@@ -1,0 +1,34 @@
+name: HushOS
+title: HushOS
+description: HushOS, your privacy operating system!
+keywords:
+  - Blog
+  - HushOS
+  - hushos.com
+author:
+  name: HushOS
+  email: hey@hushos.com
+  url: https://hushos.com
+links:
+  - text: HOME
+    link: /
+    type: navigation
+  - text: Blog
+    link: /blog
+    type: navigation
+  - text: About
+    link: /about
+    type: footer
+  - text: Contact
+    link: /contact
+    type: footer
+  - text: Privacy Policy
+    link: /privacy-policy
+    type: copyright
+  - text: Terms of Service
+    link: /terms-of-service
+    type: copyright
+socials:
+  - name: GitHub
+    icon: github
+    link: https://github.com/HushOS

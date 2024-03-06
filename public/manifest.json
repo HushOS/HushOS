@@ -1,0 +1,9 @@
+{
+    "$schema": "https://json.schemastore.org/web-manifest-combined.json",
+    "name": "Next.js Tailwind Template",
+    "short_name": "Template",
+    "start_url": ".",
+    "theme_color": "#4f46e5",
+    "background_color": "#ffffff",
+    "display": "standalone"
+}

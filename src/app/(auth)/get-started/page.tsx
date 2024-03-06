@@ -1,0 +1,62 @@
+import { Metadata } from 'next';
+import Link from 'next/link';
+
+import { RegisterForm } from '@/app/(auth)/get-started/register-form';
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+} from '@/components/ui/card';
+import { clientEnvs } from '@/env/client';
+import { Routes } from '@/lib/routes';
+
+export const metadata: Metadata = {
+    title: 'Get Started',
+    keywords: ['HushOS', 'Get Started'],
+    description: 'Your privacy awaits you!',
+    openGraph: {
+        title: 'Get Started',
+        url: `https://${clientEnvs.NEXT_PUBLIC_DOMAIN}${Routes.getStarted()}`,
+        description: 'Your privacy awaits you!',
+        type: 'website',
+    },
+    twitter: {
+        title: 'Get Started',
+        description: 'Your privacy awaits you!',
+        card: 'summary_large_image',
+    },
+};
+
+export default function GetStartedPage() {
+    return (
+        <div className='flex h-full items-center'>
+            <Card className='mx-auto w-[32rem] max-w-[32rem]'>
+                <CardHeader>
+                    <CardTitle>Get Started</CardTitle>
+                    <CardDescription>
+                        <em>Your</em> privacy awaits you!
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <RegisterForm />
+                </CardContent>
+                <CardFooter className='flex-col items-start gap-2 text-sm'>
+                    <div>
+                        <span>Already have an account? </span>
+                        <Link className='text-blue-600 underline' href={Routes.login()}>
+                            Login
+                        </Link>
+                    </div>
+                    <div>
+                        <Link className='text-blue-600 underline' href={Routes.resetPassword()}>
+                            Forgot your password?
+                        </Link>
+                    </div>
+                </CardFooter>
+            </Card>
+        </div>
+    );
+}
