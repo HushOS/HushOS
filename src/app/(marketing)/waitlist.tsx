@@ -14,14 +14,14 @@ export function Waitlist() {
 
     if (isSuccess) {
         return (
-            <div className='flex max-w-prose items-center gap-2 rounded-md bg-muted p-4 font-semibold'>
+            <div className='flex items-center gap-2 rounded-md bg-muted p-4 font-semibold'>
                 Thanks for joining the waitlist! We will be in touch.
             </div>
         );
     }
 
     return (
-        <div className='max-w-prose space-y-4'>
+        <div className='space-y-4'>
             <form
                 onSubmit={e => {
                     e.preventDefault();
