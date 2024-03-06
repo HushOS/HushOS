@@ -1,4 +1,5 @@
 {
+    "$schema": "https://json.schemastore.org/web-manifest-combined.json",
     "name": "HushOS",
     "short_name": "HushOS",
     "icons": [
@@ -15,5 +16,6 @@
     ],
     "theme_color": "#4d7cda",
     "background_color": "#4d7cda",
-    "display": "standalone"
+    "display": "standalone",
+    "start_url": "/"
 }
