@@ -4,66 +4,49 @@
 
 @layer base {
     :root {
-        --background: 233 100% 95%;
-        --foreground: 233 5% 0%;
-
-        --card: 233 50% 90%;
-        --card-foreground: 233 5% 10%;
-
-        --popover: 233 100% 95%;
-        --popover-foreground: 233 100% 0%;
-
-        --primary: 233 49% 54%;
+        --background: 220 44% 100%;
+        --foreground: 220 67% 0%;
+        --muted: 220 39% 92%;
+        --muted-foreground: 220 13% 27%;
+        --popover: 220 44% 100%;
+        --popover-foreground: 220 67% 0%;
+        --card: 0 0% 99%;
+        --card-foreground: 0 0% 0%;
+        --border: 220 2% 93%;
+        --input: 220 2% 93%;
+        --primary: 220 66% 58%;
         --primary-foreground: 0 0% 100%;
-
-        --secondary: 233 30% 70%;
-        --secondary-foreground: 0 0% 0%;
-
-        --muted: 195 30% 85%;
-        --muted-foreground: 233 5% 35%;
-
-        --accent: 195 30% 80%;
-        --accent-foreground: 233 5% 10%;
-
-        --destructive: 0 100% 30%;
-        --destructive-foreground: 233 5% 90%;
-
-        --border: 233 30% 50%;
-        --input: 233 30% 18%;
-        --ring: 233 49% 54%;
-
+        --secondary: 220 7% 91%;
+        --secondary-foreground: 220 7% 31%;
+        --accent: 220 13% 82%;
+        --accent-foreground: 220 13% 22%;
+        --destructive: 0 86% 45%;
+        --destructive-foreground: 0 0% 100%;
+        --ring: 220 66% 58%;
         --radius: 0.5rem;
     }
 
     html.dark,
     html[data-theme='dark'] {
-        --background: 233 50% 5%;
-        --foreground: 233 5% 90%;
-
-        --card: 233 50% 0%;
-        --card-foreground: 233 5% 90%;
-
-        --popover: 233 50% 5%;
-        --popover-foreground: 233 5% 90%;
-
-        --primary: 233 49% 54%;
+        --background: 220 43% 4%;
+        --foreground: 220 16% 99%;
+        --muted: 220 39% 8%;
+        --muted-foreground: 220 13% 73%;
+        --popover: 220 43% 4%;
+        --popover-foreground: 220 16% 99%;
+        --card: 220 43% 5%;
+        --card-foreground: 0 0% 100%;
+        --border: 220 2% 13%;
+        --input: 220 2% 13%;
+        --primary: 220 66% 58%;
         --primary-foreground: 0 0% 100%;
-
-        --secondary: 233 30% 10%;
-        --secondary-foreground: 0 0% 100%;
-
-        --muted: 195 30% 15%;
-        --muted-foreground: 233 5% 60%;
-
-        --accent: 195 30% 15%;
-        --accent-foreground: 233 5% 90%;
-
-        --destructive: 0 100% 30%;
-        --destructive-foreground: 233 5% 90%;
-
-        --border: 233 30% 18%;
-        --input: 233 30% 18%;
-        --ring: 233 49% 54%;
+        --secondary: 220 7% 9%;
+        --secondary-foreground: 220 7% 69%;
+        --accent: 220 13% 16%;
+        --accent-foreground: 220 13% 76%;
+        --destructive: 0 86% 49%;
+        --destructive-foreground: 0 0% 100%;
+        --ring: 220 66% 58%;
     }
 
     html.dark .shiki,
