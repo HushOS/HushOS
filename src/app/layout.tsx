@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { Viewport } from 'next';
+import { Metadata, Viewport } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 
 import { Providers } from '@/components/providers';
@@ -27,7 +27,7 @@ export const viewport: Viewport = {
     width: 'device-width',
 };
 
-export const metadata = {
+export const metadata: Metadata = {
     title: {
         default: 'HushOS',
         template: '%s',
