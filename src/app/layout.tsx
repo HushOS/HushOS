@@ -19,7 +19,7 @@ const jb = JetBrains_Mono({
 });
 
 export const viewport: Viewport = {
-    themeColor: '#4f46e5',
+    themeColor: '#4d7cda',
     initialScale: 1.0,
     maximumScale: 1.0,
     minimumScale: 1.0,
@@ -59,12 +59,12 @@ export const metadata = {
         images: `https://${clientEnvs.NEXT_PUBLIC_DOMAIN}/android-icon-192x192.png`,
     },
     icons: {
-        icon: '/apple-icon.png',
+        icon: '/favicon-32x32.png',
         shortcut: '/favicon-96x96.png',
-        apple: '/apple-icon.png',
+        apple: '/apple-touch-icon.png',
         other: {
-            rel: 'apple-touch-icon-precomposed',
-            url: '/apple-touch-icon-precomposed.png',
+            rel: 'apple-touch-icon',
+            url: '/apple-touch-icon.png',
         },
     },
 };
