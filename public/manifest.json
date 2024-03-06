@@ -17,5 +17,6 @@
     "theme_color": "#4d7cda",
     "background_color": "#4d7cda",
     "display": "standalone",
-    "start_url": "/"
+    "start_url": "/",
+    "description": "Your privacy operating system!"
 }
