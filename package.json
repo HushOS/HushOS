@@ -5,7 +5,7 @@
     "license": "AGPL-3.0",
     "scripts": {
         "dev": "concurrently \"velite dev\" \"pnpm db:studio\" \"next dev\"",
-        "build": "bun lint && bun format && velite && next build",
+        "build": "velite && next build",
         "test": "echo 'No tests found.'",
         "start": "next start",
         "lint": "next lint --fix",
