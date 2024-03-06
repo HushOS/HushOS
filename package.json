@@ -3,6 +3,7 @@
     "version": "0.0.0",
     "private": true,
     "license": "AGPL-3.0",
+    "packageManager": "pnpm@8.15.4",
     "scripts": {
         "dev": "concurrently \"velite dev\" \"pnpm db:studio\" \"next dev\"",
         "build": "velite && next build",
