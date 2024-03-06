@@ -115,8 +115,7 @@ export function VerificationForm({ email }: { email: string }) {
                 publicKey: keyBundle.cryptoProperties.asymmetricKeyBundle.publicKey,
                 signingPublicKey: keyBundle.cryptoProperties.signingKeyBundle.publicKey,
             });
-        },
-        onSuccess: () => {
+
             router.push(Routes.recoveryKey());
         },
         onError: () => {
