@@ -53,7 +53,8 @@ export function Waitlist() {
                 <Terminal className='size-4' />
                 <AlertTitle>Note</AlertTitle>
                 <AlertDescription>
-                    We only use your email to notify you when we launch. We will not spam you.
+                    We will only use your email to notify you when we launch. We will never spam
+                    you.
                 </AlertDescription>
             </Alert>
         </div>

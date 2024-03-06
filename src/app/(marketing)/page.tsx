@@ -16,12 +16,8 @@ export default function Page() {
                 <div className='my-4 space-y-4 leading-relaxed'>
                     <p>An open source, privacy first, end-to-end encrypted productivity OS!</p>
                     <p>
-                        We are building HushOS with self-hosting in mind, so that anyone can issue a
-                        few commands and have their own personal productivity cloud up and running.
-                    </p>
-                    <p>
-                        So join the waitlist and be ready to take control of your privacy, as we
-                        launch our first offering, HushDrive, an E2EE cloud storage service.
+                        Join the waitlist and be ready to take control of your privacy, as we launch
+                        our first offering, HushDrive, an E2EE cloud storage.
                     </p>
                 </div>
                 <Waitlist />
