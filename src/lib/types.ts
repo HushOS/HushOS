@@ -25,7 +25,7 @@ export type KeyPairBundle = {
 
 // https://medium.com/@jmagrippis/website-analytics-with-next-js-and-plausible-io-3620da743a1
 
-export type TrackEvent = 'Signup';
+export type TrackEvent = 'Signup' | 'Joined Waitlist';
 
 export type PlausibleArgs = [TrackEvent, () => void] | [TrackEvent];
 

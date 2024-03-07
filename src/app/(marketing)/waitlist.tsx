@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Loader2, Terminal } from 'lucide-react';
 
+import { trackEvent } from '@/components/analytics';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +26,7 @@ export function Waitlist() {
             <form
                 onSubmit={e => {
                     e.preventDefault();
+                    trackEvent('Joined Waitlist');
                     mutate({
                         email,
                     });

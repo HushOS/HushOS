@@ -9,6 +9,7 @@ import { MultipleFieldErrors, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
+import { trackEvent } from '@/components/analytics';
 import { OTPInput } from '@/components/otp-input';
 import { Button } from '@/components/ui/button';
 import {
@@ -115,6 +116,8 @@ export function VerificationForm({ email }: { email: string }) {
                 publicKey: keyBundle.cryptoProperties.asymmetricKeyBundle.publicKey,
                 signingPublicKey: keyBundle.cryptoProperties.signingKeyBundle.publicKey,
             });
+
+            trackEvent('Signup');
 
             router.push(Routes.recoveryKey());
         },
