@@ -8,6 +8,8 @@ import { serverEnvs } from '@/env/server';
 
 import '@/styles/globals.css';
 
+import { Analytics } from '@/components/analytics';
+
 const inter = Inter({
     variable: '--font-sans',
     subsets: ['latin'],
@@ -76,6 +78,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <body
                 className={`${inter.variable} ${jb.variable} ${serverEnvs.NODE_ENV === 'development' ? 'debug-screens' : ''}`}>
                 <Providers>{children}</Providers>
+                <Analytics />
             </body>
         </html>
     );
