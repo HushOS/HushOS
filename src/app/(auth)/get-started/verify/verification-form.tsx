@@ -10,7 +10,6 @@ import { toast } from 'sonner';
 import { z } from 'zod';
 
 import { trackEvent } from '@/components/analytics';
-import { OTPInput } from '@/components/otp-input';
 import { Button } from '@/components/ui/button';
 import {
     Form,
@@ -22,6 +21,7 @@ import {
     FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
@@ -140,7 +140,17 @@ export function VerificationForm({ email }: { email: string }) {
                                     <FormDescription>Check your email.</FormDescription>
                                 </div>
                                 <FormControl>
-                                    <OTPInput {...field} />
+                                    <InputOTP
+                                        maxLength={8}
+                                        render={({ slots }) => (
+                                            <InputOTPGroup>
+                                                {slots.map((slot, index) => (
+                                                    <InputOTPSlot key={index} {...slot} />
+                                                ))}{' '}
+                                            </InputOTPGroup>
+                                        )}
+                                        {...field}
+                                    />
                                 </FormControl>
                                 <FormMessage />
                             </div>

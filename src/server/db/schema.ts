@@ -59,7 +59,7 @@ export const emailVerificationCodes = pgTable('email_verification_codes', {
         .notNull()
         .references(() => users.id),
     code: varchar('code', {
-        length: 6,
+        length: 8,
     }).notNull(),
     expiresAt: timestamp('expires_at', {
         withTimezone: true,

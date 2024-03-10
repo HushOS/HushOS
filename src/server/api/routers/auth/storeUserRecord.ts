@@ -16,8 +16,8 @@ export const storeUserRecord = publicProcedure
         z.object({
             record: z.string().length(400, 'Expected record to be a hex string of length 400'),
             email: z.string().email(),
-            confirmationCode: z.string().length(6, {
-                message: 'Confirmation code must be 6 characters long',
+            confirmationCode: z.string().length(8, {
+                message: 'Confirmation code must be 8 characters long',
             }),
             userKeys: userKeysInput,
         })

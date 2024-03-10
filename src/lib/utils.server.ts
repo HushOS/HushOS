@@ -144,7 +144,7 @@ export async function generateEmailVerificationCode(userId: string): Promise<str
         return existingCode[0]!.code;
     }
 
-    const code = generateRandomString(6, alphabet('0-9'));
+    const code = generateRandomString(8, alphabet('0-9'));
     if (existingCode.length > 0) {
         await db.delete(emailVerificationCodes).where(eq(emailVerificationCodes.userId, userId));
     }

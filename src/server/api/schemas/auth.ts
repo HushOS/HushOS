@@ -27,8 +27,8 @@ export const createRegistrationResponseInput = z.object({
     request: z.string().length(64, {
         message: 'Expected request to be a hex string of length 64',
     }),
-    confirmationCode: z.string().length(6, {
-        message: 'Confirmation code must be 6 characters long',
+    confirmationCode: z.string().length(8, {
+        message: 'Confirmation code must be 8 characters long',
     }),
 });
 
