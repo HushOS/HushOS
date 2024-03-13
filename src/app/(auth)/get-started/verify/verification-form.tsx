@@ -5,6 +5,7 @@ import { ErrorMessage } from '@hookform/error-message';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { ofetch } from 'ofetch';
 import { MultipleFieldErrors, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
@@ -88,23 +89,17 @@ export function VerificationForm({ email }: { email: string }) {
             const opaque = OpaqueWorkerInstance;
             const { mHex, secHex } = await opaque.createRegistrationRequest(password);
 
-            const resp = await fetch(ApiRoutes.auth.createRegistrationResponse(), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email,
-                    confirmationCode,
-                    request: mHex,
-                } satisfies CreateRegistrationResponseInput),
-            });
-
-            if (!resp.ok) {
-                throw new Error('Failed to create registration response');
-            }
-
-            const { response } = (await resp.json()) as CreateRegistrationResponseOutput;
+            const { response } = await ofetch<CreateRegistrationResponseOutput>(
+                ApiRoutes.auth.createRegistrationResponse(),
+                {
+                    method: 'POST',
+                    body: {
+                        email,
+                        confirmationCode,
+                        request: mHex,
+                    } satisfies CreateRegistrationResponseInput,
+                }
+            );
 
             const { exportKeyHex: _, recHex } = await opaque.finalizeRequest(
                 secHex,
@@ -115,22 +110,15 @@ export function VerificationForm({ email }: { email: string }) {
             const crypto = CryptoWorkerInstance;
             const keyBundle = await crypto.generateRequiredKeys(password);
 
-            const storeRecResp = await fetch(ApiRoutes.auth.storeUserRecord(), {
+            await ofetch(ApiRoutes.auth.storeUserRecord(), {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
+                body: {
                     record: recHex,
                     email,
                     confirmationCode,
                     userKeys: keyBundle.cryptoProperties,
-                } satisfies StoreUserRecordInput),
+                } satisfies StoreUserRecordInput,
             });
-
-            if (!storeRecResp.ok) {
-                throw new Error('Failed to store user record');
-            }
 
             setData({
                 masterKey: keyBundle.mainKey,

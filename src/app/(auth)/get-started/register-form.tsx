@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
+import { ofetch } from 'ofetch';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
@@ -27,17 +28,10 @@ export function RegisterForm() {
     const { mutate } = useMutation<unknown, Error, SendRegistrationCodeInput, unknown>({
         mutationKey: ['register'],
         mutationFn: async input => {
-            const response = await fetch(ApiRoutes.auth.sendRegistrationCode(), {
+            await ofetch(ApiRoutes.auth.sendRegistrationCode(), {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(input),
+                body: input,
             });
-
-            if (!response.ok) {
-                throw new Error('Failed to send verification code');
-            }
 
             return { email: input.email };
         },

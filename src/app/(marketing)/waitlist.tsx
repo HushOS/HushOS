@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2, Terminal } from 'lucide-react';
+import { ofetch } from 'ofetch';
 
 import { trackEvent } from '@/components/analytics';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -17,17 +18,10 @@ export function Waitlist() {
     const { mutate, isPending, isSuccess } = useMutation({
         mutationKey: ['waitlist'],
         mutationFn: async () => {
-            const response = await fetch(ApiRoutes.waitlist(), {
+            await ofetch(ApiRoutes.waitlist(), {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ email } satisfies WaitlistInput),
+                body: { email } satisfies WaitlistInput,
             });
-
-            if (!response.ok) {
-                throw new Error('Failed to join waitlist');
-            }
         },
         onSuccess: () => {
             trackEvent('Joined Waitlist');
