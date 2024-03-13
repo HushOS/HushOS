@@ -44,6 +44,8 @@ export const ApiRoutes = {
 
         createCredentialResponse: makeRoute(() => '/api/auth/login/create-credential-response'),
         userAuth: makeRoute(() => '/api/auth/login/user-auth'),
+
+        logout: makeRoute(() => '/api/auth/logout'),
     },
 };
 

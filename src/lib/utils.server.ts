@@ -54,6 +54,12 @@ export function getSignedCookie(key: string) {
     return parseSignedMessage(signedValue, serverEnvs.COOKIE_SIGNING_SECRET);
 }
 
+export async function logout() {
+    const sessionId = getSignedCookie(lucia.sessionCookieName);
+    if (!sessionId) return null;
+    await lucia.invalidateSession(sessionId);
+}
+
 export const getUser = cache(async () => {
     const sessionId = getSignedCookie(lucia.sessionCookieName);
     if (!sessionId) return null;
