@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "opaque_secret" SET DATA TYPE varchar(512);

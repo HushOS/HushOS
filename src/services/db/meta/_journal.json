@@ -15,6 +15,13 @@
       "when": 1710110947612,
       "tag": "0001_uneven_caretaker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1710359320127,
+      "tag": "0002_lively_mimic",
+      "breakpoints": true
     }
   ]
 }

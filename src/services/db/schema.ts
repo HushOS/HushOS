@@ -12,8 +12,7 @@ import {
     varchar,
 } from 'drizzle-orm/pg-core';
 
-import { userKeysInput } from '@/schemas/auth';
-import { z } from '@/server/zod';
+import { UserKeys } from '@/schemas/auth';
 
 export const users = pgTable(
     'users',
@@ -30,7 +29,7 @@ export const users = pgTable(
         emailVerified: boolean('email_verified').default(false),
         agreedToTerms: boolean('agreed_to_terms').default(false),
         opaqueSecret: varchar('opaque_secret', {
-            length: 255,
+            length: 512,
         }),
         opaqueRecord: varchar('opaque_record', {
             length: 512,
@@ -98,21 +97,17 @@ export const userKeys = pgTable('user_keys', {
         .notNull()
         .references(() => users.id),
     salt: varchar('salt').notNull(),
-    mainKeyBundle: jsonb('main_key_bundle')
-        .notNull()
-        .$type<z.infer<typeof userKeysInput>['mainKeyBundle']>(),
+    mainKeyBundle: jsonb('main_key_bundle').notNull().$type<UserKeys['mainKeyBundle']>(),
     recoveryMainKeyBundle: jsonb('recovery_main_key_bundle')
         .notNull()
-        .$type<z.infer<typeof userKeysInput>['recoveryMainKeyBundle']>(),
+        .$type<UserKeys['recoveryMainKeyBundle']>(),
     recoveryKeyBundle: jsonb('recovery_key_bundle')
         .notNull()
-        .$type<z.infer<typeof userKeysInput>['recoveryKeyBundle']>(),
-    signingKeyBundle: jsonb('signing_key_bundle')
-        .notNull()
-        .$type<z.infer<typeof userKeysInput>['signingKeyBundle']>(),
+        .$type<UserKeys['recoveryKeyBundle']>(),
+    signingKeyBundle: jsonb('signing_key_bundle').notNull().$type<UserKeys['signingKeyBundle']>(),
     asymmetricKeyBundle: jsonb('asymmetric_key_bundle')
         .notNull()
-        .$type<z.infer<typeof userKeysInput>['asymmetricKeyBundle']>(),
+        .$type<UserKeys['asymmetricKeyBundle']>(),
 });
 
 export const userKeysRelations = relations(userKeys, ({ one }) => ({

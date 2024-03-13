@@ -1,21 +1,18 @@
 import { RouteConfig } from '@asteasolutions/zod-to-openapi';
 
 import { ApiRoutes } from '@/lib/routes';
-import {
-    initiateOpaqueRegistrationResponseInput,
-    initiateOpaqueResponseOutput,
-} from '@/schemas/auth';
+import { userAuthInput, userKeys } from '@/schemas/auth';
 
-export const createRegistrationResponseRouteConfig: RouteConfig = {
+export const userAuthRouteConfig: RouteConfig = {
     method: 'post',
-    path: ApiRoutes.auth.createRegistrationResponse(),
-    summary: 'Create registration response.',
+    path: ApiRoutes.auth.userAuth(),
+    summary: 'Authorize user.',
     tags: ['Auth'],
     request: {
         body: {
             content: {
                 'application/json': {
-                    schema: initiateOpaqueRegistrationResponseInput,
+                    schema: userAuthInput,
                 },
             },
             required: true,
@@ -26,7 +23,7 @@ export const createRegistrationResponseRouteConfig: RouteConfig = {
             description: 'Success',
             content: {
                 'application/json': {
-                    schema: initiateOpaqueResponseOutput,
+                    schema: userKeys,
                 },
             },
         },

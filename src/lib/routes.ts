@@ -41,6 +41,9 @@ export const ApiRoutes = {
             () => '/api/auth/register/create-registration-response'
         ),
         storeUserRecord: makeRoute(() => '/api/auth/register/store-user-record'),
+
+        createCredentialResponse: makeRoute(() => '/api/auth/login/create-credential-response'),
+        userAuth: makeRoute(() => '/api/auth/login/user-auth'),
     },
 };
 

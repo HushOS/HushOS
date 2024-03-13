@@ -2,13 +2,16 @@ import { eq } from 'drizzle-orm';
 import opaque from 'libopaque';
 import { isWithinExpirationDate } from 'oslo';
 
-import { createRegistrationResponseInput, createRegistrationResponseOutput } from '@/schemas/auth';
+import {
+    initiateOpaqueRegistrationResponseInput,
+    initiateOpaqueResponseOutput,
+} from '@/schemas/auth';
 import { ApiError, defineRoute } from '@/server/define-route';
 import { users } from '@/services/db/schema';
 
 export const POST = defineRoute({
-    input: createRegistrationResponseInput,
-    output: createRegistrationResponseOutput,
+    input: initiateOpaqueRegistrationResponseInput,
+    output: initiateOpaqueResponseOutput,
     parseType: 'body',
     handler: async ({ db, input: { request: reqHex, confirmationCode, email } }) => {
         await opaque.ready;

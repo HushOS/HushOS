@@ -34,7 +34,7 @@ export function OtpForm() {
 
     return (
         <Form {...form}>
-            <form onSubmit={form.handleSubmit(console.log)} className='space-y-4'>
+            <form onSubmit={form.handleSubmit(console.info)} className='space-y-4'>
                 <Input
                     type='number'
                     autoComplete='off'

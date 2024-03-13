@@ -32,7 +32,7 @@ export const sendRegistrationCodeInput = z
 
 export type SendRegistrationCodeInput = z.infer<typeof sendRegistrationCodeInput>;
 
-export const createRegistrationResponseInput = z
+export const initiateOpaqueRegistrationResponseInput = z
     .object({
         email: z.string().email(),
         request: z.string(),
@@ -40,19 +40,32 @@ export const createRegistrationResponseInput = z
             message: 'Confirmation code must be 8 characters long',
         }),
     })
-    .openapi('CreateRegistrationResponseInput');
+    .openapi('InitiateOpaqueRegistrationResponseInput');
 
-export type CreateRegistrationResponseInput = z.infer<typeof createRegistrationResponseInput>;
+export type InitiateOpaqueRegistrationResponseInput = z.infer<
+    typeof initiateOpaqueRegistrationResponseInput
+>;
 
-export const createRegistrationResponseOutput = z
+export const initiateOpaqueCredentialResponseInput = z
+    .object({
+        email: z.string().email(),
+        request: z.string(),
+    })
+    .openapi('InitiateOpaqueCredentialResponseInput');
+
+export type InitiateOpaqueCredentialResponseInput = z.infer<
+    typeof initiateOpaqueCredentialResponseInput
+>;
+
+export const initiateOpaqueResponseOutput = z
     .object({
         response: z.string(),
     })
-    .openapi('CreateRegistrationResponseOutput');
+    .openapi('InitiateOpaqueResponseOutput');
 
-export type CreateRegistrationResponseOutput = z.infer<typeof createRegistrationResponseOutput>;
+export type InitiateOpaqueResponseOutput = z.infer<typeof initiateOpaqueResponseOutput>;
 
-export const userKeysInput = z
+export const userKeys = z
     .object({
         salt: z.string(),
         mainKeyBundle: z.object({
@@ -78,9 +91,9 @@ export const userKeysInput = z
             encryptedPrivateKey: z.string(),
         }),
     })
-    .openapi('UserKeysInput');
+    .openapi('UserKeys');
 
-export type UserKeysInput = z.infer<typeof userKeysInput>;
+export type UserKeys = z.infer<typeof userKeys>;
 
 export const storeUserRecordInput = z
     .object({
@@ -89,23 +102,17 @@ export const storeUserRecordInput = z
         confirmationCode: z.string().length(8, {
             message: 'Confirmation code must be 8 characters long',
         }),
-        userKeys: userKeysInput,
+        userKeys: userKeys,
     })
     .openapi('StoreUserRecordInput');
 
 export type StoreUserRecordInput = z.infer<typeof storeUserRecordInput>;
 
-export const loginInput = z
+export const userAuthInput = z
     .object({
-        email: z
-            .string({
-                required_error: 'Please enter your email address',
-            })
-            .email({
-                message: 'Please enter a valid email address',
-            }),
-        request: z.string(),
+        email: z.string().email(),
+        authU: z.string(),
     })
-    .openapi('LoginInput');
+    .openapi('UserAuthInput');
 
-export type LoginInput = z.infer<typeof loginInput>;
+export type UserAuthInput = z.infer<typeof userAuthInput>;

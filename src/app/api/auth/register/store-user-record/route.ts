@@ -85,6 +85,7 @@ export const POST = defineRoute({
                     emailVerified: true,
                     opaqueRecord: opaque.uint8ArrayToHex(recToStore),
                     userKeysId: insertedUserKeys.at(0)!.id,
+                    opaqueSecret: null,
                 })
                 .where(eq(users.id, existingUser.id));
 

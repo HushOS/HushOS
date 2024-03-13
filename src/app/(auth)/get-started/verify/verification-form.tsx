@@ -26,9 +26,9 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { ApiRoutes, Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
 import {
-    createRegistrationResponseInput,
-    CreateRegistrationResponseInput,
-    CreateRegistrationResponseOutput,
+    InitiateOpaqueRegistrationResponseInput,
+    initiateOpaqueRegistrationResponseInput,
+    InitiateOpaqueResponseOutput,
     StoreUserRecordInput,
 } from '@/schemas/auth';
 import { z } from '@/server/zod';
@@ -37,7 +37,7 @@ import { OpaqueWorkerInstance } from '@/services/comlink-opaque';
 import { useCryptoStore } from '@/stores/crypto-store';
 
 const schemaWithPassword = z.intersection(
-    createRegistrationResponseInput.omit({
+    initiateOpaqueRegistrationResponseInput.omit({
         request: true,
     }),
     z.object({
@@ -71,7 +71,7 @@ export function VerificationForm({ email }: { email: string }) {
             const opaque = OpaqueWorkerInstance;
             const { mHex, secHex } = await opaque.createRegistrationRequest(password);
 
-            const { response } = await ofetch<CreateRegistrationResponseOutput>(
+            const { response } = await ofetch<InitiateOpaqueResponseOutput>(
                 ApiRoutes.auth.createRegistrationResponse(),
                 {
                     method: 'POST',
@@ -79,7 +79,7 @@ export function VerificationForm({ email }: { email: string }) {
                         email,
                         confirmationCode,
                         request: mHex,
-                    } satisfies CreateRegistrationResponseInput,
+                    } satisfies InitiateOpaqueRegistrationResponseInput,
                 }
             );
 

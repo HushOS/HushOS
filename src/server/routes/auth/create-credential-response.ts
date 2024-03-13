@@ -2,20 +2,20 @@ import { RouteConfig } from '@asteasolutions/zod-to-openapi';
 
 import { ApiRoutes } from '@/lib/routes';
 import {
-    initiateOpaqueRegistrationResponseInput,
+    initiateOpaqueCredentialResponseInput,
     initiateOpaqueResponseOutput,
 } from '@/schemas/auth';
 
-export const createRegistrationResponseRouteConfig: RouteConfig = {
+export const createCredentialResponseRouteConfig: RouteConfig = {
     method: 'post',
-    path: ApiRoutes.auth.createRegistrationResponse(),
-    summary: 'Create registration response.',
+    path: ApiRoutes.auth.createCredentialResponse(),
+    summary: 'Create credential response.',
     tags: ['Auth'],
     request: {
         body: {
             content: {
                 'application/json': {
-                    schema: initiateOpaqueRegistrationResponseInput,
+                    schema: initiateOpaqueCredentialResponseInput,
                 },
             },
             required: true,
