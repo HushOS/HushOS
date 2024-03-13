@@ -11,9 +11,9 @@ import {
     uniqueIndex,
     varchar,
 } from 'drizzle-orm/pg-core';
-import { z } from 'zod';
 
-import { userKeysInput } from '@/server/api/schemas/auth';
+import { userKeysInput } from '@/schemas/auth';
+import { z } from '@/server/zod';
 
 export const users = pgTable(
     'users',

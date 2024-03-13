@@ -33,7 +33,7 @@ export const metadata: Metadata = {
 export default function GetStartedPage() {
     return (
         <div className='flex h-full items-center'>
-            <Card className='mx-auto w-[32rem] max-w-[32rem]'>
+            <Card className='mx-auto w-[32rem] max-w-lg'>
                 <CardHeader>
                     <CardTitle>Get Started</CardTitle>
                     <CardDescription>

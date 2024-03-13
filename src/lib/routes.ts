@@ -4,9 +4,12 @@ import {
     useSearchParams as useNextSearchParams,
 } from 'next/navigation';
 import queryString from 'query-string';
-import { z } from 'zod';
+
+import { z } from '@/server/zod';
 
 export const Routes = {
+    scalar: makeRoute(() => '/scalar'),
+
     resetPassword: makeRoute(() => '/reset-password'),
     terms: makeRoute(() => '/terms'),
     privacy: makeRoute(() => '/privacy'),
@@ -27,6 +30,18 @@ export const Routes = {
             directory: z.string().optional(),
         })
     ),
+};
+
+export const ApiRoutes = {
+    apiDoc: makeRoute(() => '/api/doc'),
+    waitlist: makeRoute(() => '/api/waitlist'),
+    auth: {
+        sendRegistrationCode: makeRoute(() => '/api/auth/register/send-registration-code'),
+        createRegistrationResponse: makeRoute(
+            () => '/api/auth/register/create-registration-response'
+        ),
+        storeUserRecord: makeRoute(() => '/api/auth/register/store-user-record'),
+    },
 };
 
 type RouteBuilder<Params extends z.ZodSchema, Search extends z.ZodSchema> = {
@@ -98,5 +113,6 @@ export function convertURLSearchParamsToObject(
             obj[key] = value;
         }
     }
+
     return obj;
 }

@@ -7,7 +7,6 @@ import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { MultipleFieldErrors, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { z } from 'zod';
 
 import { trackEvent } from '@/components/analytics';
 import { Button } from '@/components/ui/button';
@@ -23,14 +22,19 @@ import {
 import { Input } from '@/components/ui/input';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { PasswordInput } from '@/components/ui/password-input';
-import { Routes } from '@/lib/routes';
+import { ApiRoutes, Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
 import { zxcvbn } from '@/lib/zxcvbn';
-import { createRegistrationResponseInput } from '@/server/api/schemas/auth';
+import {
+    createRegistrationResponseInput,
+    CreateRegistrationResponseInput,
+    CreateRegistrationResponseOutput,
+    StoreUserRecordInput,
+} from '@/schemas/auth';
+import { z } from '@/server/zod';
 import { CryptoWorkerInstance } from '@/services/comlink-crypto';
 import { OpaqueWorkerInstance } from '@/services/comlink-opaque';
 import { useCryptoStore } from '@/stores/crypto-store';
-import { api } from '@/trpc/react';
 
 const schemaWithPassword = z.intersection(
     createRegistrationResponseInput.omit({
@@ -52,8 +56,6 @@ export function VerificationForm({ email }: { email: string }) {
         criteriaMode: 'all',
     });
 
-    const createRegistrationResponse = api.auth.createRegistrationResponse.useMutation();
-    const storeUserRecord = api.auth.storeUserRecord.useMutation();
     const setData = useCryptoStore(state => state.setData);
     const router = useRouter();
     const { mutate, isPending } = useMutation({
@@ -86,11 +88,23 @@ export function VerificationForm({ email }: { email: string }) {
             const opaque = OpaqueWorkerInstance;
             const { mHex, secHex } = await opaque.createRegistrationRequest(password);
 
-            const { response } = await createRegistrationResponse.mutateAsync({
-                email,
-                confirmationCode,
-                request: mHex,
+            const resp = await fetch(ApiRoutes.auth.createRegistrationResponse(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    email,
+                    confirmationCode,
+                    request: mHex,
+                } satisfies CreateRegistrationResponseInput),
             });
+
+            if (!resp.ok) {
+                throw new Error('Failed to create registration response');
+            }
+
+            const { response } = (await resp.json()) as CreateRegistrationResponseOutput;
 
             const { exportKeyHex: _, recHex } = await opaque.finalizeRequest(
                 secHex,
@@ -101,12 +115,22 @@ export function VerificationForm({ email }: { email: string }) {
             const crypto = CryptoWorkerInstance;
             const keyBundle = await crypto.generateRequiredKeys(password);
 
-            await storeUserRecord.mutateAsync({
-                record: recHex,
-                email,
-                confirmationCode,
-                userKeys: keyBundle.cryptoProperties,
+            const storeRecResp = await fetch(ApiRoutes.auth.storeUserRecord(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    record: recHex,
+                    email,
+                    confirmationCode,
+                    userKeys: keyBundle.cryptoProperties,
+                } satisfies StoreUserRecordInput),
             });
+
+            if (!storeRecResp.ok) {
+                throw new Error('Failed to store user record');
+            }
 
             setData({
                 masterKey: keyBundle.mainKey,

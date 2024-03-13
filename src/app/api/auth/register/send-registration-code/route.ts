@@ -1,20 +1,24 @@
-import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import { generateId } from 'lucia';
 
 import { generateEmailVerificationCode, sendVerificationCode } from '@/lib/utils.server';
-import { sendRegistrationCodeInput } from '@/server/api/schemas/auth';
-import { publicProcedure } from '@/server/api/trpc';
-import { users } from '@/server/db/schema';
+import { sendRegistrationCodeInput } from '@/schemas/auth';
+import { ApiError, defineRoute } from '@/server/define-route';
+import { users } from '@/services/db/schema';
 
-export const sendRegistrationCode = publicProcedure
-    .input(sendRegistrationCodeInput)
-    .mutation(async ({ input: { agree, email }, ctx: { db } }) => {
+export const POST = defineRoute({
+    input: sendRegistrationCodeInput,
+    output: undefined,
+    parseType: 'body',
+    handler: async ({ db, input: { email, agree } }) => {
         if (!agree) {
-            throw new TRPCError({
-                code: 'BAD_REQUEST',
-                message: 'You must agree to the terms to continue.',
-            });
+            throw new ApiError(
+                'You must agree to the terms to continue.',
+                {
+                    message: 'You must agree to the terms to continue.',
+                },
+                400
+            );
         }
 
         const normalizedEmail = email.toUpperCase();
@@ -47,9 +51,13 @@ export const sendRegistrationCode = publicProcedure
         const success = await sendVerificationCode(email, code);
 
         if (!success) {
-            throw new TRPCError({
-                code: 'INTERNAL_SERVER_ERROR',
-                message: 'Failed to send email',
-            });
+            throw new ApiError(
+                'Failed to send email',
+                {
+                    message: 'Failed to send email',
+                },
+                500
+            );
         }
-    });
+    },
+});

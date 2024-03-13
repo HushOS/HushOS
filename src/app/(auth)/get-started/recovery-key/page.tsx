@@ -34,7 +34,7 @@ export default async function RecoveryKeyPage() {
 
     return (
         <div className='flex h-full items-center'>
-            <Card className='mx-auto w-[32rem] max-w-[32rem]'>
+            <Card className='mx-auto w-[32rem] max-w-lg'>
                 <CardHeader className='gap-2'>
                     <CardTitle>Recovery Key</CardTitle>
                     <div className='flex flex-col gap-2 text-sm text-muted-foreground'>

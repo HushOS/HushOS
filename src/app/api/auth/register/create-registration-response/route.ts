@@ -1,26 +1,18 @@
-import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import opaque from 'libopaque';
 import { isWithinExpirationDate } from 'oslo';
-import { z } from 'zod';
 
-import { createRegistrationResponseInput } from '@/server/api/schemas/auth';
-import { publicProcedure } from '@/server/api/trpc';
-import { users } from '@/server/db/schema';
+import { createRegistrationResponseInput, createRegistrationResponseOutput } from '@/schemas/auth';
+import { ApiError, defineRoute } from '@/server/define-route';
+import { users } from '@/services/db/schema';
 
-export const createRegistrationResponse = publicProcedure
-    .input(createRegistrationResponseInput)
-    .output(
-        z.object({
-            response: z.string().length(128, {
-                message: 'Expected response to be a hex string of length 128',
-            }),
-        })
-    )
-    .mutation(async ({ input, ctx: { db } }) => {
+export const POST = defineRoute({
+    input: createRegistrationResponseInput,
+    output: createRegistrationResponseOutput,
+    parseType: 'body',
+    handler: async ({ db, input: { request: reqHex, confirmationCode, email } }) => {
         await opaque.ready;
 
-        const { request: reqHex, confirmationCode, email } = input;
         const normalizedEmail = email.toUpperCase();
 
         const existingUser = await db.query.users.findFirst({
@@ -30,10 +22,7 @@ export const createRegistrationResponse = publicProcedure
             },
         });
 
-        const error = new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Invalid email or confirmation code.',
-        });
+        const error = new ApiError('Invalid email or confirmation code.', 400);
 
         if (
             !existingUser ||
@@ -62,4 +51,5 @@ export const createRegistrationResponse = publicProcedure
         return {
             response: opaque.uint8ArrayToHex(pub),
         };
-    });
+    },
+});

@@ -14,9 +14,9 @@ import { Resend } from 'resend';
 
 import ConfirmationCode from '@/emails/confirmation-code';
 import { serverEnvs } from '@/env/server';
-import { db } from '@/server/db';
-import { emailVerificationCodes } from '@/server/db/schema';
 import { lucia } from '@/services/auth';
+import { db } from '@/services/db';
+import { emailVerificationCodes } from '@/services/db/schema';
 
 export function signMessage(message: string, signingKey: string) {
     const signature = createHmac('sha256', signingKey).update(message).digest('hex');

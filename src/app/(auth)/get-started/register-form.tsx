@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
@@ -18,26 +19,35 @@ import {
     FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { Routes } from '@/lib/routes';
-import { sendRegistrationCodeInput } from '@/server/api/schemas/auth';
-import { api } from '@/trpc/react';
-import { RouterInputs } from '@/trpc/shared';
-
-type SendRegistrationCodeInput = RouterInputs['auth']['sendRegistrationCode'];
+import { ApiRoutes, Routes } from '@/lib/routes';
+import { SendRegistrationCodeInput, sendRegistrationCodeInput } from '@/schemas/auth';
 
 export function RegisterForm() {
     const { push } = useRouter();
-    const { mutate } = api.auth.sendRegistrationCode.useMutation({
-        onSuccess: (_data, { email }) => {
+    const { mutate } = useMutation<unknown, Error, SendRegistrationCodeInput, unknown>({
+        mutationKey: ['register'],
+        mutationFn: async input => {
+            const response = await fetch(ApiRoutes.auth.sendRegistrationCode(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(input),
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to send verification code');
+            }
+
+            return { email: input.email };
+        },
+        onSuccess: (_, { email }) => {
             push(
-                Routes.verify(
-                    {},
-                    {
-                        search: {
-                            email,
-                        },
-                    }
-                )
+                Routes.verify(undefined, {
+                    search: {
+                        email,
+                    },
+                })
             );
         },
         onError: () => {

@@ -1,31 +1,23 @@
-import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import opaque from 'libopaque';
 import { isWithinExpirationDate } from 'oslo';
-import { z } from 'zod';
 
 import { setSignedCookie } from '@/lib/utils.server';
-import { userKeysInput } from '@/server/api/schemas/auth';
-import { publicProcedure } from '@/server/api/trpc';
-import { db } from '@/server/db';
-import { emailVerificationCodes, userKeys, users } from '@/server/db/schema';
+import { storeUserRecordInput } from '@/schemas/auth';
+import { ApiError, defineRoute } from '@/server/define-route';
 import { lucia } from '@/services/auth';
+import { emailVerificationCodes, userKeys, users } from '@/services/db/schema';
 
-export const storeUserRecord = publicProcedure
-    .input(
-        z.object({
-            record: z.string().length(400, 'Expected record to be a hex string of length 400'),
-            email: z.string().email(),
-            confirmationCode: z.string().length(8, {
-                message: 'Confirmation code must be 8 characters long',
-            }),
-            userKeys: userKeysInput,
-        })
-    )
-    .mutation(async ({ input }) => {
+export const POST = defineRoute({
+    input: storeUserRecordInput,
+    output: undefined,
+    parseType: 'body',
+    handler: async ({
+        db,
+        input: { record: recHex, email, confirmationCode, userKeys: userCryptoKeys },
+    }) => {
         await opaque.ready;
 
-        const { record: recHex, email, confirmationCode, userKeys: userCryptoKeys } = input;
         const normalizedEmail = email.toUpperCase();
 
         const existingUser = await db.query.users.findFirst({
@@ -35,11 +27,14 @@ export const storeUserRecord = publicProcedure
             },
         });
 
-        const error = new TRPCError({
-            code: 'BAD_REQUEST',
-            message:
-                'Either the user does not exist, the email is already verified or there is no existing user secret.',
-        });
+        const error = new ApiError(
+            'Either the user does not exist, the email is already verified or there is no existing user secret.',
+            {
+                message:
+                    'Either the user does not exist, the email is already verified or there is no existing user secret.',
+            },
+            400
+        );
 
         if (
             !existingUser ||
@@ -75,10 +70,13 @@ export const storeUserRecord = publicProcedure
                 });
 
             if (!insertedUserKeys || insertedUserKeys.length <= 0) {
-                throw new TRPCError({
-                    code: 'INTERNAL_SERVER_ERROR',
-                    message: 'Failed to perform a database operation.',
-                });
+                throw new ApiError(
+                    'Failed to perform a database operation.',
+                    {
+                        message: 'Failed to perform a database operation.',
+                    },
+                    500
+                );
             }
 
             await ctx
@@ -96,4 +94,5 @@ export const storeUserRecord = publicProcedure
         const session = await lucia.createSession(existingUser.id, {});
         const sessionCookie = lucia.createSessionCookie(session.id);
         setSignedCookie(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
-    });
+    },
+});

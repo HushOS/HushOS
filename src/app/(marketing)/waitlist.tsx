@@ -1,17 +1,38 @@
 'use client';
 
 import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { Loader2, Terminal } from 'lucide-react';
 
 import { trackEvent } from '@/components/analytics';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { api } from '@/trpc/react';
+import { ApiRoutes } from '@/lib/routes';
+import { WaitlistInput } from '@/schemas/waitlist';
 
 export function Waitlist() {
-    const { mutate, isPending, isSuccess } = api.waitlist.join.useMutation();
     const [email, setEmail] = useState('');
+
+    const { mutate, isPending, isSuccess } = useMutation({
+        mutationKey: ['waitlist'],
+        mutationFn: async () => {
+            const response = await fetch(ApiRoutes.waitlist(), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ email } satisfies WaitlistInput),
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to join waitlist');
+            }
+        },
+        onSuccess: () => {
+            trackEvent('Joined Waitlist');
+        },
+    });
 
     if (isSuccess) {
         return (
@@ -26,10 +47,7 @@ export function Waitlist() {
             <form
                 onSubmit={e => {
                     e.preventDefault();
-                    trackEvent('Joined Waitlist');
-                    mutate({
-                        email,
-                    });
+                    mutate();
                 }}
                 className='flex items-center gap-2'>
                 <Input

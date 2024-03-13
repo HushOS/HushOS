@@ -34,7 +34,7 @@ export default function VerifyPage({
 
     return (
         <div className='flex h-full items-center'>
-            <Card className='mx-auto w-[32rem] max-w-[32rem]'>
+            <Card className='mx-auto w-[32rem] max-w-lg'>
                 <CardHeader>
                     <CardTitle>Almost there!</CardTitle>
                     <CardDescription>You won&apos;t be disappointed, we promise!</CardDescription>
