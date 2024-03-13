@@ -33,6 +33,11 @@ declare module 'libopaque' {
         cfg: Config;
         ids: { idS: string; idU: string };
     }): { rec: Uint8Array; export_key: Uint8Array };
+
+    function createCredentialRequest(params: { pwdU: string }): {
+        pub: Uint8Array;
+        sec: Uint8Array;
+    };
 }
 
 // declare module 'libopaque/dist/libopaque.debug' {

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
+import { Loader2 } from 'lucide-react';
 import { ofetch } from 'ofetch';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -21,11 +22,12 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { ApiRoutes, Routes } from '@/lib/routes';
+import { cn } from '@/lib/utils';
 import { SendRegistrationCodeInput, sendRegistrationCodeInput } from '@/schemas/auth';
 
 export function RegisterForm() {
     const { push } = useRouter();
-    const { mutate } = useMutation<unknown, Error, SendRegistrationCodeInput, unknown>({
+    const { mutate, isPending } = useMutation<unknown, Error, SendRegistrationCodeInput, unknown>({
         mutationKey: ['register'],
         mutationFn: async input => {
             await ofetch(ApiRoutes.auth.sendRegistrationCode(), {
@@ -103,7 +105,15 @@ export function RegisterForm() {
                         </FormItem>
                     )}
                 />
-                <Button type='submit'>Continue</Button>
+                <Button type='submit' disabled={isPending}>
+                    <Loader2
+                        className={cn('mr-2 size-4 animate-spin', {
+                            [`inline`]: isPending,
+                            [`hidden`]: !isPending,
+                        })}
+                    />
+                    Continue
+                </Button>
             </form>
         </Form>
     );

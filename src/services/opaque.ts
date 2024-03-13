@@ -35,6 +35,16 @@ export const OpaqueService = {
             exportKeyHex: opaque.uint8ArrayToHex(export_key),
         };
     },
+
+    createCredentialRequest: async (password: string) => {
+        await opaque.ready;
+        const { pub, sec } = opaque.createCredentialRequest({ pwdU: password });
+
+        return {
+            pubHex: opaque.uint8ArrayToHex(pub),
+            secHex: opaque.uint8ArrayToHex(sec),
+        };
+    },
 };
 
 expose(OpaqueService);

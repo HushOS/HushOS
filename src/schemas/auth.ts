@@ -94,3 +94,18 @@ export const storeUserRecordInput = z
     .openapi('StoreUserRecordInput');
 
 export type StoreUserRecordInput = z.infer<typeof storeUserRecordInput>;
+
+export const loginInput = z
+    .object({
+        email: z
+            .string({
+                required_error: 'Please enter your email address',
+            })
+            .email({
+                message: 'Please enter a valid email address',
+            }),
+        request: z.string(),
+    })
+    .openapi('LoginInput');
+
+export type LoginInput = z.infer<typeof loginInput>;
