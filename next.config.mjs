@@ -1,8 +1,11 @@
+import withBundleAnalyzer from '@next/bundle-analyzer';
 import createJiti from 'jiti';
 
 const jiti = createJiti(new URL(import.meta.url).pathname);
 
-jiti('./src/env/server');
+const {
+    serverEnvs: { ANALYZE },
+} = jiti('./src/env/server');
 jiti('./src/env/client');
 
 /** @type {import('next').NextConfig} */
@@ -19,4 +22,6 @@ const nextConfig = {
     },
 };
 
-export default nextConfig;
+export default withBundleAnalyzer({
+    enabled: ANALYZE,
+})(nextConfig);

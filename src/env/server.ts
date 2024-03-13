@@ -23,6 +23,8 @@ export const serverEnvs = createEnv({
         EMAIL_FROM: z.string(),
 
         COOKIE_SIGNING_SECRET: z.string(),
+
+        ANALYZE: z.preprocess(v => v === 'true' || v === '1', z.boolean()).default(false),
     },
     experimental__runtimeEnv: process.env,
     emptyStringAsUndefined: true,

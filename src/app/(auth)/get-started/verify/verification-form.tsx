@@ -6,7 +6,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { ofetch } from 'ofetch';
-import { MultipleFieldErrors, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { trackEvent } from '@/components/analytics';
@@ -25,7 +25,6 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp
 import { PasswordInput } from '@/components/ui/password-input';
 import { ApiRoutes, Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
-import { zxcvbn } from '@/lib/zxcvbn';
 import {
     createRegistrationResponseInput,
     CreateRegistrationResponseInput,
@@ -42,7 +41,10 @@ const schemaWithPassword = z.intersection(
         request: true,
     }),
     z.object({
-        password: z.string().min(1, { message: 'Password is required.' }),
+        password: z
+            .string()
+            .min(8, { message: 'Password must be at least 8 characters.' })
+            .max(64, { message: 'Password must be at most 64 characters.' }),
     })
 );
 
@@ -66,26 +68,6 @@ export function VerificationForm({ email }: { email: string }) {
             email,
             password,
         }: z.infer<typeof schemaWithPassword>) => {
-            const zxcvbnResult = zxcvbn(password, [email]);
-            if (zxcvbnResult.score <= 2) {
-                const types: MultipleFieldErrors = {};
-                let lastId = 0;
-                zxcvbnResult.feedback.suggestions.forEach((error, i) => {
-                    lastId = i + 1;
-                    types[`password${lastId}`] = error;
-                });
-
-                if (zxcvbnResult.feedback.warning) {
-                    types[`password${lastId + 1}`] = zxcvbnResult.feedback.warning;
-                }
-
-                form.setError('password', {
-                    types,
-                });
-
-                return;
-            }
-
             const opaque = OpaqueWorkerInstance;
             const { mHex, secHex } = await opaque.createRegistrationRequest(password);
 
