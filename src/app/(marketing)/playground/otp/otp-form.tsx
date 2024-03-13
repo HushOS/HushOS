@@ -70,6 +70,7 @@ export function OtpForm() {
                                 </div>
                                 <FormControl>
                                     <InputOTP
+                                        autoComplete='off'
                                         data-1p-ignore
                                         maxLength={8}
                                         render={({ slots }) => (
