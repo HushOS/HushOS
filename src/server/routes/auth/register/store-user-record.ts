@@ -115,7 +115,7 @@ export const storeUserRecord = new OpenAPIHono<{
 
         const session = await lucia.createSession(existingUser.id, {});
         const sessionCookie = lucia.createSessionCookie(session.id);
-        setSignedCookie(
+        await setSignedCookie(
             c,
             sessionCookie.name,
             sessionCookie.value,

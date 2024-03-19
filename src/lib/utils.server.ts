@@ -1,11 +1,12 @@
 import 'server-only';
 
-import { createHmac } from 'crypto';
 import { cache } from 'react';
-import { cookies } from 'next/headers';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { render } from '@react-email/render';
 import { eq } from 'drizzle-orm';
-import { CookieAttributes } from 'lucia';
+import { Context } from 'hono';
+import { getSignedCookie } from 'hono/cookie';
 import { createTransport } from 'nodemailer';
 import SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { createDate, isWithinExpirationDate, TimeSpan } from 'oslo';
@@ -14,68 +15,38 @@ import { Resend } from 'resend';
 
 import ConfirmationCode from '@/emails/confirmation-code';
 import { serverEnvs } from '@/env/server';
+import { Routes } from '@/lib/routes';
 import { lucia } from '@/services/auth';
 import { db } from '@/services/db';
 import { emailVerificationCodes } from '@/services/db/schema';
 
-export function signMessage(message: string, signingKey: string) {
-    const signature = createHmac('sha256', signingKey).update(message).digest('hex');
-    return message + '.' + signature;
-}
-
-export function parseSignedMessage(signedMessage: string, signingKey: string) {
-    const message = signedMessage.substring(0, signedMessage.lastIndexOf('.'));
-    const signature = signedMessage.substring(signedMessage.lastIndexOf('.') + 1);
-
-    if (message === undefined || signature === undefined) {
-        return null;
-    }
-
-    const expectedMessage = signMessage(message, signingKey);
-    if (signedMessage !== expectedMessage) {
-        return null;
-    }
-
-    return message;
-}
-
-export function setSignedCookie(key: string, value: string, attributes: CookieAttributes) {
-    try {
-        const signedValue = signMessage(value, serverEnvs.COOKIE_SIGNING_SECRET);
-        cookies().set(key, signedValue, attributes);
-    } catch (e) {
-        // Next.js throws error when attempting to set cookies when rendering page
-    }
-}
-
-export function getSignedCookie(key: string) {
-    const signedValue = cookies().get(key)?.value;
-    if (!signedValue) return null;
-    return parseSignedMessage(signedValue, serverEnvs.COOKIE_SIGNING_SECRET);
-}
-
 export const getUser = cache(async () => {
-    const sessionId = getSignedCookie(lucia.sessionCookieName);
+    const sessionId = await getSignedCookie(
+        {
+            req: {
+                raw: {
+                    headers: headers(),
+                },
+            },
+        } as Context<any, any, {}>,
+        serverEnvs.COOKIE_SIGNING_SECRET,
+        lucia.sessionCookieName
+    );
+
     if (!sessionId) return null;
 
-    const { user, session } = await lucia.validateSession(sessionId);
+    const { user } = await lucia.validateSession(sessionId);
+    return user;
+});
 
-    try {
-        if (session && session.fresh) {
-            const sessionCookie = lucia.createSessionCookie(session.id);
-            setSignedCookie(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
-        }
-
-        if (!session) {
-            const sessionCookie = lucia.createBlankSessionCookie();
-            setSignedCookie(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
-        }
-    } catch {
-        // Next.js throws error when attempting to set cookies when rendering page
+export async function ensureAuthenticated() {
+    const user = await getUser();
+    if (!user) {
+        throw redirect(Routes.login());
     }
 
     return user;
-});
+}
 
 function getSmtpTransporter() {
     let requiresAuth =

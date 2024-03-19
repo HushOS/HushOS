@@ -1,12 +1,11 @@
 import { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { clientEnvs } from '@/env/client';
 import { Routes } from '@/lib/routes';
-import { getUser } from '@/lib/utils.server';
+import { ensureAuthenticated } from '@/lib/utils.server';
 import { client } from '@/server/client';
 
 export const metadata: Metadata = {
@@ -27,10 +26,8 @@ export const metadata: Metadata = {
 };
 
 export default async function DrivePage() {
-    const user = await getUser();
-    if (!user) {
-        throw redirect(Routes.login());
-    }
+    const user = await ensureAuthenticated();
+
     return (
         <div className='flex h-full items-center'>
             <Card className='mx-auto w-[32rem] max-w-lg'>
@@ -45,7 +42,7 @@ export default async function DrivePage() {
                 </CardContent>
                 <CardFooter>
                     <Button asChild>
-                        <Link href={client.api.auth.logout.$url()}>Logout</Link>
+                        <Link href={client.api.auth.logout.$url().pathname}>Logout</Link>
                     </Button>
                 </CardFooter>
             </Card>

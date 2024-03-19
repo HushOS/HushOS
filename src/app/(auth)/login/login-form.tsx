@@ -44,8 +44,7 @@ export function LoginForm() {
     const setData = useCryptoStore(state => state.setData);
     const { mutate, isPending } = useMutation<unknown, Error, SchemaWithPassword, unknown>({
         mutationKey: ['register'],
-        mutationFn: async () => {},
-        onSuccess: async (_, { email, password }) => {
+        mutationFn: async ({ email, password }) => {
             const opaque = OpaqueWorkerInstance;
             const { pubHex, secHex } = await opaque.createCredentialRequest(password);
 
@@ -72,7 +71,8 @@ export function LoginForm() {
                 privateKey: keyBundle.asymmetricPrivateKey,
                 signingPrivateKey: keyBundle.signingPrivateKey,
             });
-
+        },
+        onSuccess: async () => {
             push(Routes.drive());
         },
         onError: () => {
