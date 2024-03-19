@@ -5,9 +5,9 @@ import { ErrorMessage } from '@hookform/error-message';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
-import { ofetch } from 'ofetch';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import * as z from 'zod';
 
 import { trackEvent } from '@/components/analytics';
 import { Button } from '@/components/ui/button';
@@ -23,21 +23,16 @@ import {
 import { Input } from '@/components/ui/input';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { PasswordInput } from '@/components/ui/password-input';
-import { ApiRoutes, Routes } from '@/lib/routes';
+import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
-import {
-    InitiateOpaqueRegistrationResponseInput,
-    initiateOpaqueRegistrationResponseInput,
-    InitiateOpaqueResponseOutput,
-    StoreUserRecordInput,
-} from '@/schemas/auth';
-import { z } from '@/server/zod';
+import { initiateOpaqueRegistrationResponseSchema } from '@/schemas/auth';
+import { client } from '@/server/client';
 import { CryptoWorkerInstance } from '@/services/comlink-crypto';
 import { OpaqueWorkerInstance } from '@/services/comlink-opaque';
 import { useCryptoStore } from '@/stores/crypto-store';
 
 const schemaWithPassword = z.intersection(
-    initiateOpaqueRegistrationResponseInput.omit({
+    initiateOpaqueRegistrationResponseSchema.omit({
         request: true,
     }),
     z.object({
@@ -48,8 +43,10 @@ const schemaWithPassword = z.intersection(
     })
 );
 
+type SchemaWithPassword = z.infer<typeof schemaWithPassword>;
+
 export function VerificationForm({ email }: { email: string }) {
-    const form = useForm<z.infer<typeof schemaWithPassword>>({
+    const form = useForm<SchemaWithPassword>({
         resolver: zodResolver(schemaWithPassword),
         defaultValues: {
             confirmationCode: '',
@@ -61,27 +58,20 @@ export function VerificationForm({ email }: { email: string }) {
 
     const setData = useCryptoStore(state => state.setData);
     const router = useRouter();
-    const { mutate, isPending } = useMutation({
+    const { mutate, isPending } = useMutation<unknown, Error, SchemaWithPassword>({
         mutationKey: ['user-verification'],
-        mutationFn: async ({
-            confirmationCode,
-            email,
-            password,
-        }: z.infer<typeof schemaWithPassword>) => {
+        mutationFn: async ({ confirmationCode, email, password }) => {
             const opaque = OpaqueWorkerInstance;
             const { mHex, secHex } = await opaque.createRegistrationRequest(password);
 
-            const { response } = await ofetch<InitiateOpaqueResponseOutput>(
-                ApiRoutes.auth.createRegistrationResponse(),
-                {
-                    method: 'POST',
-                    body: {
-                        email,
-                        confirmationCode,
-                        request: mHex,
-                    } satisfies InitiateOpaqueRegistrationResponseInput,
-                }
-            );
+            const resp = await client.api.auth.register['create-registration-response'].$post({
+                json: {
+                    email,
+                    confirmationCode,
+                    request: mHex,
+                },
+            });
+            const { response } = await resp.json();
 
             const { exportKeyHex: _, recHex } = await opaque.finalizeRequest(
                 secHex,
@@ -92,14 +82,13 @@ export function VerificationForm({ email }: { email: string }) {
             const crypto = CryptoWorkerInstance;
             const keyBundle = await crypto.generateRequiredKeys(password);
 
-            await ofetch(ApiRoutes.auth.storeUserRecord(), {
-                method: 'POST',
-                body: {
+            await client.api.auth.register['store-user-record'].$post({
+                json: {
                     record: recHex,
                     email,
                     confirmationCode,
                     userKeys: keyBundle.cryptoProperties,
-                } satisfies StoreUserRecordInput,
+                },
             });
 
             setData({

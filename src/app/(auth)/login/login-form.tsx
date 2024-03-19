@@ -5,10 +5,9 @@ import { ErrorMessage } from '@hookform/error-message';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
-import { ofetch } from 'ofetch';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { z } from 'zod';
+import * as z from 'zod';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -21,21 +20,16 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
-import { ApiRoutes, Routes } from '@/lib/routes';
+import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
-import {
-    InitiateOpaqueCredentialResponseInput,
-    initiateOpaqueCredentialResponseInput,
-    InitiateOpaqueResponseOutput,
-    UserAuthInput,
-    UserKeys,
-} from '@/schemas/auth';
+import { initiateOpaqueCredentialResponseSchema } from '@/schemas/auth';
+import { client } from '@/server/client';
 import { CryptoWorkerInstance } from '@/services/comlink-crypto';
 import { OpaqueWorkerInstance } from '@/services/comlink-opaque';
 import { useCryptoStore } from '@/stores/crypto-store';
 
 const schemaWithPassword = z.intersection(
-    initiateOpaqueCredentialResponseInput.omit({
+    initiateOpaqueCredentialResponseSchema.omit({
         request: true,
     }),
     z.object({
@@ -55,26 +49,20 @@ export function LoginForm() {
             const opaque = OpaqueWorkerInstance;
             const { pubHex, secHex } = await opaque.createCredentialRequest(password);
 
-            const { response } = await ofetch<InitiateOpaqueResponseOutput>(
-                ApiRoutes.auth.createCredentialResponse(),
-                {
-                    method: 'POST',
-                    body: {
-                        email,
-                        request: pubHex,
-                    } satisfies InitiateOpaqueCredentialResponseInput,
-                }
-            );
+            const serverResp = await client.api.auth.login['create-credential-response'].$post({
+                json: { email, request: pubHex },
+            });
+            const { response } = await serverResp.json();
 
             const { authUHex } = await opaque.recoverCredentials(email, secHex, response);
 
-            const userKeys = await ofetch<UserKeys>(ApiRoutes.auth.userAuth(), {
-                method: 'POST',
-                body: {
+            const userKeysResp = await client.api.auth.login['user-auth'].$post({
+                json: {
                     email,
                     authU: authUHex,
-                } satisfies UserAuthInput,
+                },
             });
+            const userKeys = await userKeysResp.json();
 
             const crypto = CryptoWorkerInstance;
             const keyBundle = await crypto.decryptRequiredKeys(password, userKeys);

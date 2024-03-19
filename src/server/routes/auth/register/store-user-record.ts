@@ -1,21 +1,50 @@
+import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
+import { setSignedCookie } from 'hono/cookie';
+import { HTTPException } from 'hono/http-exception';
 import opaque from 'libopaque';
 import { isWithinExpirationDate } from 'oslo';
 
-import { setSignedCookie } from '@/lib/utils.server';
-import { storeUserRecordInput } from '@/schemas/auth';
-import { ApiError, defineRoute } from '@/server/define-route';
+import { serverEnvs } from '@/env/server';
+import { storeUserRecordSchema } from '@/schemas/auth';
+import { ContextVariables } from '@/server/types';
 import { lucia } from '@/services/auth';
 import { emailVerificationCodes, userKeys, users } from '@/services/db/schema';
 
-export const POST = defineRoute({
-    input: storeUserRecordInput,
-    output: undefined,
-    parseType: 'body',
-    handler: async ({
-        db,
-        input: { record: recHex, email, confirmationCode, userKeys: userCryptoKeys },
-    }) => {
+export const storeUserRecord = new OpenAPIHono<{
+    Variables: ContextVariables;
+}>().openapi(
+    createRoute({
+        method: 'post',
+        path: '/api/auth/register/store-user-record',
+        tags: ['Auth'],
+        summary: "Stores the user's OPAQUE record for future use and also stores user's key bundle",
+        request: {
+            body: {
+                description: 'Request body',
+                content: {
+                    'application/json': {
+                        schema: storeUserRecordSchema.openapi('StoreUserRecord'),
+                    },
+                },
+                required: true,
+            },
+        },
+        responses: {
+            200: {
+                description: 'Success',
+            },
+        },
+    }),
+    async c => {
+        const {
+            email,
+            confirmationCode,
+            record: recHex,
+            userKeys: userCryptoKeys,
+        } = c.req.valid('json');
+        const db = c.get('db');
+
         await opaque.ready;
 
         const normalizedEmail = email.toUpperCase();
@@ -27,14 +56,10 @@ export const POST = defineRoute({
             },
         });
 
-        const error = new ApiError(
-            'Either the user does not exist, the email is already verified or there is no existing user secret.',
-            {
-                message:
-                    'Either the user does not exist, the email is already verified or there is no existing user secret.',
-            },
-            400
-        );
+        const error = new HTTPException(400, {
+            message:
+                'Either the user does not exist, the email is already verified or there is no existing user secret.',
+        });
 
         if (
             !existingUser ||
@@ -70,13 +95,9 @@ export const POST = defineRoute({
                 });
 
             if (!insertedUserKeys || insertedUserKeys.length <= 0) {
-                throw new ApiError(
-                    'Failed to perform a database operation.',
-                    {
-                        message: 'Failed to perform a database operation.',
-                    },
-                    500
-                );
+                throw new HTTPException(500, {
+                    message: 'Failed to perform a database operation.',
+                });
             }
 
             await ctx
@@ -94,6 +115,17 @@ export const POST = defineRoute({
 
         const session = await lucia.createSession(existingUser.id, {});
         const sessionCookie = lucia.createSessionCookie(session.id);
-        setSignedCookie(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
-    },
-});
+        setSignedCookie(
+            c,
+            sessionCookie.name,
+            sessionCookie.value,
+            serverEnvs.COOKIE_SIGNING_SECRET,
+            {
+                ...sessionCookie.attributes,
+                sameSite: 'Strict',
+            }
+        );
+
+        return c.json({});
+    }
+);

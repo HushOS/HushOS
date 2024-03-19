@@ -5,8 +5,9 @@ import { redirect } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { clientEnvs } from '@/env/client';
-import { ApiRoutes, Routes } from '@/lib/routes';
+import { Routes } from '@/lib/routes';
 import { getUser } from '@/lib/utils.server';
+import { client } from '@/server/client';
 
 export const metadata: Metadata = {
     title: 'Drive',
@@ -44,7 +45,7 @@ export default async function DrivePage() {
                 </CardContent>
                 <CardFooter>
                     <Button asChild>
-                        <Link href={ApiRoutes.auth.logout()}>Logout</Link>
+                        <Link href={client.api.auth.logout.$url()}>Logout</Link>
                     </Button>
                 </CardFooter>
             </Card>

@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
-import { ofetch } from 'ofetch';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
@@ -21,18 +20,18 @@ import {
     FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { ApiRoutes, Routes } from '@/lib/routes';
+import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
-import { SendRegistrationCodeInput, sendRegistrationCodeInput } from '@/schemas/auth';
+import { SendRegistrationCode, sendRegistrationCodeSchema } from '@/schemas/auth';
+import { client } from '@/server/client';
 
 export function RegisterForm() {
     const { push } = useRouter();
-    const { mutate, isPending } = useMutation<unknown, Error, SendRegistrationCodeInput, unknown>({
+    const { mutate, isPending } = useMutation<unknown, Error, SendRegistrationCode, unknown>({
         mutationKey: ['register'],
         mutationFn: async input => {
-            await ofetch(ApiRoutes.auth.sendRegistrationCode(), {
-                method: 'POST',
-                body: input,
+            await client.api.auth.register['send-registration-code'].$post({
+                json: input,
             });
 
             return { email: input.email };
@@ -51,8 +50,8 @@ export function RegisterForm() {
         },
     });
 
-    const form = useForm<SendRegistrationCodeInput>({
-        resolver: zodResolver(sendRegistrationCodeInput),
+    const form = useForm<SendRegistrationCode>({
+        resolver: zodResolver(sendRegistrationCodeSchema),
         defaultValues: {
             email: '',
         },

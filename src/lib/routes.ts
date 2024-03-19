@@ -4,8 +4,7 @@ import {
     useSearchParams as useNextSearchParams,
 } from 'next/navigation';
 import queryString from 'query-string';
-
-import { z } from '@/server/zod';
+import * as z from 'zod';
 
 export const Routes = {
     scalar: makeRoute(() => '/scalar'),
@@ -30,23 +29,6 @@ export const Routes = {
             directory: z.string().optional(),
         })
     ),
-};
-
-export const ApiRoutes = {
-    apiDoc: makeRoute(() => '/api/doc'),
-    waitlist: makeRoute(() => '/api/waitlist'),
-    auth: {
-        sendRegistrationCode: makeRoute(() => '/api/auth/register/send-registration-code'),
-        createRegistrationResponse: makeRoute(
-            () => '/api/auth/register/create-registration-response'
-        ),
-        storeUserRecord: makeRoute(() => '/api/auth/register/store-user-record'),
-
-        createCredentialResponse: makeRoute(() => '/api/auth/login/create-credential-response'),
-        userAuth: makeRoute(() => '/api/auth/login/user-auth'),
-
-        logout: makeRoute(() => '/api/auth/logout'),
-    },
 };
 
 type RouteBuilder<Params extends z.ZodSchema, Search extends z.ZodSchema> = {

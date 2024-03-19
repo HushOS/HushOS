@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Check, Clipboard } from 'lucide-react';
 import { useForm } from 'react-hook-form';
+import * as z from 'zod';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -18,7 +19,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
-import { z } from '@/server/zod';
 
 export function OtpForm() {
     const form = useForm<{ code: string }>({

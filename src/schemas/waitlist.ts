@@ -1,13 +1,7 @@
-import { z } from '@/server/zod';
+import * as z from 'zod';
 
-export const waitlistInput = z
-    .object({
-        email: z.string().email(),
-    })
-    .openapi('WaitlistInput', {
-        example: {
-            email: 'hey@hushos.com',
-        },
-    });
+export const waitlistSchema = z.object({
+    email: z.string().email(),
+});
 
-export type WaitlistInput = z.infer<typeof waitlistInput>;
+export type Waitlist = z.infer<typeof waitlistSchema>;
