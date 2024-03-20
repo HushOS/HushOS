@@ -2,33 +2,51 @@
 
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { HardDriveIcon, LogOutIcon } from 'lucide-react';
 
 import { Logo } from '@/components/logo';
+import { SidebarItem, SidebarNav } from '@/components/sidebar-nav';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
+import { client } from '@/server/client';
 
 type PlatformShellProps = {
     defaultLayout?: Array<number>;
     defaultCollapsed?: boolean;
     navCollapsedSize: number;
     children: ReactNode;
+    additionalSidebarComponents?: ReactNode;
 };
+
+const items: Array<SidebarItem> = [
+    {
+        icon: HardDriveIcon,
+        label: 'Drive',
+        routeOrAction: Routes.drive(),
+    },
+    {
+        icon: LogOutIcon,
+        label: 'Logout',
+        routeOrAction: client.api.auth.logout.$url().pathname,
+    },
+];
 
 export function PlatformShell({
     defaultLayout = [20, 80],
     navCollapsedSize,
     defaultCollapsed = false,
     children,
+    additionalSidebarComponents,
 }: PlatformShellProps) {
     const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
     const [size, setSize] = useState(defaultLayout);
 
     useEffect(() => {
-        document.cookie = `react-resizable-panels:layout=${JSON.stringify(size)}`;
+        document.cookie = `react-resizable-panels:layout=${JSON.stringify(size)};path=/`;
     }, [size]);
 
     return (
@@ -50,16 +68,16 @@ export function PlatformShell({
                         setIsCollapsed(true);
                         document.cookie = `react-resizable-panels:collapsed=${JSON.stringify(
                             true
-                        )}`;
+                        )};path=/`;
                     }}
                     onExpand={() => {
                         setIsCollapsed(false);
                         document.cookie = `react-resizable-panels:collapsed=${JSON.stringify(
                             false
-                        )}`;
+                        )};path=/`;
                     }}
                     className={cn(
-                        'hidden lg:block',
+                        'hidden flex-col lg:flex',
                         false && 'min-w-[50px] transition-all duration-300 ease-in-out'
                     )}>
                     <div
@@ -74,13 +92,15 @@ export function PlatformShell({
                                     className={cn({
                                         [`hidden`]: isCollapsed,
                                     })}>
-                                    Drive
+                                    HushOS
                                 </h1>
                             </div>
                         </Link>
                         <ThemeToggle />
                     </div>
                     <Separator className='mb-4' />
+                    <SidebarNav links={items} isCollapsed={isCollapsed} />
+                    {additionalSidebarComponents}
                 </ResizablePanel>
                 <ResizableHandle withHandle className='hidden lg:flex' />
                 <ResizablePanel
