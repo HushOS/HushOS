@@ -26,17 +26,17 @@ const items: Array<SidebarItem> = [
     {
         icon: HardDriveIcon,
         label: 'Drive',
-        routeOrAction: Routes.drive(),
+        route: Routes.drive(),
     },
     {
         icon: LogOutIcon,
         label: 'Logout',
-        routeOrAction: client.api.auth.logout.$url().pathname,
+        route: client.api.auth.logout.$url().pathname,
     },
 ];
 
 export function PlatformShell({
-    defaultLayout = [20, 80],
+    defaultLayout = [14, 86],
     navCollapsedSize,
     defaultCollapsed = false,
     children,
@@ -60,7 +60,7 @@ export function PlatformShell({
                     collapsedSize={navCollapsedSize}
                     collapsible={true}
                     minSize={10}
-                    maxSize={20}
+                    maxSize={24}
                     onResize={resize => {
                         setSize(prev => [resize, prev[1]!]);
                     }}

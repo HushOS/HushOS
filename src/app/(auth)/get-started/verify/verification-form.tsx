@@ -21,7 +21,12 @@ import {
     FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
+import {
+    InputOTP,
+    InputOTPGroup,
+    InputOTPSeparator,
+    InputOTPSlot,
+} from '@/components/ui/input-otp';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Routes } from '@/lib/routes';
 import { cn } from '@/lib/utils';
@@ -123,17 +128,21 @@ export function VerificationForm({ email }: { email: string }) {
                                     <FormDescription>Check your email.</FormDescription>
                                 </div>
                                 <FormControl>
-                                    <InputOTP
-                                        maxLength={8}
-                                        render={({ slots }) => (
-                                            <InputOTPGroup>
-                                                {slots.map((slot, index) => (
-                                                    <InputOTPSlot key={index} {...slot} />
-                                                ))}{' '}
-                                            </InputOTPGroup>
-                                        )}
-                                        {...field}
-                                    />
+                                    <InputOTP maxLength={8} {...field}>
+                                        <InputOTPGroup>
+                                            <InputOTPSlot index={0} />
+                                            <InputOTPSlot index={1} />
+                                            <InputOTPSlot index={2} />
+                                            <InputOTPSlot index={3} />
+                                        </InputOTPGroup>
+                                        <InputOTPSeparator />
+                                        <InputOTPGroup>
+                                            <InputOTPSlot index={4} />
+                                            <InputOTPSlot index={5} />
+                                            <InputOTPSlot index={6} />
+                                            <InputOTPSlot index={7} />
+                                        </InputOTPGroup>
+                                    </InputOTP>
                                 </FormControl>
                                 <FormMessage />
                             </div>

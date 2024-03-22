@@ -9,7 +9,13 @@ import { serverEnvs } from '@/env/server';
 import { storeUserRecordSchema } from '@/schemas/auth';
 import { ContextVariables } from '@/server/types';
 import { lucia } from '@/services/auth';
-import { emailVerificationCodes, userKeys, users } from '@/services/db/schema';
+import {
+    directoryNodes,
+    emailVerificationCodes,
+    userKeys,
+    users,
+    workspaces,
+} from '@/services/db/schema';
 
 export const storeUserRecord = new OpenAPIHono<{
     Variables: ContextVariables;
@@ -94,11 +100,36 @@ export const storeUserRecord = new OpenAPIHono<{
                     id: userKeys.id,
                 });
 
-            if (!insertedUserKeys || insertedUserKeys.length <= 0) {
+            if (insertedUserKeys.length <= 0) {
                 throw new HTTPException(500, {
                     message: 'Failed to perform a database operation.',
                 });
             }
+
+            const [insertedWorkspace] = await ctx
+                .insert(workspaces)
+                .values({
+                    userId: existingUser.id,
+                })
+                .returning({
+                    id: workspaces.id,
+                });
+
+            if (!insertedWorkspace) {
+                throw new HTTPException(500, {
+                    message: 'Failed to perform a database operation.',
+                });
+            }
+
+            await ctx.insert(directoryNodes).values({
+                workspaceId: insertedWorkspace.id,
+                materializedPath: `workspace-${insertedWorkspace.id}/`,
+                keyBundle: userCryptoKeys.mainKeyBundle,
+                metadataBundle: {
+                    nonce: '',
+                    encryptedMetadata: '',
+                },
+            });
 
             await ctx
                 .update(users)
