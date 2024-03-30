@@ -137,6 +137,7 @@ export const storeUserRecord = new OpenAPIHono<{
                     opaqueRecord: opaque.uint8ArrayToHex(recToStore),
                     userKeysId: insertedUserKeys.at(0)!.id,
                     opaqueSecret: null,
+                    workspaceId: insertedWorkspace.id,
                 })
                 .where(eq(users.id, existingUser.id));
 
