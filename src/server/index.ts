@@ -57,6 +57,13 @@ app.get(
     })
 );
 
+app.get('/api/health', async c => {
+    // TODO: We should check the appropriate services here
+
+    c.status(200);
+    c.body('OK');
+});
+
 const routes = app.route('/', waitlistApp).route('/', authApp);
 
 export type AppType = typeof routes;
