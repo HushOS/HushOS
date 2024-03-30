@@ -1,6 +1,5 @@
 import 'server-only';
 
-import { cache } from 'react';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { render } from '@react-email/render';
@@ -18,7 +17,7 @@ import { getLuciaClient } from '@/services/auth';
 import { getDbClient } from '@/services/db';
 import { emailVerificationCodes } from '@/services/db/schema';
 
-export const getUser = cache(async () => {
+export const getUser = async () => {
     const lucia = getLuciaClient();
     const sessionId = cookies().get(lucia.sessionCookieName)?.value;
     if (!sessionId) {
@@ -29,7 +28,7 @@ export const getUser = cache(async () => {
     const { user } = await lucia.validateSession(sessionId);
     console.log(user);
     return user;
-});
+};
 
 export async function ensureAuthenticated() {
     const user = await getUser();
