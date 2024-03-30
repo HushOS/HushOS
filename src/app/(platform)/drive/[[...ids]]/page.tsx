@@ -27,8 +27,9 @@ export default async function DrivePage({ params: { ids } }: { params: { ids?: s
         return redirect(Routes.drive());
     }
 
-    const user = await ensureAuthenticated();
+    await ensureAuthenticated();
+
     const currentFolderId = ids?.at(0) ?? null;
 
-    return <div className='h-full p-2'></div>;
+    return <div className='h-full p-2'>{currentFolderId ?? 'Root'}</div>;
 }
