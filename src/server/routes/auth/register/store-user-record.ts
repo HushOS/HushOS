@@ -7,7 +7,6 @@ import { isWithinExpirationDate } from 'oslo';
 
 import { storeUserRecordSchema } from '@/schemas/auth';
 import { ContextVariables } from '@/server/types';
-import { lucia } from '@/services/auth';
 import {
     directoryNodes,
     emailVerificationCodes,
@@ -49,6 +48,7 @@ export const storeUserRecord = new OpenAPIHono<{
             userKeys: userCryptoKeys,
         } = c.req.valid('json');
         const db = c.get('db');
+        const lucia = c.get('lucia');
 
         await opaque.ready;
 

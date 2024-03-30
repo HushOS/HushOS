@@ -5,13 +5,16 @@ import { getCookie, setCookie } from 'hono/cookie';
 import { authApp } from '@/server/routes/auth';
 import { waitlistApp } from '@/server/routes/waitlist';
 import { ContextVariables } from '@/server/types';
-import { lucia } from '@/services/auth';
-import { db } from '@/services/db';
+import { getLuciaClient } from '@/services/auth';
+import { getDbClient } from '@/services/db';
 
 const app = new OpenAPIHono<{ Variables: ContextVariables }>();
 
 app.use(async (c, next) => {
+    const db = getDbClient();
+    const lucia = getLuciaClient();
     c.set('db', db);
+    c.set('lucia', lucia);
 
     const sessionId = getCookie(c, lucia.sessionCookieName);
     if (!sessionId) {

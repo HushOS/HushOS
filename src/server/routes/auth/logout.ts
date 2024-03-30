@@ -3,7 +3,6 @@ import { getCookie } from 'hono/cookie';
 
 import { Routes } from '@/lib/routes';
 import { ContextVariables } from '@/server/types';
-import { lucia } from '@/services/auth';
 
 export const logoutApp = new OpenAPIHono<{ Variables: ContextVariables }>().openapi(
     createRoute({
@@ -18,6 +17,7 @@ export const logoutApp = new OpenAPIHono<{ Variables: ContextVariables }>().open
         },
     }),
     async c => {
+        const lucia = c.get('lucia');
         const sessionId = getCookie(c, lucia.sessionCookieName);
         if (!sessionId) {
             return c.redirect(Routes.login());

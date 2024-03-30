@@ -6,7 +6,6 @@ import opaque from 'libopaque';
 
 import { userAuthSchema, userKeysSchema } from '@/schemas/auth';
 import { ContextVariables } from '@/server/types';
-import { lucia } from '@/services/auth';
 import { users } from '@/services/db/schema';
 
 export const userAuth = new OpenAPIHono<{ Variables: ContextVariables }>().openapi(
@@ -40,6 +39,7 @@ export const userAuth = new OpenAPIHono<{ Variables: ContextVariables }>().opena
     async c => {
         const { authU: authUHex, email } = c.req.valid('json');
         const db = c.get('db');
+        const lucia = c.get('lucia');
 
         await opaque.ready;
 
