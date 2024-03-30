@@ -4,7 +4,7 @@ import * as z from 'zod';
 export const serverEnvs = createEnv({
     server: {
         NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-        DEPLOY_TARGET: z.enum(['self-hosted', 'vercel']).default('self-hosted'),
+        DEPLOY_TARGET: z.enum(['standalone', 'vercel']).default('standalone'),
         DATABASE_URL: z.string(),
 
         EMAIL_PROVIDER: z.enum(['console', 'smtp', 'resend']).default('console'),
