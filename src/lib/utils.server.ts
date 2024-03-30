@@ -24,7 +24,9 @@ export const getUser = cache(async () => {
         return null;
     }
 
+    console.log(sessionId);
     const { user } = await lucia.validateSession(sessionId);
+    console.log(user);
     return user;
 });
 
