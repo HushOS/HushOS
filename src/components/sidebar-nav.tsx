@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link, { LinkProps } from 'next/link';
 import { usePathname } from 'next/navigation';
 import { LucideIcon } from 'lucide-react';
 
@@ -11,6 +11,7 @@ export type SidebarItem = {
     label: string;
     icon: LucideIcon;
     route: string;
+    linkProps?: Partial<LinkProps>;
 };
 
 type SidebarNavProps = {
@@ -42,7 +43,8 @@ export function SidebarNav({ links, isCollapsed }: SidebarNavProps) {
                                         isActive && 'bg-primary/5 text-primary',
                                         !isActive &&
                                             'hover:bg-accent-foreground/5 hover:text-accent-foreground'
-                                    )}>
+                                    )}
+                                    {...link.linkProps}>
                                     <link.icon className='size-4' />
                                     <span className='sr-only'>{link.label}</span>
                                 </Link>
@@ -63,7 +65,8 @@ export function SidebarNav({ links, isCollapsed }: SidebarNavProps) {
                                 isActive && 'border-l-4 border-primary bg-primary/5 text-primary',
                                 !isActive &&
                                     'hover:bg-accent-foreground/5 hover:text-accent-foreground'
-                            )}>
+                            )}
+                            {...link.linkProps}>
                             <link.icon className='mr-2 size-4' />
                             {link.label}
                         </Link>

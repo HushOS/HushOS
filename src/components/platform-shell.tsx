@@ -32,6 +32,9 @@ const items: Array<SidebarItem> = [
         icon: LogOutIcon,
         label: 'Logout',
         route: client.api.auth.logout.$url().pathname,
+        linkProps: {
+            prefetch: false,
+        },
     },
 ];
 

@@ -1,11 +1,11 @@
 import { Session, User } from 'lucia';
 
-import { getLuciaClient } from '@/services/auth';
-import { getDbClient } from '@/services/db';
+import { lucia } from '@/services/auth';
+import { db } from '@/services/db';
 
 export type ContextVariables = {
-    db: ReturnType<typeof getDbClient>;
-    lucia: ReturnType<typeof getLuciaClient>;
+    db: typeof db;
+    lucia: typeof lucia;
     user: User | null;
     session: Session | null;
 };

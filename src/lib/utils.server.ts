@@ -14,12 +14,11 @@ import { Resend } from 'resend';
 import ConfirmationCode from '@/emails/confirmation-code';
 import { serverEnvs } from '@/env/server';
 import { Routes } from '@/lib/routes';
-import { getLuciaClient } from '@/services/auth';
-import { getDbClient } from '@/services/db';
+import { lucia } from '@/services/auth';
+import { db } from '@/services/db';
 import { emailVerificationCodes } from '@/services/db/schema';
 
 export const getUser = cache(async () => {
-    const lucia = getLuciaClient();
     const sessionId = cookies().get(lucia.sessionCookieName)?.value;
     if (!sessionId) {
         return null;
@@ -96,7 +95,6 @@ export async function sendVerificationCode(emailAddress: string, code: string) {
 }
 
 export async function generateEmailVerificationCode(userId: string): Promise<string> {
-    const db = getDbClient();
     const existingCode = await db
         .select({ code: emailVerificationCodes.code, expiresAt: emailVerificationCodes.expiresAt })
         .from(emailVerificationCodes)
