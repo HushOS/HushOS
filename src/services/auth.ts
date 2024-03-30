@@ -5,9 +5,7 @@ import { serverEnvs } from '@/env/server';
 import { db } from '@/services/db';
 import { sessions, users } from '@/services/db/schema';
 
-const adapter = new DrizzlePostgreSQLAdapter(db, sessions, users);
-
-export const lucia = new Lucia(adapter, {
+export const lucia = new Lucia(new DrizzlePostgreSQLAdapter(db, sessions, users), {
     sessionCookie: {
         attributes: {
             secure: serverEnvs.NODE_ENV === 'production',
