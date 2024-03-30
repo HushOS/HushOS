@@ -1,7 +1,6 @@
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
-import { getSignedCookie } from 'hono/cookie';
+import { getCookie } from 'hono/cookie';
 
-import { serverEnvs } from '@/env/server';
 import { Routes } from '@/lib/routes';
 import { ContextVariables } from '@/server/types';
 import { lucia } from '@/services/auth';
@@ -19,12 +18,7 @@ export const logoutApp = new OpenAPIHono<{ Variables: ContextVariables }>().open
         },
     }),
     async c => {
-        const sessionId = await getSignedCookie(
-            c,
-            serverEnvs.COOKIE_SIGNING_SECRET,
-            lucia.sessionCookieName
-        );
-
+        const sessionId = getCookie(c, lucia.sessionCookieName);
         if (!sessionId) {
             return c.redirect(Routes.login());
         }

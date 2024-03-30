@@ -1,12 +1,10 @@
 import 'server-only';
 
 import { cache } from 'react';
-import { headers } from 'next/headers';
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { render } from '@react-email/render';
 import { eq } from 'drizzle-orm';
-import { Context } from 'hono';
-import { getSignedCookie } from 'hono/cookie';
 import { createTransport } from 'nodemailer';
 import SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { createDate, isWithinExpirationDate, TimeSpan } from 'oslo';
@@ -21,19 +19,10 @@ import { db } from '@/services/db';
 import { emailVerificationCodes } from '@/services/db/schema';
 
 export const getUser = cache(async () => {
-    const sessionId = await getSignedCookie(
-        {
-            req: {
-                raw: {
-                    headers: headers(),
-                },
-            },
-        } as Context<any, any, {}>,
-        serverEnvs.COOKIE_SIGNING_SECRET,
-        lucia.sessionCookieName
-    );
-
-    if (!sessionId) return null;
+    const sessionId = cookies().get(lucia.sessionCookieName)?.value;
+    if (!sessionId) {
+        return null;
+    }
 
     const { user } = await lucia.validateSession(sessionId);
     return user;

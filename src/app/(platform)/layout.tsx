@@ -5,7 +5,7 @@ import { PlatformShell } from '@/components/platform-shell';
 import { ensureAuthenticated } from '@/lib/utils.server';
 
 export default async function PlatformLayout({ children }: { children: ReactNode }) {
-    const user = await ensureAuthenticated();
+    await ensureAuthenticated();
 
     const defaultLayoutString = cookies().get('react-resizable-panels:layout')?.value ?? '[20, 80]';
     let defaultLayout = JSON.parse(defaultLayoutString) as Array<number>;

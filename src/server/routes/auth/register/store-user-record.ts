@@ -1,11 +1,10 @@
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import { eq } from 'drizzle-orm';
-import { setSignedCookie } from 'hono/cookie';
+import { setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import opaque from 'libopaque';
 import { isWithinExpirationDate } from 'oslo';
 
-import { serverEnvs } from '@/env/server';
 import { storeUserRecordSchema } from '@/schemas/auth';
 import { ContextVariables } from '@/server/types';
 import { lucia } from '@/services/auth';
@@ -146,16 +145,10 @@ export const storeUserRecord = new OpenAPIHono<{
 
         const session = await lucia.createSession(existingUser.id, {});
         const sessionCookie = lucia.createSessionCookie(session.id);
-        await setSignedCookie(
-            c,
-            sessionCookie.name,
-            sessionCookie.value,
-            serverEnvs.COOKIE_SIGNING_SECRET,
-            {
-                ...sessionCookie.attributes,
-                sameSite: 'Strict',
-            }
-        );
+        setCookie(c, sessionCookie.name, sessionCookie.value, {
+            ...sessionCookie.attributes,
+            sameSite: 'Strict',
+        });
 
         return c.json({});
     }

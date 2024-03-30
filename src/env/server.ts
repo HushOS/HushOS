@@ -22,8 +22,6 @@ export const serverEnvs = createEnv({
         // always required regardless of email provider
         EMAIL_FROM: z.string(),
 
-        COOKIE_SIGNING_SECRET: z.string(),
-
         ANALYZE: z.preprocess(v => v === 'true' || v === '1', z.boolean()).default(false),
     },
     experimental__runtimeEnv: process.env,
