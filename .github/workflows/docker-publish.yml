@@ -40,7 +40,7 @@ jobs:
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}
                   secrets: |
-                      "NEXT_PUBLIC_COMMIT_SHA=${{ github.sha }}"
+                      "COMMIT_SHA=${{ github.sha }}"
 
             - name: Notify
               run: |

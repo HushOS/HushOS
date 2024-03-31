@@ -23,6 +23,8 @@ export const serverEnvs = createEnv({
         EMAIL_FROM: z.string(),
 
         ANALYZE: z.preprocess(v => v === 'true' || v === '1', z.boolean()).default(false),
+
+        COMMIT_SHA: z.string().default('none'),
     },
     experimental__runtimeEnv: process.env,
     emptyStringAsUndefined: true,
