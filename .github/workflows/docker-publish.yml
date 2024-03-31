@@ -39,3 +39,7 @@ jobs:
                   push: true
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}
+
+            - name: Notify
+              run: |
+                  curl --request GET '${{ secrets.NOTIFY_WEBHOOK }}' --header 'Authorization: Bearer ${{ secrets.NOTIFY_API_TOKEN }}'
