@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { apiReference } from '@scalar/hono-api-reference';
 import { getCookie, setCookie } from 'hono/cookie';
 
+import { clientEnvs } from '@/env/client';
 import { authApp } from '@/server/routes/auth';
 import { waitlistApp } from '@/server/routes/waitlist';
 import { ContextVariables } from '@/server/types';
@@ -63,6 +64,17 @@ app.get('/api/health', async c => {
 
     c.status(200);
     c.body('OK');
+});
+
+app.get('/api/commit-sha', async c => {
+    return c.json(
+        {
+            sha: clientEnvs.NEXT_PUBLIC_COMMIT_SHA,
+        },
+        {
+            status: 200,
+        }
+    );
 });
 
 const routes = app.route('/', waitlistApp).route('/', authApp);

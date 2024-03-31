@@ -24,6 +24,9 @@ COPY . .
 ENV DEPLOY_TARGET standalone
 ENV NEXT_TELEMETRY_DISABLED 1
 
+ARG NEXT_PUBLIC_COMMIT_SHA
+ENV NEXT_PUBLIC_COMMIT_SHA $NEXT_PUBLIC_COMMIT_SHA
+
 RUN \
   if [ -f yarn.lock ]; then yarn run build; \
   elif [ -f package-lock.json ]; then npm run build; \
@@ -38,6 +41,9 @@ WORKDIR /app
 ENV DEPLOY_TARGET standalone
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
+
+ARG NEXT_PUBLIC_COMMIT_SHA
+ENV NEXT_PUBLIC_COMMIT_SHA $NEXT_PUBLIC_COMMIT_SHA
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
