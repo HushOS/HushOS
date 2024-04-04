@@ -63,7 +63,7 @@ app.get('/api/health', async c => {
     // TODO: We should check the appropriate services here
 
     c.status(200);
-    c.body('OK');
+    return c.body('OK');
 });
 
 app.get('/api/commit-sha', async c => {
