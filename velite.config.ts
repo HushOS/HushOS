@@ -117,7 +117,14 @@ export default defineConfig({
                     excerpt: s.excerpt(),
                     content: s.mdx(),
                 })
-                .transform(data => ({ ...data, permalink: `/blog/${data.slug}` })),
+                .transform(data => ({
+                    ...data,
+                    cover:
+                        data.cover === undefined
+                            ? `/api/og?title=${encodeURIComponent(data.title)}`
+                            : data.cover,
+                    permalink: `/blog/${data.slug}`,
+                })),
         },
     },
     mdx: {
@@ -184,6 +191,6 @@ export default defineConfig({
             i.permalink = `/${i.slug}`;
         });
 
-        // return false // return false to prevent velite from writing data to disk
+        // return false to prevent velite from writing data to disk
     },
 });

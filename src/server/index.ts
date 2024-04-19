@@ -4,6 +4,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 
 import { serverEnvs } from '@/env/server';
 import { authApp } from '@/server/routes/auth';
+import { ogApp } from '@/server/routes/og';
 import { waitlistApp } from '@/server/routes/waitlist';
 import { ContextVariables } from '@/server/types';
 import { lucia } from '@/services/auth';
@@ -77,7 +78,7 @@ app.get('/api/commit-sha', async c => {
     );
 });
 
-const routes = app.route('/', waitlistApp).route('/', authApp);
+const routes = app.route('/', ogApp).route('/', waitlistApp).route('/', authApp);
 
 export type AppType = typeof routes;
 

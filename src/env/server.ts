@@ -1,5 +1,5 @@
 import { createEnv } from '@t3-oss/env-nextjs';
-import * as z from 'zod';
+import { z } from 'zod';
 
 export const serverEnvs = createEnv({
     server: {
@@ -24,6 +24,7 @@ export const serverEnvs = createEnv({
 
         ANALYZE: z.preprocess(v => v === 'true' || v === '1', z.boolean()).default(false),
 
+        // gets populated by the docker / gh action build
         COMMIT_SHA: z.string().default('none'),
     },
     experimental__runtimeEnv: process.env,

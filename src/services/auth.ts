@@ -15,6 +15,7 @@ export const lucia = new Lucia(new DrizzlePostgreSQLAdapter(db, sessions, users)
         return {
             id: attributes.id,
             email: attributes.email,
+            workspaceId: attributes.workspaceId,
         };
     },
 });
@@ -25,6 +26,7 @@ declare module 'lucia' {
         DatabaseUserAttributes: {
             id: number;
             email: string;
+            workspaceId: string;
         };
     }
 }

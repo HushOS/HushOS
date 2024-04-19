@@ -28,7 +28,12 @@ export function generateMetadata({ params: { slug } }: { params: { slug: string 
         openGraph: {
             title: post.title,
             description: post.excerpt,
-            // images: getOgImageUrl(post.title),
+            images:
+                typeof post.cover === 'string'
+                    ? post.cover
+                    : {
+                          url: post.cover.src,
+                      },
             publishedTime: post.date,
             type: 'article',
             url: `https://${clientEnvs.NEXT_PUBLIC_DOMAIN}/blog/${slug}`,
