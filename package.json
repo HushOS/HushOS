@@ -10,9 +10,9 @@
         "start": "next start",
         "lint": "next lint --fix",
         "format": "prettier --write \"**/*.{ts,tsx,js,jsx,cjs,mjs,md,mdx}\"",
-        "db:generate": "dotenv -c pnpm drizzle-kit generate:pg",
-        "db:push": "dotenv -c pnpm drizzle-kit push:pg",
-        "db:push:prod": "dotenv -e .env.production.local pnpm drizzle-kit push:pg",
+        "db:generate": "dotenv -c pnpm drizzle-kit generate",
+        "db:migrate": "dotenv -c pnpm drizzle-kit migrate",
+        "db:migrate:prod": "dotenv -e .env.production.local pnpm drizzle-kit migrate",
         "db:studio": "dotenv -c pnpm drizzle-kit studio"
     },
     "packageManager": "pnpm@8.15.5+sha256.4b4efa12490e5055d59b9b9fc9438b7d581a6b7af3b5675eb5c5f447cee1a589",

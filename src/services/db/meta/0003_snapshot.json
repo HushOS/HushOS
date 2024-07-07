@@ -1,10 +1,8 @@
 {
-  "id": "26c5ca77-c101-4381-bdf7-8af545a91ffa",
-  "prevId": "237e137e-dac8-4352-902c-c72ae6c557dc",
-  "version": "5",
-  "dialect": "pg",
+  "version": "7",
+  "dialect": "postgresql",
   "tables": {
-    "directory_nodes": {
+    "public.directory_nodes": {
       "name": "directory_nodes",
       "schema": "",
       "columns": {
@@ -65,34 +63,34 @@
         "directory_nodes_workspace_id_workspaces_id_fk": {
           "name": "directory_nodes_workspace_id_workspaces_id_fk",
           "tableFrom": "directory_nodes",
-          "tableTo": "workspaces",
           "columnsFrom": [
             "workspace_id"
           ],
+          "tableTo": "workspaces",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         },
         "directory_nodes_parent_directory_id_directory_nodes_id_fk": {
           "name": "directory_nodes_parent_directory_id_directory_nodes_id_fk",
           "tableFrom": "directory_nodes",
-          "tableTo": "directory_nodes",
           "columnsFrom": [
             "parent_directory_id"
           ],
+          "tableTo": "directory_nodes",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "email_verification_codes": {
+    "public.email_verification_codes": {
       "name": "email_verification_codes",
       "schema": "",
       "columns": {
@@ -126,21 +124,21 @@
         "email_verification_codes_user_id_users_id_fk": {
           "name": "email_verification_codes_user_id_users_id_fk",
           "tableFrom": "email_verification_codes",
-          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "file_nodes": {
+    "public.file_nodes": {
       "name": "file_nodes",
       "schema": "",
       "columns": {
@@ -218,47 +216,47 @@
         "file_nodes_workspace_id_workspaces_id_fk": {
           "name": "file_nodes_workspace_id_workspaces_id_fk",
           "tableFrom": "file_nodes",
-          "tableTo": "workspaces",
           "columnsFrom": [
             "workspace_id"
           ],
+          "tableTo": "workspaces",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         },
         "file_nodes_parent_directory_id_directory_nodes_id_fk": {
           "name": "file_nodes_parent_directory_id_directory_nodes_id_fk",
           "tableFrom": "file_nodes",
-          "tableTo": "directory_nodes",
           "columnsFrom": [
             "parent_directory_id"
           ],
+          "tableTo": "directory_nodes",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         },
         "file_nodes_previous_version_id_file_nodes_id_fk": {
           "name": "file_nodes_previous_version_id_file_nodes_id_fk",
           "tableFrom": "file_nodes",
-          "tableTo": "file_nodes",
           "columnsFrom": [
             "previous_version_id"
           ],
+          "tableTo": "file_nodes",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "sessions": {
+    "public.sessions": {
       "name": "sessions",
       "schema": "",
       "columns": {
@@ -286,21 +284,21 @@
         "sessions_user_id_users_id_fk": {
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
-          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "user_keys": {
+    "public.user_keys": {
       "name": "user_keys",
       "schema": "",
       "columns": {
@@ -358,21 +356,21 @@
         "user_keys_user_id_users_id_fk": {
           "name": "user_keys_user_id_users_id_fk",
           "tableFrom": "user_keys",
-          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "users": {
+    "public.users": {
       "name": "users",
       "schema": "",
       "columns": {
@@ -435,45 +433,53 @@
       },
       "indexes": {
         "normalized_email_idx": {
-          "name": "normalized_email_idx",
           "columns": [
-            "normalized_email"
+            {
+              "expression": "normalized_email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "isUnique": true
+          "with": {},
+          "name": "normalized_email_idx",
+          "isUnique": true,
+          "method": "btree",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "users_workspace_id_workspaces_id_fk": {
           "name": "users_workspace_id_workspaces_id_fk",
           "tableFrom": "users",
-          "tableTo": "workspaces",
           "columnsFrom": [
             "workspace_id"
           ],
+          "tableTo": "workspaces",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         },
         "users_user_keys_id_user_keys_id_fk": {
           "name": "users_user_keys_id_user_keys_id_fk",
           "tableFrom": "users",
-          "tableTo": "user_keys",
           "columnsFrom": [
             "user_keys_id"
           ],
+          "tableTo": "user_keys",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "waitlist": {
+    "public.waitlist": {
       "name": "waitlist",
       "schema": "",
       "columns": {
@@ -502,14 +508,14 @@
       "uniqueConstraints": {
         "waitlist_email_unique": {
           "name": "waitlist_email_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "email"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       }
     },
-    "workspaces": {
+    "public.workspaces": {
       "name": "workspaces",
       "schema": "",
       "columns": {
@@ -539,15 +545,15 @@
         "workspaces_user_id_users_id_fk": {
           "name": "workspaces_user_id_users_id_fk",
           "tableFrom": "workspaces",
-          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -555,33 +561,37 @@
     }
   },
   "enums": {
-    "directory_status": {
+    "public.directory_status": {
       "name": "directory_status",
-      "values": {
-        "normal": "normal",
-        "deleted": "deleted",
-        "permanently_deleted": "permanently_deleted"
-      }
+      "schema": "public",
+      "values": [
+        "normal",
+        "deleted",
+        "permanently_deleted"
+      ]
     },
-    "file_status": {
+    "public.file_status": {
       "name": "file_status",
-      "values": {
-        "upload_started": "upload_started",
-        "upload_failed": "upload_failed",
-        "upload_cancelled": "upload_cancelled",
-        "upload_finished": "upload_finished",
-        "deleted": "deleted",
-        "permanently_deleted": "permanently_deleted",
-        "size_mismatch": "size_mismatch",
-        "malicious_upload": "malicious_upload",
-        "old_version": "old_version"
-      }
+      "schema": "public",
+      "values": [
+        "upload_started",
+        "upload_failed",
+        "upload_cancelled",
+        "upload_finished",
+        "deleted",
+        "permanently_deleted",
+        "size_mismatch",
+        "malicious_upload",
+        "old_version"
+      ]
     }
   },
   "schemas": {},
   "_meta": {
-    "columns": {},
     "schemas": {},
-    "tables": {}
-  }
+    "tables": {},
+    "columns": {}
+  },
+  "id": "26c5ca77-c101-4381-bdf7-8af545a91ffa",
+  "prevId": "237e137e-dac8-4352-902c-c72ae6c557dc"
 }
