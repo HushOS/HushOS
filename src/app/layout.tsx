@@ -9,6 +9,7 @@ import { serverEnvs } from '@/env/server';
 import '@/styles/globals.css';
 
 import { Analytics } from '@/components/analytics';
+import { Navbar } from '@/components/navbar';
 
 const inter = Inter({
     variable: '--font-sans',
@@ -77,7 +78,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <html lang='en' dir='ltr' suppressHydrationWarning>
             <body
                 className={`${inter.variable} ${jb.variable} ${serverEnvs.NODE_ENV === 'development' ? 'debug-screens' : ''}`}>
-                <Providers>{children}</Providers>
+                <Providers>
+                    <Navbar />
+                    {children}
+                </Providers>
                 <Analytics />
             </body>
         </html>
