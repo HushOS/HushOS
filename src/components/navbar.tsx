@@ -39,7 +39,7 @@ export function Navbar() {
     const [isOpen, setIsOpen] = useState(false);
 
     return (
-        <header className='sticky top-5 z-40 mx-auto flex w-[90%] items-center justify-between rounded-2xl border border-secondary bg-card/15 p-2 shadow-inner md:w-[70%] lg:w-3/4 lg:max-w-5xl'>
+        <header className='sticky top-5 z-40 mx-auto flex w-[90%] items-center justify-between rounded-2xl border border-secondary bg-card/15 p-2 shadow-inner backdrop-blur md:w-[70%] lg:w-3/4 lg:max-w-5xl'>
             <Link href='/' className='flex items-center text-lg font-bold'>
                 <Logo className='mr-2 size-6' />
                 HushOS
