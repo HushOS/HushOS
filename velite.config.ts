@@ -91,6 +91,7 @@ export default defineConfig({
             schema: s
                 .object({
                     title: s.string().max(99),
+                    description: s.string().optional(),
                     slug: s.slug('global', ['admin', 'login']),
                     body: s.mdx(),
                 })

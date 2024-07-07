@@ -6,7 +6,6 @@ export default function Page() {
     return (
         <Main>
             <Hero />
-            <Footer />
         </Main>
     );
 }

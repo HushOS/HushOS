@@ -7,6 +7,7 @@ export const Routes = {
     resetPassword: makeRoute(() => '/reset-password'),
     terms: makeRoute(() => '/terms'),
     privacy: makeRoute(() => '/privacy'),
+    gdpr: makeRoute(() => '/gdpr'),
 
     login: makeRoute(() => '/login'),
 

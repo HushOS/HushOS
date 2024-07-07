@@ -9,6 +9,7 @@ import { serverEnvs } from '@/env/server';
 import '@/styles/globals.css';
 
 import { Analytics } from '@/components/analytics';
+import { Footer } from '@/components/footer';
 import { Navbar } from '@/components/navbar';
 
 const inter = Inter({
@@ -81,6 +82,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Providers>
                     <Navbar />
                     {children}
+                    <Footer />
                 </Providers>
                 <Analytics />
             </body>

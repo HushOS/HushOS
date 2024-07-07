@@ -35,8 +35,9 @@ export function Footer() {
                 </Container>
                 <Container className='not-prose items-center justify-between border-t text-sm md:flex'>
                     <div className='mb-6 flex flex-col gap-4 underline decoration-muted underline-offset-4 md:mb-0 md:flex-row'>
-                        <Link href={Routes.privacy()}>Privacy Policy</Link>
-                        <Link href={Routes.terms()}>Terms of Service</Link>
+                        <Link href={Routes.privacy()}>Privacy</Link>
+                        <Link href={Routes.terms()}>Terms</Link>
+                        <Link href={Routes.gdpr()}>GDPR</Link>
                     </div>
                     <p className='text-muted-foreground'>
                         © <a href='https://github.com/brijr/components'>HushOS, Inc.</a> All rights
