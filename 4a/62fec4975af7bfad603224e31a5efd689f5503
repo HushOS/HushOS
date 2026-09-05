@@ -1,0 +1,175 @@
+CONTRIBUTING.md
+  s_3830535a0a5ada::t_7147ab3df493bf 1-89
+.dockerignore
+  s_3830535a0a5ada::t_1d01f608d4c5ef 1-19
+.editorconfig
+  s_3830535a0a5ada::t_9533fce77d4fcb 1-9
+.gitignore
+  s_3830535a0a5ada::t_a3afbc5af8166b 1-39
+.nvmrc
+  s_3830535a0a5ada::t_d37c4dc4f06425 1
+.oxlintrc.json
+  s_3830535a0a5ada::t_21146178c949b7 1-13
+.vscode/extensions.json
+  s_3830535a0a5ada::t_776931291afa01 1-3
+.vscode/settings.json
+  s_3830535a0a5ada::t_8c053c7470dda0 1-42
+.zed/settings.json
+  s_3830535a0a5ada::t_f22cfbda1ccf5c 1-179
+AGENTS.md
+  s_3830535a0a5ada::t_0144b820613268 1-11
+LICENSE
+  s_3830535a0a5ada::t_9cd9092743d6bd 1-661
+README.md
+  s_3830535a0a5ada::t_14576a1e3e6901 1-125
+apps/api/package.json
+  s_3830535a0a5ada::t_040ef88515a14e 1-34
+apps/api/src/logging.ts
+  s_3830535a0a5ada::t_e61e0955098750 1-26
+apps/api/tsconfig.json
+  s_3830535a0a5ada::t_692dd59a1dd5d4 1-10
+apps/web/.oxlintrc.json
+  s_3830535a0a5ada::t_ae5bbcc96ba669 1-6
+apps/web/components.json
+  s_3830535a0a5ada::t_115e4a154cd628 1-21
+apps/web/package.json
+  s_3830535a0a5ada::t_2f39089ea81360 1-54
+apps/web/src/components/ui/button.tsx
+  s_3830535a0a5ada::t_8e610f5bc3da8b 1-56
+apps/web/src/lib/api.ts
+  s_3830535a0a5ada::t_55e211a8a4d3e0 1-10
+apps/web/src/lib/queries.ts
+  s_3830535a0a5ada::t_7fa18ad7304014 1-25
+apps/web/src/lib/utils.ts
+  s_3830535a0a5ada::t_ae243f8c043853 1
+apps/web/src/routeTree.gen.ts
+  s_3830535a0a5ada::t_db61b855ef367e 1-111
+apps/web/src/router.tsx
+  s_3830535a0a5ada::t_eec95135876187 1-28
+apps/web/src/routes/__root.tsx
+  s_3830535a0a5ada::t_339b79f9efd1bc 1-60
+apps/web/src/routes/index.tsx
+  s_3830535a0a5ada::t_2a42415e35514f 1-41
+apps/web/src/styles.css
+  s_3830535a0a5ada::t_b521734c05b12c 1-84
+apps/web/src/test/setup.ts
+  s_3830535a0a5ada::t_08c063630d2dfb 1-5
+apps/web/tsconfig.json
+  s_3830535a0a5ada::t_06e91078cfb254 1-18
+apps/web/vite.config.ts
+  s_3830535a0a5ada::t_a7e2c4e93db008 1-15
+apps/web/vitest.config.ts
+  s_3830535a0a5ada::t_37bca6ea8c80aa 1-14
+bun.lock
+  s_3830535a0a5ada::t_576d15970ce7a3 1-1026
+compose.external-db.yaml
+  s_3830535a0a5ada::t_56335833c793df 1-10
+docs/self-hosting.md
+  s_3830535a0a5ada::t_c939dc15f89fe2 1-119
+package.json
+  s_3830535a0a5ada::t_fa1906e1b80def 1-45
+packages/config/oxfmt.ts
+  s_3830535a0a5ada::t_ab187fa6f6c334 1-19
+packages/config/oxlint.json
+  s_3830535a0a5ada::t_ddf0e49834efda 1-11
+packages/config/package.json
+  s_3830535a0a5ada::t_d64b9fff810bbb 1-17
+packages/db/drizzle.config.ts
+  s_3830535a0a5ada::t_6c068cedb2852f 1-8
+packages/db/drizzle/20260905145809_worried_barracuda/migration.sql
+  s_3830535a0a5ada::t_12384590d2d361 1-4
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_3830535a0a5ada::t_1d5d8cdc278142 1-49
+packages/db/package.json
+  s_3830535a0a5ada::t_6de90d762a9377 1-34
+packages/db/src/index.ts
+  s_3830535a0a5ada::t_f787e2b74109fd 1-7
+packages/db/src/schema.ts
+  s_3830535a0a5ada::t_4d7a6bcfdf3fbc 1-7
+packages/db/tsconfig.json
+  s_3830535a0a5ada::t_d1c2cefb5fe8e6 1-10
+packages/logging/package.json
+  s_3830535a0a5ada::t_7e0022334d1828 1-32
+packages/shared/package.json
+  s_3830535a0a5ada::t_1475b9f9bdb270 1-21
+packages/shared/src/index.ts
+  s_3830535a0a5ada::t_1f2473dea408a4 1-3
+packages/shared/tsconfig.json
+  s_3830535a0a5ada::t_9b8c69bd0ab2c5 1-10
+packages/utils/package.json
+  s_3830535a0a5ada::t_f62581533148b4 1-21
+packages/utils/src/index.ts
+  s_3830535a0a5ada::t_fa71be42a0440e 1-4
+packages/utils/tsconfig.json
+  s_3830535a0a5ada::t_000060697b8620 1-10
+scripts/export-local-ca.ts
+  s_3830535a0a5ada::t_be02139c8a42c6 1-20
+tsconfig.base.json
+  s_3830535a0a5ada::t_ac1ec141fcc294 1-17
+tsconfig.json
+  s_3830535a0a5ada::t_7368cd582d863c 1-7
+turbo.json
+  s_3830535a0a5ada::t_75148c73c9a523 1-43
+.env.example
+  s_9f2c97d8a662e1::t_7a0fa55dcd929e 1-16
+.env.production.example
+  s_9f2c97d8a662e1::t_5fcc6b868a9f4e 1-12
+.github/workflows/ci.yml
+  s_9f2c97d8a662e1::t_dd3b456324fa5c 1-91
+apps/api/Dockerfile
+  s_9f2c97d8a662e1::t_ff504bd10ed0a5 1-40
+apps/api/src/app.ts
+  s_9f2c97d8a662e1::t_8d5475f42ed5a3 1-13
+apps/api/src/index.ts
+  s_9f2c97d8a662e1::t_60a47ae3d7a278 1-37
+apps/api/src/routes.ts
+  s_9f2c97d8a662e1::t_efd3cf9074c60b 1-22
+apps/web/Dockerfile
+  s_9f2c97d8a662e1::t_69f922e078ad2e 1-31
+apps/web/nitro.config.ts
+  s_9f2c97d8a662e1::t_3edf5356591180 1-8
+apps/web/src/lib/logging.server.ts
+  s_9f2c97d8a662e1::t_d428cf9e5f88c1 1-8
+compose.dev.yaml
+  s_9f2c97d8a662e1::t_663a0bf4874263 1-16
+compose.yaml
+  s_9f2c97d8a662e1::t_8ef8b8bbf5c372 1-103
+infra/Caddyfile
+  s_9f2c97d8a662e1::t_e1007aaa4a358d 1-9
+infra/Caddyfile.dev
+  s_9f2c97d8a662e1::t_7489ecf5c8164c 1-23
+packages/logging/src/index.ts
+  s_9f2c97d8a662e1::t_a6d0b555ce4c6d 1-2
+packages/logging/src/nitro.ts
+  s_9f2c97d8a662e1::t_78a8cb344e94d4 1
+packages/logging/src/server.ts
+  s_9f2c97d8a662e1::t_4aacdbcad3a520 1-34
+packages/logging/tsconfig.json
+  s_9f2c97d8a662e1::t_a4c59cb15fbc16 1-7
+scripts/setup.ts
+  s_9f2c97d8a662e1::t_42e6a1a84ead24 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "4a62fec4975af7bfad603224e31a5efd689f5503",
+  "prompts": {},
+  "sessions": {
+    "s_3830535a0a5ada": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a071ff-d104-7d73-9c53-baa314986072",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_9f2c97d8a662e1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0725a-2ff6-73e1-aca5-f5f0d6c9cb09",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
