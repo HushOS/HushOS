@@ -1,0 +1,307 @@
+packages/logging/src/index.ts
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 1-2
+packages/db/package.json
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_9d02ed19034e52 19
+  s_3830535a0a5ada::t_d57995641633c4 1-3,5-18,20-34
+apps/web/src/routes/app.index.tsx
+  h_f7ba60a6997566 20,35,37
+  s_3830535a0a5ada::t_b2c7eea96f9573 1-19,21-34,36,38-52
+README.md
+  s_3830535a0a5ada::t_b6b19242d40b21 76
+  s_3830535a0a5ada::t_98b9a9ea00e48d 3-17,20-23,26-29,31-52,65-67,84,102-104,108,112-118,126-129
+  s_3830535a0a5ada::t_3f5a1ab6f402b4 30
+  s_3830535a0a5ada::t_f5e328d1ff4db3 53-64,71-74,77,82
+  s_3830535a0a5ada::t_29b539741c7fcb 78-80
+  s_3830535a0a5ada::t_99d16330803e2d 18-19,24,106,110
+  s_3830535a0a5ada::t_9d02ed19034e52 95
+  s_3830535a0a5ada::t_2d06c084f0669b 120-123
+  s_3830535a0a5ada::t_5f96a5ded544bb 69,86-94,96-97,99-100
+  s_3830535a0a5ada::t_a5eca6f6700ce2 1-2
+  s_3830535a0a5ada::t_d4612513d39c00 25
+  s_3830535a0a5ada::t_6d3a37b2c7dbd7 68
+  s_3830535a0a5ada::t_f9a96443b2c949 70
+  s_3830535a0a5ada::t_c4e0cd96710bb2 75
+  s_3830535a0a5ada::t_9462ff75d2033f 81
+  s_3830535a0a5ada::t_98f1b85305df15 83
+  s_3830535a0a5ada::t_d28c25c4863751 85
+  s_3830535a0a5ada::t_d1d53e06e1a1a4 98
+  s_3830535a0a5ada::t_58f77c3d71945a 101
+  s_3830535a0a5ada::t_c2b2ad22d4b771 105
+  s_3830535a0a5ada::t_10e739ae054d25 107
+  s_3830535a0a5ada::t_20e7395b5a2ae4 109
+  s_3830535a0a5ada::t_7d8e6e229cb3ef 111
+  s_3830535a0a5ada::t_a74cf24a8c131e 119
+  s_3830535a0a5ada::t_813953539df1e1 124-125
+apps/web/src/routes/index.tsx
+  s_3830535a0a5ada::t_b2c7eea96f9573 1-41
+apps/web/src/lib/utils.ts
+  s_3830535a0a5ada::t_2bf3b68b740e1e 1
+packages/shared/package.json
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_42ea0f3e806d7d 1-3,5-21
+compose.dev.yaml
+  s_3830535a0a5ada::t_b1d0b7d07665ad 6
+  s_3830535a0a5ada::t_d1186c7adc2bc1 8
+  s_3830535a0a5ada::t_29b539741c7fcb 12
+  s_3830535a0a5ada::t_5bde591d277ac2 9-10
+  s_3830535a0a5ada::t_c5f0d30b5f8e93 1-5,7,11,13-16
+.gitignore
+  s_3830535a0a5ada::t_5bde591d277ac2 16
+  s_3830535a0a5ada::t_273ad1bcf73427 1-15,17-39
+packages/utils/package.json
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_2fbd7afc8a8868 1-3,5-21
+scripts/setup.ts
+  s_3830535a0a5ada::t_5bde591d277ac2 19-23
+  s_3830535a0a5ada::t_04e8a0af9fe6a3 1-18,24
+apps/api/package.json
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_2230ee86fd643e 24-27
+  s_3830535a0a5ada::t_01c188356a9108 1-3,5-23,28-34
+apps/web/src/start.ts
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 4-7
+  s_3830535a0a5ada::t_d267bb4e1a240e 1-3,8-16
+packages/logging/package.json
+  s_3830535a0a5ada::t_d62e5ad41ec4de 20-22
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 1-19,23-28
+apps/web/src/lib/api.ts
+  s_3830535a0a5ada::t_d1186c7adc2bc1 4-6,8
+  s_3830535a0a5ada::t_5f96a5ded544bb 7
+  s_3830535a0a5ada::t_b219120433f170 1-3,9-11
+packages/logging/tsconfig.json
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 1-7
+turbo.json
+  s_3830535a0a5ada::t_5f96a5ded544bb 3,18-21,36
+  s_3830535a0a5ada::t_68956ef261a9d0 8-15,26-33
+  s_3830535a0a5ada::t_49ca9485390caa 1-2,4-7,16-17,22-25,34-35,37-43
+apps/web/src/routeTree.gen.ts
+  s_3830535a0a5ada::t_5f96a5ded544bb 36,40,46,54,58,83-84,88,92,99,103-111
+  s_3830535a0a5ada::t_2ebc99ba5d9b31 1-35,37-39,41-45,47-53,55-57,59-82,85-87,89-91,93-98,100-102
+scripts/export-local-ca.ts
+  s_3830535a0a5ada::t_5bde591d277ac2 1-9,11-18,20
+  s_3830535a0a5ada::t_0b992d0b6c8ba6 10,19
+apps/web/src/components/ui/button.tsx
+  s_3830535a0a5ada::t_2bf3b68b740e1e 3
+  s_3830535a0a5ada::t_9e34473da6a383 1-2,4-56
+apps/api/Dockerfile
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 8
+  s_3830535a0a5ada::t_9d02ed19034e52 1-7,9-40
+packages/config/package.json
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_ed4acd429b0e65 1-3,5-17
+.env.example
+  s_3830535a0a5ada::t_d1186c7adc2bc1 10-11,13
+  s_3830535a0a5ada::t_5bde591d277ac2 9,12,14,17-19
+  s_3830535a0a5ada::t_29b539741c7fcb 15-16
+  s_3830535a0a5ada::t_5bf514d153dc74 1-8
+packages/logging/src/server.ts
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 1-34
+apps/api/src/index.ts
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 2
+  s_3830535a0a5ada::t_d267bb4e1a240e 5,39
+  s_3830535a0a5ada::t_51668b387b8303 9
+  s_3830535a0a5ada::t_03359aba721a6c 1
+  s_3830535a0a5ada::t_d9a5a8f1c22d0d 3-4
+  s_3830535a0a5ada::t_f4da5d3de9feb4 6-8
+  s_3830535a0a5ada::t_9d994ac7182bf9 10-12,36-38
+  s_9f2c97d8a662e1::t_f3fbe03c2e9aca 13-35
+apps/web/src/routes/app.tsx
+  s_3830535a0a5ada::t_b2c7eea96f9573 1-12,14-22,24-28
+  s_3830535a0a5ada::t_5bf428136f399a 13
+  h_f7ba60a6997566 23
+apps/web/Dockerfile
+  s_3830535a0a5ada::t_9d02ed19034e52 1-7,9-21,27,31-32,34-35,38-41
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 8,33,36-37
+  s_3830535a0a5ada::t_dfc7dbdff14a5b 22
+  s_3830535a0a5ada::t_f649d2fc5b7a6b 23-26
+  s_3830535a0a5ada::t_82088e00eef281 28-30
+  s_3830535a0a5ada::t_0eb127680676b1 42-44
+package.json
+  s_3830535a0a5ada::t_5bde591d277ac2 23
+  s_3830535a0a5ada::t_b6b19242d40b21 11-13,26-28
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_aaad63c47a45e0 1-3,5-10,14-22,24-25,29-45
+apps/api/src/logging.ts
+  s_3830535a0a5ada::t_d62e5ad41ec4de 11-15
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 2-3,5
+  s_3830535a0a5ada::t_ad08593efc354e 1,4,6-10,16-26
+infra/Caddyfile.dev
+  s_3830535a0a5ada::t_5bde591d277ac2 1,16-17,19-26
+  s_3830535a0a5ada::t_d1186c7adc2bc1 2-15,27
+  s_3830535a0a5ada::t_29b539741c7fcb 18
+.github/workflows/ci.yml
+  s_3830535a0a5ada::t_c068549a79007b 8-14,34-91
+  s_3830535a0a5ada::t_259b9b94c86a0b 17-33
+  s_3830535a0a5ada::t_39b4e14789970a 5-7
+  s_3830535a0a5ada::t_e23e8144b6ee5e 15-16
+  s_9f2c97d8a662e1::t_b5ad8b41ce4230 1-4
+apps/api/src/routes.ts
+  s_3830535a0a5ada::t_b2c7eea96f9573 1-3,5-8,13-22
+  s_3830535a0a5ada::t_ad08593efc354e 4
+  s_3830535a0a5ada::t_d267bb4e1a240e 9-12
+apps/web/package.json
+  s_3830535a0a5ada::t_8560fb34b05f22 15-18,27,38-40
+  s_3830535a0a5ada::t_67611d6cd65119 4
+  s_3830535a0a5ada::t_2230ee86fd643e 19
+  s_3830535a0a5ada::t_74e761441f1487 31
+  s_3830535a0a5ada::t_a91cc2fbbc26b6 1-3,5-14,20-26,28-30,32-37,41-53
+apps/web/server.ts
+  s_3830535a0a5ada::t_3f5a1ab6f402b4 47
+  s_3830535a0a5ada::t_09fa28daedbe60 44-46
+  s_9f2c97d8a662e1::t_8e517378dbd81f 1-43
+infra/Caddyfile
+  s_3830535a0a5ada::t_d1186c7adc2bc1 3-8
+  s_3830535a0a5ada::t_96742d98800588 1-2,9-14
+docs/self-hosting.md
+  s_3830535a0a5ada::t_259b9b94c86a0b 36
+  s_3830535a0a5ada::t_f5e328d1ff4db3 26,96,98-99
+  s_3830535a0a5ada::t_98b9a9ea00e48d 1-23,25,27-28,31-33,50-94
+  s_3830535a0a5ada::t_9d02ed19034e52 24,29-30
+  s_3830535a0a5ada::t_2be4d70374cdc0 38-41
+  s_3830535a0a5ada::t_c068549a79007b 34-35,37,42-49
+  s_3830535a0a5ada::t_29b539741c7fcb 95,97
+apps/web/src/lib/logging.server.ts
+  s_3830535a0a5ada::t_d267bb4e1a240e 2
+  s_3830535a0a5ada::t_9e1d1dd6ea6a02 1,3
+.dockerignore
+  s_3830535a0a5ada::t_dfc7dbdff14a5b 14-19
+  s_3830535a0a5ada::t_5bde591d277ac2 2
+  s_3830535a0a5ada::t_04a83bac0c77b2 1,3-13
+AGENTS.md
+  s_3830535a0a5ada::t_99d16330803e2d 5-6
+  s_3830535a0a5ada::t_ead583c272f86d 1-4,7-11
+apps/web/vite.config.ts
+  s_3830535a0a5ada::t_d1186c7adc2bc1 7-18
+  s_3830535a0a5ada::t_21c7a84100ebb7 1-6,19-21
+apps/api/src/app.ts
+  s_3830535a0a5ada::t_b2c7eea96f9573 4,10
+  s_3830535a0a5ada::t_ad08593efc354e 3,8
+  s_3830535a0a5ada::t_d4ef188bf69991 1-2
+  s_3830535a0a5ada::t_53fc2ffbeb3517 5-7
+  s_3830535a0a5ada::t_78cc0db6fe2b13 9
+  s_3830535a0a5ada::t_58662ad5ac8867 11-13
+CONTRIBUTING.md
+  s_3830535a0a5ada::t_99d16330803e2d 19-23,53
+  s_3830535a0a5ada::t_3f5a1ab6f402b4 29,35,42,45
+  s_3830535a0a5ada::t_259b9b94c86a0b 63
+  s_3830535a0a5ada::t_2d06c084f0669b 71
+  s_3830535a0a5ada::t_98b9a9ea00e48d 1-18,24-26,47-52,54-62,66-70
+  s_3830535a0a5ada::t_c068549a79007b 64-65
+  s_3830535a0a5ada::t_d3c3d2adedf7b3 27-28,30-34,36-41,43-44,46
+compose.yaml
+  s_3830535a0a5ada::t_9d02ed19034e52 23-36
+  s_3830535a0a5ada::t_d1186c7adc2bc1 70
+  s_3830535a0a5ada::t_b1d0b7d07665ad 96
+  s_3830535a0a5ada::t_5bde591d277ac2 42,91-92
+  s_3830535a0a5ada::t_dfc7dbdff14a5b 64
+  s_3830535a0a5ada::t_483497d94c73e3 20-22
+  s_3830535a0a5ada::t_67d4e225f30808 37-41
+  s_3830535a0a5ada::t_6f8af1582755cc 43-45,61-63
+  s_3830535a0a5ada::t_4165ff3a921cf5 65-69
+  s_3830535a0a5ada::t_c28d24cb93840b 71-73,88-90
+  s_3830535a0a5ada::t_2f1e8f81e4b3c2 93-95
+  s_3830535a0a5ada::t_90e65b9dbfdbdd 97-99
+  h_f7ba60a6997566 1-19,46-60,74-87,100-103
+LICENSE
+  s_3830535a0a5ada::t_67611d6cd65119 1-661
+.editorconfig
+  s_3830535a0a5ada::t_5df4a59e4a60ea 1-9
+.env.production.example
+  s_3830535a0a5ada::t_7a6347a6c4a0e7 1-12
+.nvmrc
+  s_3830535a0a5ada::t_25b7807c144af3 1
+.oxlintrc.json
+  s_3830535a0a5ada::t_28f535dc877d83 1-13
+.vscode/extensions.json
+  s_3830535a0a5ada::t_c5eeaf216622a4 1-3
+.vscode/settings.json
+  s_3830535a0a5ada::t_d8bbb3dff5847b 1-42
+.zed/settings.json
+  s_3830535a0a5ada::t_f73aed2d5154f4 1-179
+apps/api/tsconfig.json
+  s_3830535a0a5ada::t_7354e78fd40987 1-10
+apps/web/.oxlintrc.json
+  s_3830535a0a5ada::t_9d486127eb3bae 1-6
+apps/web/components.json
+  s_3830535a0a5ada::t_b1d7351ae940fb 1-21
+apps/web/src/lib/queries.ts
+  s_3830535a0a5ada::t_1d88bc133dd707 1-25
+apps/web/src/router.tsx
+  s_3830535a0a5ada::t_11d11b92356588 1-28
+apps/web/src/routes/__root.tsx
+  s_3830535a0a5ada::t_6cb9cd5358272b 1-55
+apps/web/src/styles.css
+  s_3830535a0a5ada::t_c221bcf1ba9a05 1-84
+apps/web/src/test/setup.ts
+  s_3830535a0a5ada::t_ad75c4c637ec85 1-5
+apps/web/tsconfig.json
+  s_3830535a0a5ada::t_8b2ef101dcee41 1-12
+apps/web/vitest.config.ts
+  s_3830535a0a5ada::t_770bc7c614a05b 1-14
+bun.lock
+  s_3830535a0a5ada::t_602b53a7c54f9c 1-995
+compose.external-db.yaml
+  s_3830535a0a5ada::t_a4574f9aef7372 1-10
+packages/config/oxfmt.ts
+  s_3830535a0a5ada::t_d709233b7dbacf 1-19
+packages/config/oxlint.json
+  s_3830535a0a5ada::t_b3baaac959345e 1-11
+packages/db/drizzle.config.ts
+  s_3830535a0a5ada::t_cd83627efebba0 1-8
+packages/db/drizzle/20260905145809_worried_barracuda/migration.sql
+  s_3830535a0a5ada::t_f55adf96ebfa2e 1-4
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_3830535a0a5ada::t_eeb78976c4af6e 1-49
+packages/db/src/index.ts
+  s_3830535a0a5ada::t_224b6abf99071e 1-15
+packages/db/src/schema.ts
+  s_3830535a0a5ada::t_248745e2ea1f4a 1-7
+packages/db/tsconfig.json
+  s_3830535a0a5ada::t_127dc140f10d7e 1-10
+packages/shared/src/index.ts
+  s_3830535a0a5ada::t_7bd3705a112aef 1-3
+packages/shared/tsconfig.json
+  s_3830535a0a5ada::t_1cca383a75a855 1-10
+packages/utils/src/index.ts
+  s_3830535a0a5ada::t_2367ba0e3cddff 1-4
+packages/utils/tsconfig.json
+  s_3830535a0a5ada::t_3cd9754392b385 1-10
+tsconfig.base.json
+  s_3830535a0a5ada::t_ad445686980487 1-17
+tsconfig.json
+  s_3830535a0a5ada::t_557d3d03f1d7e7 1-7
+oxfmt.config.ts
+  h_f7ba60a6997566 1-3
+packages/config/tsconfig.json
+  h_f7ba60a6997566 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "2c5e170388251a8f1c43944c8f7baa9df1e2acfe",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3830535a0a5ada": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a071ff-d104-7d73-9c53-baa314986072",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_9f2c97d8a662e1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0725a-2ff6-73e1-aca5-f5f0d6c9cb09",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
