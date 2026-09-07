@@ -1,0 +1,37 @@
+.env.example
+  s_3830535a0a5ada::t_deb50088131316 9-10
+.env.production.example
+  s_3830535a0a5ada::t_9e703173cc2265 9-10
+CONTRIBUTING.md
+  s_3830535a0a5ada::t_1a6bb5c6b02c60 29
+README.md
+  s_3830535a0a5ada::t_e92798279fc96f 43,47-49,55-56,80
+apps/web/Dockerfile
+  s_3830535a0a5ada::t_e6edf1ca8853d6 24,27
+apps/web/package.json
+  s_3830535a0a5ada::t_b3f93af8fdeed1 7,9
+apps/web/vite.config.ts
+  s_3830535a0a5ada::t_d52d8083c71ca4 10
+compose.yaml
+  s_3830535a0a5ada::t_746b7785882973 34,42,53
+docs/self-hosting.md
+  s_3830535a0a5ada::t_12359b2036a669 9,15-17,31-32,106
+scripts/setup.ts
+  s_3830535a0a5ada::t_472b390e7499ae 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "1cc472d35b535c149c58c8dc329aa0c1dae0f5f3",
+  "prompts": {},
+  "sessions": {
+    "s_3830535a0a5ada": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a071ff-d104-7d73-9c53-baa314986072",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
