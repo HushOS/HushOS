@@ -1,0 +1,19 @@
+docs/self-hosting.md
+  s_b2c35164ad1785::t_85da735de900eb 53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "045996480ebd9398a67e9319808680b17db3f756",
+  "prompts": {},
+  "sessions": {
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
