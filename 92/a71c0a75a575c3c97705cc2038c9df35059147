@@ -1,0 +1,50 @@
+apps/web/src/components/legal-layout.tsx
+  s_6c88462bf7649c::t_8779980bcb3d82 3,19
+apps/web/src/routes/index.tsx
+  s_6c88462bf7649c::t_8779980bcb3d82 5,88
+apps/web/src/components/site-header.tsx
+  s_6c88462bf7649c::t_d92610f1c008ac 21
+  s_6c88462bf7649c::t_350d429d23525e 50
+  s_6c88462bf7649c::t_8779980bcb3d82 7,45
+.github/workflows/ci.yml
+  s_b2c35164ad1785::t_2919fed120bf24 89-111
+docs/self-hosting.md
+  s_b2c35164ad1785::t_f1d95f513dcbb7 69-74
+  s_b2c35164ad1785::t_400d4dfca8dbc3 53,63-68,75-88
+  s_b2c35164ad1785::t_626e6161a26837 89
+README.md
+  s_b2c35164ad1785::t_ab974d5b0b714a 61
+apps/web/src/lib/api.server.ts
+  s_b2c35164ad1785::t_400d4dfca8dbc3 217-218
+apps/web/server/plugins/request-context.ts
+  s_b2c35164ad1785::t_2919fed120bf24 23-25
+compose.coolify.yaml
+  s_b2c35164ad1785::t_2919fed120bf24 1-53
+scripts/deploy.ts
+  s_b2c35164ad1785::t_2919fed120bf24 1-74,76
+  s_b2c35164ad1785::t_1bcad57fc61388 75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "92a71c0a75a575c3c97705cc2038c9df35059147",
+  "prompts": {},
+  "sessions": {
+    "s_6c88462bf7649c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07e1a-c41e-7503-90b7-48c6ca245b49",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
