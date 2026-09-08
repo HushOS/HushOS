@@ -1,0 +1,506 @@
+packages/db/Dockerfile
+  s_b2c35164ad1785::t_3f4d7efe987ef6 2,20
+  s_b2c35164ad1785::t_00ba530056e2c7 6,18-19,21-32
+  s_b2c35164ad1785::t_593ee4eefa4b09 1,3-5,7-17
+apps/web/docker-entrypoint.sh
+  s_b2c35164ad1785::t_b8e75cb37388ce 9-12
+  s_b2c35164ad1785::t_3f4d7efe987ef6 1-8,18-25
+  s_b2c35164ad1785::t_00ba530056e2c7 13-17
+apps/web/Dockerfile
+  s_b2c35164ad1785::t_00ba530056e2c7 6,15-17,35-43
+  s_b2c35164ad1785::t_3f4d7efe987ef6 32-33,44-47
+  s_b2c35164ad1785::t_72546005fa279e 1-5,7-14,18-31,34,48
+docs/self-hosting.md
+  s_b2c35164ad1785::t_00ba530056e2c7 19-23,67
+  s_b2c35164ad1785::t_b8e75cb37388ce 51-66,68-71
+  s_b2c35164ad1785::t_3c4983f70f2eb4 1-18,24-50,72-159
+.github/workflows/ci.yml
+  s_b2c35164ad1785::t_12933a4d548d1d 106
+  s_b2c35164ad1785::t_6b8076675b3eb3 94
+  s_b2c35164ad1785::t_3f4d7efe987ef6 57,78,101-105,107-124
+  s_b2c35164ad1785::t_eb85b883508c1a 1-56,58-77,79-93,95-100
+.dockerignore
+  s_c7c58dab0be89d::t_e00d16b6e70ecb 1-21
+.editorconfig
+  s_3830535a0a5ada::t_cf6989c6207d8f 1-9
+.env.example
+  s_c7c58dab0be89d::t_e85ff8563f977d 1-33
+.env.production.example
+  s_3830535a0a5ada::t_9ac230e66a7827 1-10
+.gitignore
+  s_c7c58dab0be89d::t_b8f2a7b3c1c529 1-43
+.nvmrc
+  s_3830535a0a5ada::t_fd78ac158171d4 1
+.oxlintrc.json
+  s_3830535a0a5ada::t_8a80ac2a03f63b 1-13
+.vscode/extensions.json
+  s_3830535a0a5ada::t_036eb6b37bb9b8 1-3
+AGENTS.md
+  s_c7c58dab0be89d::t_b610243125d6c5 1-25
+CONTRIBUTING.md
+  s_c7c58dab0be89d::t_6278a41971568d 1-101
+DESIGN.md
+  s_8ff38914bac5ae::t_65e5a3fa8ba3cd 1-348
+LICENSE
+  s_3830535a0a5ada::t_f74c6119d49ee9 1-661
+apps/web/.oxlintrc.json
+  s_3830535a0a5ada::t_7e222bc7d1f74c 1-6
+apps/web/components.json
+  s_3830535a0a5ada::t_6a5bdcc94f8fe5 1-21
+apps/web/package.json
+  s_8ff38914bac5ae::t_749ff24607f83e 1-76
+apps/web/public/brand/README.txt
+  s_8ff38914bac5ae::t_1b07318946a0a3 1-10
+apps/web/public/brand/hushos-logo-blue.svg
+  s_8ff38914bac5ae::t_cc52ebd91f5d78 1
+apps/web/public/brand/hushos-logo-on-blue.svg
+  s_8ff38914bac5ae::t_e4602705f167b9 1
+apps/web/public/brand/hushos-logo-on-dark.svg
+  s_8ff38914bac5ae::t_323d9bded3b49c 1
+apps/web/public/brand/hushos-logo.svg
+  s_8ff38914bac5ae::t_9941da73dd4ce2 1
+apps/web/public/brand/hushos-wordmark-on-blue.svg
+  s_8ff38914bac5ae::t_be9b718b181f70 1
+apps/web/public/brand/hushos-wordmark-on-dark.svg
+  s_8ff38914bac5ae::t_19148d6bd6dd17 1
+apps/web/public/brand/hushos-wordmark.svg
+  s_8ff38914bac5ae::t_778687955e9a5b 1
+apps/web/public/browserconfig.xml
+  s_d3b0b96436d1e8::t_a99a59ee9c6866 1-9
+apps/web/public/manifest.json
+  s_d3b0b96436d1e8::t_2959a102a1cd88 1-22
+apps/web/public/safari-pinned-tab.svg
+  s_d3b0b96436d1e8::t_9293bce50f6ff4 1-45
+apps/web/scripts/brand-assets.ts
+  s_8ff38914bac5ae::t_4a880639016d1d 1-40
+apps/web/scripts/optimize-images.tsx
+  s_c7c58dab0be89d::t_24ce741e5be43a 1-37
+apps/web/server/plugins/environment.ts
+  s_c7c58dab0be89d::t_f4f34ffa1fff8a 1-6
+apps/web/src/components/app-sidebar.tsx
+  s_8ff38914bac5ae::t_ec8c31a744e10a 1-114
+apps/web/src/components/auth-layout.tsx
+  s_8ff38914bac5ae::t_bfdd4cd551e7ce 1-147
+apps/web/src/components/brand.tsx
+  s_8ff38914bac5ae::t_2f59696d39b9fd 1-181
+apps/web/src/components/consent-field.tsx
+  s_8ff38914bac5ae::t_9a1a271727398c 1-56
+apps/web/src/components/copy-button.tsx
+  s_8ff38914bac5ae::t_e08a7c5e75d195 1-84
+apps/web/src/components/copy-value.tsx
+  s_8ff38914bac5ae::t_4ab844bdd5f40d 1-39
+apps/web/src/components/email-step.tsx
+  s_8ff38914bac5ae::t_cafef7b35c5f0b 1-174
+apps/web/src/components/form-rows.tsx
+  s_8ff38914bac5ae::t_b0578f9751facd 1-87
+apps/web/src/components/legal-layout.tsx
+  s_6c88462bf7649c::t_c8fe0cf754ffdf 1-54
+apps/web/src/components/mdx.tsx
+  s_8ff38914bac5ae::t_f9419852bc8390 1-96
+apps/web/src/components/motion.tsx
+  s_8ff38914bac5ae::t_2b602d0e314f1e 1-157
+apps/web/src/components/site-header.tsx
+  s_6c88462bf7649c::t_3b731f8f2bb05c 1-119
+apps/web/src/components/theme-toggle.tsx
+  s_8ff38914bac5ae::t_af5c53f957eb8e 1-70
+apps/web/src/components/ui/button.tsx
+  s_8ff38914bac5ae::t_de9e451d500e36 1-66
+apps/web/src/components/ui/card.tsx
+  s_8ff38914bac5ae::t_a3c87b8df7a498 1-87
+apps/web/src/components/ui/checkbox.tsx
+  s_8ff38914bac5ae::t_728e8199c9bdb9 1-31
+apps/web/src/components/ui/context-menu.tsx
+  s_8ff38914bac5ae::t_b5ca700fa0827b 1-239
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_8ff38914bac5ae::t_15a6e37a4ab5db 1-252
+apps/web/src/components/ui/field.tsx
+  s_8ff38914bac5ae::t_ce6d6b30f60254 1-231
+apps/web/src/components/ui/input.tsx
+  s_8ff38914bac5ae::t_672d46faf380ff 1-19
+apps/web/src/components/ui/label.tsx
+  s_8ff38914bac5ae::t_e71e8e5cbf3404 1-20
+apps/web/src/components/ui/progress.tsx
+  s_8ff38914bac5ae::t_b6fbabfaffc149 1-69
+apps/web/src/components/ui/separator.tsx
+  s_8ff38914bac5ae::t_480fcefa054e14 1-18
+apps/web/src/components/ui/sheet.tsx
+  s_8ff38914bac5ae::t_2962402c60ad72 1-129
+apps/web/src/components/ui/sidebar.tsx
+  s_8ff38914bac5ae::t_f292db686759fb 1-692
+apps/web/src/components/ui/skeleton.tsx
+  s_8ff38914bac5ae::t_1aa50c3dd56c36 1-9
+apps/web/src/components/ui/tooltip.tsx
+  s_8ff38914bac5ae::t_a4e802bc67e03b 1-52
+apps/web/src/components/unlock-device.tsx
+  s_8ff38914bac5ae::t_6d19631a0b5080 1-98
+apps/web/src/components/user-menu.tsx
+  s_8ff38914bac5ae::t_20e21142b7f080 1-177
+apps/web/src/components/verified-email-step.tsx
+  s_8ff38914bac5ae::t_d88582b006a20b 1-88
+apps/web/src/content/blog/why-your-password-never-leaves-your-device.mdx
+  s_8ff38914bac5ae::t_975f2cf8fd5ca6 1-37
+apps/web/src/content/legal/privacy.mdx
+  s_8ff38914bac5ae::t_659b69acedf47a 1-63
+apps/web/src/content/legal/terms.mdx
+  s_8ff38914bac5ae::t_810aa9ed02a46b 1-54
+apps/web/src/content/security.mdx
+  s_8ff38914bac5ae::t_4eacf42b4efca4 1-83
+apps/web/src/hooks/use-mobile.ts
+  s_8ff38914bac5ae::t_88b027d190fe58 1-18
+apps/web/src/lib/api.ts
+  s_3830535a0a5ada::t_2fdd2572cd7343 1-18
+apps/web/src/lib/auth-client.ts
+  s_c7c58dab0be89d::t_94fef51b74122b 1-11
+apps/web/src/lib/auth.ts
+  s_c7c58dab0be89d::t_abc9df12de1b36 1-16
+apps/web/src/lib/auth.worker.ts
+  s_c7c58dab0be89d::t_5a540bd1191f7c 1
+apps/web/src/lib/brand.ts
+  s_8ff38914bac5ae::t_54d3b6feacef58 1-34
+apps/web/src/lib/content.ts
+  s_8ff38914bac5ae::t_f1f0d852d38c8d 1-32
+apps/web/src/lib/form.ts
+  s_8ff38914bac5ae::t_7ea333e4e7ade9 1-12
+apps/web/src/lib/og.server.tsx
+  s_8ff38914bac5ae::t_c59d2fb96a90db 1-108
+apps/web/src/lib/queries.ts
+  s_8ff38914bac5ae::t_54430975433b18 1-39
+apps/web/src/lib/social.ts
+  s_8ff38914bac5ae::t_0c2e7a59e5419c 1-71
+apps/web/src/lib/sounds.ts
+  s_8ff38914bac5ae::t_4436d93b480246 1-73
+apps/web/src/lib/theme.ts
+  s_8ff38914bac5ae::t_9692379ca1f1f1 1-40
+apps/web/src/lib/utils.ts
+  s_3830535a0a5ada::t_ec090b219f28d6 1
+apps/web/src/mdx.d.ts
+  s_8ff38914bac5ae::t_0883cde77f2433 1-7
+apps/web/src/routeTree.gen.ts
+  s_b2c35164ad1785::t_a3451889237fb8 1-642
+apps/web/src/router.tsx
+  s_3830535a0a5ada::t_7bf83143a0ddd4 1-28
+apps/web/src/routes/__root.tsx
+  s_8ff38914bac5ae::t_8e754c567df734 1-157
+apps/web/src/routes/account-deleted/route.tsx
+  s_8ff38914bac5ae::t_1f1675bc86884d 1-19
+apps/web/src/routes/api/$.ts
+  s_c7c58dab0be89d::t_53cb5ecbd67765 1-10
+apps/web/src/routes/app/account.tsx
+  s_8ff38914bac5ae::t_9e7ba2e2847ccc 1-238
+apps/web/src/routes/app/index.tsx
+  s_8ff38914bac5ae::t_f5fe462172d813 1-187
+apps/web/src/routes/app/route.tsx
+  s_8ff38914bac5ae::t_acb002a0a59014 1-99
+apps/web/src/routes/blog/$slug.tsx
+  s_8ff38914bac5ae::t_faa9f07e1048e6 1-66
+apps/web/src/routes/blog/index.tsx
+  s_8ff38914bac5ae::t_f1e0e2cbedfc83 1-53
+apps/web/src/routes/design[.]md.ts
+  s_8ff38914bac5ae::t_77f7ec7b7df4cf 1-18
+apps/web/src/routes/index.tsx
+  s_6c88462bf7649c::t_c2ffa4aa795096 1-275
+apps/web/src/routes/llms[.]txt.ts
+  s_8ff38914bac5ae::t_3d28969b4a6ffd 1-39
+apps/web/src/routes/login/route.tsx
+  s_8ff38914bac5ae::t_1153c470b0cb65 1-154
+apps/web/src/routes/og[.]jpg.ts
+  s_c7c58dab0be89d::t_3515ba42332684 1-5
+apps/web/src/routes/privacy/route.tsx
+  s_8ff38914bac5ae::t_09043f23035df6 1-16
+apps/web/src/routes/recover/check-email.tsx
+  s_c7c58dab0be89d::t_1fc9eb72972b24 1-5
+apps/web/src/routes/recover/complete.tsx
+  s_8ff38914bac5ae::t_0f1a573ab0d566 1-166
+apps/web/src/routes/recover/index.tsx
+  s_c7c58dab0be89d::t_70f218405b6e0a 1-5
+apps/web/src/routes/recover/route.tsx
+  s_8ff38914bac5ae::t_0a649df09fe899 1-16
+apps/web/src/routes/register/check-email.tsx
+  s_c7c58dab0be89d::t_a094658bee21b3 1-5
+apps/web/src/routes/register/complete.tsx
+  s_8ff38914bac5ae::t_f2de24750325a1 1-158
+apps/web/src/routes/register/index.tsx
+  s_c7c58dab0be89d::t_a6d6124d2e78a4 1-5
+apps/web/src/routes/register/route.tsx
+  s_8ff38914bac5ae::t_8be941d588fb91 1-20
+apps/web/src/routes/robots[.]txt.ts
+  s_8ff38914bac5ae::t_822f46d29db606 1-22
+apps/web/src/routes/security/route.tsx
+  s_8ff38914bac5ae::t_0f88579e740f9b 1-16
+apps/web/src/routes/share-og[.]jpg.ts
+  s_c7c58dab0be89d::t_16e620e09293fd 1-6
+apps/web/src/routes/sitemap[.]xml.ts
+  s_8ff38914bac5ae::t_72d7160e6bea08 1-36
+apps/web/src/routes/terms/route.tsx
+  s_8ff38914bac5ae::t_56de984af351b6 1-16
+apps/web/src/styles.css
+  s_8ff38914bac5ae::t_fe16ca2b64fd68 1-198
+apps/web/src/test/setup.ts
+  s_3830535a0a5ada::t_650ccb56f4b00c 1-5
+apps/web/tsconfig.json
+  s_3830535a0a5ada::t_9f830041ebf913 1-19
+apps/web/vite.config.ts
+  s_8ff38914bac5ae::t_a14a8b8bd64e42 1-42
+apps/web/vitest.config.ts
+  s_3830535a0a5ada::t_6f77043e397177 1-14
+bun.lock
+  s_8ff38914bac5ae::t_08211742e45fab 1-1964
+compose.dev.yaml
+  s_c7c58dab0be89d::t_bb4295947d64f0 1-14
+compose.external-db.yaml
+  s_3830535a0a5ada::t_178225bbd3f73a 1-10
+compose.yaml
+  s_c7c58dab0be89d::t_9d212255c3927b 1-77
+docs/opaque-auth-design.md
+  s_c7c58dab0be89d::t_018abdfcabface 1-176
+package.json
+  s_8ff38914bac5ae::t_674ebb9211f10f 1-53
+packages/auth/package.json
+  s_c7c58dab0be89d::t_9b356637ac26d9 1-29
+packages/auth/src/client.ts
+  s_c7c58dab0be89d::t_e20e37e9bf47e9 1-331
+packages/auth/src/crypto-transport.ts
+  s_c7c58dab0be89d::t_1f4c14b46942d5 1-64
+packages/auth/src/device-storage.ts
+  s_c7c58dab0be89d::t_30b95e0bb53c6a 1-63
+packages/auth/src/protocol.ts
+  s_c7c58dab0be89d::t_252ae03cd6cc52 1-4
+packages/auth/src/server.ts
+  s_c7c58dab0be89d::t_e64bf71d33bc39 1-599
+packages/auth/src/store.ts
+  s_c7c58dab0be89d::t_a08e73f3583056 1-64
+packages/auth/src/with-storage-events.ts
+  s_c7c58dab0be89d::t_a9f7ca9b4cc0da 1-15
+packages/auth/src/worker.ts
+  s_c7c58dab0be89d::t_ee16437ba05042 1-17
+packages/auth/tsconfig.json
+  s_c7c58dab0be89d::t_5f52fded36af67 1-9
+packages/config/oxfmt.ts
+  s_3830535a0a5ada::t_78e45f6e46b3d2 1-19
+packages/config/oxlint.json
+  s_3830535a0a5ada::t_44493a86d83b7e 1-11
+packages/config/package.json
+  s_3830535a0a5ada::t_ac90725b39a8f6 1-17
+packages/crypto/package.json
+  s_c7c58dab0be89d::t_99529a8876197b 1-26
+packages/crypto/src/aead.ts
+  s_c7c58dab0be89d::t_60f5f0aa20c483 1-24
+packages/crypto/src/device.ts
+  s_c7c58dab0be89d::t_b5a0df14c1a7ae 1-65
+packages/crypto/src/identity.ts
+  s_c7c58dab0be89d::t_573423289bc67f 1-89
+packages/crypto/src/index.ts
+  s_c7c58dab0be89d::t_03de6903b5ac4d 1-11
+packages/crypto/src/keys.ts
+  s_c7c58dab0be89d::t_c4c9bf8ae59dfb 1-41
+packages/crypto/src/protocol.ts
+  s_c7c58dab0be89d::t_cd481bda5e20bf 1-29
+packages/crypto/src/recovery.ts
+  s_c7c58dab0be89d::t_179e090fd87f9a 1-210
+packages/crypto/src/server.ts
+  s_c7c58dab0be89d::t_d5eeb81fd6ee0e 1-2
+packages/crypto/src/session.ts
+  s_c7c58dab0be89d::t_cde77d0815ecd2 1-268
+packages/crypto/tsconfig.json
+  s_c7c58dab0be89d::t_71515333bcf58a 1-9
+packages/db/drizzle.config.ts
+  s_c7c58dab0be89d::t_2f78664f0336a3 1-9
+packages/db/drizzle/20260905145809_worried_barracuda/migration.sql
+  s_3830535a0a5ada::t_c8c50987c7c173 1-4
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_3830535a0a5ada::t_4dfae74f766ae2 1-49
+packages/db/drizzle/20260907172825_slow_lifeguard/migration.sql
+  s_c7c58dab0be89d::t_b0d4280439f941 1-95
+packages/db/drizzle/20260907172825_slow_lifeguard/snapshot.json
+  s_c7c58dab0be89d::t_7ef816662340b7 1-1097
+packages/db/drizzle/20260907182012_slim_beyonder/migration.sql
+  s_c7c58dab0be89d::t_f87e1777719125 1-66
+packages/db/drizzle/20260907182012_slim_beyonder/snapshot.json
+  s_c7c58dab0be89d::t_2a031cefbe993e 1-1836
+packages/db/drizzle/20260907182127_spooky_alex_power/migration.sql
+  s_c7c58dab0be89d::t_aaae756c91145f 1-17
+packages/db/drizzle/20260907182127_spooky_alex_power/snapshot.json
+  s_c7c58dab0be89d::t_95a1ff95291bed 1-2020
+packages/db/drizzle/20260907183015_public_demogoblin/migration.sql
+  s_c7c58dab0be89d::t_3a23e8cfe5ff9f 1-3
+packages/db/drizzle/20260907183015_public_demogoblin/snapshot.json
+  s_c7c58dab0be89d::t_3874a5ffaad625 1-2053
+packages/db/package.json
+  s_c7c58dab0be89d::t_498ec872a41a21 1-35
+packages/db/src/auth.ts
+  s_c7c58dab0be89d::t_fc7714a52c28c3 1-546
+packages/db/src/client.ts
+  s_c7c58dab0be89d::t_b816d7c16220b0 1-5
+packages/db/src/schema/auth.ts
+  s_c7c58dab0be89d::t_9fbd7705a5a97f 1-254
+packages/db/src/schema/index.ts
+  s_c7c58dab0be89d::t_7b36a9ea5eb44c 1-4
+packages/db/src/schema/relations.ts
+  s_c7c58dab0be89d::t_b88898036ae2d3 1-93
+packages/db/src/schema/storage.ts
+  s_c7c58dab0be89d::t_7dd538c1564079 1-60
+packages/db/src/schema/workspaces.ts
+  s_c7c58dab0be89d::t_1dcb56b7d3d9a9 1-7
+packages/db/tsconfig.json
+  s_3830535a0a5ada::t_e263d41cdfdfbe 1-10
+packages/emails/package.json
+  s_c7c58dab0be89d::t_6c1cdcd18391af 1-33
+packages/emails/src/service.tsx
+  s_8ff38914bac5ae::t_82be097936dd68 1-101
+packages/emails/src/templates/verify-email.tsx
+  s_8ff38914bac5ae::t_1dbec8aa327b87 1-301
+packages/emails/tsconfig.json
+  s_c7c58dab0be89d::t_32afc70b38b970 1-9
+packages/env/package.json
+  s_c7c58dab0be89d::t_7fe429f794fd8f 1-24
+packages/env/src/auth.ts
+  s_c7c58dab0be89d::t_fb53c7f92b1bb3 1-36
+packages/env/src/db.ts
+  s_c7c58dab0be89d::t_b20b7e229fb38f 1-14
+packages/env/src/email.ts
+  s_c7c58dab0be89d::t_585ffe43edf2a9 1-48
+packages/env/src/server.ts
+  s_c7c58dab0be89d::t_dcf1a666167e43 1-8
+packages/env/tsconfig.json
+  s_c7c58dab0be89d::t_5f325af28b22bf 1-10
+packages/logging/package.json
+  s_3830535a0a5ada::t_6db3ff565fe41e 1-28
+packages/logging/src/index.ts
+  s_c7c58dab0be89d::t_6ed48802c48b77 1-4
+packages/logging/src/privacy.ts
+  s_c7c58dab0be89d::t_5f772812cb425b 1-140
+packages/shared/package.json
+  s_3830535a0a5ada::t_6fc45d031a9b23 1-21
+packages/shared/src/index.ts
+  s_3830535a0a5ada::t_b9e21af13be15c 1-3
+packages/shared/tsconfig.json
+  s_3830535a0a5ada::t_4f6b464588a606 1-10
+packages/utils/package.json
+  s_3830535a0a5ada::t_107196f5ad58af 1-21
+packages/utils/src/index.ts
+  s_3830535a0a5ada::t_ddb0c220bfce24 1-4
+packages/utils/tsconfig.json
+  s_3830535a0a5ada::t_b1055929ac36ef 1-10
+scripts/setup.ts
+  s_c7c58dab0be89d::t_aad46dd79e154f 1-46
+tsconfig.base.json
+  s_3830535a0a5ada::t_71d597f525d295 1-17
+tsconfig.json
+  s_3830535a0a5ada::t_8c01ad66db6c86 1-7
+turbo.json
+  s_c7c58dab0be89d::t_694909969f9b75 1-72
+.vscode/settings.json
+  s_c7c58dab0be89d::t_ead10ca17bad01 1-43
+.zed/settings.json
+  s_c7c58dab0be89d::t_711e4089ae6bdd 1-186
+CLAUDE.md
+  s_c7c58dab0be89d::t_a97e9b6b5a7282 1
+CONTEXT.md
+  s_c7c58dab0be89d::t_69f8a21a1d37b7 1-27
+README.md
+  s_12880503b6c6d4::t_89792dc83a45a3 1-130
+apps/web/nitro.config.ts
+  s_c7c58dab0be89d::t_9daf5e75151656 1-12
+apps/web/server/plugins/database.ts
+  s_9f2c97d8a662e1::t_0fd56ad61ac009 1-6
+apps/web/server/plugins/request-context.ts
+  s_12880503b6c6d4::t_1d936bef563fae 1-27
+apps/web/src/components/auth-input.tsx
+  s_c7c58dab0be89d::t_b62c60ced6663c 1-77
+apps/web/src/components/page-header.tsx
+  s_8ff38914bac5ae::t_42e292efe84e1e 1-31
+apps/web/src/components/theme-provider.tsx
+  s_c7c58dab0be89d::t_cdeff7117e26c4 1-38
+apps/web/src/components/ui/alert.tsx
+  s_8ff38914bac5ae::t_dcafe4235aca5a 1-88
+apps/web/src/components/ui/badge.tsx
+  s_8ff38914bac5ae::t_6f98e3992b8161 1-39
+apps/web/src/lib/api.server.ts
+  s_12880503b6c6d4::t_ea0d92d7304626 1-308
+apps/web/src/lib/logging.server.ts
+  s_9f2c97d8a662e1::t_ac71d99a30eeb8 1-12
+apps/web/src/routes/app/recovery-key.tsx
+  s_c7c58dab0be89d::t_45b1ece521f5bb 1-255
+oxfmt.config.ts
+  s_3830535a0a5ada::t_78f3b895dd3d77 1-3
+packages/config/tsconfig.json
+  s_3830535a0a5ada::t_3b3d2f17ef6b78 1
+packages/db/src/index.ts
+  s_c7c58dab0be89d::t_4fd1226d8833e2 1-2
+packages/logging/src/nitro.ts
+  s_9f2c97d8a662e1::t_b2c48417bb659e 1
+packages/logging/tsconfig.json
+  s_9f2c97d8a662e1::t_6536a78c0e609d 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "b882f4850f96713ea3dda5e251988e426d3765fb",
+  "prompts": {},
+  "sessions": {
+    "s_12880503b6c6d4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07e1e-e7a4-7bd3-8e50-bc01f93ebf88",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_3830535a0a5ada": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a071ff-d104-7d73-9c53-baa314986072",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_6c88462bf7649c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07e1a-c41e-7503-90b7-48c6ca245b49",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_9f2c97d8a662e1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0725a-2ff6-73e1-aca5-f5f0d6c9cb09",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c7c58dab0be89d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ccd-835f-7123-a821-b43eb1e90698",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d3b0b96436d1e8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ce6-542f-7210-9dd6-40e26fc13aad",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
