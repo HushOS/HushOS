@@ -1,0 +1,35 @@
+docs/opaque-auth-design.md
+  s_a93452be7adb91::t_16cae107a7562f 129,139
+  s_a93452be7adb91::t_d9eb7e3f021329 151
+packages/auth/src/with-storage-events.ts
+  s_a93452be7adb91::t_daad9b38308550 6-11,13
+packages/auth/src/store.ts
+  s_a93452be7adb91::t_daad9b38308550 2,32-68,80,101
+packages/auth/src/client.ts
+  s_a93452be7adb91::t_daad9b38308550 16,43-58,112,126,228,255,305,342,375,380
+packages/auth/src/server.ts
+  s_a93452be7adb91::t_49be2000e149ff 24-25,75-78,96-99,113,117,125,414
+apps/web/src/lib/api.server.ts
+  s_a93452be7adb91::t_49be2000e149ff 40
+packages/crypto/src/session.ts
+  s_a93452be7adb91::t_473da1bcd24b74 224,226,271
+  s_a93452be7adb91::t_4e81a2317de540 112
+  s_a93452be7adb91::t_eb8075c42b5ad6 82-84,93,104-111,113-117,119,122,129-143,148-159,164-173,176-182,189,221,228,234,266,270,272,276,315,321-326,337-357
+  s_a93452be7adb91::t_629eddeec6cf15 358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "8337908d4c8ee98de7f528b0d7665cff6269e23c",
+  "prompts": {},
+  "sessions": {
+    "s_a93452be7adb91": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07de5-1715-7822-9d49-4b5552f95c76",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
