@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link, useLocation } from '@tanstack/react-router';
+import { Link, useLocation, useRouter } from '@tanstack/react-router';
+import { useEffect } from 'react';
 import { KeyRoundIcon, LayoutGridIcon, SettingsIcon } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import {
@@ -52,7 +53,12 @@ function StorageMeter() {
 
 export function AppSidebar({ user }: { user: { name: string; email: string } }) {
     const pathname = useLocation({ select: (location) => location.pathname });
-    const { state } = useSidebar();
+    const { state, setOpenMobile } = useSidebar();
+    const router = useRouter();
+    useEffect(
+        () => router.subscribe('onResolved', () => setOpenMobile(false)),
+        [router, setOpenMobile],
+    );
     const active = (to: string, exact: boolean) =>
         exact ? pathname === to : pathname === to || pathname.startsWith(`${to}/`);
     return (

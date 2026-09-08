@@ -58,8 +58,7 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
                 form.reset();
                 cue('success');
                 router.options.context.queryClient.clear();
-                await router.invalidate();
-                await router.navigate({ to: '/app/recovery-key' });
+                await router.navigate({ to: '/setup/recovery-key', replace: true });
             } catch (error) {
                 cue('error');
                 setError(authError(error));

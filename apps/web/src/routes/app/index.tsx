@@ -37,7 +37,8 @@ function WorkspacePage() {
             .then(() => authClient.initializeAccount(user))
             .then(async (needsBackup) => {
                 if (!active) return;
-                if (needsBackup) await router.navigate({ to: '/app/recovery-key' });
+                if (needsBackup)
+                    await router.navigate({ to: '/setup/recovery-key', replace: true });
                 await queryClient.invalidateQueries(storageQueryOptions);
             })
             .catch(() => {

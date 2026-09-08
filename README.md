@@ -85,7 +85,7 @@ Stop the development server before switching to the full self-hosted stack, whic
 
 ## Accounts and email previews
 
-Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [MailHog](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters, then save the 24-word recovery phrase or download its recovery kit. The QR code contains that same private phrase.
+Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [MailHog](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters. The dedicated `/setup/recovery-key` page then lets you save the 24-word recovery phrase or download its recovery kit. Confirm it is saved and choose “Continue to HushOS” to open the app. The QR code contains that same private phrase.
 
 New accounts receive a personal workspace and **1 GiB** allowance in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid storage entitlements have a separate schema; there is no checkout or billing webhook yet, and uploads are not implemented.
 

@@ -36,6 +36,7 @@ import { Route as RecoverCompleteRouteImport } from './routes/recover/complete'
 import { Route as RegisterIndexRouteImport } from './routes/register/index'
 import { Route as RegisterCheckEmailRouteImport } from './routes/register/check-email'
 import { Route as RegisterCompleteRouteImport } from './routes/register/complete'
+import { Route as SetupRecoveryKeyRouteImport } from './routes/setup/recovery-key'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -172,6 +173,11 @@ const RegisterCompleteRoute = RegisterCompleteRouteImport.update({
   path: '/complete',
   getParentRoute: () => RegisterRouteRoute,
 } as any)
+const SetupRecoveryKeyRoute = SetupRecoveryKeyRouteImport.update({
+  id: '/setup/recovery-key',
+  path: '/setup/recovery-key',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -197,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
+  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
   '/app/': typeof AppIndexRoute
   '/blog/': typeof BlogIndexRoute
   '/recover/': typeof RecoverIndexRoute
@@ -223,6 +230,7 @@ export interface FileRoutesByTo {
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
+  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
   '/app': typeof AppIndexRoute
   '/blog': typeof BlogIndexRoute
   '/recover': typeof RecoverIndexRoute
@@ -253,6 +261,7 @@ export interface FileRoutesById {
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
+  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
   '/app/': typeof AppIndexRoute
   '/blog/': typeof BlogIndexRoute
   '/recover/': typeof RecoverIndexRoute
@@ -284,6 +293,7 @@ export interface FileRouteTypes {
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
+    | '/setup/recovery-key'
     | '/app/'
     | '/blog/'
     | '/recover/'
@@ -310,6 +320,7 @@ export interface FileRouteTypes {
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
+    | '/setup/recovery-key'
     | '/app'
     | '/blog'
     | '/recover'
@@ -339,6 +350,7 @@ export interface FileRouteTypes {
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
+    | '/setup/recovery-key'
     | '/app/'
     | '/blog/'
     | '/recover/'
@@ -363,6 +375,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiSplatRoute: typeof ApiSplatRoute
   BlogSlugRoute: typeof BlogSlugRoute
+  SetupRecoveryKeyRoute: typeof SetupRecoveryKeyRoute
   BlogIndexRoute: typeof BlogIndexRoute
 }
 
@@ -557,6 +570,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterCompleteRouteImport
       parentRoute: typeof RegisterRouteRoute
     }
+    '/setup/recovery-key': {
+      id: '/setup/recovery-key'
+      path: '/setup/recovery-key'
+      fullPath: '/setup/recovery-key'
+      preLoaderRoute: typeof SetupRecoveryKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -626,6 +646,7 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiSplatRoute: ApiSplatRoute,
   BlogSlugRoute: BlogSlugRoute,
+  SetupRecoveryKeyRoute: SetupRecoveryKeyRoute,
   BlogIndexRoute: BlogIndexRoute,
 }
 export const routeTree = rootRouteImport
