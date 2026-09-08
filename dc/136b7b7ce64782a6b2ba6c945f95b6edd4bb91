@@ -1,0 +1,21 @@
+docs/self-hosting.md
+  s_b2c35164ad1785::t_7b0c7260c31678 42
+.github/workflows/ci.yml
+  s_b2c35164ad1785::t_39e399748e2388 20-21,54,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "dc136b7b7ce64782a6b2ba6c945f95b6edd4bb91",
+  "prompts": {},
+  "sessions": {
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
