@@ -1,0 +1,35 @@
+README.md
+  s_b2c35164ad1785::t_89b416ee09284f 88
+apps/web/src/components/app-sidebar.tsx
+  s_b2c35164ad1785::t_d58f4c99ad06b2 2-3,56-61
+apps/web/src/components/recovery-phrase.tsx
+  s_b2c35164ad1785::t_715f53a7940c80 1-245
+apps/web/src/routeTree.gen.ts
+  s_b2c35164ad1785::t_509baf285f9758 39,176-180,206,233,264,296,323,353,378,573-579,649
+apps/web/src/routes/app/index.tsx
+  s_b2c35164ad1785::t_4f3361f06622d7 40-41
+apps/web/src/routes/app/recovery-key.tsx
+  s_b2c35164ad1785::t_d8bed3d63be8c8 1-2,7,13,18
+apps/web/src/routes/recover/complete.tsx
+  s_b2c35164ad1785::t_587bb61dd9c2f9 61
+apps/web/src/routes/register/complete.tsx
+  s_b2c35164ad1785::t_5511ac2451c4ed 55
+apps/web/src/routes/setup/recovery-key.tsx
+  s_b2c35164ad1785::t_15f06aaf193bbc 1-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "567ac0b653380db0753c28148cda880092d260ff",
+  "prompts": {},
+  "sessions": {
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
