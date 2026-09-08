@@ -17,8 +17,8 @@ jobs:
         name: Check, test, and build
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-node@v4
+            - uses: actions/checkout@v7
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
             - uses: oven-sh/setup-bun@v2
@@ -51,16 +51,12 @@ jobs:
                       dockerfile: packages/db/Dockerfile
                       target: migrate
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
             - name: Set image name
               id: image
               env:
                   IMAGE_SUFFIX: ${{ matrix.image }}
               run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
-            - name: Set up QEMU
-              uses: docker/setup-qemu-action@v4
-              with:
-                  platforms: arm64
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
             - name: Log in to GHCR
@@ -76,7 +72,7 @@ jobs:
                   file: ${{ matrix.dockerfile }}
                   target: ${{ matrix.target }}
                   build-args: RELEASE_SHA=${{ github.sha }}
-                  platforms: linux/amd64,linux/arm64
+                  platforms: linux/amd64
                   push: true
                   tags: |
                       ${{ steps.image.outputs.name }}:latest

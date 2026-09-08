@@ -39,7 +39,7 @@ For an existing deployment, remove the old API service and its separate hostname
 
 ## Container publishing
 
-The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun run build` on pull requests and pushes to `main`. Successful pushes to `main` then build and publish these Linux AMD64/ARM64 images:
+The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun run build` on pull requests and pushes to `main`. Successful pushes to `main` then build and publish these Linux AMD64 images on native AMD64 runners:
 
 | Service    | Image                           |
 | ---------- | ------------------------------- |
