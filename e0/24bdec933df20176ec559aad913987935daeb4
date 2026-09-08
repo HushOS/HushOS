@@ -1,0 +1,139 @@
+CONTRIBUTING.md
+  s_b2c35164ad1785::t_db4825a50711bb 93
+packages/crypto/src/identity.ts
+  s_b2c35164ad1785::t_399d8e465d25bd 37-44,77-82,112-116,125-130,132-139,144-154,157-177
+  s_b2c35164ad1785::t_cfd44e52c5a201 2-3,7,35,51,67,91,103-111,117-124,131,140-143,155-156,178-180
+  s_b2c35164ad1785::t_97d50d2e2dca10 181
+apps/web/src/lib/api.server.ts
+  s_b2c35164ad1785::t_081786d8cf2fdb 46,55,67,82
+  s_b2c35164ad1785::t_399d8e465d25bd 77-81,206-238
+packages/crypto/src/security.ts
+  s_b2c35164ad1785::t_399d8e465d25bd 4-9,36-48,50,52,60-70,75-76,82-92,94-100,104-109,111-112,116-122,130-165
+  s_b2c35164ad1785::t_df0be971355428 1-3,10-35,49,51,53-59,71-74,77-81,93,101-103,110,113-115,123-129,166-176
+DESIGN.md
+  s_8ff38914bac5ae::t_c8d544b43a0f44 289
+  s_8ff38914bac5ae::t_97c1b464bd10f9 315
+  s_8ff38914bac5ae::t_79b4dbe5c28306 280,286-287,299,305
+packages/db/src/schema/auth.ts
+  s_b2c35164ad1785::t_dcde1b6014141e 117,194,247
+packages/auth/src/protocol.ts
+  s_b2c35164ad1785::t_99f63fe31e9c43 1
+apps/web/src/content/blog/why-your-password-never-leaves-your-device.mdx
+  s_b2c35164ad1785::t_db4825a50711bb 27-37
+apps/web/src/routes/blog/index.tsx
+  s_8ff38914bac5ae::t_7848cc0bf5a93b 40
+packages/auth/src/store.ts
+  s_b2c35164ad1785::t_1422e5cde9d14b 17-18
+packages/db/drizzle/20260908005640_supreme_siren/snapshot.json
+  s_b2c35164ad1785::t_399d8e465d25bd 2-2049,2051-2053
+  s_b2c35164ad1785::t_1422e5cde9d14b 1,2050
+docs/opaque-auth-design.md
+  s_b2c35164ad1785::t_db4825a50711bb 3,32,127
+  s_b2c35164ad1785::t_9810d022bda310 74,77,94,177-190
+  s_b2c35164ad1785::t_dcee25a6399a5c 123
+apps/web/src/routes/setup/recovery-key.tsx
+  s_8ff38914bac5ae::t_4ae4af0e7a195c 2,7-10,34,39
+apps/web/src/content/security.mdx
+  s_b2c35164ad1785::t_db4825a50711bb 11,27,31,38,50,52,55-59,62-86,89
+packages/logging/src/privacy.ts
+  s_b2c35164ad1785::t_1422e5cde9d14b 89-90,104,115
+packages/auth/src/server.ts
+  s_b2c35164ad1785::t_081786d8cf2fdb 1,248,281-282,355,364,379,475,501,522-523,527,613,622-630,635,640-641,650-651,665,678-679,684-686,689-690,701-702,708,719-721,725-726,747-749
+  s_b2c35164ad1785::t_399d8e465d25bd 356-360,506-510,542-545,614-621,631-634,636-639,642-649,652-664,666-677,680-683,687-688,691-700,703-707,709-718,722-724,727-746
+README.md
+  s_b2c35164ad1785::t_9810d022bda310 3,94
+apps/web/src/components/theme-toggle.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 49
+apps/web/src/routes/index.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 159,161-162,243
+apps/web/src/content/legal/privacy.mdx
+  s_b2c35164ad1785::t_db4825a50711bb 37,52
+apps/web/src/components/auth-input.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 60
+packages/crypto/src/recovery.ts
+  s_b2c35164ad1785::t_cfd44e52c5a201 10,27,29,89,103,112,121,138-139,158,187
+apps/web/src/components/account-security-form.tsx
+  s_8ff38914bac5ae::t_4ae4af0e7a195c 99-103
+  s_b2c35164ad1785::t_399d8e465d25bd 2,4-14,16-17,19-20,34-61,63-67,69-89,95-98,104-123,125-127,129-148,150-166,168-183,185-186,193-194,196-205,208-216
+  s_b2c35164ad1785::t_8859178b2c459f 90-92,94
+  s_8ff38914bac5ae::t_dcd3dcb7722e8a 1,3,15,18,21-33,62,68,124,128,149,167,184,187-192,195,206-207
+  s_8ff38914bac5ae::t_f0dc7c8b3298d4 93
+apps/web/src/components/ui/button.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 16-17,29
+apps/web/src/routes/app/index.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 129-131,163,169-171,178-180
+packages/crypto/src/device.ts
+  s_b2c35164ad1785::t_cfd44e52c5a201 47-48
+apps/web/src/components/recovery-phrase.tsx
+  s_b2c35164ad1785::t_db4825a50711bb 97-98
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 167-169,176-178,185,187
+  s_8ff38914bac5ae::t_4ae4af0e7a195c 18-28,132-139
+docs/self-hosting.md
+  s_b2c35164ad1785::t_db4825a50711bb 3,147
+  s_b2c35164ad1785::t_705254f8f1d210 148
+apps/web/src/components/ui/toast.tsx
+  s_8ff38914bac5ae::t_1c1712674757d6 1-218
+apps/web/src/routes/login/route.tsx
+  s_b2c35164ad1785::t_8859178b2c459f 21-27,57,111-115
+  s_8ff38914bac5ae::t_4ae4af0e7a195c 28-35,72-80
+  s_8ff38914bac5ae::t_12225efe2faf07 110,116
+apps/web/src/routes/app/route.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 87
+  s_b2c35164ad1785::t_399d8e465d25bd 52,55
+packages/crypto/src/session.ts
+  s_b2c35164ad1785::t_df0be971355428 28-29,53-54,81-82,91-92,104-108,118,146,184,192,198,205,265-266,283
+  s_b2c35164ad1785::t_399d8e465d25bd 1-6,114-115
+apps/web/src/components/site-header.tsx
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 21,58
+apps/web/src/routes/__root.tsx
+  s_8ff38914bac5ae::t_b4a41766f12d92 19,150
+packages/crypto/src/index.ts
+  s_b2c35164ad1785::t_df0be971355428 12-13
+apps/web/src/components/copy-value.tsx
+  s_8ff38914bac5ae::t_7848cc0bf5a93b 28-29
+  s_8ff38914bac5ae::t_b4a41766f12d92 2,5-17,22,25-27,30,36,45
+apps/web/src/routes/app/account.tsx
+  s_8ff38914bac5ae::t_97c1b464bd10f9 76,190,219,236
+  s_8ff38914bac5ae::t_2ba8d0de5dfb1e 1,7,72-75,77-99,101-116,126-130,183,185,189,191-204,220-229,234,237-245,337-338
+  s_8ff38914bac5ae::t_dc81eb6f4bfcb9 30,100,212-213,255-257
+  s_b2c35164ad1785::t_399d8e465d25bd 120-122,167,180-182,184,187,205,230-233,235,258-263
+  s_8ff38914bac5ae::t_4ae4af0e7a195c 172
+  s_b2c35164ad1785::t_99f63fe31e9c43 186
+  s_8ff38914bac5ae::t_50e2afa66e9301 188
+packages/auth/src/client.ts
+  s_b2c35164ad1785::t_1422e5cde9d14b 1,306-308,313-316,324,329-331,336-338
+  s_b2c35164ad1785::t_399d8e465d25bd 156,300-305,309-312,317-323,325-328,332-335
+  s_b2c35164ad1785::t_5a5f5eefc39fdd 339-340
+packages/db/drizzle/20260908005640_supreme_siren/migration.sql
+  s_b2c35164ad1785::t_1422e5cde9d14b 1-3
+packages/db/src/auth.ts
+  s_b2c35164ad1785::t_399d8e465d25bd 549-554,568-571,576-580,582-588,590-596,600-622,624-626,628-630,633-647,650-652,654-656,658-667,671-678
+  s_b2c35164ad1785::t_dcde1b6014141e 312,547-548,555-567,572-575,581,589,597-599,623,627,631-632,648-649,653,657,668-670,681
+  s_b2c35164ad1785::t_9faac26dd977f1 679-680
+apps/web/src/routes/llms[.]txt.ts
+  s_b2c35164ad1785::t_6630c407533d31 18-19,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e024bdec933df20176ec559aad913987935daeb4",
+  "prompts": {},
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
