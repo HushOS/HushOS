@@ -79,6 +79,9 @@ type Message = {
 
 export function createCryptoSession() {
     const security = createSecurityChange();
+    let generation = 0;
+    let queue = Promise.resolve();
+    const pending = new Set<(error: Error) => void>();
     let accountKeyVersion = 1;
     let password = '';
     let state = '';
@@ -87,7 +90,7 @@ export function createCryptoSession() {
     let accountKey: Uint8Array<ArrayBuffer> | undefined;
     let unlockedUserId: string | null = null;
 
-    function reset() {
+    function clearState() {
         security.reset();
         accountKeyVersion = 1;
         password = '';
@@ -98,57 +101,92 @@ export function createCryptoSession() {
         accountKey = undefined;
         unlockedUserId = null;
     }
-    async function handle(message: Message): Promise<CryptoResults[keyof CryptoResults]> {
+    function reset() {
+        generation++;
+        clearState();
+        const error = new Error('Your account was locked. Please try again.');
+        for (const reject of pending) reject(error);
+        pending.clear();
+    }
+    function checkGeneration(expected: number) {
+        if (expected !== generation) throw new Error('Your account was locked. Please try again.');
+    }
+    async function execute(
+        message: Message,
+        expected: number,
+    ): Promise<CryptoResults[keyof CryptoResults]> {
         await ready;
+        checkGeneration(expected);
         switch (message.operation) {
             case 'securityStart':
-                reset();
+                clearState();
                 return security.start(message.input);
             case 'securityFinish':
                 return security.finish(message.input);
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new Error('Unlock your account to finish setup.');
-                return {
-                    recovery: message.input.recovery
-                        ? (await createRecovery(accountKey, unlockedUserId, 1, accountKeyVersion))
-                              .recovery
-                        : undefined,
-                    identity: message.input.identity
-                        ? await createIdentity(accountKey, unlockedUserId, accountKeyVersion)
-                        : undefined,
-                };
+                const root = accountKey.slice();
+                const userId = unlockedUserId;
+                const keyVersion = accountKeyVersion;
+                try {
+                    return {
+                        recovery: message.input.recovery
+                            ? (await createRecovery(root, userId, 1, keyVersion)).recovery
+                            : undefined,
+                        identity: message.input.identity
+                            ? await createIdentity(root, userId, keyVersion)
+                            : undefined,
+                    };
+                } finally {
+                    root.fill(0);
+                }
             }
             case 'backup': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new Error('Unlock your account to view your recovery key.');
-                return {
-                    phrase: await readRecoveryPhrase(
-                        accountKey,
-                        unlockedUserId,
-                        message.input.recovery,
-                    ),
-                };
+                const root = accountKey.slice();
+                try {
+                    return {
+                        phrase: await readRecoveryPhrase(
+                            root,
+                            unlockedUserId,
+                            message.input.recovery,
+                        ),
+                    };
+                } finally {
+                    root.fill(0);
+                }
             }
             case 'remember': {
                 if (!accountKey || unlockedUserId !== message.input.identity.userId)
                     throw new Error('Unlock your account before saving it on this device.');
-                return rememberAccountKey(
-                    accountKey,
-                    message.input.deviceKey,
-                    message.input.identity,
-                );
+                const root = accountKey.slice();
+                try {
+                    return await rememberAccountKey(
+                        root,
+                        message.input.deviceKey,
+                        message.input.identity,
+                    );
+                } finally {
+                    root.fill(0);
+                }
             }
             case 'restore': {
-                reset();
-                accountKey = await restoreAccountKey(message.input.bundle, message.input.deviceKey);
+                clearState();
+                const root = await restoreAccountKey(message.input.bundle, message.input.deviceKey);
+                if (expected !== generation) {
+                    root.fill(0);
+                    checkGeneration(expected);
+                }
+                accountKey = root;
                 unlockedUserId = message.input.bundle.userId;
                 accountKeyVersion = message.input.bundle.keyVersion;
                 return { userId: unlockedUserId };
             }
 
             case 'registerStart': {
-                reset();
+                clearState();
                 password = message.input.password;
                 const result = client.startRegistration({ password });
                 state = result.clientRegistrationState;
@@ -180,19 +218,20 @@ export function createCryptoSession() {
                           message.input.recovery,
                       )
                     : undefined;
-                accountKey = recovered?.accountKey ?? crypto.getRandomValues(new Uint8Array(32));
+                const root = recovered?.accountKey ?? crypto.getRandomValues(new Uint8Array(32));
                 const keyVersion = recovering ? message.input.recovery.keyVersion : 1;
                 const credentialVersion = recovering ? message.input.credentialVersion + 1 : 1;
-                const key = await wrappingKey(result.exportKey, salt);
+                let key: Uint8Array<ArrayBuffer> | undefined;
                 try {
+                    key = await wrappingKey(result.exportKey, salt);
                     const encrypted = await encryptKey(
-                        accountKey,
+                        root,
                         key,
                         nonce,
                         accountKeyContext(message.input.userId, keyVersion, credentialVersion),
                     );
                     const { recovery } = await createRecovery(
-                        accountKey,
+                        root,
                         message.input.userId,
                         recovering ? message.input.recovery.recoveryVersion + 1 : 1,
                         keyVersion,
@@ -224,16 +263,17 @@ export function createCryptoSession() {
                         };
                     return {
                         ...output,
-                        identity: await createIdentity(accountKey, message.input.userId),
+                        identity: await createIdentity(root, message.input.userId),
                     };
                 } finally {
                     recovered?.signingKey.fill(0);
-                    key.fill(0);
-                    reset();
+                    root.fill(0);
+                    key?.fill(0);
+                    clearState();
                 }
             }
             case 'loginStart': {
-                reset();
+                clearState();
                 password = message.input.password;
                 const result = client.startLogin({ password });
                 state = result.clientLoginState;
@@ -272,13 +312,18 @@ export function createCryptoSession() {
                 exportKey = '';
                 phase = 'idle';
                 try {
-                    accountKey = await decryptKey(
+                    const root = await decryptKey(
                         decode(envelope.encryptedKey, 48),
                         key,
                         decode(envelope.wrappingNonce, 24),
                         accountKeyContext(userId, envelope.keyVersion, envelope.credentialVersion),
                     );
-                    if (accountKey.length !== 32) throw new Error('Invalid account key.');
+                    if (expected !== generation || root.length !== 32) {
+                        root.fill(0);
+                        checkGeneration(expected);
+                        throw new Error('Invalid account key.');
+                    }
+                    accountKey = root;
                     unlockedUserId = userId;
                     accountKeyVersion = envelope.keyVersion;
                     return { userId };
@@ -287,6 +332,28 @@ export function createCryptoSession() {
                 }
             }
         }
+    }
+
+    function handle(message: Message): Promise<CryptoResults[keyof CryptoResults]> {
+        const expected = generation;
+        return new Promise((resolve, reject) => {
+            pending.add(reject);
+            // Keep a cancelled operation on the queue until its local secrets are cleared.
+            // Reset rejects callers immediately; later generations cannot share its state.
+            queue = queue.then(async () => {
+                try {
+                    checkGeneration(expected);
+                    const result = await execute(message, expected);
+                    checkGeneration(expected);
+                    resolve(result);
+                } catch (error) {
+                    reject(error);
+                } finally {
+                    if (expected !== generation) clearState();
+                    pending.delete(reject);
+                }
+            });
+        });
     }
 
     return { handle, reset };

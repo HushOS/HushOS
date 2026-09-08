@@ -1,5 +1,5 @@
 import { createStore } from 'zustand/vanilla';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import type { RememberedAccount } from '@hushos/crypto';
 
 type AuthState = {
@@ -29,7 +29,43 @@ function isDevice(value: unknown): value is RememberedAccount {
     );
 }
 export function createAuthStore() {
-    return createStore<AuthState>()(
+    let available = true;
+    function disablePersistence(name: string) {
+        available = false;
+        // Discard an older bundle if a write failed, rather than restoring stale access.
+        try {
+            localStorage.removeItem(name);
+        } catch {
+            /* Storage may be disabled entirely. In-memory auth must still work. */
+        }
+    }
+    const storage: StateStorage = {
+        getItem(name) {
+            if (!available) return null;
+            try {
+                return localStorage.getItem(name);
+            } catch {
+                disablePersistence(name);
+                return null;
+            }
+        },
+        setItem(name, value) {
+            if (!available) return;
+            try {
+                localStorage.setItem(name, value);
+            } catch {
+                disablePersistence(name);
+            }
+        },
+        removeItem(name) {
+            try {
+                localStorage.removeItem(name);
+            } catch {
+                disablePersistence(name);
+            }
+        },
+    };
+    const store = createStore<AuthState>()(
         persist(
             (): AuthState => ({
                 unlockedUserId: null,
@@ -41,7 +77,7 @@ export function createAuthStore() {
             {
                 name: 'hushos-device-unlock',
                 version: 1,
-                storage: createJSONStorage(() => localStorage),
+                storage: createJSONStorage(() => storage),
                 skipHydration: true,
                 partialize: (state) => ({ device: state.device, lockRevision: state.lockRevision }),
                 merge: (persisted, current) => {
@@ -62,4 +98,5 @@ export function createAuthStore() {
             },
         ),
     );
+    return { store, canPersist: () => available };
 }

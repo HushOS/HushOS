@@ -13,7 +13,7 @@ export function createAuthClient(
 ) {
     let transport: CryptoTransport | undefined;
     let epoch = 0;
-    const store = createAuthStore();
+    const { store, canPersist } = createAuthStore();
     let restoring: Promise<void> | undefined;
     let busy = false;
     let channel: BroadcastChannel | undefined;
@@ -40,11 +40,22 @@ export function createAuthClient(
                 lock();
         });
         window.addEventListener('pagehide', lock);
-        if ('BroadcastChannel' in window) {
-            channel = new BroadcastChannel('hushos-auth');
-            channel.onmessage = (event) => {
-                if (event.data === 'lock') lock();
-            };
+        try {
+            if ('BroadcastChannel' in window) {
+                channel = new BroadcastChannel('hushos-auth');
+                channel.onmessage = (event) => {
+                    if (event.data === 'lock') lock();
+                };
+            }
+        } catch {
+            /* Storage events still propagate locks when broadcasting is unavailable. */
+        }
+    }
+    function broadcastLock() {
+        try {
+            channel?.postMessage('lock');
+        } catch {
+            /* Cross-tab notification must not prevent local cleanup or revocation. */
         }
     }
     async function rpc<K extends keyof WorkerRequests>(
@@ -98,6 +109,7 @@ export function createAuthClient(
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
         store.setState({ unlockedUserId: result.user.id, rememberError: '' });
         try {
+            if (!canPersist()) throw new Error('Device storage is unavailable.');
             const saved = await deviceKeys.create();
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             const device = await rpc('remember', {
@@ -111,6 +123,7 @@ export function createAuthClient(
             });
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             store.setState({ device });
+            if (!canPersist()) throw new Error('Device storage is unavailable.');
         } catch {
             store.setState({
                 rememberError:
@@ -212,7 +225,7 @@ export function createAuthClient(
                 device: null,
                 lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
             });
-            channel?.postMessage('lock');
+            broadcastLock();
             await deviceKeys.clear();
         },
         requestEmail: (email: string, purpose: 'register' | 'recover' = 'register') =>
@@ -239,7 +252,7 @@ export function createAuthClient(
                     device: null,
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
-                channel?.postMessage('lock');
+                broadcastLock();
                 await deviceKeys.clear().catch(() => {});
             }),
         recoveryBackup: async (user: SessionUser) => {
@@ -289,7 +302,7 @@ export function createAuthClient(
                     device: null,
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
-                channel?.postMessage('lock');
+                broadcastLock();
                 await deviceKeys.clear().catch(() => {});
                 try {
                     return await login(email, password);
@@ -326,7 +339,7 @@ export function createAuthClient(
                     device: null,
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
-                channel?.postMessage('lock');
+                broadcastLock();
                 await deviceKeys.clear().catch(() => {});
                 try {
                     await login(
@@ -359,13 +372,12 @@ export function createAuthClient(
         async logout() {
             listen();
             lock();
-            channel?.postMessage('lock');
+            broadcastLock();
             store.setState({
                 device: null,
                 lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
             });
-            await deviceKeys.clear().catch(() => {});
-            await request('logout', {});
+            await Promise.all([deviceKeys.clear().catch(() => {}), request('logout', {})]);
             store.setState({
                 lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
             });

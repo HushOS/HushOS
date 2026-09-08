@@ -21,6 +21,8 @@ import { sendVerificationEmail } from '@hushos/emails/server';
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 const ENROLLMENT_SECONDS = 30 * 60;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+export const EMAIL_ADDRESS_PATTERN =
+    /^(?=.{1,64}@)[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 
 export class AuthError extends Error {
     constructor(
@@ -70,7 +72,10 @@ export function authCookie(kind: 'session' | 'enrollment', token: string | null)
 }
 
 export function normalizeEmail(email: string) {
-    return email.trim().toLowerCase();
+    const normalized = email.trim().toLowerCase();
+    if (normalized.length > 254 || !EMAIL_ADDRESS_PATTERN.test(normalized))
+        throw new AuthError('Enter a valid email address.');
+    return normalized;
 }
 
 let nextCleanupAt = 0;
@@ -88,7 +93,10 @@ export async function guardAuthMutation(request: Request) {
     }
 }
 
-async function limitEmail(kind: 'register' | 'recover' | 'login', email: string) {
+async function limitEmail(
+    kind: 'register' | 'recover-email' | 'recover-start' | 'login',
+    email: string,
+) {
     const limit = kind === 'login' ? 10 : 3;
     if (
         !(await authRepository.consumeRateLimit(hash(`auth:${kind}:${email}`), limit, 15 * 60_000))
@@ -102,11 +110,11 @@ export async function requestRegistrationEmail(
     purpose: 'register' | 'recover' = 'register',
 ) {
     const normalizedEmail = normalizeEmail(email);
-    await limitEmail(purpose, normalizedEmail);
+    await limitEmail(purpose === 'recover' ? 'recover-email' : 'register', normalizedEmail);
     const token = randomToken();
     await authRepository.createEnrollment({
         purpose,
-        email: email.trim(),
+        email: normalizedEmail,
         normalizedEmail,
         verificationTokenHash: hash(token),
         expiresAt: new Date(Date.now() + ENROLLMENT_SECONDS * 1000),
@@ -114,7 +122,7 @@ export async function requestRegistrationEmail(
     try {
         // The fragment is never sent in an HTTP request or recorded in access logs.
         await sendVerificationEmail(
-            email.trim(),
+            normalizedEmail,
             `${config().origin}/${purpose === 'register' ? 'register' : 'recover'}/complete#verify=${token}`,
             purpose,
         );
@@ -403,7 +411,7 @@ export async function confirmRecoveryBackup(request: Request, recoveryVersion: n
 export async function startRecovery(request: Request, registrationRequest: string) {
     const enrollment = await getEnrollment(request, 'recover');
     if (!enrollment) throw new AuthError('Verify your email before recovering your account.', 401);
-    await limitEmail('recover', normalizeEmail(enrollment.email));
+    await limitEmail('recover-start', normalizeEmail(enrollment.email));
     const credential = await authRepository.findCredential(normalizeEmail(enrollment.email));
     const recovery = credential ? await authRepository.getRecoveryKey(credential.userId) : null;
     if (!credential || !recovery)

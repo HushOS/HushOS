@@ -37,7 +37,7 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
 const emailSchema = t.String({
     minLength: 3,
     maxLength: 254,
-    pattern: '^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$',
+    pattern: auth.EMAIL_ADDRESS_PATTERN.source,
 });
 const opaqueMessage = t.String({ minLength: 1, maxLength: 4096 });
 const tokenSchema = t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' });

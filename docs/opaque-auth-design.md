@@ -126,7 +126,7 @@ Replacing a recovery phrase revokes its future server recovery authorization. It
 
 Signup progresses through `/register`, `/register/check-email`, `/register/complete`, and `/setup/recovery-key`, where saving the phrase and choosing Continue to HushOS opens `/app`. The phrase remains viewable at `/app/recovery-key`. Plain `/register` renders the email form during SSR; verified fragment processing happens only on the completion page. TanStack Form and local Zod schemas validate form values. The backend independently validates nonsecret fields and wire payloads. It cannot validate a plaintext password it never receives.
 
-Email addresses are trimmed and lowercased for lookup, without provider-specific alias rules. Display names use NFC and 1–100 Unicode code points. These are server-readable metadata, not encryption identifiers. The immutable account UUID is the OPAQUE identifier.
+Email addresses must be a single bare mailbox, without display names, comments, or address lists. They are trimmed and lowercased consistently for lookup, rate limiting, and delivery, without provider-specific alias rules. Recovery email delivery and verified recovery attempts have separate rate-limit budgets. Display names use NFC and 1–100 Unicode code points. These are server-readable metadata, not encryption identifiers. The immutable account UUID is the OPAQUE identifier.
 
 Email enrollment lasts 30 minutes. A random 32-byte verification token is stored only as SHA-256 and sent in a URL fragment; it never enters an HTTP path. Verification atomically consumes it and issues a different random hashed enrollment token in an HttpOnly cookie. Registration inserts the user, credential, password/recovery/identity bundles, personal workspace, and base quota in one transaction, then consumes enrollment. Existing users cannot be reinitialized by signup.
 
@@ -136,7 +136,7 @@ Cookies use HttpOnly, SameSite=Lax, Path=/, no Domain, and Secure plus the `__Ho
 
 ## Remembered browser unlock and portability
 
-The crypto worker owns the plaintext root. Zustand's persisted state contains only a versioned encrypted device bundle and lock revision. A non-exportable AES-GCM device key is stored as a `CryptoKey` in IndexedDB. The root is wrapped inside the worker, never exported to UI state.
+The crypto worker owns the plaintext root. Zustand's persisted state contains only a versioned encrypted device bundle and lock revision. A non-exportable AES-GCM device key is stored as a `CryptoKey` in IndexedDB. The root is wrapped inside the worker, never exported to UI state. If localStorage is blocked or a write fails, the client continues in memory and warns that device access could not be saved. Persistence failures cannot prevent sign-out from attempting device-key cleanup and server-session revocation.
 
 Device associated data:
 
@@ -148,7 +148,7 @@ A reload/new tab reads the encrypted bundle, validates a live server session and
 
 Non-exportability prevents ordinary raw-key export; it does not stop malicious same-origin code from using the key. XSS, a compromised client build, browser profile compromise, and hostile device software remain distinct threats. JavaScript cannot guarantee zeroization of strings or garbage-collector copies.
 
-`createCryptoSession` has no React, fetch, IndexedDB, or Worker dependency. `CryptoTransport` is the coordinator boundary, with a browser Worker implementation. `DeviceKeyStore` contains the browser Web Crypto persistence adapter. Electron can use this secure renderer arrangement with its normal isolation/CSP requirements. React Native needs a JSI/native crypto and secure-storage adapter; Rust/Swift implementations must reproduce the exact suites, OPAQUE profile, Base64url encoding, and associated-data bytes. They should keep private material in their native vault and use OS-protected device wrapping. Those native integrations are not implemented by this web scaffold.
+`createCryptoSession` has no React, fetch, IndexedDB, or Worker dependency. It serializes operations; resetting invalidates queued and active work and rejects its callers immediately. Cancelled work cannot publish a result or restore unlocked state. Operations own temporary root copies and wipe them when they finish. `CryptoTransport` is the coordinator boundary, with a browser Worker implementation. `DeviceKeyStore` contains the browser Web Crypto persistence adapter. Electron can use this secure renderer arrangement with its normal isolation/CSP requirements. React Native needs a JSI/native crypto and secure-storage adapter; Rust/Swift implementations must reproduce the exact suites, OPAQUE profile, Base64url encoding, and associated-data bytes. They should keep private material in their native vault and use OS-protected device wrapping. Those native integrations are not implemented by this web scaffold.
 
 ## Quota and permanent deletion
 
