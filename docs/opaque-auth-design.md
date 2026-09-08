@@ -1,6 +1,6 @@
 # Authentication, account keys, and recovery
 
-Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, stable account identity keys, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, billing checkout, authenticated password change, and cryptographic migrations remain future work.
+Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, authenticated password changes, master/recovery-key rotation, stable account identity keys, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, billing checkout, and cryptographic suite migrations remain future work.
 
 ## Key hierarchy
 
@@ -29,7 +29,7 @@ The stable X25519 and Ed25519 identities prepare for recipient key exchange and 
 
 - OPAQUE profile 1: Serenity's Ristretto implementation, explicit Argon2id with 65,536 KiB memory, three iterations, parallelism four, and server identifier `hushos/opaque/profile/1`.
 - Envelope suite 1: HKDF-SHA-256 and libsodium XChaCha20-Poly1305-IETF, combined ciphertext followed by its 16-byte tag.
-- Account-key version 1: a 32-byte random account key. Credential revisions increment on password reset and are separate from root-key versions.
+- Account-key revisions begin at 1 and increment on master-key rotation; each root is 32 random bytes. Credential revisions increment on password change, password recovery, and either key rotation, independently of root revisions.
 - Identity suite 1: independently generated `crypto_box_keypair` (X25519) and `crypto_sign_seed_keypair` (Ed25519 from a random 32-byte seed).
 - Recovery suite 1: a random 32-byte secret encoded as 24 English BIP39 words. Recovery revisions increment when that secret is replaced.
 - Device suite 1: browser Web Crypto AES-256-GCM with a non-exportable device key, 12-byte nonce, and 16-byte tag.
@@ -71,10 +71,10 @@ hushos/identity/signing-seed-wrap/v1
 Associated data is:
 
 ```text
-["hushos/identity", 1, lowercase(userId), 1, purpose, publicKeyBase64url]
+["hushos/identity", 1, lowercase(userId), keyVersion, purpose, publicKeyBase64url]
 ```
 
-`purpose` is respectively `encryption-private-wrap` or `signing-seed-wrap`. Public-key binding detects substitution when the client opens the envelope. The encrypted Ed25519 seed reconstructs its full signing key using libsodium. Identity records have no ordinary overwrite endpoint and are unchanged during password recovery. [Libsodium signatures](https://doc.libsodium.org/public-key_cryptography/public-key_signatures).
+`purpose` is respectively `encryption-private-wrap` or `signing-seed-wrap`. Public-key binding detects substitution when the client opens the envelope. The encrypted Ed25519 seed reconstructs its full signing key using libsodium. Identity records are unchanged during password recovery; authenticated master-key rotation rewraps their private material while preserving the public keys. [Libsodium signatures](https://doc.libsodium.org/public-key_cryptography/public-key_signatures).
 
 ## Recovery envelopes and authorization
 
@@ -91,7 +91,7 @@ All use HKDF-SHA-256, the recovery salt, and 32-byte output. The authorization o
 Both encrypted envelopes use distinct random 24-byte nonces and this associated-data shape:
 
 ```text
-["hushos/recovery", 1, purpose, lowercase(userId), 1, recoveryVersion]
+["hushos/recovery", 1, purpose, lowercase(userId), keyVersion, recoveryVersion]
 ```
 
 Purpose is `account-wrap` or `secret-backup`. Each ciphertext is 48 bytes. A user who has unlocked the root can decrypt the recovery-secret backup locally to redisplay the phrase. The recovery screen temporarily receives that phrase for display, QR encoding, and a local text download. It never puts the phrase in a URL, API request, persistent app store, or analytics event. The downloadable kit intentionally contains the secret phrase and encrypted recovery envelope and must be kept private.
@@ -120,11 +120,11 @@ Canonical signed message:
 
 The server's signature check binds every replacement field; it does not establish that an arbitrary client constructed its ciphertext correctly. An honest client must verify local recovery and preserve the root. Serenity documents reset as new OPAQUE registration replacing the old record; preserving encrypted content requires this additional envelope/proof protocol. [Password reset guide](https://opaque-auth.com/docs/guides/password-reset).
 
-Replacing a recovery phrase revokes its future server recovery authorization. It **cannot** invalidate an old phrase paired with an old encrypted root envelope: that offline kit still opens the unchanged root. Root rotation and content-key migration would be a different operation. Email alone cannot restore a lost root; loss of password, remembered access, and recovery kit means losing access to the encryption keys.
+Replacing a recovery phrase revokes its future server recovery authorization. It **cannot** invalidate an old phrase paired with an old encrypted root envelope: that offline kit still opens the root it contains. Password recovery and recovery-key rotation preserve that root. Master-key rotation replaces the root separately and also replaces the recovery phrase. It does not erase an old root or private identity keys already extracted from an old kit; content-key migration remains future work. Email alone cannot restore a lost root; loss of password, remembered access, and recovery kit means losing access to the encryption keys.
 
 ## Enrollment and session state
 
-Signup progresses through `/register`, `/register/check-email`, `/register/complete`, and `/app/recovery-key`. Plain `/register` renders the email form during SSR; verified fragment processing happens only on the completion page. TanStack Form and local Zod schemas validate form values. The backend independently validates nonsecret fields and wire payloads. It cannot validate a plaintext password it never receives.
+Signup progresses through `/register`, `/register/check-email`, `/register/complete`, and `/setup/recovery-key`, where saving the phrase and choosing Continue to HushOS opens `/app`. The phrase remains viewable at `/app/recovery-key`. Plain `/register` renders the email form during SSR; verified fragment processing happens only on the completion page. TanStack Form and local Zod schemas validate form values. The backend independently validates nonsecret fields and wire payloads. It cannot validate a plaintext password it never receives.
 
 Email addresses are trimmed and lowercased for lookup, without provider-specific alias rules. Display names use NFC and 1–100 Unicode code points. These are server-readable metadata, not encryption identifiers. The immutable account UUID is the OPAQUE identifier.
 
@@ -174,3 +174,17 @@ The operator can see email, name, account/workspace IDs, quotas, timestamps, pub
 - `@hushos/logging`: evlog integration and redaction policy.
 
 `OPAQUE_SERVER_SETUP` must persist and be backed up with the database. Never regenerate it at startup. Suite/profile migrations require explicit client support, authentication, local rewrapping, revision checks, and transactional replacement; never relabel old ciphertext or records. Development accounts made before recovery/identity/quota provisioning finish that setup after their next unlock. The worker creates only missing private-key bundles under the existing account key. The authenticated setup transaction rechecks the live session and credential revision, locks the user, and inserts missing records without overwriting established keys. Database migrations never fabricate private keys.
+
+## Authenticated password changes and key rotation
+
+Account settings expose three operations, each authorized by a fresh OPAQUE exchange with the current password. `/api/auth/security/start` binds the one-use attempt to its action (`password`, `master-key`, or `recovery-key`), current session hash, user, credential revision, and five-minute expiry. The client starts a separate OPAQUE registration for the replacement credential. The worker opens the existing root with the old login export key and wraps the resulting root with the new registration export key, using fresh salt and nonce. Neither password nor export key is sent to the server.
+
+- **Password change:** use the new password for registration, preserve the root, recovery envelopes, and identity envelopes, and increment the credential revision.
+- **Recovery-key rotation:** register again with the same password, preserve the root and identity envelopes, generate a new recovery secret and authorization key, and increment both recovery and credential revisions.
+- **Master-key rotation:** register again with the same password, generate a new random 32-byte root, increment the root and credential revisions, rewrap both existing identity private keys under the new root, and generate a new recovery secret with an incremented recovery revision. The worker verifies that decrypted identity private keys reconstruct the stored public keys. The server also requires unchanged identity public keys.
+
+`keyVersion` is the root revision, beginning at 1; it is not the envelope suite. Recovery and identity associated data now use that revision in the position previously fixed at 1, retaining byte-for-byte compatibility for existing accounts. Password recovery after rotation preserves the current root revision. Remembered-device bundles also bind that revision.
+
+`/api/auth/security/finish` consumes the attempt before OPAQUE verification. The database transaction locks the user and rechecks the live session, credential revision, root revision, recovery revision, and operation-specific replacement fields. It replaces all affected records together, revokes every session and outstanding login/recovery attempt, and invalidates pending email-recovery enrollments. A stale concurrent operation cannot overwrite the winning transaction. The browser clears remembered access across tabs and signs in again to establish a fresh session and device envelope. If automatic sign-in fails after the change commits, the UI takes the user to sign-in. Both rotation actions then lead to `/setup/recovery-key` to save and confirm the new phrase.
+
+Master-key rotation currently covers the password envelope, recovery envelopes, and identity envelopes: Drive object storage does not exist yet. The transaction refuses root rotation when the personal workspace reports used or reserved storage. Future encrypted object/workspace-key envelopes must participate in the rotation before that restriction can be lifted. Rotation cannot erase previously copied ciphertext or revoke identity private keys already extracted from an older root and bundle.

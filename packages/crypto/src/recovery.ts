@@ -7,7 +7,7 @@ import type { AccountKeyEnvelope } from './protocol';
 
 export type RecoveryEnvelope = {
     version: 1;
-    keyVersion: 1;
+    keyVersion: number;
     recoveryVersion: number;
     wrappingSalt: string;
     wrappingNonce: string;
@@ -24,9 +24,9 @@ export type RecoveryReset = {
     envelope: AccountKeyEnvelope;
     recovery: RecoveryEnvelope;
 };
-function context(purpose: string, userId: string, version: number) {
+function context(purpose: string, userId: string, version: number, keyVersion: number) {
     return new TextEncoder().encode(
-        JSON.stringify(['hushos/recovery', 1, purpose, userId.toLowerCase(), 1, version]),
+        JSON.stringify(['hushos/recovery', 1, purpose, userId.toLowerCase(), keyVersion, version]),
     );
 }
 async function derive(
@@ -86,6 +86,7 @@ export async function createRecovery(
     accountKey: Uint8Array<ArrayBuffer>,
     userId: string,
     recoveryVersion = 1,
+    keyVersion = 1,
 ) {
     await sodium.ready;
     const secret = crypto.getRandomValues(new Uint8Array(32));
@@ -99,7 +100,7 @@ export async function createRecovery(
     try {
         const envelope: RecoveryEnvelope = {
             version: 1,
-            keyVersion: 1,
+            keyVersion,
             recoveryVersion,
             wrappingSalt: encode(salt),
             wrappingNonce: encode(nonce),
@@ -108,7 +109,7 @@ export async function createRecovery(
                     accountKey,
                     wrapping,
                     nonce,
-                    context('account-wrap', userId, recoveryVersion),
+                    context('account-wrap', userId, recoveryVersion, keyVersion),
                 ),
             ),
             backupNonce: encode(backupNonce),
@@ -117,7 +118,7 @@ export async function createRecovery(
                     secret,
                     backup,
                     backupNonce,
-                    context('secret-backup', userId, recoveryVersion),
+                    context('secret-backup', userId, recoveryVersion, keyVersion),
                 ),
             ),
             publicKey: encode(pair.publicKey),
@@ -134,7 +135,8 @@ export async function createRecovery(
 function checkEnvelope(envelope: RecoveryEnvelope) {
     if (
         envelope.version !== 1 ||
-        envelope.keyVersion !== 1 ||
+        !Number.isSafeInteger(envelope.keyVersion) ||
+        envelope.keyVersion < 1 ||
         !Number.isSafeInteger(envelope.recoveryVersion) ||
         envelope.recoveryVersion < 1
     )
@@ -153,7 +155,7 @@ export async function readRecoveryPhrase(
             decode(envelope.encryptedRecoveryKey, 48),
             key,
             decode(envelope.backupNonce, 24),
-            context('secret-backup', userId, envelope.recoveryVersion),
+            context('secret-backup', userId, envelope.recoveryVersion, envelope.keyVersion),
         );
         return entropyToMnemonic(secret, wordlist);
     } finally {
@@ -182,7 +184,7 @@ export async function openRecovery(phrase: string, userId: string, envelope: Rec
             decode(envelope.encryptedKey, 48),
             key,
             decode(envelope.wrappingNonce, 24),
-            context('account-wrap', userId, envelope.recoveryVersion),
+            context('account-wrap', userId, envelope.recoveryVersion, envelope.keyVersion),
         );
         return { accountKey, signingKey: new Uint8Array(pair.privateKey) };
     } finally {

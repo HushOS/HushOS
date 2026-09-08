@@ -1,8 +1,10 @@
+import type { SecurityAction, SessionUser } from '@hushos/auth/protocol';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { ArrowRightIcon, TriangleAlertIcon } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
+import { AccountSecurityForm, securityLabels } from '@/components/account-security-form';
 import { AuthInput } from '@/components/auth-input';
 import { CopyValue } from '@/components/copy-value';
 import { FormActions, FormNote, FormTable } from '@/components/form-rows';
@@ -25,7 +27,7 @@ function Row({ label, value, copy }: { label: string; value: string; copy?: bool
                 {label}
             </dt>
             <dd className="flex items-center px-5 py-3.5 font-mono text-[13px] wrap-anywhere sm:px-6">
-                {copy ? <CopyValue value={value} /> : value}
+                {copy ? <CopyValue value={value} label={label} /> : value}
             </dd>
         </div>
     );
@@ -67,12 +69,65 @@ function Section({
     );
 }
 
+/*
+ * A security action: one ghost row that opens into its inline form, using the
+ * same collapse as the delete confirmation so every section moves alike.
+ */
+function SecurityRow({
+    action,
+    user,
+    open,
+    disabled,
+    className,
+    onOpen,
+    onClose,
+    onSuccess,
+    onPending,
+}: {
+    action: SecurityAction;
+    user: SessionUser;
+    open: boolean;
+    disabled: boolean;
+    className?: string;
+    onOpen: () => void;
+    onClose: () => void;
+    onSuccess: () => void;
+    onPending: (pending: boolean) => void;
+}) {
+    return (
+        <>
+            <Collapse open={!open} className={className}>
+                <Button variant="row" size="row" disabled={disabled} onClick={onOpen}>
+                    {securityLabels[action]} <ArrowRightIcon aria-hidden="true" />
+                </Button>
+            </Collapse>
+            <Collapse open={open} className={className}>
+                <AccountSecurityForm
+                    user={user}
+                    action={action}
+                    onCancel={onClose}
+                    onPending={onPending}
+                    onSuccess={onSuccess}
+                />
+            </Collapse>
+        </>
+    );
+}
+
 function AccountPage() {
     const { user } = Route.useRouteContext();
     const router = useRouter();
+    const [securityAction, setSecurityAction] = useState<SecurityAction | null>(null);
+    const [securityPending, setSecurityPending] = useState(false);
+    const [securitySuccess, setSecuritySuccess] = useState('');
     const [confirming, setConfirming] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    function openSecurity(action: SecurityAction) {
+        setSecurityAction(action);
+        setSecuritySuccess('');
+        setConfirming(false);
+    }
     const deleteFields = z.object({
         email: z
             .string()
@@ -109,12 +164,12 @@ function AccountPage() {
             <PageHeader
                 eyebrow="Account"
                 title="Account settings"
-                description="Your identity, your way back in, and the one action that can’t be undone."
+                description="Manage your password, encryption keys, and account."
             />
             <Section
                 id="profile-title"
                 title="Profile"
-                description="Name and email changes aren’t available yet in this preview."
+                description="Your name, email, and account ID."
             >
                 <dl>
                     <Row label="Name" value={user.name} />
@@ -123,18 +178,71 @@ function AccountPage() {
                 </dl>
             </Section>
             <Section
+                id="password-title"
+                title="Password"
+                description="The password you use to sign in and unlock your account key on this device."
+            >
+                <Collapse open={Boolean(securitySuccess)} className="border-b">
+                    <output className="block">
+                        <FormNote>{securitySuccess}</FormNote>
+                    </output>
+                </Collapse>
+                <SecurityRow
+                    action="password"
+                    user={user}
+                    open={securityAction === 'password'}
+                    disabled={securityPending || pending}
+                    onOpen={() => openSecurity('password')}
+                    onClose={() => setSecurityAction(null)}
+                    onPending={setSecurityPending}
+                    onSuccess={() => {
+                        setSecurityAction(null);
+                        setSecuritySuccess(
+                            'Password changed. Other sessions have been signed out.',
+                        );
+                    }}
+                />
+            </Section>
+            <Section
                 id="recovery-title"
                 title="Recovery phrase"
                 description="Your 24 words are the only way to reset a forgotten password without losing your account key. Review them any time this device is unlocked."
             >
                 <Button
-                    variant="ghost"
-                    className="h-14 w-full justify-between px-5 sm:px-6"
+                    variant="row"
+                    size="row"
                     render={<Link to="/app/recovery-key" />}
                     nativeButton={false}
                 >
                     View recovery phrase <ArrowRightIcon aria-hidden="true" />
                 </Button>
+                <SecurityRow
+                    action="recovery-key"
+                    user={user}
+                    className="border-t"
+                    open={securityAction === 'recovery-key'}
+                    disabled={securityPending || pending}
+                    onOpen={() => openSecurity('recovery-key')}
+                    onClose={() => setSecurityAction(null)}
+                    onPending={setSecurityPending}
+                    onSuccess={() => setSecurityAction(null)}
+                />
+            </Section>
+            <Section
+                id="master-key-title"
+                title="Master key"
+                description="The root key that protects your account’s private keys. Rotating it also creates a new recovery phrase."
+            >
+                <SecurityRow
+                    action="master-key"
+                    user={user}
+                    open={securityAction === 'master-key'}
+                    disabled={securityPending || pending}
+                    onOpen={() => openSecurity('master-key')}
+                    onClose={() => setSecurityAction(null)}
+                    onPending={setSecurityPending}
+                    onSuccess={() => setSecurityAction(null)}
+                />
             </Section>
             <Section
                 id="delete-title"
@@ -144,9 +252,15 @@ function AccountPage() {
             >
                 <Collapse open={!confirming}>
                     <Button
-                        variant="ghost"
-                        className="h-14 w-full justify-between px-5 text-destructive hover:bg-destructive/10 hover:text-destructive sm:px-6"
-                        onClick={() => setConfirming(true)}
+                        variant="row"
+                        size="row"
+                        className="text-destructive hover:bg-destructive/10 [&>svg]:text-destructive"
+                        disabled={securityPending}
+                        onClick={() => {
+                            setConfirming(true);
+                            setSecurityAction(null);
+                            setSecuritySuccess('');
+                        }}
                     >
                         Delete account… <ArrowRightIcon aria-hidden="true" />
                     </Button>
@@ -220,6 +334,8 @@ function AccountPage() {
                                     type="button"
                                     className="text-link"
                                     disabled={pending}
+                                    data-cuelume-press=""
+                                    data-cuelume-release=""
                                     onClick={() => {
                                         setConfirming(false);
                                         form.reset();

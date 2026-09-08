@@ -16,6 +16,7 @@ import { MotionProvider } from '@/components/motion';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
+import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { getCurrentUser } from '@/lib/auth';
 import { initSounds } from '@/lib/sounds';
@@ -146,7 +147,7 @@ function RootDocument({ children }: { children: ReactNode }) {
                 <ThemeProvider theme={theme}>
                     <MotionProvider>
                         <TooltipProvider delay={0} closeDelay={0}>
-                            {children}
+                            <Toaster>{children}</Toaster>
                         </TooltipProvider>
                     </MotionProvider>
                 </ThemeProvider>

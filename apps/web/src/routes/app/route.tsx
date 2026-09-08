@@ -49,9 +49,10 @@ function AppLayout() {
     useEffect(() => {
         let active = true;
         async function checkSession() {
+            if (authClient.isAuthenticating()) return;
             try {
                 const { user: current } = await authClient.session();
-                if (!active) return;
+                if (!active || authClient.isAuthenticating()) return;
                 if (
                     !current ||
                     current.id !== user.id ||
@@ -83,7 +84,7 @@ function AppLayout() {
             <SidebarInset>
                 <header className="sticky top-0 z-30 flex h-11 items-stretch border-b bg-background">
                     <SidebarTrigger
-                        className="h-auto w-11 self-stretch border-r text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="h-auto w-11 self-stretch border-r text-foreground hover:bg-muted"
                         data-cuelume-press="press"
                     />
                     <div className="eyebrow flex items-center px-4 text-muted-foreground">

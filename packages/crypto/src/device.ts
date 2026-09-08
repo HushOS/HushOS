@@ -44,7 +44,8 @@ export async function rememberAccountKey(
 export async function restoreAccountKey(bundle: RememberedAccount, deviceKey: CryptoKey) {
     if (
         bundle.version !== 1 ||
-        bundle.keyVersion !== 1 ||
+        !Number.isSafeInteger(bundle.keyVersion) ||
+        bundle.keyVersion < 1 ||
         !Number.isSafeInteger(bundle.credentialVersion) ||
         bundle.credentialVersion < 1
     )

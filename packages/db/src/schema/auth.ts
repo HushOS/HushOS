@@ -114,7 +114,7 @@ export const opaqueLoginAttempts = pgTable(
     (table) => [
         check(
             'opaque_login_attempts_purpose_binding',
-            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} = 'delete' and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
+            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
         ),
         index('opaque_login_attempts_user_idx').on(table.userId),
         index('opaque_login_attempts_expiry_idx').on(table.expiresAt),
@@ -191,7 +191,7 @@ export const accountRecoveryKeys = pgTable(
     (table) => [
         check(
             'account_recovery_keys_versions_valid',
-            sql`${table.version} = 1 and ${table.keyVersion} = 1 and ${table.recoveryVersion} > 0`,
+            sql`${table.version} = 1 and ${table.keyVersion} > 0 and ${table.recoveryVersion} > 0`,
         ),
         check(
             'account_recovery_keys_lengths_valid',
@@ -244,7 +244,7 @@ export const accountIdentities = pgTable(
     (table) => [
         check(
             'account_identities_versions_valid',
-            sql`${table.version} = 1 and ${table.keyVersion} = 1`,
+            sql`${table.version} = 1 and ${table.keyVersion} > 0`,
         ),
         check(
             'account_identities_lengths_valid',

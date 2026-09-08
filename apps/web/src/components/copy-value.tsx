@@ -1,29 +1,39 @@
-import { useEffect, useState } from 'react';
-import { TextSwap } from '@/components/motion';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { toast } from '@/components/ui/toast';
 import { cue } from '@/lib/sounds';
 
-/* A value you can click to copy: underlined like a link, with a tooltip that says so. */
-export function CopyValue({ value, className = '' }: { value: string; className?: string }) {
-    const [copied, setCopied] = useState(false);
-    useEffect(() => {
-        if (!copied) return;
-        const timer = window.setTimeout(() => setCopied(false), 1_600);
-        return () => window.clearTimeout(timer);
-    }, [copied]);
+/*
+ * A value you can click to copy: underlined like a link, with a tooltip that
+ * says so. The confirmation is a toast, because the tooltip closes on click.
+ */
+export function CopyValue({
+    value,
+    label,
+    className = '',
+}: {
+    value: string;
+    label: string;
+    className?: string;
+}) {
     async function copy() {
         try {
             await navigator.clipboard.writeText(value);
             cue('success', { volume: 0.4 });
-            setCopied(true);
+            toast.add({ type: 'success', title: `${label} copied`, description: value });
         } catch {
             cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Copy failed',
+                description:
+                    'Your browser blocked clipboard access. Select the value and copy it instead.',
+            });
         }
     }
     return (
         <Tooltip>
             <TooltipTrigger
-                render={<button type="button" aria-label={`Copy ${value}`} />}
+                render={<button type="button" aria-label={`Copy ${label}`} />}
                 onClick={() => void copy()}
                 data-cuelume-press="press"
                 data-cuelume-release="release"
@@ -32,7 +42,7 @@ export function CopyValue({ value, className = '' }: { value: string; className?
                 {value}
             </TooltipTrigger>
             <TooltipContent side="top" className="eyebrow">
-                <TextSwap>{copied ? 'Copied' : 'Click to copy'}</TextSwap>
+                Click to copy
             </TooltipContent>
         </Tooltip>
     );

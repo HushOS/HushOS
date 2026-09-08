@@ -15,7 +15,17 @@ import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 
-export function RecoveryPhrase({ user, setup = false }: { user: SessionUser; setup?: boolean }) {
+export type RecoveryReason = 'master-key' | 'recovery-key';
+
+export function RecoveryPhrase({
+    user,
+    setup = false,
+    reason,
+}: {
+    user: SessionUser;
+    setup?: boolean;
+    reason?: RecoveryReason;
+}) {
     const router = useRouter();
     const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
     const [backup, setBackup] = useState<Awaited<
@@ -84,7 +94,8 @@ export function RecoveryPhrase({ user, setup = false }: { user: SessionUser; set
             JSON.stringify(backup.recovery, null, 4),
             '',
             'To reset your password, open HushOS, choose Forgot your password, verify your email, and enter the 24 words.',
-            'A password reset replaces this recovery phrase. Save the new kit after recovery.',
+            'Password recovery and either recovery-key or master-key rotation replace this phrase. Save a new kit afterward.',
+            'Changing your password from Account settings preserves this phrase.',
         ].join('\n');
         const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
         const anchor = document.createElement('a');
@@ -118,8 +129,14 @@ export function RecoveryPhrase({ user, setup = false }: { user: SessionUser; set
         <AuthLayout
             embedded
             title={confirmed ? 'Your recovery phrase' : 'Save your recovery phrase'}
-            stamp={confirmed ? 'Saved' : 'One-time setup'}
-            description="These 24 words, with access to your email, are the only way to set a new password if you forget yours. Store them somewhere private and offline."
+            stamp={confirmed ? 'Saved' : reason ? 'New phrase' : 'One-time setup'}
+            description={`${
+                reason === 'master-key'
+                    ? 'Your master key was rotated and your previous phrase no longer works. '
+                    : reason === 'recovery-key'
+                      ? 'Your previous phrase no longer works. '
+                      : ''
+            }These 24 words, with access to your email, are the only way to set a new password if you forget yours. Store them somewhere private and offline.`}
         >
             {ready ? (
                 <div className="border bg-card">
@@ -147,25 +164,27 @@ export function RecoveryPhrase({ user, setup = false }: { user: SessionUser; set
                     </ol>
                     <div className="grid grid-cols-2 border-b">
                         <Button
-                            variant="ghost"
-                            className="h-12 justify-between border-r px-4"
+                            variant="row"
+                            size="row"
+                            className="h-12 border-r px-4 sm:px-4"
                             onClick={() => void copy()}
                         >
                             <TextSwap>{copied ? 'Copied' : 'Copy phrase'}</TextSwap>
                             <CopyCheckIcon done={copied} className="size-4" />
                         </Button>
                         <Button
-                            variant="ghost"
-                            className="h-12 justify-between px-4"
+                            variant="row"
+                            size="row"
+                            className="h-12 px-4 sm:px-4"
                             onClick={download}
                         >
                             Download kit <DownloadIcon aria-hidden="true" />
                         </Button>
                     </div>
                     <details className="group border-b">
-                        <summary className="eyebrow flex h-12 cursor-pointer items-center justify-between px-4 text-muted-foreground select-none hover:bg-muted hover:text-foreground">
+                        <summary className="eyebrow flex h-12 cursor-pointer items-center justify-between px-4 text-foreground select-none hover:bg-muted">
                             Show as QR code
-                            <QrCodeIcon className="size-4" aria-hidden="true" />
+                            <QrCodeIcon className="size-4 text-primary" aria-hidden="true" />
                         </summary>
                         <div className="border-t p-5">
                             <div className="mx-auto w-fit border bg-white p-3">

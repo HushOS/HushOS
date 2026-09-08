@@ -90,7 +90,7 @@ CI runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun 
 
 `bun run setup` is idempotent, preserves existing settings, and adds missing auth/email defaults. `bun run infra:down` preserves data; avoid removing volumes unless you intend to discard that local database. Keep the generated `.env` when reusing the volume: changing only the password variable does not change an existing Postgres role's password.
 
-This is the foundation for HushOS Drive and the later productivity suite. Email verification, OPAQUE authentication, remembered unlock, recovery, identity-key provisioning, quota grants, and permanent deletion are implemented; Drive storage, content encryption, sharing, chat, and billing are future work. HushOS is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
+This is the foundation for HushOS Drive and the later productivity suite. Email verification, OPAQUE authentication, remembered unlock, recovery, password changes, master/recovery-key rotation, identity-key provisioning, quota grants, and permanent deletion are implemented; Drive storage, content encryption, sharing, chat, and billing are future work. HushOS is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
 
 ## Authentication, cryptography, and email packages
 

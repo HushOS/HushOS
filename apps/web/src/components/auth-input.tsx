@@ -57,7 +57,7 @@ export function AuthInput({
                         aria-label={revealed ? 'Hide password' : 'Show password'}
                         aria-pressed={revealed}
                         data-cuelume-toggle=""
-                        className="eyebrow absolute inset-y-0 right-0 flex w-16 cursor-pointer items-center justify-center border-l text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        className="eyebrow absolute inset-y-0 right-0 flex w-16 cursor-pointer items-center justify-center border-l text-foreground transition-colors hover:bg-muted"
                     >
                         <TextSwap>{revealed ? 'Hide' : 'Show'}</TextSwap>
                     </button>

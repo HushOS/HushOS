@@ -1,3 +1,4 @@
+import type { SecurityAction, SecurityChallenge } from '@hushos/crypto';
 import type { CryptoTransport } from './crypto-transport';
 import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
 import { createAuthStore } from './store';
@@ -152,6 +153,7 @@ export function createAuthClient(
     }
     return {
         store,
+        isAuthenticating: () => busy,
         initializeAccount,
         async restore(user: SessionUser) {
             listen();
@@ -293,6 +295,47 @@ export function createAuthClient(
                     return await login(email, password);
                 } catch {
                     throw new Error('Your password was changed. Sign in with your new password.');
+                }
+            }),
+        changeSecurity: (
+            user: SessionUser,
+            action: SecurityAction,
+            password: string,
+            newPassword?: string,
+        ) =>
+            exclusive(async () => {
+                lock();
+                const start = await rpc('securityStart', { action, password, newPassword });
+                const challenge = await request<SecurityChallenge>('security/start', {
+                    action,
+                    ...start,
+                });
+                if (challenge.userId !== user.id || challenge.action !== action)
+                    throw new Error('Your account changed. Sign in again.');
+                const changeEpoch = epoch;
+                const finish = await rpc('securityFinish', challenge);
+                if (epoch !== changeEpoch)
+                    throw new Error('Your account was locked. Please try again.');
+                await request('security/finish', {
+                    action,
+                    attemptToken: challenge.attemptToken,
+                    ...finish,
+                });
+                lock();
+                store.setState({
+                    device: null,
+                    lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
+                });
+                channel?.postMessage('lock');
+                await deviceKeys.clear().catch(() => {});
+                try {
+                    await login(
+                        user.email,
+                        action === 'password' ? (newPassword ?? password) : password,
+                    );
+                    return { signedIn: true };
+                } catch {
+                    return { signedIn: false };
                 }
             }),
         session: () => request<{ user: SessionUser | null }>('session'),

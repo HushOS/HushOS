@@ -46,7 +46,7 @@ export function ThemeToggle() {
         <div className="relative flex">
             <DropdownMenu>
                 <DropdownMenuTrigger
-                    className="eyebrow flex cursor-pointer items-center gap-2 border-l px-4 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground disabled:opacity-50"
+                    className="eyebrow flex cursor-pointer items-center gap-2 border-l px-4 text-foreground transition-colors hover:bg-muted aria-expanded:bg-muted disabled:opacity-50"
                     aria-label={`Appearance: ${themeOptions[theme].label}`}
                     title={`Appearance: ${themeOptions[theme].label}`}
                     disabled={isPending}

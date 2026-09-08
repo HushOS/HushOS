@@ -37,7 +37,7 @@ export const Route = createFileRoute('/blog/')({
                             <span className="flex items-start justify-between gap-6 text-lg font-medium tracking-tight text-balance">
                                 {post.meta.title}
                                 <ArrowRightIcon
-                                    className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+                                    className="mt-1 size-4 shrink-0 text-primary transition-transform group-hover:translate-x-0.5"
                                     aria-hidden="true"
                                 />
                             </span>

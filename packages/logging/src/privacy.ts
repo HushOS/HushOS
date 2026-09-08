@@ -86,6 +86,8 @@ const authActions = new Set([
     'recovery-key/confirm',
     'storage',
     'setup',
+    'security/start',
+    'security/finish',
     'delete/start',
     'delete/finish',
 ]);
@@ -99,7 +101,7 @@ export function authLogAction(pathname: string) {
 export function redactAuthenticationEvent(event: WideEvent) {
     const path = typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : '';
     const privateRoute =
-        /^\/(api\/auth(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$))/.test(
+        /^\/(api\/auth(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$)|setup(?:\/|$))/.test(
             path,
         );
     event.path = path;
@@ -110,6 +112,7 @@ export function redactAuthenticationEvent(event: WideEvent) {
         const knownPages = new Set([
             '/app',
             '/app/account',
+            '/setup/recovery-key',
             '/app/recovery-key',
             '/login',
             '/register',

@@ -126,8 +126,9 @@ function WorkspacePage() {
                             <div className="flex border-t">
                                 {unlocked ? (
                                     <Button
-                                        variant="ghost"
-                                        className="h-12 flex-1 justify-between px-5 sm:px-8"
+                                        variant="row"
+                                        size="row"
+                                        className="h-12 sm:px-8"
                                         onClick={lock}
                                     >
                                         Lock this device <LockKeyholeIcon aria-hidden="true" />
@@ -159,22 +160,24 @@ function WorkspacePage() {
                         <div className="flex items-center justify-between gap-6 py-2.5">
                             <dt className="eyebrow text-muted-foreground">Account ID</dt>
                             <dd className="flex min-w-0">
-                                <CopyValue value={user.id} />
+                                <CopyValue value={user.id} label="Account ID" />
                             </dd>
                         </div>
                     </dl>
                     <div className="grid grid-cols-2 border-t">
                         <Button
-                            variant="ghost"
-                            className="h-12 justify-between border-r px-5 sm:px-8"
+                            variant="row"
+                            size="row"
+                            className="h-12 border-r sm:px-8"
                             render={<Link to="/app/account" />}
                             nativeButton={false}
                         >
                             Settings <ArrowRightIcon aria-hidden="true" />
                         </Button>
                         <Button
-                            variant="ghost"
-                            className="h-12 justify-between px-5 sm:px-8"
+                            variant="row"
+                            size="row"
+                            className="h-12 sm:px-8"
                             render={<Link to="/app/recovery-key" />}
                             nativeButton={false}
                         >

@@ -1,6 +1,6 @@
 # HushOS
 
-A foundation for an open-source, self-hostable, end-to-end encrypted productivity suite, starting with HushOS Drive. Email verification, OPAQUE registration/sign-in, remembered device unlock, recovery-key password reset, permanent account deletion, and initial storage allowances are implemented. Account encryption keys are generated and wrapped on the client. Drive file storage, content encryption, sharing, chat, and paid checkout remain future work.
+A foundation for an open-source, self-hostable, end-to-end encrypted productivity suite, starting with HushOS Drive. Email verification, OPAQUE registration/sign-in, remembered device unlock, recovery-key password reset, password changes, master/recovery-key rotation, permanent account deletion, and initial storage allowances are implemented. Account encryption keys are generated and wrapped on the client. Drive file storage, content encryption, sharing, chat, and paid checkout remain future work.
 
 ## Stack
 
@@ -91,7 +91,7 @@ New accounts receive a personal workspace and **1 GiB** allowance in the same si
 
 `/login` unlocks the account key in a worker. A non-exportable Web Crypto device key in IndexedDB protects an encrypted account-key bundle in localStorage through Zustand persist. Refreshes and new tabs restore that key only after checking a live server session and credential revision. Explicit lock or sign-out removes saved device access across tabs. The server session lasts up to seven days. Browser origin compromise can still misuse a saved device key; non-exportability does not prevent XSS.
 
-Use `/recover` with access to both your email and recovery phrase to replace your password while preserving the root key and permanent identity. Recovery revokes existing sessions and replaces the recovery phrase. Account settings at `/app/account` offer permanent deletion after fresh OPAQUE password confirmation. Accounts created during earlier development iterations may lack recovery/identity/workspace records; the application does not invent or overwrite their encryption keys during migration.
+Use `/recover` with access to both your email and recovery phrase to replace your password while preserving the root key and permanent identity. Recovery revokes existing sessions and replaces the recovery phrase. Account settings at `/app/account` offer password changes, recovery-key rotation, master-key rotation, and permanent deletion, each requiring fresh OPAQUE password confirmation. Password changes preserve encryption keys; recovery rotation replaces the 24 words; master-key rotation replaces the root and recovery phrase while preserving identity keys. Security changes revoke other sessions, and rotations return you to the recovery setup page to save the new phrase. Master-key rotation is currently available only while the workspace has no used or reserved storage. Accounts created during earlier development iterations may lack recovery/identity/workspace records; the application does not invent or overwrite their encryption keys during migration.
 
 Emails use React Email and the existing HushOS logo. `EMAIL_ADAPTER` selects `smtp`, `resend`, or `ses`; see [configuration](docs/self-hosting.md#authentication-and-email). MailHog captures local mail without sending it externally.
 

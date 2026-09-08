@@ -1,3 +1,4 @@
+import type { SecurityAction, SecurityChallenge, SecurityUpdate } from '@hushos/crypto';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import {
     verifyRecoveryReset,
@@ -244,7 +245,7 @@ export async function finishRegistration(
 export async function startLogin(
     email: string,
     startLoginRequest: string,
-    deletionSessionHash?: Buffer,
+    binding?: { purpose: SecurityAction | 'delete'; sessionTokenHash: Buffer },
 ) {
     const normalizedEmail = normalizeEmail(email);
     await limitEmail('login', normalizedEmail);
@@ -277,8 +278,8 @@ export async function startLogin(
         credentialVersion: credential?.version ?? null,
         profileVersion: OPAQUE_PROFILE_VERSION,
         serverState: response.serverLoginState,
-        purpose: deletionSessionHash ? 'delete' : 'login',
-        sessionTokenHash: deletionSessionHash ?? null,
+        purpose: binding?.purpose ?? 'login',
+        sessionTokenHash: binding?.sessionTokenHash ?? null,
         expiresAt: new Date(Date.now() + 5 * 60_000),
     });
     return {
@@ -351,12 +352,16 @@ export async function logout(request: Request) {
     return authCookie('session', null);
 }
 
-function decodeRecovery(input: RecoveryEnvelope, expectedVersion: number) {
-    if (input.version !== 1 || input.keyVersion !== 1 || input.recoveryVersion !== expectedVersion)
+function decodeRecovery(input: RecoveryEnvelope, expectedVersion: number, keyVersion = 1) {
+    if (
+        input.version !== 1 ||
+        input.keyVersion !== keyVersion ||
+        input.recoveryVersion !== expectedVersion
+    )
         throw new AuthError('Unsupported recovery key envelope.');
     return {
         version: 1,
-        keyVersion: 1,
+        keyVersion,
         recoveryVersion: input.recoveryVersion,
         wrappingSalt: decodeField(input.wrappingSalt, 32),
         wrappingNonce: decodeField(input.wrappingNonce, 24),
@@ -371,7 +376,7 @@ function encodeRecovery(
 ): RecoveryEnvelope {
     return {
         version: 1,
-        keyVersion: 1,
+        keyVersion: key.keyVersion,
         recoveryVersion: key.recoveryVersion,
         wrappingSalt: key.wrappingSalt.toString('base64url'),
         wrappingNonce: key.wrappingNonce.toString('base64url'),
@@ -467,7 +472,7 @@ export async function finishRecovery(
     }
     if (
         input.envelope.envelopeVersion !== 1 ||
-        input.envelope.keyVersion !== 1 ||
+        input.envelope.keyVersion !== oldRecovery.keyVersion ||
         input.envelope.credentialVersion !== attempt.credentialVersion + 1
     )
         throw failure();
@@ -493,11 +498,16 @@ export async function finishRecovery(
         profileVersion: OPAQUE_PROFILE_VERSION,
         serverSetupId: config().serverSetupId,
         envelope: {
+            keyVersion: input.envelope.keyVersion,
             wrappingSalt: decodeField(input.envelope.wrappingSalt, 32),
             wrappingNonce: decodeField(input.envelope.wrappingNonce, 24),
             encryptedKey: decodeField(input.envelope.encryptedKey, 48),
         },
-        recovery: decodeRecovery(input.recovery, oldRecovery.recoveryVersion + 1),
+        recovery: decodeRecovery(
+            input.recovery,
+            oldRecovery.recoveryVersion + 1,
+            oldRecovery.keyVersion,
+        ),
     });
     if (!user) throw failure();
     return { user, cookie: authCookie('enrollment', null) };
@@ -509,12 +519,12 @@ export async function getStorageAllowance(request: Request) {
     return { storage: await authRepository.getStorageAllowance(user.id) };
 }
 
-function decodeIdentity(input: IdentityEnvelope) {
-    if (input.version !== 1 || input.keyVersion !== 1)
+function decodeIdentity(input: IdentityEnvelope, keyVersion = 1) {
+    if (input.version !== 1 || input.keyVersion !== keyVersion)
         throw new AuthError('Unsupported identity key version.');
     return {
         version: 1,
-        keyVersion: 1,
+        keyVersion,
         wrappingSalt: decodeField(input.wrappingSalt, 32),
         encryptionPublicKey: decodeField(input.encryptionPublicKey, 32),
         encryptionPrivateKeyNonce: decodeField(input.encryptionPrivateKeyNonce, 24),
@@ -529,7 +539,10 @@ export async function startAccountDeletion(request: Request, startLoginRequest: 
     const user = await getSessionUser(request);
     const token = readToken(request, 'session');
     if (!user || !token) throw new AuthError('Sign in before deleting your account.', 401);
-    return startLogin(user.email, startLoginRequest, hash(token));
+    return startLogin(user.email, startLoginRequest, {
+        purpose: 'delete',
+        sessionTokenHash: hash(token),
+    });
 }
 export async function finishAccountDeletion(
     request: Request,
@@ -596,4 +609,141 @@ export async function initializeAccount(
     });
     if (!initialized) throw new AuthError('Sign in to finish account setup.', 401);
     return { ok: true };
+}
+
+export async function startSecurityChange(
+    request: Request,
+    input: {
+        action: SecurityAction;
+        startLoginRequest: string;
+        registrationRequest: string;
+    },
+): Promise<SecurityChallenge> {
+    const user = await getSessionUser(request);
+    const token = readToken(request, 'session');
+    if (!user || !token) throw new AuthError('Sign in before changing account security.', 401);
+    const bundles = await authRepository.getSecurityBundles(user.id);
+    if (!bundles || bundles.envelope.credentialVersion !== user.credentialVersion)
+        throw new AuthError('Unlock your account and finish recovery setup first.', 409);
+    if (input.action === 'master-key') {
+        const storage = await authRepository.getStorageAllowance(user.id);
+        if (!storage || storage.usedBytes !== '0' || storage.reservedBytes !== '0')
+            throw new AuthError(
+                'Master-key rotation is not available for accounts with stored data yet.',
+                409,
+            );
+    }
+    const challenge = await startLogin(user.email, input.startLoginRequest, {
+        purpose: input.action,
+        sessionTokenHash: hash(token),
+    });
+    let registration;
+    try {
+        registration = server.createRegistrationResponse({
+            serverSetup: config().serverSetup,
+            userIdentifier: user.id,
+            registrationRequest: input.registrationRequest,
+        });
+    } catch {
+        throw new AuthError('Could not start the security change. Please try again.');
+    }
+    const e = bundles.envelope;
+    const i = bundles.identity;
+    return {
+        ...challenge,
+        ...registration,
+        action: input.action,
+        userId: user.id,
+        envelope: {
+            envelopeVersion: e.envelopeVersion,
+            keyVersion: e.keyVersion,
+            credentialVersion: e.credentialVersion,
+            wrappingSalt: e.wrappingSalt.toString('base64url'),
+            wrappingNonce: e.wrappingNonce.toString('base64url'),
+            encryptedKey: e.encryptedKey.toString('base64url'),
+        },
+        recovery: encodeRecovery(bundles.recovery),
+        identity: {
+            version: 1,
+            keyVersion: i.keyVersion,
+            wrappingSalt: i.wrappingSalt.toString('base64url'),
+            encryptionPublicKey: i.encryptionPublicKey.toString('base64url'),
+            encryptionPrivateKeyNonce: i.encryptionPrivateKeyNonce.toString('base64url'),
+            encryptedEncryptionPrivateKey: i.encryptedEncryptionPrivateKey.toString('base64url'),
+            signingPublicKey: i.signingPublicKey.toString('base64url'),
+            signingSeedNonce: i.signingSeedNonce.toString('base64url'),
+            encryptedSigningSeed: i.encryptedSigningSeed.toString('base64url'),
+        },
+    };
+}
+
+export async function finishSecurityChange(
+    request: Request,
+    input: SecurityUpdate & { action: SecurityAction; attemptToken: string },
+) {
+    const user = await getSessionUser(request);
+    const token = readToken(request, 'session');
+    if (!user || !token) throw new AuthError('Sign in before changing account security.', 401);
+    const failure = () =>
+        new AuthError('Account security could not be changed. Sign in again and retry.', 409);
+    if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();
+    const attempt = await authRepository.consumeLoginAttempt(hash(input.attemptToken));
+    if (
+        !attempt ||
+        attempt.purpose !== input.action ||
+        attempt.userId !== user.id ||
+        attempt.credentialVersion !== user.credentialVersion ||
+        !attempt.sessionTokenHash?.equals(hash(token)) ||
+        attempt.expiresAt.getTime() <= Date.now() ||
+        attempt.profileVersion !== OPAQUE_PROFILE_VERSION
+    )
+        throw failure();
+    await ready;
+    try {
+        server.finishLogin({
+            serverLoginState: attempt.serverState,
+            finishLoginRequest: input.finishLoginRequest,
+            identifiers: OPAQUE_IDENTIFIERS,
+        });
+        const { startLoginRequest } = client.startLogin({ password: randomToken() });
+        server.startLogin({
+            serverSetup: config().serverSetup,
+            userIdentifier: user.id,
+            registrationRecord: input.registrationRecord,
+            startLoginRequest,
+            identifiers: OPAQUE_IDENTIFIERS,
+        });
+    } catch {
+        throw failure();
+    }
+    const old = await authRepository.getSecurityBundles(user.id);
+    if (!old) throw failure();
+    const keyVersion = old.envelope.keyVersion + (input.action === 'master-key' ? 1 : 0);
+    if (
+        input.envelope.envelopeVersion !== 1 ||
+        input.envelope.keyVersion !== keyVersion ||
+        input.envelope.credentialVersion !== user.credentialVersion + 1 ||
+        (input.action === 'password' ? input.recovery !== undefined : !input.recovery) ||
+        (input.action === 'master-key' ? !input.identity : input.identity !== undefined)
+    )
+        throw failure();
+    const changed = await authRepository.changeAccountSecurity({
+        userId: user.id,
+        action: input.action,
+        sessionTokenHash: hash(token),
+        credentialVersion: user.credentialVersion,
+        registrationRecord: input.registrationRecord,
+        envelope: {
+            keyVersion,
+            wrappingSalt: decodeField(input.envelope.wrappingSalt, 32),
+            wrappingNonce: decodeField(input.envelope.wrappingNonce, 24),
+            encryptedKey: decodeField(input.envelope.encryptedKey, 48),
+        },
+        recovery: input.recovery
+            ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
+            : undefined,
+        identity: input.identity ? decodeIdentity(input.identity, keyVersion) : undefined,
+    });
+    if (!changed) throw failure();
+    return { success: true };
 }

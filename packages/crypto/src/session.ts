@@ -1,3 +1,9 @@
+import {
+    createSecurityChange,
+    type SecurityAction,
+    type SecurityChallenge,
+    type SecurityUpdate,
+} from './security';
 import { createIdentity, type IdentityEnvelope } from './identity';
 import {
     createRecovery,
@@ -19,6 +25,8 @@ import {
 } from './protocol';
 
 export type CryptoRequests = {
+    securityStart: { password: string; newPassword?: string; action: SecurityAction };
+    securityFinish: SecurityChallenge;
     initialize: { userId: string; recovery: boolean; identity: boolean };
     remember: {
         deviceKey: CryptoKey;
@@ -42,6 +50,8 @@ export type CryptoRequests = {
     unlock: { userId: string; envelope: AccountKeyEnvelope };
 };
 export type CryptoResults = {
+    securityStart: { startLoginRequest: string; registrationRequest: string };
+    securityFinish: SecurityUpdate;
     initialize: { recovery?: RecoveryEnvelope; identity?: IdentityEnvelope };
     backup: { phrase: string };
     recoverFinish: {
@@ -68,6 +78,8 @@ type Message = {
 }[keyof CryptoRequests];
 
 export function createCryptoSession() {
+    const security = createSecurityChange();
+    let accountKeyVersion = 1;
     let password = '';
     let state = '';
     let phase: 'idle' | 'register' | 'login' | 'unlock' = 'idle';
@@ -76,6 +88,8 @@ export function createCryptoSession() {
     let unlockedUserId: string | null = null;
 
     function reset() {
+        security.reset();
+        accountKeyVersion = 1;
         password = '';
         state = '';
         exportKey = '';
@@ -87,15 +101,21 @@ export function createCryptoSession() {
     async function handle(message: Message): Promise<CryptoResults[keyof CryptoResults]> {
         await ready;
         switch (message.operation) {
+            case 'securityStart':
+                reset();
+                return security.start(message.input);
+            case 'securityFinish':
+                return security.finish(message.input);
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new Error('Unlock your account to finish setup.');
                 return {
                     recovery: message.input.recovery
-                        ? (await createRecovery(accountKey, unlockedUserId, 1)).recovery
+                        ? (await createRecovery(accountKey, unlockedUserId, 1, accountKeyVersion))
+                              .recovery
                         : undefined,
                     identity: message.input.identity
-                        ? await createIdentity(accountKey, unlockedUserId)
+                        ? await createIdentity(accountKey, unlockedUserId, accountKeyVersion)
                         : undefined,
                 };
             }
@@ -123,6 +143,7 @@ export function createCryptoSession() {
                 reset();
                 accountKey = await restoreAccountKey(message.input.bundle, message.input.deviceKey);
                 unlockedUserId = message.input.bundle.userId;
+                accountKeyVersion = message.input.bundle.keyVersion;
                 return { userId: unlockedUserId };
             }
 
@@ -160,6 +181,7 @@ export function createCryptoSession() {
                       )
                     : undefined;
                 accountKey = recovered?.accountKey ?? crypto.getRandomValues(new Uint8Array(32));
+                const keyVersion = recovering ? message.input.recovery.keyVersion : 1;
                 const credentialVersion = recovering ? message.input.credentialVersion + 1 : 1;
                 const key = await wrappingKey(result.exportKey, salt);
                 try {
@@ -167,19 +189,20 @@ export function createCryptoSession() {
                         accountKey,
                         key,
                         nonce,
-                        accountKeyContext(message.input.userId, 1, credentialVersion),
+                        accountKeyContext(message.input.userId, keyVersion, credentialVersion),
                     );
                     const { recovery } = await createRecovery(
                         accountKey,
                         message.input.userId,
                         recovering ? message.input.recovery.recoveryVersion + 1 : 1,
+                        keyVersion,
                     );
                     const output = {
                         recovery,
                         registrationRecord: result.registrationRecord,
                         envelope: {
                             envelopeVersion: ENVELOPE_VERSION,
-                            keyVersion: 1,
+                            keyVersion,
                             credentialVersion,
                             wrappingSalt: encode(salt),
                             wrappingNonce: encode(nonce),
@@ -239,7 +262,8 @@ export function createCryptoSession() {
                 const { userId, envelope } = message.input;
                 if (
                     envelope.envelopeVersion !== ENVELOPE_VERSION ||
-                    envelope.keyVersion !== 1 ||
+                    !Number.isSafeInteger(envelope.keyVersion) ||
+                    envelope.keyVersion < 1 ||
                     !Number.isSafeInteger(envelope.credentialVersion) ||
                     envelope.credentialVersion < 1
                 )
@@ -256,6 +280,7 @@ export function createCryptoSession() {
                     );
                     if (accountKey.length !== 32) throw new Error('Invalid account key.');
                     unlockedUserId = userId;
+                    accountKeyVersion = envelope.keyVersion;
                     return { userId };
                 } finally {
                     key.fill(0);

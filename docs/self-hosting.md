@@ -1,6 +1,6 @@
 # Self-hosting HushOS
 
-The stack contains one app service, a migration job, and PostgreSQL. TanStack Start and Nitro host the UI and Elysia API together. Email-first OPAQUE authentication, client account-key wrapping, recovery, remembered device access, and permanent deletion are implemented. Drive storage and content encryption are not yet implemented.
+The stack contains one app service, a migration job, and PostgreSQL. TanStack Start and Nitro host the UI and Elysia API together. Email-first OPAQUE authentication, client account-key wrapping, recovery, password changes, master/recovery-key rotation, remembered device access, and permanent deletion are implemented. Drive storage and content encryption are not yet implemented.
 
 ## Run the full stack locally
 
@@ -143,6 +143,8 @@ Verification links expire after 30 minutes and use a URL fragment, so their toke
 Account sessions use HttpOnly, SameSite=Lax, Path=/ cookies; HTTPS adds Secure and the `__Host-` prefix. Session validity and credential revision are checked before remembered device unlock. Serve production over HTTPS. A cookie or database backup alone does not contain the plaintext account key, but the OPAQUE setup is a sensitive server secret and must be protected.
 
 The server cannot recover lost encryption keys from email alone. Users must retain their recovery kit. Keep database and OPAQUE setup backups together, encrypted and access controlled. A reset replaces the recovery phrase for future reset authorization; an old recovery kit plus its old wrapped-key bundle can still recover the unchanged root key offline. Deleting an account removes live database records; operator backups and mail-provider retention follow your separate retention policy.
+
+Account settings require a fresh current-password exchange for password changes and key rotation. Each operation revokes existing sessions and pending recovery attempts. Recovery-key rotation replaces the phrase; master-key rotation replaces the root and phrase while preserving identity keys. Users must save a new recovery kit after either rotation. Master-key rotation is restricted to accounts with no used or reserved storage until encrypted Drive objects can participate in the operation. Old backups and recovery kits can still expose their old roots; rotating a root does not revoke identity private keys already extracted from those copies.
 
 ## PostgreSQL 18 upgrades
 

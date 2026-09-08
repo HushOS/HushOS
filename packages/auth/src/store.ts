@@ -14,7 +14,8 @@ function isDevice(value: unknown): value is RememberedAccount {
     const v = value as Record<string, unknown>;
     return (
         v.version === 1 &&
-        v.keyVersion === 1 &&
+        Number.isSafeInteger(v.keyVersion) &&
+        Number(v.keyVersion) > 0 &&
         Number.isSafeInteger(v.credentialVersion) &&
         Number(v.credentialVersion) > 0 &&
         typeof v.userId === 'string' &&

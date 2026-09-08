@@ -34,7 +34,7 @@ Your email is used to verify your identity, deliver recovery links, and send imp
 ## 3. What the Service never sees
 
 - Your password, in any form. Sign-in uses OPAQUE, which keeps it on your device.
-- Your recovery phrase. It is shown to you once and only stored encrypted by your account key.
+- Your recovery phrase in plaintext. The server stores an encrypted backup; your unlocked browser can display it again or export a recovery kit.
 - Your unwrapped account key or identity keys.
 
 ## 4. Cookies and local storage
@@ -49,7 +49,7 @@ Verification and recovery emails are sent through the email provider the Operato
 
 - Account data is kept until you delete your account.
 - Pending email verifications expire after 30 minutes and are then removed.
-- Sessions are removed when they expire or when you sign out.
+- Sessions are removed when they expire or when you sign out. Password changes, password recovery, and key rotation revoke all existing sessions.
 - Server logs are rotated on a short schedule set by the Operator.
 
 Deleting your account from Account settings removes your profile, workspace, storage records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.

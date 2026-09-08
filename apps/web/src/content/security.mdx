@@ -8,7 +8,7 @@ import { Ledger, Note } from '../components/mdx';
 
 ## Scope
 
-This page describes what is implemented. It covers sign-in, the account key, identity keys, recovery, and remembered browser unlock. The byte-level protocol lives in the `@hushos/crypto` package and is specified in `docs/opaque-auth-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
+This page describes what is implemented. It covers sign-in, password changes, account and recovery-key rotation, identity keys, recovery, and remembered browser unlock. The byte-level protocol lives in the `@hushos/crypto` package and is specified in `docs/opaque-auth-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
 
 ## Sign-in without sending a password
 
@@ -24,18 +24,18 @@ HushOS uses OPAQUE, a password-authenticated key exchange, through the Serenity 
     ]}
 />
 
-OPAQUE produces two secrets. The **session key** is shared with the server and used only for the authenticated session. The **export key** is known only to the client. Only the export key is used for encryption, and only after a further derivation step.
+OPAQUE produces two secrets. The **session key** is shared with the server; HushOS uses a separate random token for its application sessions. The **export key** is known only to the client. Only the export key is used to wrap the account key, and only after a further derivation step.
 
 ## The account key
 
-Your account key is 32 random bytes generated in your browser. It is not derived from your password, so changing the password does not change the key. Two independent wrappings of the same key exist:
+Your account key, also called the master key, is 32 random bytes generated in your browser. It is not derived from your password, so changing the password does not change the key. Two independent wrappings of the same key exist:
 
 <Ledger
     rows={[
         ['Password wrap', 'HKDF-SHA-256 over the OPAQUE export key, then XChaCha20-Poly1305'],
         ['Recovery wrap', 'HKDF-SHA-256 over the recovery secret, then XChaCha20-Poly1305'],
         ['Salt and nonce', 'Fresh 32-byte salt and 24-byte nonce on every wrap'],
-        ['Bound to', 'Your account ID, the key version, and the credential revision'],
+        ['Bound to', 'Your account ID, root revision, and credential or recovery revision'],
     ]}
 />
 
@@ -47,20 +47,46 @@ At signup the browser also generates an X25519 key pair for encryption and an Ed
 
 ## Recovery
 
-A 32-byte recovery secret is generated on your device and shown once as 24 English BIP39 words. It wraps the same account key, so recovering with the phrase preserves everything the key protects. A backup of the secret is stored encrypted by the account key, which is how the phrase can be shown again while your device is unlocked.
+A 32-byte recovery secret is generated on your device and displayed as 24 English BIP39 words. It wraps the same account key, so recovering with the phrase preserves everything the key protects. A backup of the secret is stored encrypted by the account key, which is how the phrase can be shown again while your device is unlocked.
 
-Resetting a password requires a verified email link and the phrase. The browser proves it holds the phrase by signing the reset with a key derived from it, re-registers with OPAQUE under the new password, and rewraps the unchanged account key. The server checks the signature and every binding, replaces the credentials in one transaction, and revokes every other session. A reset issues a new recovery phrase.
+Resetting a password requires a verified email link and the phrase. The browser proves it holds the phrase by signing the reset with a key derived from it, re-registers with OPAQUE under the new password, and rewraps the unchanged account key. The server checks the signature and every binding, replaces the credentials in one transaction, and revokes all existing sessions. A reset issues a new recovery phrase, then signs you in with the new password.
 
 <Note title="What recovery cannot do">
-    Replacing a phrase stops it from authorising future resets, but an old phrase paired with an old
-    downloaded kit can still open the unchanged account key. Email alone can never restore a lost
-    key. If you lose your password, your remembered devices, and your recovery kit, the key is gone
-    and so is access to what it protects.
+    Replacing a phrase stops it from authorising future resets. An old downloaded kit still contains
+    its phrase and encrypted account key, so it can open that root offline. Password recovery and
+    recovery-key rotation preserve that root; master-key rotation creates a different one. Email
+    alone can never restore a lost key. If you lose your password, your remembered devices, and your
+    recovery kit, the key is gone and so is access to what it protects.
 </Note>
+
+## Password changes and key rotation
+
+[Account settings](/app/account) offers three actions. Each requires your current password through a fresh OPAQUE exchange. The password stays on your device, and the server receives only protocol messages and encrypted key bundles.
+
+<Ledger
+    rows={[
+        [
+            'Change password',
+            'Rewraps the same master key; preserves the recovery phrase and identity keys',
+        ],
+        [
+            'Rotate recovery key',
+            'Creates new 24-word recovery credentials; preserves the password, master key, and identity keys',
+        ],
+        [
+            'Rotate master key',
+            'Generates a new master key and recovery phrase; rewraps the existing identity keys and preserves the password',
+        ],
+    ]}
+/>
+
+The server replaces the affected records in one transaction and rejects stale concurrent changes. Each action revokes existing sessions and pending recovery attempts. Your browser then signs in again and saves a fresh device-unlock bundle. If that sign-in fails, the sign-in page confirms the change and explains which password to use. After either rotation, save and confirm the new recovery phrase before continuing into the app.
+
+Master-key rotation currently supports accounts with no used or reserved storage. Drive storage is not implemented; future file and workspace-key envelopes must be included in rotation before accounts with stored data can use it. Rotating a master key cannot erase old ciphertext, or revoke private identity keys someone already extracted from an older key bundle.
 
 ## Remembered browser unlock
 
-The plaintext account key lives only inside a Web Worker. To let a browser reopen your account without the password, the worker wraps the key with a non-exportable AES-256-GCM device key held in IndexedDB. What is persisted is a versioned encrypted bundle and a lock revision; the key itself never enters application state. Locking the device discards the bundle. Signing out anywhere with a credential change locks every remembered device.
+The plaintext account key lives only inside a Web Worker. To let a browser reopen your account without the password, the worker wraps the key with a non-exportable AES-256-GCM device key held in IndexedDB. What is persisted is a versioned encrypted bundle and a lock revision; the key itself never enters application state. Locking or signing out clears remembered access across tabs in that browser. Password changes, password recovery, and either key rotation revoke sessions on other browsers too. Those browsers lose access when they next check the session; revocation cannot erase keys already held offline.
 
 ## Sessions and transport
 

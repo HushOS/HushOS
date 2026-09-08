@@ -156,9 +156,10 @@ function LandingPage() {
                         </dl>
                         <Link
                             to="/security"
-                            className="eyebrow flex items-center justify-between border-t px-5 py-4 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            className="eyebrow flex items-center justify-between border-t px-5 py-4 text-foreground transition-colors hover:bg-muted"
                         >
-                            Read the security model <ArrowRightIcon className="size-3.5" />
+                            Read the security model{' '}
+                            <ArrowRightIcon className="size-3.5 text-primary" aria-hidden="true" />
                         </Link>
                     </aside>
                 </section>
@@ -239,7 +240,7 @@ function LandingPage() {
                                 {latest.meta.title}
                             </span>
                             <ArrowRightIcon
-                                className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+                                className="size-4 shrink-0 text-primary transition-transform group-hover:translate-x-0.5"
                                 aria-hidden="true"
                             />
                         </Link>

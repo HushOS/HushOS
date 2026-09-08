@@ -18,8 +18,21 @@ const loginFields = z.object({
 });
 
 export const Route = createFileRoute('/login')({
-    beforeLoad: ({ context }) => {
-        if (context.user) throw redirect({ to: '/app' });
+    validateSearch: z.object({
+        securityChanged: z
+            .enum(['password', 'master-key', 'recovery-key'])
+            .optional()
+            .catch(undefined),
+    }),
+    beforeLoad: ({ context, search }) => {
+        if (!context.user) return;
+        const rotated =
+            search.securityChanged && search.securityChanged !== 'password'
+                ? search.securityChanged
+                : undefined;
+        throw rotated
+            ? redirect({ to: '/setup/recovery-key', search: { reason: rotated } })
+            : redirect({ to: '/app' });
     },
     headers: () => ({
         'Cache-Control': 'private, no-store',
@@ -41,6 +54,7 @@ export const Route = createFileRoute('/login')({
 });
 function LoginPage() {
     const router = useRouter();
+    const { securityChanged } = Route.useSearch();
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const form = useForm({
@@ -55,8 +69,15 @@ function LoginPage() {
                 form.reset();
                 cue('success');
                 router.options.context.queryClient.clear();
-                await router.invalidate();
-                await router.navigate({ to: '/app' });
+                const rotated =
+                    securityChanged && securityChanged !== 'password' ? securityChanged : undefined;
+                if (rotated)
+                    await router.navigate({
+                        to: '/setup/recovery-key',
+                        search: { reason: rotated },
+                        replace: true,
+                    });
+                else await router.navigate({ to: '/app', replace: true });
             } catch (error) {
                 cue('error');
                 setError(authError(error));
@@ -86,6 +107,13 @@ function LoginPage() {
                 noValidate
             >
                 <FormTable>
+                    {securityChanged && (
+                        <FormNote>
+                            {securityChanged === 'password'
+                                ? 'Password changed. Sign in with your new password.'
+                                : 'Your keys were rotated. Sign in to save your new recovery phrase.'}
+                        </FormNote>
+                    )}
                     <form.Field name="email">
                         {(field) => (
                             <AuthInput

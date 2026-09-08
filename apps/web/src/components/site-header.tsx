@@ -18,7 +18,7 @@ function BarLink({
             to={to}
             activeOptions={{ exact }}
             data-cuelume-hover="tick"
-            className="eyebrow flex min-w-10 flex-auto items-center justify-center border-r px-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex-none sm:px-4 data-[status=active]:bg-muted data-[status=active]:text-foreground"
+            className="eyebrow flex min-w-10 flex-auto items-center justify-center border-r px-2 text-foreground transition-colors hover:bg-muted sm:flex-none sm:px-4 data-[status=active]:bg-muted"
         >
             {children}
         </Link>
@@ -55,7 +55,7 @@ export function SiteHeader() {
 }
 
 const footerCell =
-    'flex items-center gap-2 border-r border-b px-4 py-3 transition-colors hover:bg-muted hover:text-foreground even:border-r-0 sm:border-b-0 sm:even:border-r';
+    'flex items-center gap-2 border-r border-b px-4 py-3 text-foreground transition-colors hover:bg-muted even:border-r-0 sm:border-b-0 sm:even:border-r';
 
 function FooterLink({
     to,

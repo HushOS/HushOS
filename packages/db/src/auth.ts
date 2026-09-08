@@ -309,7 +309,7 @@ export async function resetAccountPassword(input: {
     serverSetupId: string;
     envelope: Pick<
         typeof accountKeys.$inferInsert,
-        'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
+        'keyVersion' | 'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
     >;
     recovery: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
 }) {
@@ -541,6 +541,141 @@ export async function initializeAccount(input: {
                 .insert(workspaceStorage)
                 .values({ workspaceId: workspace.id, baseQuotaBytes: input.initialQuotaBytes });
         }
+        return true;
+    });
+}
+
+export async function getSecurityBundles(userId: string) {
+    const [bundles] = await db
+        .select({
+            envelope: accountKeys,
+            recovery: accountRecoveryKeys,
+            identity: accountIdentities,
+        })
+        .from(accountKeys)
+        .innerJoin(accountRecoveryKeys, eq(accountRecoveryKeys.userId, accountKeys.userId))
+        .innerJoin(accountIdentities, eq(accountIdentities.userId, accountKeys.userId))
+        .where(eq(accountKeys.userId, userId));
+    return bundles ?? null;
+}
+
+export async function changeAccountSecurity(input: {
+    userId: string;
+    action: 'password' | 'master-key' | 'recovery-key';
+    sessionTokenHash: Buffer;
+    credentialVersion: number;
+    registrationRecord: string;
+    envelope: Pick<
+        typeof accountKeys.$inferInsert,
+        'keyVersion' | 'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
+    >;
+    recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
+    identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
+}) {
+    return db.transaction(async (tx) => {
+        const [user] = await tx
+            .select(userFields)
+            .from(users)
+            .where(eq(users.id, input.userId))
+            .for('update');
+        if (!user) return false;
+        const [current] = await tx
+            .select({
+                credential: opaqueCredentials,
+                envelope: accountKeys,
+                recovery: accountRecoveryKeys,
+                identity: accountIdentities,
+            })
+            .from(sessions)
+            .innerJoin(
+                opaqueCredentials,
+                and(
+                    eq(opaqueCredentials.userId, sessions.userId),
+                    eq(opaqueCredentials.version, sessions.credentialVersion),
+                ),
+            )
+            .innerJoin(accountKeys, eq(accountKeys.userId, sessions.userId))
+            .innerJoin(accountRecoveryKeys, eq(accountRecoveryKeys.userId, sessions.userId))
+            .innerJoin(accountIdentities, eq(accountIdentities.userId, sessions.userId))
+            .where(
+                and(
+                    eq(sessions.tokenHash, input.sessionTokenHash),
+                    eq(sessions.userId, user.id),
+                    eq(sessions.credentialVersion, input.credentialVersion),
+                    gt(sessions.expiresAt, new Date()),
+                ),
+            );
+        if (
+            !current ||
+            current.envelope.credentialVersion !== input.credentialVersion ||
+            input.envelope.keyVersion !==
+                current.envelope.keyVersion + (input.action === 'master-key' ? 1 : 0)
+        )
+            return false;
+        if (
+            input.action === 'password'
+                ? input.recovery !== undefined
+                : !input.recovery ||
+                  input.recovery.recoveryVersion !== current.recovery.recoveryVersion + 1 ||
+                  input.recovery.keyVersion !== input.envelope.keyVersion
+        )
+            return false;
+        if (input.action === 'master-key') {
+            if (
+                !input.identity ||
+                input.identity.keyVersion !== input.envelope.keyVersion ||
+                !input.identity.encryptionPublicKey.equals(current.identity.encryptionPublicKey) ||
+                !input.identity.signingPublicKey.equals(current.identity.signingPublicKey)
+            )
+                return false;
+            // Drive has no encrypted objects yet. Do not allow root replacement once
+            // stored data exists until its key rewrapping participates in this transaction.
+            const [storage] = await tx
+                .select({ storage: workspaceStorage })
+                .from(personalWorkspaces)
+                .innerJoin(
+                    workspaceStorage,
+                    eq(workspaceStorage.workspaceId, personalWorkspaces.workspaceId),
+                )
+                .where(eq(personalWorkspaces.userId, user.id))
+                .for('update');
+            if (
+                !storage ||
+                storage.storage.usedBytes !== 0n ||
+                storage.storage.reservedBytes !== 0n
+            )
+                return false;
+        } else if (input.identity) return false;
+        const version = input.credentialVersion + 1;
+        await tx
+            .update(opaqueCredentials)
+            .set({ registrationRecord: input.registrationRecord, version, updatedAt: new Date() })
+            .where(eq(opaqueCredentials.userId, user.id));
+        await tx
+            .update(accountKeys)
+            .set({ ...input.envelope, credentialVersion: version, updatedAt: new Date() })
+            .where(eq(accountKeys.userId, user.id));
+        if (input.recovery)
+            await tx
+                .update(accountRecoveryKeys)
+                .set({ ...input.recovery, confirmedAt: null, updatedAt: new Date() })
+                .where(eq(accountRecoveryKeys.userId, user.id));
+        if (input.identity)
+            await tx
+                .update(accountIdentities)
+                .set(input.identity)
+                .where(eq(accountIdentities.userId, user.id));
+        await tx.delete(sessions).where(eq(sessions.userId, user.id));
+        await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
+        await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));
+        await tx
+            .delete(accountEnrollments)
+            .where(
+                and(
+                    eq(accountEnrollments.normalizedEmail, user.email.toLowerCase()),
+                    eq(accountEnrollments.purpose, 'recover'),
+                ),
+            );
         return true;
     });
 }

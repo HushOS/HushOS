@@ -43,7 +43,7 @@ const opaqueMessage = t.String({ minLength: 1, maxLength: 4096 });
 const tokenSchema = t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' });
 const envelopeSchema = t.Object({
     envelopeVersion: t.Literal(1),
-    keyVersion: t.Literal(1),
+    keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     credentialVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     wrappingSalt: tokenSchema,
     wrappingNonce: t.String({ minLength: 32, maxLength: 32 }),
@@ -52,7 +52,7 @@ const envelopeSchema = t.Object({
 
 const recoverySchema = t.Object({
     version: t.Literal(1),
-    keyVersion: t.Literal(1),
+    keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     recoveryVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     wrappingSalt: tokenSchema,
     wrappingNonce: t.String({ minLength: 32, maxLength: 32 }),
@@ -64,7 +64,7 @@ const recoverySchema = t.Object({
 
 const identitySchema = t.Object({
     version: t.Literal(1),
-    keyVersion: t.Literal(1),
+    keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     wrappingSalt: tokenSchema,
     encryptionPublicKey: tokenSchema,
     encryptionPrivateKeyNonce: t.String({ minLength: 32, maxLength: 32 }),
@@ -73,6 +73,12 @@ const identitySchema = t.Object({
     signingSeedNonce: t.String({ minLength: 32, maxLength: 32 }),
     encryptedSigningSeed: t.String({ minLength: 64, maxLength: 64 }),
 });
+
+const securityActionSchema = t.Union([
+    t.Literal('password'),
+    t.Literal('master-key'),
+    t.Literal('recovery-key'),
+]);
 
 export const apiApp = new Elysia({ prefix: '/api' })
     .use(
@@ -190,6 +196,39 @@ export const apiApp = new Elysia({ prefix: '/api' })
         { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
         async ({ request, body, set }) => {
             const result = await auth.finishAccountDeletion(request, body);
+            set.headers['set-cookie'] = [
+                auth.authCookie('session', null),
+                auth.authCookie('enrollment', null),
+            ];
+            return result;
+        },
+    )
+    .post(
+        '/auth/security/start',
+        {
+            body: t.Object({
+                action: securityActionSchema,
+                startLoginRequest: opaqueMessage,
+                registrationRequest: opaqueMessage,
+            }),
+        },
+        ({ request, body }) => auth.startSecurityChange(request, body),
+    )
+    .post(
+        '/auth/security/finish',
+        {
+            body: t.Object({
+                action: securityActionSchema,
+                attemptToken: tokenSchema,
+                finishLoginRequest: opaqueMessage,
+                registrationRecord: opaqueMessage,
+                envelope: envelopeSchema,
+                recovery: t.Optional(recoverySchema),
+                identity: t.Optional(identitySchema),
+            }),
+        },
+        async ({ request, body, set }) => {
+            const result = await auth.finishSecurityChange(request, body);
             set.headers['set-cookie'] = [
                 auth.authCookie('session', null),
                 auth.authCookie('enrollment', null),

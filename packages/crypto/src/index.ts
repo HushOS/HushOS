@@ -9,3 +9,5 @@ export {
     restoreAccountKey,
     type RememberedAccount,
 } from './device';
+
+export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './security';

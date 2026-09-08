@@ -13,7 +13,8 @@ const buttonVariants = cva(
                     'border-ink bg-ink text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--ink),var(--background)_12%)]',
                 outline:
                     'border-border bg-card text-foreground hover:bg-muted aria-expanded:bg-muted',
-                ghost: 'border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground',
+                ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted aria-expanded:bg-muted',
+                row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-muted aria-expanded:bg-muted [&>svg]:text-primary',
                 destructive:
                     'border-destructive bg-destructive text-destructive-foreground hover:bg-[color-mix(in_oklch,var(--destructive),var(--ink)_10%)] focus-visible:outline-destructive',
                 'destructive-outline':
@@ -25,6 +26,7 @@ const buttonVariants = cva(
                 xs: "h-7 gap-1.5 px-2.5 text-[10px] [&_svg:not([class*='size-'])]:size-3",
                 sm: "h-8 px-3 text-[11px] [&_svg:not([class*='size-'])]:size-3.5",
                 lg: 'h-12 px-5 text-[13px]',
+                row: 'h-14 px-5 sm:px-6',
                 icon: 'size-10',
                 'icon-xs': "size-7 [&_svg:not([class*='size-'])]:size-3",
                 'icon-sm': 'size-8',

@@ -277,14 +277,16 @@ Every corner is square. The single radius token is `none`. Blocks are rectangles
 
 ## Components
 
-- **Button.** Square, mono caps. `primary` is the blue block and there is one per screen. `secondary` is an ink block. `outline` is a bordered surface cell, `ghost` a borderless cell that fills on hover. `destructive` is a coral block with ink text; `destructive-outline` opens a dangerous flow. Large buttons are 48px, action blocks in a form table are 56px. Buttons move 1px on press and carry press and release sounds; links get the same cues through delegation.
+- **Button.** Square, mono caps. `primary` is the blue block and there is one per screen. `secondary` is an ink block. `outline` is a bordered surface cell, `ghost` a borderless cell that fills on hover; `row` (with `size="row"`) is the full-width 56px cell used in the app: ink label on the left, blue arrow on the right. `destructive` is a coral block with ink text; `destructive-outline` opens a dangerous flow. Large buttons are 48px, action blocks in a form table are 56px. Buttons move 1px on press and carry press and release sounds; links get the same cues through delegation.
 - **Form table, row, actions** (`form-rows.tsx`). The only way to lay out a form. `AuthInput` renders a row with an optional hint or error line; `ConsentField` renders the agreement row; `FormNote` renders a message row; `FormActions` renders the last row.
 - **Input.** 48px inside a row, borderless within the table, mono text, 16px on small screens so iOS does not zoom. A password row has a 64px SHOW/HIDE cell on the right.
 - **Checkbox.** 18px square, ink border, blue fill when checked, check icon at 3px stroke. Its toggle sound plays from `onCheckedChange`, so label clicks sound the same.
 - **Badge.** 24px eyebrow block. `success` teal, `warning` yellow, `destructive` coral, all with ink text; `outline` for neutral.
 - **Stamp.** An eyebrow in a bordered cell under a form: the claims the code actually keeps. `warning` tone is the yellow block.
-- **Alert.** A bordered row with an icon; tinted fill at low alpha; enters with a 4px drop. Inline, never a toast.
+- **Alert.** A bordered row with an icon; tinted fill at low alpha; enters with a 4px drop. Inline, for anything the user must act on.
+- **Toast** (`ui/toast.tsx`, Base UI). The one floating element: a raised cell bottom right with the hard shadow, a 20px stamp in the strip colour (teal check, coral cross), an eyebrow title, a mono description, and a 40px close cell. Toasts only confirm something that already happened (a value copied, a kit downloaded), dismiss themselves after 3.5s, and stack with an 8px peek. Call `toast.add({ type, title, description })`.
 - **Menus.** Raised surface, square, hard offset shadow, 36px mono items, eyebrow group labels. The profile menu holds appearance, interface sounds, account links, and sign out. Right-clicking the brand cell opens the brand menu with an in-place "Copied" state.
+- **Account rows.** Each account-settings section is a ghost row (56px, label left, arrow right) that collapses into its inline form table: change password, rotate recovery phrase, rotate master key, delete account. Only one form is open at a time; opening another closes the rest. Every form asks for the current password, and its action block reads the same as the row that opened it.
 - **Sidebar.** shadcn sidebar retuned: square, mono items, tooltips when collapsed, storage meter and profile trigger in the footer, state persisted in the `sidebar_state` cookie and read on the server for the first paint.
 - **Ledger** and **Note** are the two MDX components available to content authors.
 
@@ -294,11 +296,13 @@ Every corner is square. The single radius token is `none`. Blocks are rectangles
 - Do use one blue block per screen and keep it in the last row of the form table.
 - Do set labels in eyebrow mono caps and paragraphs in sans.
 - Do check light and dark; in dark mode the ground is pure black and there is no gradient anywhere.
+- Do make clickable things look clickable: muted grey is for labels and metadata only. Anything interactive is set in ink or blue, fills on hover, and either sits in its own cell or is underlined. On a row, the arrow is blue.
 - Do keep security claims to what the code does.
 - Don't round a corner, add a soft shadow, a gradient, a glow, a grid texture, a pulsing dot, or an emoji.
 - Don't label forms with numbers; use stamps that stay true ("Step 1 of 2", "Existing account").
 - Don't set body copy in mono or uppercase.
 - Don't put strip colours on text; they are fills with ink text.
+- Don't set a link, nav cell, or row label in muted grey; if it reads like a label, nobody clicks it.
 - Don't use white text on primary in dark mode; use the on-primary token.
 
 ## Motion
@@ -308,7 +312,7 @@ Motion has a purpose or it does not ship: feedback for a press, a state that cha
 - **Tooling.** CSS first. Motion for React (`motion/react`) is used only where CSS cannot: exit animations, height to auto, and interruptible state swaps. Helpers live in `components/motion.tsx`: `TextSwap`, `IconSwap`, `Collapse`, `PendingLabel`, `Spinner`, and `MotionProvider`, which sets the default spring and `reducedMotion="user"`.
 - **Springs.** State swaps use `duration: 0.3, bounce: 0`. Content that arrives may use `duration: 0.45, bounce: 0.15`. If a spring looks wrong, raise damping.
 - **Curves.** Entrances and exits use `ease-out-expo`; on-screen moves use `ease-in-out-cubic`; colour and border use `ease-out-soft` at 150ms. Never `ease-in`.
-- **Durations.** 150ms press and colour, 200ms enter of errors and alerts, 220ms icon swaps, 300ms text swaps, 400ms the auth entrance and the delete-account collapse, 500ms progress fills.
+- **Durations.** 150ms press and colour, 200ms enter of errors and alerts, 220ms icon swaps, 300ms text swaps, 400ms the auth entrance and the account-settings collapses (delete, password, key rotation), 500ms progress fills.
 - **Text swaps** crossfade with a 10px lift and a 2px blur. **Icon swaps** scale from 0.6. **Recovery words** stagger in at 25ms. **Menus** scale from 0.95 at their trigger's transform origin over 100ms.
 - `prefers-reduced-motion` collapses every CSS animation, and `MotionConfig` limits Motion to opacity and colour.
 

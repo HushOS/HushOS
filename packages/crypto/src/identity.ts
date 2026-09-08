@@ -1,10 +1,10 @@
 import sodium from 'libsodium-wrappers';
-import { encryptKey } from './aead';
-import { encode } from './keys';
+import { encryptKey, decryptKey } from './aead';
+import { encode, decode } from './keys';
 
 export type IdentityEnvelope = {
     version: 1;
-    keyVersion: 1;
+    keyVersion: number;
     wrappingSalt: string;
     encryptionPublicKey: string;
     encryptionPrivateKeyNonce: string;
@@ -32,15 +32,23 @@ async function identityWrappingKey(
         ),
     );
 }
-function identityContext(userId: string, purpose: string, publicKey: string) {
+function identityContext(userId: string, keyVersion: number, purpose: string, publicKey: string) {
     return new TextEncoder().encode(
-        JSON.stringify(['hushos/identity', 1, userId.toLowerCase(), 1, purpose, publicKey]),
+        JSON.stringify([
+            'hushos/identity',
+            1,
+            userId.toLowerCase(),
+            keyVersion,
+            purpose,
+            publicKey,
+        ]),
     );
 }
 // Independent long-lived identity. Recovery rotates recovery credentials, never these keys.
 export async function createIdentity(
     root: Uint8Array<ArrayBuffer>,
     userId: string,
+    keyVersion = 1,
 ): Promise<IdentityEnvelope> {
     await sodium.ready;
     const encryption = sodium.crypto_box_keypair();
@@ -56,7 +64,7 @@ export async function createIdentity(
     try {
         return {
             version: 1,
-            keyVersion: 1,
+            keyVersion,
             wrappingSalt: encode(salt),
             encryptionPublicKey,
             signingPublicKey,
@@ -66,7 +74,12 @@ export async function createIdentity(
                     encryption.privateKey,
                     encryptionWrap,
                     encryptionNonce,
-                    identityContext(userId, 'encryption-private-wrap', encryptionPublicKey),
+                    identityContext(
+                        userId,
+                        keyVersion,
+                        'encryption-private-wrap',
+                        encryptionPublicKey,
+                    ),
                 ),
             ),
             signingSeedNonce: encode(signingNonce),
@@ -75,7 +88,7 @@ export async function createIdentity(
                     signingSeed,
                     signingWrap,
                     signingNonce,
-                    identityContext(userId, 'signing-seed-wrap', signingPublicKey),
+                    identityContext(userId, keyVersion, 'signing-seed-wrap', signingPublicKey),
                 ),
             ),
         };
@@ -85,5 +98,84 @@ export async function createIdentity(
         signingSeed.fill(0);
         encryptionWrap.fill(0);
         signingWrap.fill(0);
+    }
+}
+
+// Rewrap the existing private keys; master-key rotation must preserve public identity.
+export async function rewrapIdentity(
+    oldRoot: Uint8Array<ArrayBuffer>,
+    newRoot: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: IdentityEnvelope,
+    keyVersion: number,
+): Promise<IdentityEnvelope> {
+    if (
+        envelope.version !== 1 ||
+        !Number.isSafeInteger(envelope.keyVersion) ||
+        envelope.keyVersion < 1
+    )
+        throw new Error('Unsupported identity envelope.');
+    await sodium.ready;
+    const oldSalt = decode(envelope.wrappingSalt, 32);
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const secrets: Uint8Array[] = [];
+    async function rewrap(ciphertext: string, nonce: string, purpose: string, publicKey: string) {
+        const oldWrap = await identityWrappingKey(oldRoot, oldSalt, purpose);
+        secrets.push(oldWrap);
+        const privateKey = await decryptKey(
+            decode(ciphertext, 48),
+            oldWrap,
+            decode(nonce, 24),
+            identityContext(userId, envelope.keyVersion, purpose, publicKey),
+        );
+        secrets.push(privateKey);
+        const derivedPublic =
+            purpose === 'encryption-private-wrap'
+                ? sodium.crypto_scalarmult_base(privateKey)
+                : (() => {
+                      const pair = sodium.crypto_sign_seed_keypair(privateKey);
+                      secrets.push(pair.privateKey);
+                      return pair.publicKey;
+                  })();
+        if (encode(derivedPublic) !== publicKey) throw new Error('Identity keys do not match.');
+        const wrap = await identityWrappingKey(newRoot, salt, purpose);
+        secrets.push(wrap);
+        const nextNonce = crypto.getRandomValues(new Uint8Array(24));
+        return {
+            nonce: encode(nextNonce),
+            encrypted: encode(
+                await encryptKey(
+                    privateKey,
+                    wrap,
+                    nextNonce,
+                    identityContext(userId, keyVersion, purpose, publicKey),
+                ),
+            ),
+        };
+    }
+    try {
+        const encryption = await rewrap(
+            envelope.encryptedEncryptionPrivateKey,
+            envelope.encryptionPrivateKeyNonce,
+            'encryption-private-wrap',
+            envelope.encryptionPublicKey,
+        );
+        const signing = await rewrap(
+            envelope.encryptedSigningSeed,
+            envelope.signingSeedNonce,
+            'signing-seed-wrap',
+            envelope.signingPublicKey,
+        );
+        return {
+            ...envelope,
+            keyVersion,
+            wrappingSalt: encode(salt),
+            encryptionPrivateKeyNonce: encryption.nonce,
+            encryptedEncryptionPrivateKey: encryption.encrypted,
+            signingSeedNonce: signing.nonce,
+            encryptedSigningSeed: signing.encrypted,
+        };
+    } finally {
+        for (const secret of secrets) secret.fill(0);
     }
 }
