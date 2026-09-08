@@ -1,0 +1,29 @@
+{
+    "name": "@hushos/auth",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        "./server": "./src/server.ts",
+        "./protocol": "./src/protocol.ts",
+        "./worker": "./src/worker.ts",
+        "./client": "./src/client.ts",
+        "./device-storage": "./src/device-storage.ts",
+        "./crypto-transport": "./src/crypto-transport.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@hushos/crypto": "workspace:*",
+        "@hushos/db": "workspace:*",
+        "@hushos/emails": "workspace:*",
+        "@hushos/env": "workspace:*",
+        "zustand": "5.0.15"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2"
+    }
+}

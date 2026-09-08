@@ -1,0 +1,187 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
+import { useStore } from 'zustand';
+import { ArrowRightIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
+import { IconSwap, Spinner, TextSwap } from '@/components/motion';
+import { PageHeader } from '@/components/page-header';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { CopyValue } from '@/components/copy-value';
+import { Button } from '@/components/ui/button';
+import { UnlockDevice } from '@/components/unlock-device';
+import { authClient } from '@/lib/auth-client';
+import { storageQueryOptions } from '@/lib/queries';
+import { cue } from '@/lib/sounds';
+
+export const Route = createFileRoute('/app/')({
+    head: () => ({ meta: [{ title: 'Overview · HushOS' }] }),
+    component: WorkspacePage,
+});
+
+function WorkspacePage() {
+    const { user } = Route.useRouteContext();
+    const router = useRouter();
+    const queryClient = useQueryClient();
+    const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
+    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const rememberError = useStore(authClient.store, (state) => state.rememberError);
+    const [initialized, setInitialized] = useState(false);
+    const [error, setError] = useState('');
+    const unlocked = unlockedUser === user.id;
+    const opening = !initialized || restoring;
+    useEffect(() => {
+        let active = true;
+        void authClient
+            .restore(user)
+            .then(() => authClient.initializeAccount(user))
+            .then(async (needsBackup) => {
+                if (!active) return;
+                if (needsBackup) await router.navigate({ to: '/app/recovery-key' });
+                await queryClient.invalidateQueries(storageQueryOptions);
+            })
+            .catch(() => {
+                if (active)
+                    setError('Account setup could not finish. Please refresh to try again.');
+            })
+            .finally(() => {
+                if (active) setInitialized(true);
+            });
+        return () => {
+            active = false;
+        };
+    }, [user, router, queryClient]);
+    function lock() {
+        setError('');
+        void authClient
+            .lock()
+            .then(() => cue('droplet'))
+            .catch(() => {
+                cue('error');
+                setError('Could not remove saved device access. Please try signing out.');
+            });
+    }
+    return (
+        <div className="flex flex-col">
+            <PageHeader
+                eyebrow="Overview"
+                title={`Welcome, ${user.name}.`}
+                description="Your account, your device, and your keys at a glance."
+            />
+            {(rememberError || error) && (
+                <div className="flex flex-col gap-3 border-b px-5 py-5 sm:px-8">
+                    {rememberError && (
+                        <Alert variant="warning">
+                            <AlertTitle>Saved device access needs attention</AlertTitle>
+                            <AlertDescription>{rememberError}</AlertDescription>
+                        </Alert>
+                    )}
+                    {error && (
+                        <Alert variant="destructive">
+                            <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                    )}
+                </div>
+            )}
+            <div className="grid border-b lg:grid-cols-2">
+                <section
+                    aria-labelledby="device-title"
+                    className="flex flex-col border-b lg:border-r lg:border-b-0"
+                >
+                    <div className="flex items-center justify-between gap-4 border-b px-5 py-3.5 sm:px-8">
+                        <h2 id="device-title" className="eyebrow flex items-center gap-2.5">
+                            <IconSwap id={opening ? 'opening' : unlocked ? 'unlocked' : 'locked'}>
+                                {opening ? (
+                                    <Spinner className="size-3.5" />
+                                ) : unlocked ? (
+                                    <LockKeyholeOpenIcon className="size-3.5" aria-hidden="true" />
+                                ) : (
+                                    <LockKeyholeIcon className="size-3.5" aria-hidden="true" />
+                                )}
+                            </IconSwap>
+                            This device
+                        </h2>
+                        <Badge
+                            variant={unlocked ? 'success' : opening ? 'outline' : 'warning'}
+                            aria-live="polite"
+                        >
+                            <TextSwap>
+                                {unlocked ? 'Unlocked' : opening ? 'Opening…' : 'Locked'}
+                            </TextSwap>
+                        </Badge>
+                    </div>
+                    {!unlocked && !opening ? (
+                        <UnlockDevice
+                            user={user}
+                            onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}
+                        />
+                    ) : (
+                        <>
+                            <p className="flex-1 px-5 py-5 text-sm leading-relaxed text-muted-foreground sm:px-8">
+                                {unlocked
+                                    ? 'Your account key is unlocked here. It stays available across tabs and refreshes until you lock it.'
+                                    : 'Restoring saved device access…'}
+                            </p>
+                            <div className="flex border-t">
+                                {unlocked ? (
+                                    <Button
+                                        variant="ghost"
+                                        className="h-12 flex-1 justify-between px-5 sm:px-8"
+                                        onClick={lock}
+                                    >
+                                        Lock this device <LockKeyholeIcon aria-hidden="true" />
+                                    </Button>
+                                ) : (
+                                    <span className="eyebrow flex h-12 items-center px-5 text-muted-foreground sm:px-8">
+                                        One moment…
+                                    </span>
+                                )}
+                            </div>
+                        </>
+                    )}
+                </section>
+                <section aria-labelledby="account-title" className="flex flex-col">
+                    <div className="border-b px-5 py-3.5 sm:px-8">
+                        <h2 id="account-title" className="eyebrow">
+                            Account
+                        </h2>
+                    </div>
+                    <dl className="flex-1 px-5 py-2 font-mono text-[13px] sm:px-8">
+                        <div className="flex items-center justify-between gap-6 border-b border-dotted py-2.5">
+                            <dt className="eyebrow text-muted-foreground">Name</dt>
+                            <dd className="truncate">{user.name}</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-6 border-b border-dotted py-2.5">
+                            <dt className="eyebrow text-muted-foreground">Email</dt>
+                            <dd className="truncate">{user.email}</dd>
+                        </div>
+                        <div className="flex items-center justify-between gap-6 py-2.5">
+                            <dt className="eyebrow text-muted-foreground">Account ID</dt>
+                            <dd className="flex min-w-0">
+                                <CopyValue value={user.id} />
+                            </dd>
+                        </div>
+                    </dl>
+                    <div className="grid grid-cols-2 border-t">
+                        <Button
+                            variant="ghost"
+                            className="h-12 justify-between border-r px-5 sm:px-8"
+                            render={<Link to="/app/account" />}
+                            nativeButton={false}
+                        >
+                            Settings <ArrowRightIcon aria-hidden="true" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            className="h-12 justify-between px-5 sm:px-8"
+                            render={<Link to="/app/recovery-key" />}
+                            nativeButton={false}
+                        >
+                            Recovery phrase <ArrowRightIcon aria-hidden="true" />
+                        </Button>
+                    </div>
+                </section>
+            </div>
+        </div>
+    );
+}

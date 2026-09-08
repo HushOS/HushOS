@@ -1,0 +1,6 @@
+{
+    "extends": ["../../packages/config/oxlint.json"],
+    "plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y"],
+    "env": { "browser": true },
+    "ignorePatterns": ["src/routeTree.gen.ts", "dist/**", ".output/**", ".nitro/**", ".tanstack/**"]
+}

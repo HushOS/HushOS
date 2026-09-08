@@ -1,0 +1,77 @@
+name: hushos
+
+services:
+    db:
+        image: postgres:18-alpine
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-hushos}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run bun run setup first}
+            POSTGRES_DB: ${POSTGRES_DB:-hushos}
+        volumes:
+            - postgres18_data:/var/lib/postgresql
+        healthcheck:
+            test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    migrate:
+        build:
+            context: .
+            dockerfile: packages/db/Dockerfile
+            target: migrate
+        environment:
+            DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+        depends_on:
+            db:
+                condition: service_healthy
+        restart: 'no'
+
+    web:
+        ports:
+            - '127.0.0.1:${PORT:-5173}:5173'
+        build:
+            context: .
+            dockerfile: apps/web/Dockerfile
+        restart: unless-stopped
+        environment:
+            NODE_ENV: production
+            HOST: 0.0.0.0
+            PORT: 5173
+            DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            APP_ORIGIN: ${APP_ORIGIN:-}
+            OPAQUE_SERVER_SETUP: ${OPAQUE_SERVER_SETUP:-}
+            OPAQUE_SERVER_SETUP_ID: ${OPAQUE_SERVER_SETUP_ID:-}
+            INITIAL_STORAGE_QUOTA_BYTES: ${INITIAL_STORAGE_QUOTA_BYTES:-1073741824}
+            EMAIL_ADAPTER: ${EMAIL_ADAPTER:-}
+            EMAIL_FROM: ${EMAIL_FROM:-}
+            SMTP_HOST: ${SMTP_HOST:-}
+            SMTP_PORT: ${SMTP_PORT:-}
+            SMTP_SECURE: ${SMTP_SECURE:-}
+            SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+            SMTP_USER: ${SMTP_USER:-}
+            SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+            RESEND_API_KEY: ${RESEND_API_KEY:-}
+            AWS_REGION: ${AWS_REGION:-}
+            AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+            AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+            AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+        depends_on:
+            migrate:
+                condition: service_completed_successfully
+        healthcheck:
+            test:
+                [
+                    CMD,
+                    bun,
+                    -e,
+                    "const r = await fetch('http://localhost:5173/api/ready'); process.exit(r.ok ? 0 : 1)",
+                ]
+            interval: 10s
+            timeout: 10s
+            retries: 5
+
+volumes:
+    postgres18_data:

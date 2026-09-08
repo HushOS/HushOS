@@ -1,0 +1,1097 @@
+{
+    "version": "8",
+    "dialect": "postgres",
+    "id": "0961d665-8efc-4a66-9453-cdf4e5bfdc14",
+    "prevIds": ["5a77452d-8998-40b6-b48d-44430568084a"],
+    "ddl": [
+        {
+            "isRlsEnabled": false,
+            "name": "account_enrollments",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "account_keys",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "auth_rate_limits",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "opaque_credentials",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "opaque_login_attempts",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "sessions",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "users",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "workspaces",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "email",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "normalized_email",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "verification_token_hash",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "enrollment_token_hash",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "verified_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "expires_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "user_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "1",
+            "generated": null,
+            "identity": null,
+            "name": "key_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "1",
+            "generated": null,
+            "identity": null,
+            "name": "credential_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "smallint",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "envelope_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "wrapping_salt",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "wrapping_nonce",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "encrypted_key",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "updated_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "key_hash",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "count",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "expires_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "user_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "registration_record",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "smallint",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "profile_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "server_setup_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "1",
+            "generated": null,
+            "identity": null,
+            "name": "version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "updated_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "token_hash",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "user_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "credential_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "smallint",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "profile_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "server_state",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "expires_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "user_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "token_hash",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "credential_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "expires_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "last_seen_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "name",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "email",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "text",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "normalized_email",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "email_verified_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "created_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "updated_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "users"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "workspaces"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "createdAt",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "workspaces"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "expires_at",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "account_enrollments_expiry_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "expires_at",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "auth_rate_limits_expiry_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "user_id",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "opaque_login_attempts_user_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "expires_at",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "opaque_login_attempts_expiry_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "user_id",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "sessions_user_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
+                    "value": "expires_at",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "sessions_expiry_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["user_id"],
+            "schemaTo": "public",
+            "tableTo": "users",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
+            "name": "account_keys_user_id_users_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["user_id"],
+            "schemaTo": "public",
+            "tableTo": "users",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
+            "name": "opaque_credentials_user_id_users_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["user_id"],
+            "schemaTo": "public",
+            "tableTo": "users",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
+            "name": "opaque_login_attempts_user_id_users_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["user_id"],
+            "schemaTo": "public",
+            "tableTo": "users",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
+            "name": "sessions_user_id_users_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
+            "name": "account_enrollments_pkey",
+            "schema": "public",
+            "table": "account_enrollments",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["user_id"],
+            "nameExplicit": false,
+            "name": "account_keys_pkey",
+            "schema": "public",
+            "table": "account_keys",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["key_hash"],
+            "nameExplicit": false,
+            "name": "auth_rate_limits_pkey",
+            "schema": "public",
+            "table": "auth_rate_limits",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["user_id"],
+            "nameExplicit": false,
+            "name": "opaque_credentials_pkey",
+            "schema": "public",
+            "table": "opaque_credentials",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["token_hash"],
+            "nameExplicit": false,
+            "name": "opaque_login_attempts_pkey",
+            "schema": "public",
+            "table": "opaque_login_attempts",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
+            "name": "sessions_pkey",
+            "schema": "public",
+            "table": "sessions",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
+            "name": "users_pkey",
+            "schema": "public",
+            "table": "users",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
+            "name": "workspaces_pkey",
+            "schema": "public",
+            "table": "workspaces",
+            "entityType": "pks"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["verification_token_hash"],
+            "nullsNotDistinct": false,
+            "name": "account_enrollments_verification_token_hash_key",
+            "schema": "public",
+            "table": "account_enrollments",
+            "entityType": "uniques"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["enrollment_token_hash"],
+            "nullsNotDistinct": false,
+            "name": "account_enrollments_enrollment_token_hash_key",
+            "schema": "public",
+            "table": "account_enrollments",
+            "entityType": "uniques"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["token_hash"],
+            "nullsNotDistinct": false,
+            "name": "sessions_token_hash_key",
+            "schema": "public",
+            "table": "sessions",
+            "entityType": "uniques"
+        },
+        {
+            "nameExplicit": false,
+            "columns": ["normalized_email"],
+            "nullsNotDistinct": false,
+            "name": "users_normalized_email_key",
+            "schema": "public",
+            "table": "users",
+            "entityType": "uniques"
+        },
+        {
+            "value": "\"expires_at\" > \"created_at\"",
+            "name": "account_enrollments_expiry_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "value": "(\"verified_at\" is null and octet_length(\"verification_token_hash\") = 32 and \"verification_token_hash\" is not null and \"enrollment_token_hash\" is null) or (\"verified_at\" is not null and \"verification_token_hash\" is null and octet_length(\"enrollment_token_hash\") = 32 and \"enrollment_token_hash\" is not null)",
+            "name": "account_enrollments_state_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "account_enrollments"
+        },
+        {
+            "value": "\"key_version\" > 0 and \"credential_version\" > 0",
+            "name": "account_keys_versions_positive",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "value": "\"envelope_version\" = 1 and octet_length(\"wrapping_salt\") = 32 and octet_length(\"wrapping_nonce\") = 24 and octet_length(\"encrypted_key\") = 48",
+            "name": "account_keys_envelope_supported",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "account_keys"
+        },
+        {
+            "value": "\"count\" > 0",
+            "name": "auth_rate_limits_count_positive",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "value": "octet_length(\"key_hash\") = 32",
+            "name": "auth_rate_limits_key_length",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "auth_rate_limits"
+        },
+        {
+            "value": "\"version\" > 0",
+            "name": "opaque_credentials_version_positive",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "value": "\"profile_version\" = 1",
+            "name": "opaque_credentials_profile_supported",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_credentials"
+        },
+        {
+            "value": "octet_length(\"token_hash\") = 32",
+            "name": "opaque_login_attempts_token_length",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "value": "\"expires_at\" > \"created_at\"",
+            "name": "opaque_login_attempts_expiry_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "value": "\"profile_version\" = 1",
+            "name": "opaque_login_attempts_profile_supported",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "value": "(\"user_id\" is null and \"credential_version\" is null) or (\"user_id\" is not null and \"credential_version\" is not null and \"credential_version\" > 0)",
+            "name": "opaque_login_attempts_credential_binding",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "opaque_login_attempts"
+        },
+        {
+            "value": "octet_length(\"token_hash\") = 32",
+            "name": "sessions_token_hash_length",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "value": "\"credential_version\" > 0",
+            "name": "sessions_version_positive",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "value": "\"expires_at\" > \"created_at\"",
+            "name": "sessions_expiry_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "sessions"
+        },
+        {
+            "value": "char_length(\"name\") between 1 and 100",
+            "name": "users_name_length",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "users"
+        }
+    ],
+    "renames": []
+}

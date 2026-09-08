@@ -1,0 +1,83 @@
+---
+title: Security model
+updated: 2026-09-08
+summary: How HushOS authenticates you and derives your keys, written so you can check each claim against the code. This page covers accounts; Drive and file encryption will be added here when they ship.
+---
+
+import { Ledger, Note } from '../components/mdx';
+
+## Scope
+
+This page describes what is implemented. It covers sign-in, the account key, identity keys, recovery, and remembered browser unlock. The byte-level protocol lives in the `@hushos/crypto` package and is specified in `docs/opaque-auth-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
+
+## Sign-in without sending a password
+
+HushOS uses OPAQUE, a password-authenticated key exchange, through the Serenity implementation. During registration your browser and the server run a short protocol that leaves the server with a record it can use to verify future sign-ins. The password never leaves the browser, not even as a hash.
+
+<Ledger
+    rows={[
+        ['Protocol', 'OPAQUE (Ristretto), Serenity implementation'],
+        ['Hardening', 'Argon2id, 65,536 KiB memory, 3 iterations, parallelism 4'],
+        ['Server stores', 'The OPAQUE registration record'],
+        ['Client receives', 'An export key that only the client ever sees'],
+        ['Unknown email', 'Answered with a decoy record so lookups do not reveal accounts'],
+    ]}
+/>
+
+OPAQUE produces two secrets. The **session key** is shared with the server and used only for the authenticated session. The **export key** is known only to the client. Only the export key is used for encryption, and only after a further derivation step.
+
+## The account key
+
+Your account key is 32 random bytes generated in your browser. It is not derived from your password, so changing the password does not change the key. Two independent wrappings of the same key exist:
+
+<Ledger
+    rows={[
+        ['Password wrap', 'HKDF-SHA-256 over the OPAQUE export key, then XChaCha20-Poly1305'],
+        ['Recovery wrap', 'HKDF-SHA-256 over the recovery secret, then XChaCha20-Poly1305'],
+        ['Salt and nonce', 'Fresh 32-byte salt and 24-byte nonce on every wrap'],
+        ['Bound to', 'Your account ID, the key version, and the credential revision'],
+    ]}
+/>
+
+Every envelope carries associated data that names its purpose, version, and owner. An envelope moved to another account or another version fails to open.
+
+## Identity keys
+
+At signup the browser also generates an X25519 key pair for encryption and an Ed25519 key pair for signatures. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. These identities prepare for recipient key exchange and signatures; they are not a sharing protocol on their own.
+
+## Recovery
+
+A 32-byte recovery secret is generated on your device and shown once as 24 English BIP39 words. It wraps the same account key, so recovering with the phrase preserves everything the key protects. A backup of the secret is stored encrypted by the account key, which is how the phrase can be shown again while your device is unlocked.
+
+Resetting a password requires a verified email link and the phrase. The browser proves it holds the phrase by signing the reset with a key derived from it, re-registers with OPAQUE under the new password, and rewraps the unchanged account key. The server checks the signature and every binding, replaces the credentials in one transaction, and revokes every other session. A reset issues a new recovery phrase.
+
+<Note title="What recovery cannot do">
+    Replacing a phrase stops it from authorising future resets, but an old phrase paired with an old
+    downloaded kit can still open the unchanged account key. Email alone can never restore a lost
+    key. If you lose your password, your remembered devices, and your recovery kit, the key is gone
+    and so is access to what it protects.
+</Note>
+
+## Remembered browser unlock
+
+The plaintext account key lives only inside a Web Worker. To let a browser reopen your account without the password, the worker wraps the key with a non-exportable AES-256-GCM device key held in IndexedDB. What is persisted is a versioned encrypted bundle and a lock revision; the key itself never enters application state. Locking the device discards the bundle. Signing out anywhere with a credential change locks every remembered device.
+
+## Sessions and transport
+
+<Ledger
+    rows={[
+        [
+            'Verification links',
+            '32 random bytes, sent in a URL fragment, stored only as SHA-256, valid 30 minutes',
+        ],
+        ['Login attempts', 'Random handles, stored hashed, consumed after 5 minutes or one finish'],
+        ['Sessions', '7 days, 32-byte token, only its SHA-256 stored'],
+        ['Cookies', 'HttpOnly, SameSite=Lax, Secure with the __Host- prefix under HTTPS'],
+        ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, shared rate limits'],
+        ['Responses', 'private, no-store and no-referrer'],
+    ]}
+/>
+
+## What comes next
+
+Drive will apply the same shape to files: keys created on your device, content encrypted before it leaves, and envelopes bound to their owner and version. When it ships, this page will document the file and folder key hierarchy in the same detail. Until then, treat anything not on this page as not implemented.

@@ -1,0 +1,10 @@
+services:
+    db:
+        profiles: [local-db]
+    migrate:
+        depends_on: !reset {}
+        environment:
+            DATABASE_URL: ${DATABASE_URL:?Set the external PostgreSQL connection URL}
+    web:
+        environment:
+            DATABASE_URL: ${DATABASE_URL:?Set the external PostgreSQL connection URL}

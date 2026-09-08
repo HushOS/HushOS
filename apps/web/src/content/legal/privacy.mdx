@@ -1,0 +1,63 @@
+---
+title: Privacy Policy
+updated: 2026-09-08
+summary: HushOS is designed so the Service holds as little about you as it can. This page lists exactly what is stored, what is never stored, and how long it is kept.
+---
+
+import { Ledger } from '../../components/mdx';
+
+## 1. Who is responsible
+
+The operator of this HushOS instance (the “Operator”) is the data controller for the information described here. HushOS is open-source software; the HushOS project does not receive any data from instances it does not run.
+
+## 2. What the Service stores
+
+<Ledger
+    rows={[
+        ['Account', 'Email address, display name, internal account ID'],
+        [
+            'Authentication',
+            'An OPAQUE registration record; verifies a sign-in without learning the password',
+        ],
+        [
+            'Key bundles',
+            'Your account key wrapped by your password and by your recovery phrase, plus wrapped identity keys',
+        ],
+        ['Workspace', 'Your workspace, its storage allowance, and usage counters'],
+        ['Sessions', 'Session identifiers with creation and expiry times'],
+        ['Server logs', 'Timestamps, request IDs, status codes and IP addresses, kept briefly'],
+    ]}
+/>
+
+Your email is used to verify your identity, deliver recovery links, and send important notices about your account. The Service cannot unwrap your key bundles.
+
+## 3. What the Service never sees
+
+- Your password, in any form. Sign-in uses OPAQUE, which keeps it on your device.
+- Your recovery phrase. It is shown to you once and only stored encrypted by your account key.
+- Your unwrapped account key or identity keys.
+
+## 4. Cookies and local storage
+
+The Service sets a session cookie so you stay signed in, a preference cookie for your chosen appearance, and a cookie that remembers whether the sidebar is open. Your browser may also hold a device key that lets your account unlock on this device without re-entering your password, and a setting for interface sounds. None of these are used for tracking or advertising, and the Service does not use third-party analytics.
+
+## 5. Email
+
+Verification and recovery emails are sent through the email provider the Operator has configured. Those emails contain a one-time link that expires after 30 minutes. The provider may keep delivery logs according to its own policy.
+
+## 6. How long data is kept
+
+- Account data is kept until you delete your account.
+- Pending email verifications expire after 30 minutes and are then removed.
+- Sessions are removed when they expire or when you sign out.
+- Server logs are rotated on a short schedule set by the Operator.
+
+Deleting your account from Account settings removes your profile, workspace, storage records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.
+
+## 7. Your rights
+
+Depending on where you live, you may have the right to access, correct, export, or delete your personal data, and to object to or restrict certain processing. You can view your account details and delete your account yourself at any time. For anything else, contact the Operator of this instance.
+
+## 8. Changes
+
+When this policy changes in a meaningful way, the date above is updated and, where practical, you are notified by email. The [Terms of Service](/terms) describe the agreement that this policy sits alongside.

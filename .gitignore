@@ -1,0 +1,43 @@
+node_modules/
+.turbo/
+dist/
+.output/
+.nitro/
+.tanstack/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+!.env.production.example
+.DS_Store
+.impeccable/
+.vitest/
+.local/
+.scratch/
+
+# Logs and tool caches
+*.log
+.cache/
+.eslintcache
+.stylelintcache
+.oxlintcache
+.vite/
+
+# Local database exports, credentials, and TLS material
+backups/
+*.dump
+*.sql.gz
+*.pem
+*.key
+*.p12
+
+# OS and editor scratch files (shared .vscode/.zed settings remain tracked)
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+
+# React Email preview build
+.react-email/

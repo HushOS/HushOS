@@ -1,0 +1,124 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    check:
+        name: Check, test, and build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.0
+            - run: bun install --frozen-lockfile
+            - name: Lint, format, and typecheck
+              run: bun run check
+            - name: Test
+              run: bun run test
+            - name: Build
+              run: bun run build
+
+    publish:
+        name: Publish ${{ matrix.image }}
+        needs: check
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - image: web
+                      dockerfile: apps/web/Dockerfile
+                      target: runtime
+                    - image: migrate
+                      dockerfile: packages/db/Dockerfile
+                      target: migrate
+        steps:
+            - uses: actions/checkout@v4
+            - name: Set image name
+              id: image
+              env:
+                  IMAGE_SUFFIX: ${{ matrix.image }}
+              run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v4
+              with:
+                  platforms: arm64
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4
+            - name: Log in to GHCR
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Build and publish
+              uses: docker/build-push-action@v7
+              with:
+                  context: .
+                  file: ${{ matrix.dockerfile }}
+                  target: ${{ matrix.target }}
+                  build-args: RELEASE_SHA=${{ github.sha }}
+                  platforms: linux/amd64,linux/arm64
+                  push: true
+                  tags: |
+                      ${{ steps.image.outputs.name }}:latest
+                      ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+                  labels: |
+                      org.opencontainers.image.source=https://github.com/${{ github.repository }}
+                      org.opencontainers.image.revision=${{ github.sha }}
+                      org.opencontainers.image.licenses=AGPL-3.0-only
+                  cache-from: type=gha,scope=${{ matrix.image }}
+                  cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+    deploy:
+        name: Deploy production
+        needs: publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        environment:
+            name: production
+            url: ${{ vars.DEPLOY_ORIGIN }}
+        steps:
+            - name: Request deployment
+              env:
+                  DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+                  DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+              run: |
+                  curl --request POST --fail --silent --show-error --max-time 30 --output /dev/null \
+                    --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+                    "$DEPLOY_WEBHOOK_URL"
+            - name: Wait for the published release
+              env:
+                  DEPLOY_ORIGIN: ${{ vars.DEPLOY_ORIGIN }}
+              run: |
+                  for attempt in $(seq 1 90); do
+                    if curl --fail --silent --show-error --max-time 10 \
+                      --dump-header /tmp/readiness-headers --output /dev/null \
+                      "$DEPLOY_ORIGIN/api/ready" && \
+                      tr -d '\r' < /tmp/readiness-headers | grep -iq "^x-hushos-release: $GITHUB_SHA$"; then
+                      echo "Published release is ready."
+                      exit 0
+                    fi
+                    sleep 5
+                  done
+                  echo "Timed out waiting for the published release." >&2
+                  exit 1

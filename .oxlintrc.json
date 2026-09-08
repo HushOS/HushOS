@@ -1,0 +1,13 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "extends": ["./packages/config/oxlint.json"],
+    "ignorePatterns": [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/.output/**",
+        "**/.nitro/**",
+        "**/.tanstack/**",
+        "**/.turbo/**",
+        "**/routeTree.gen.ts"
+    ]
+}

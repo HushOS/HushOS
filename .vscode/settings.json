@@ -1,0 +1,43 @@
+{
+    "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+    "js/ts.tsdk.path": "./node_modules/typescript",
+    "js/ts.experimental.useTsgo": true,
+    "js/ts.preferences.importModuleSpecifier": "non-relative",
+    "js/ts.preferences.preferTypeOnlyAutoImports": true,
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit",
+        "source.fixAll.oxc": "always"
+    },
+    "oxc.enable.oxlint": true,
+    "oxc.enable.oxfmt": true,
+    "oxc.disableNestedConfig": false,
+    "oxc.fmt.configPath": "oxfmt.config.ts",
+    "oxc.fixKind": "safe_fix",
+    "oxc.typeAware": true,
+    "prettier.enable": false,
+    "yaml.customTags": ["!reset mapping"],
+    "tailwindCSS.experimental.configFile": {
+        "apps/web/src/styles.css": "apps/web/src/**"
+    },
+    "tailwindCSS.classFunctions": ["cn", "cva", "cx"],
+    "tailwindCSS.experimental.classRegex": [
+        ["(?:cva|cx|cn)\\(((?:[^()]|\\([^()]*\\))*)\\)", "[\"'`]([^\"'`]*)[\"'`]"],
+        "(?:[A-Za-z_$][\\w$]*ClassName|className|class|tw)\\s*[:=]\\s*[\"'`]([^\"'`]*)[\"'`]"
+    ],
+    "files.associations": {
+        "*.css": "tailwindcss"
+    },
+    "[tailwindcss]": {
+        "editor.defaultFormatter": "oxc.oxc-vscode"
+    },
+    "search.exclude": {
+        "**/.output": true,
+        "**/dist": true,
+        "**/.turbo": true,
+        "**/routeTree.gen.ts": true
+    },
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+}

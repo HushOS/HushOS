@@ -1,0 +1,53 @@
+{
+    "name": "hushos",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "workspaces": [
+        "apps/*",
+        "packages/*"
+    ],
+    "type": "module",
+    "scripts": {
+        "dev": "bun --env-file=.env run turbo run dev",
+        "build": "bun --env-file=.env run turbo run build",
+        "start": "bun --env-file=.env run turbo run start",
+        "typecheck": "tsc --noEmit && turbo run typecheck",
+        "lint": "oxlint --deny-warnings .",
+        "lint:fix": "oxlint --fix .",
+        "format": "oxfmt --write .",
+        "format:check": "oxfmt --check .",
+        "check": "bun run lint && bun run format:check && bun run typecheck",
+        "setup": "bun scripts/setup.ts",
+        "infra:up": "docker compose -f compose.yaml -f compose.dev.yaml up -d --wait db mailhog",
+        "infra:down": "docker compose -f compose.yaml -f compose.dev.yaml stop db mailhog",
+        "selfhost:up": "docker compose up -d --build --remove-orphans",
+        "selfhost:down": "docker compose down",
+        "db:generate": "bun --env-file=../../.env run --cwd packages/db db:generate",
+        "db:migrate": "bun --env-file=../../.env run --cwd packages/db db:migrate",
+        "db:studio": "bun --env-file=../../.env run --cwd packages/db db:studio",
+        "test": "turbo run test",
+        "email:preview": "bun run --cwd packages/emails preview",
+        "email:build": "bun run --cwd packages/emails preview:build",
+        "email:start": "bun run --cwd packages/emails preview:start",
+        "images:optimize": "bun run --cwd apps/web images:optimize"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "oxfmt": "0.66.0",
+        "oxlint": "1.81.0",
+        "oxlint-tsgolint": "7.0.2001",
+        "turbo": "2.10.12",
+        "typescript": "7.0.2"
+    },
+    "engines": {
+        "bun": ">=1.4.0",
+        "node": ">=24.0.0"
+    },
+    "packageManager": "bun@1.4.0",
+    "intent": {
+        "skills": [
+            "*"
+        ]
+    }
+}

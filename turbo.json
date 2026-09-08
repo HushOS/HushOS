@@ -1,0 +1,72 @@
+{
+    "$schema": "https://turborepo.dev/schema.json",
+    "globalDependencies": ["tsconfig.base.json", "packages/config/**"],
+    "tasks": {
+        "dev": {
+            "cache": false,
+            "persistent": true,
+            "passThroughEnv": [
+                "PORT",
+                "HOST",
+                "DATABASE_URL",
+                "APP_ORIGIN",
+                "OPAQUE_SERVER_SETUP",
+                "OPAQUE_SERVER_SETUP_ID",
+                "INITIAL_STORAGE_QUOTA_BYTES",
+                "EMAIL_ADAPTER",
+                "EMAIL_FROM",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_SECURE",
+                "SMTP_REQUIRE_TLS",
+                "SMTP_USER",
+                "SMTP_PASSWORD",
+                "RESEND_API_KEY",
+                "AWS_REGION",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN"
+            ]
+        },
+        "build": {
+            "dependsOn": ["^build"],
+            "inputs": ["$TURBO_DEFAULT$", ".env*"],
+            "outputs": [".output/**"],
+            "env": ["NODE_ENV"]
+        },
+        "start": {
+            "cache": false,
+            "persistent": true,
+            "passThroughEnv": [
+                "PORT",
+                "HOST",
+                "NODE_ENV",
+                "DATABASE_URL",
+                "APP_ORIGIN",
+                "OPAQUE_SERVER_SETUP",
+                "OPAQUE_SERVER_SETUP_ID",
+                "INITIAL_STORAGE_QUOTA_BYTES",
+                "EMAIL_ADAPTER",
+                "EMAIL_FROM",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_SECURE",
+                "SMTP_REQUIRE_TLS",
+                "SMTP_USER",
+                "SMTP_PASSWORD",
+                "RESEND_API_KEY",
+                "AWS_REGION",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN"
+            ]
+        },
+        "typecheck": {
+            "dependsOn": ["^typecheck"],
+            "outputs": []
+        },
+        "test": {
+            "outputs": []
+        }
+    }
+}

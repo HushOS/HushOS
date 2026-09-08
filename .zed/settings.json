@@ -1,0 +1,186 @@
+{
+    "format_on_save": "on",
+    "prettier": {
+        "allowed": false
+    },
+    "lsp": {
+        "yaml-language-server": {
+            "settings": {
+                "yaml": {
+                    "customTags": ["!reset mapping"]
+                }
+            }
+        },
+        "oxlint": {
+            "initialization_options": {
+                "settings": {
+                    "configPath": null,
+                    "run": "onType",
+                    "disableNestedConfig": false,
+                    "fixKind": "safe_fix",
+                    "typeAware": true,
+                    "unusedDisableDirectives": "deny"
+                }
+            }
+        },
+        "oxfmt": {
+            "initialization_options": {
+                "settings": {
+                    "fmt.configPath": "./oxfmt.config.ts"
+                }
+            }
+        },
+        "typescript-ls": {
+            "settings": {
+                "package_version": "7.0.2",
+                "typescript": {
+                    "preferences": {
+                        "importModuleSpecifier": "non-relative",
+                        "preferTypeOnlyAutoImports": true
+                    }
+                },
+                "javascript": {
+                    "preferences": {
+                        "importModuleSpecifier": "non-relative"
+                    }
+                }
+            }
+        },
+        "tailwindcss-language-server": {
+            "settings": {
+                "tailwindCSS": {
+                    "classFunctions": ["cn", "cva", "cx"],
+                    "experimental": {
+                        "configFile": {
+                            "apps/web/src/styles.css": "apps/web/src/**"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "languages": {
+        "TypeScript": {
+            "language_servers": [
+                "typescript-ls",
+                "oxlint",
+                "oxfmt",
+                "!vtsls",
+                "!typescript-language-server",
+                "..."
+            ],
+            "formatter": [
+                {
+                    "code_action": "source.organizeImports"
+                },
+                {
+                    "code_action": "source.fixAll.oxc"
+                },
+                {
+                    "language_server": {
+                        "name": "oxfmt"
+                    }
+                }
+            ]
+        },
+        "TSX": {
+            "language_servers": [
+                "typescript-ls",
+                "oxlint",
+                "oxfmt",
+                "!vtsls",
+                "!typescript-language-server",
+                "..."
+            ],
+            "formatter": [
+                {
+                    "code_action": "source.organizeImports"
+                },
+                {
+                    "code_action": "source.fixAll.oxc"
+                },
+                {
+                    "language_server": {
+                        "name": "oxfmt"
+                    }
+                }
+            ]
+        },
+        "JavaScript": {
+            "language_servers": [
+                "typescript-ls",
+                "oxlint",
+                "oxfmt",
+                "!vtsls",
+                "!typescript-language-server",
+                "..."
+            ],
+            "formatter": [
+                {
+                    "code_action": "source.fixAll.oxc"
+                },
+                {
+                    "language_server": {
+                        "name": "oxfmt"
+                    }
+                }
+            ]
+        },
+        "JSX": {
+            "language_servers": [
+                "typescript-ls",
+                "oxlint",
+                "oxfmt",
+                "!vtsls",
+                "!typescript-language-server",
+                "..."
+            ],
+            "formatter": [
+                {
+                    "code_action": "source.fixAll.oxc"
+                },
+                {
+                    "language_server": {
+                        "name": "oxfmt"
+                    }
+                }
+            ]
+        },
+        "CSS": {
+            "formatter": {
+                "language_server": {
+                    "name": "oxfmt"
+                }
+            }
+        },
+        "JSON": {
+            "formatter": {
+                "language_server": {
+                    "name": "oxfmt"
+                }
+            }
+        },
+        "JSONC": {
+            "formatter": {
+                "language_server": {
+                    "name": "oxfmt"
+                }
+            }
+        },
+        "Markdown": {
+            "formatter": {
+                "language_server": {
+                    "name": "oxfmt"
+                }
+            }
+        },
+        "YAML": {
+            "formatter": {
+                "language_server": {
+                    "name": "oxfmt"
+                }
+            }
+        }
+    },
+    "tab_size": 4
+}
