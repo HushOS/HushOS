@@ -1,17 +1,13 @@
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 import { RecoveryPhrase } from '@/components/recovery-phrase';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 
-export const Route = createFileRoute('/setup/recovery-key')({
+export const Route = createFileRoute('/_authenticated/setup/recovery-key')({
     /* A rotation from account settings says why the user is here; signup leaves it empty. */
     validateSearch: z.object({
         reason: z.enum(['master-key', 'recovery-key']).optional().catch(undefined),
     }),
-    beforeLoad: ({ context }) => {
-        if (!context.user) throw redirect({ to: '/login' });
-        return { user: context.user };
-    },
     headers: () => ({
         'Cache-Control': 'private, no-store',
         Vary: 'Cookie',

@@ -18,7 +18,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { getCurrentUser } from '@/lib/auth';
+import { sessionHint } from '@/lib/session';
 import { initSounds } from '@/lib/sounds';
 import { getThemeServerFn } from '@/lib/theme';
 import styles from '@/styles.css?url';
@@ -69,8 +69,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { rel: 'manifest', href: '/manifest.json' },
         ],
     }),
-    // One session lookup per navigation; every header and guard reads it from context.
-    beforeLoad: async () => ({ user: await getCurrentUser() }),
+    // Public pages only need to know whether a session cookie exists; no lookup here.
+    // The protected layout validates for real when the user goes in.
+    beforeLoad: ({ context }) => ({ hasSession: sessionHint(context.queryClient) }),
     shellComponent: RootDocument,
     loader: () => getThemeServerFn(),
     component: Outlet,

@@ -14,6 +14,7 @@ export default defineConfig({
         '**/.tanstack/**',
         '**/.turbo/**',
         '**/routeTree.gen.ts',
+        '**/src/rendered/**',
         'bun.lock',
     ],
 });

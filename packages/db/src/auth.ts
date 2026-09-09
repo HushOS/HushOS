@@ -1,4 +1,5 @@
 import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
     personalWorkspaces,
@@ -220,11 +221,17 @@ export async function createSession(input: {
     });
 }
 
-export async function getSessionUser(tokenHash: Buffer) {
+export async function getSessionUser(
+    tokenHash: Buffer,
+    lifetime: { idleSeconds: number; maxSeconds: number },
+) {
+    const now = new Date();
+    const absoluteCutoff = new Date(now.getTime() - lifetime.maxSeconds * 1000);
     const [result] = await db
         .select({
             user: { ...userFields, credentialVersion: sessions.credentialVersion },
             sessionId: sessions.id,
+            createdAt: sessions.createdAt,
         })
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
@@ -235,11 +242,23 @@ export async function getSessionUser(tokenHash: Buffer) {
                 eq(opaqueCredentials.version, sessions.credentialVersion),
             ),
         )
-        .where(and(eq(sessions.tokenHash, tokenHash), gt(sessions.expiresAt, new Date())));
+        .where(
+            and(
+                eq(sessions.tokenHash, tokenHash),
+                gt(sessions.expiresAt, now),
+                gt(sessions.createdAt, absoluteCutoff),
+            ),
+        );
     if (!result) return null;
+    // Slide the idle deadline on activity, at most every five minutes, never past the cap.
+    const absoluteExpiry = new Date(result.createdAt.getTime() + lifetime.maxSeconds * 1000);
+    const idleExpiry = new Date(now.getTime() + lifetime.idleSeconds * 1000);
     await db
         .update(sessions)
-        .set({ lastSeenAt: new Date() })
+        .set({
+            lastSeenAt: now,
+            expiresAt: idleExpiry < absoluteExpiry ? idleExpiry : absoluteExpiry,
+        })
         .where(
             and(
                 eq(sessions.id, result.sessionId),
@@ -282,15 +301,44 @@ export async function consumeRateLimit(keyHash: Buffer, limit: number, windowMs:
     return bucket !== undefined && bucket.count <= limit;
 }
 
-export async function cleanupExpired() {
+/*
+ * Removes expired rows in bounded batches so a large backlog never holds a lock or
+ * a connection for long. Runs from the background worker, never inside a request.
+ */
+export async function cleanupExpired(options: { batchSize?: number; signal?: AbortSignal } = {}) {
+    const batch = Math.max(1, Math.min(options.batchSize ?? 500, 5_000));
     const now = new Date();
-    await Promise.all([
-        db.delete(accountEnrollments).where(lt(accountEnrollments.expiresAt, now)),
-        db.delete(opaqueLoginAttempts).where(lt(opaqueLoginAttempts.expiresAt, now)),
-        db.delete(accountRecoveryAttempts).where(lt(accountRecoveryAttempts.expiresAt, now)),
-        db.delete(sessions).where(lt(sessions.expiresAt, now)),
-        db.delete(authRateLimits).where(lt(authRateLimits.expiresAt, now)),
-    ]);
+    async function sweep(table: PgTable, key: PgColumn, expiresAt: PgColumn) {
+        let total = 0;
+        while (!options.signal?.aborted) {
+            const result = await db.execute(
+                sql`delete from ${table} where ${key} in (select ${key} from ${table} where ${expiresAt} < ${now} limit ${batch})`,
+            );
+            const deleted = result.rowCount ?? 0;
+            total += deleted;
+            if (deleted < batch) break;
+        }
+        return total;
+    }
+    return {
+        enrollments: await sweep(
+            accountEnrollments,
+            accountEnrollments.id,
+            accountEnrollments.expiresAt,
+        ),
+        loginAttempts: await sweep(
+            opaqueLoginAttempts,
+            opaqueLoginAttempts.tokenHash,
+            opaqueLoginAttempts.expiresAt,
+        ),
+        recoveryAttempts: await sweep(
+            accountRecoveryAttempts,
+            accountRecoveryAttempts.tokenHash,
+            accountRecoveryAttempts.expiresAt,
+        ),
+        sessions: await sweep(sessions, sessions.id, sessions.expiresAt),
+        rateLimits: await sweep(authRateLimits, authRateLimits.keyHash, authRateLimits.expiresAt),
+    };
 }
 
 export async function getRecoveryKey(userId: string) {

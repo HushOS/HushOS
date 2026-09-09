@@ -31,8 +31,8 @@ export function ColourStrip({ className = '' }: { className?: string }) {
 
 /* Sign in and create account, or open the app when a session exists. */
 export function SessionLinks() {
-    const { user } = useRouteContext({ from: '__root__' });
-    return user ? (
+    const { hasSession } = useRouteContext({ from: '__root__' });
+    return hasSession ? (
         <BarLink to="/app">Open app</BarLink>
     ) : (
         <>

@@ -8,6 +8,7 @@
         "**/.nitro/**",
         "**/.tanstack/**",
         "**/.turbo/**",
-        "**/routeTree.gen.ts"
+        "**/routeTree.gen.ts",
+        "**/src/rendered/**"
     ]
 }

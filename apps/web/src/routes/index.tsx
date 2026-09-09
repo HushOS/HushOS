@@ -81,7 +81,7 @@ export const Route = createFileRoute('/')({
 });
 
 function LandingPage() {
-    const { user } = Route.useRouteContext();
+    const { hasSession } = Route.useRouteContext();
     const latest = posts[0];
     return (
         <div className="flex min-h-svh flex-col">
@@ -102,7 +102,7 @@ function LandingPage() {
                                 on your device, your keys are created there, and the code is public.
                             </p>
                             <div className="flex flex-wrap gap-3">
-                                {user ? (
+                                {hasSession ? (
                                     <Button
                                         render={<Link to="/app" />}
                                         nativeButton={false}

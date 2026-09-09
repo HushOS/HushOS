@@ -26,7 +26,8 @@
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN"
-            ]
+            ],
+            "dependsOn": ["^build"]
         },
         "build": {
             "dependsOn": ["^build"],
@@ -67,6 +68,14 @@
         },
         "test": {
             "outputs": []
+        },
+        "@hushos/emails#build": {
+            "inputs": ["src/templates/**", "scripts/**"],
+            "outputs": ["src/rendered/**"]
+        },
+        "@hushos/jobs#build": {
+            "dependsOn": ["^build"],
+            "outputs": ["dist/**"]
         }
     }
 }

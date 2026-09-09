@@ -13,6 +13,7 @@ import {
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
 import { authRepository } from '@hushos/db';
+import { sendVerificationEmail } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
 
 import {
@@ -21,9 +22,10 @@ import {
     OPAQUE_PROFILE_VERSION,
     type AccountKeyEnvelope,
 } from '@hushos/crypto';
-import { sendVerificationEmail } from '@hushos/emails/server';
 
-const SESSION_SECONDS = 7 * 24 * 60 * 60;
+// Sessions slide: seven days from the last request, never more than thirty from sign-in.
+const SESSION_IDLE_SECONDS = 7 * 24 * 60 * 60;
+const SESSION_MAX_SECONDS = 30 * 24 * 60 * 60;
 const ENROLLMENT_SECONDS = 30 * 60;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 export const EMAIL_ADDRESS_PATTERN =
@@ -33,8 +35,9 @@ export class AuthError extends Error {
     constructor(
         message: string,
         readonly status: 400 | 401 | 403 | 409 | 429 | 503 = 400,
+        options?: { cause?: unknown },
     ) {
-        super(message);
+        super(message, options);
         this.name = 'AuthError';
     }
 }
@@ -72,7 +75,7 @@ function readToken(request: Request, kind: 'session' | 'enrollment') {
 }
 
 export function authCookie(kind: 'session' | 'enrollment', token: string | null) {
-    const seconds = token ? (kind === 'session' ? SESSION_SECONDS : ENROLLMENT_SECONDS) : 0;
+    const seconds = token ? (kind === 'session' ? SESSION_MAX_SECONDS : ENROLLMENT_SECONDS) : 0;
     return `${cookieName(kind)}=${token ?? ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${config().secure ? '; Secure' : ''}`;
 }
 
@@ -83,8 +86,6 @@ export function normalizeEmail(email: string) {
     return normalized;
 }
 
-let nextCleanupAt = 0;
-
 function normalizeName(value: string) {
     const name = value.trim().normalize('NFC');
     if (Array.from(name).length < 1 || Array.from(name).length > 100)
@@ -92,36 +93,73 @@ function normalizeName(value: string) {
     return name;
 }
 
+/*
+ * The address rate limits are keyed on. Behind a reverse proxy, set
+ * TRUSTED_PROXY_HEADER so the proxy's header is used; the last value in a
+ * comma-separated list is the one the nearest proxy appended. Without it the
+ * socket address is used, which behind a proxy is the proxy itself.
+ */
+export function clientAddress(request: Request, remoteAddress?: string) {
+    const header = authEnv.TRUSTED_PROXY_HEADER;
+    if (header) {
+        const value = request.headers.get(header);
+        const last = value?.split(',').at(-1)?.trim();
+        if (last && last.length <= 64) return last;
+    }
+    return remoteAddress?.trim() || 'unknown';
+}
+
 export async function guardAuthMutation(request: Request) {
     if (request.headers.get('origin') !== config().origin)
         throw new AuthError('This request must come from HushOS.', 403);
     if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json')
         throw new AuthError('Expected a JSON request.', 400);
-    if (!(await authRepository.consumeRateLimit(hash('auth:global'), 600, 60_000)))
-        throw new AuthError('Too many requests. Please try again shortly.', 429);
-    if (Date.now() >= nextCleanupAt) {
-        nextCleanupAt = Date.now() + 60_000;
-        await authRepository.cleanupExpired();
-    }
 }
 
-async function limitEmail(
-    kind: 'register' | 'recover-email' | 'recover-start' | 'login',
-    email: string,
-) {
-    const limit = kind === 'login' ? 10 : 3;
+// Per-address first, so one client cannot exhaust everyone's budget; the global
+// bucket is a circuit breaker for the whole instance, not the working limit.
+export async function limitAuthMutation(address: string) {
+    if (!(await authRepository.consumeRateLimit(hash(`auth:address:${address}`), 120, 60_000)))
+        throw new AuthError('Too many requests. Please try again shortly.', 429);
+    if (!(await authRepository.consumeRateLimit(hash('auth:global'), 6_000, 60_000)))
+        throw new AuthError('Too many requests. Please try again shortly.', 429);
+}
+
+// Outbound mail is the expensive, abusable resource: bound it per address and per hour.
+async function limitEmailSend(address: string) {
     if (
-        !(await authRepository.consumeRateLimit(hash(`auth:${kind}:${email}`), limit, 15 * 60_000))
-    ) {
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:email:address:${address}`),
+            20,
+            60 * 60_000,
+        )) ||
+        !(await authRepository.consumeRateLimit(hash('auth:email:global'), 600, 60 * 60_000))
+    )
+        throw new AuthError('Too many verification emails. Please try again later.', 429);
+}
+
+async function limitEmail(kind: 'register' | 'recover-email' | 'recover-start', email: string) {
+    if (!(await authRepository.consumeRateLimit(hash(`auth:${kind}:${email}`), 3, 15 * 60_000)))
         throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
-    }
+}
+
+/*
+ * Password attempts are counted per email *and* client address, so a stranger who
+ * knows your email cannot lock you out. Authenticated security actions count per
+ * account instead: they already require a live session.
+ */
+async function limitPasswordAttempts(key: string) {
+    if (!(await authRepository.consumeRateLimit(hash(key), 10, 15 * 60_000)))
+        throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
 }
 
 export async function requestRegistrationEmail(
     email: string,
     purpose: 'register' | 'recover' = 'register',
+    address = 'unknown',
 ) {
     const normalizedEmail = normalizeEmail(email);
+    await limitEmailSend(address);
     await limitEmail(purpose === 'recover' ? 'recover-email' : 'register', normalizedEmail);
     const token = randomToken();
     await authRepository.createEnrollment({
@@ -138,11 +176,12 @@ export async function requestRegistrationEmail(
             `${config().origin}/${purpose === 'register' ? 'register' : 'recover'}/complete#verify=${token}`,
             purpose,
         );
-    } catch {
+    } catch (error) {
         await authRepository.removeEnrollment(hash(token));
         throw new AuthError(
             'Could not send the verification email. Please try again shortly.',
             503,
+            { cause: error },
         );
     }
     return { message: 'Check your inbox for a verification link.' };
@@ -265,10 +304,13 @@ export async function finishRegistration(
 export async function startLogin(
     email: string,
     startLoginRequest: string,
-    binding?: { purpose: SecurityAction | 'delete'; sessionTokenHash: Buffer },
+    binding?: { purpose: SecurityAction | 'delete'; sessionTokenHash: Buffer; userId: string },
+    address = 'unknown',
 ) {
     const normalizedEmail = normalizeEmail(email);
-    await limitEmail('login', normalizedEmail);
+    await limitPasswordAttempts(
+        binding ? `auth:security:${binding.userId}` : `auth:login:${normalizedEmail}:${address}`,
+    );
     const credential = await authRepository.findCredential(normalizedEmail);
     if (
         credential &&
@@ -343,7 +385,7 @@ export async function finishLogin(
         credentialVersion: attempt.credentialVersion,
         tokenHash: hash(token),
         previousTokenHash: previousToken ? hash(previousToken) : null,
-        expiresAt: new Date(Date.now() + SESSION_SECONDS * 1000),
+        expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
     });
     if (!result) throw failure();
     const { key, user } = result;
@@ -363,7 +405,17 @@ export async function finishLogin(
 
 export async function getSessionUser(request: Request) {
     const token = readToken(request, 'session');
-    return token ? authRepository.getSessionUser(hash(token)) : null;
+    return token
+        ? authRepository.getSessionUser(hash(token), {
+              idleSeconds: SESSION_IDLE_SECONDS,
+              maxSeconds: SESSION_MAX_SECONDS,
+          })
+        : null;
+}
+
+/* Cookie presence only: enough to draw a signed-in header, never to trust. */
+export function hasSessionCookie(request: Request) {
+    return readToken(request, 'session') !== null;
 }
 
 export async function updateProfile(request: Request, input: { name: string }) {
@@ -616,6 +668,7 @@ export async function startAccountDeletion(request: Request, startLoginRequest: 
     return startLogin(user.email, startLoginRequest, {
         purpose: 'delete',
         sessionTokenHash: hash(token),
+        userId: user.id,
     });
 }
 export async function finishAccountDeletion(
@@ -709,6 +762,7 @@ export async function startSecurityChange(
     const challenge = await startLogin(user.email, input.startLoginRequest, {
         purpose: input.action,
         sessionTokenHash: hash(token),
+        userId: user.id,
     });
     let registration;
     try {

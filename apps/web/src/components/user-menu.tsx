@@ -21,6 +21,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { authClient } from '@/lib/auth-client';
+import { forgetSession } from '@/lib/session';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
 
 export function initials(name: string) {
@@ -71,6 +72,7 @@ export function UserMenu({
         try {
             await authClient.logout();
             router.options.context.queryClient.clear();
+            forgetSession(router.options.context.queryClient, false);
             await router.invalidate();
             await router.navigate({ to: '/login' });
         } catch {

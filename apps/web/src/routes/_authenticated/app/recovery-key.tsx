@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RecoveryPhrase } from '@/components/recovery-phrase';
 
-export const Route = createFileRoute('/app/recovery-key')({
+export const Route = createFileRoute('/_authenticated/app/recovery-key')({
     head: () => ({
         meta: [
             { title: 'Your recovery phrase · HushOS' },

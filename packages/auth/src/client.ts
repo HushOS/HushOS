@@ -20,8 +20,9 @@ export function createAuthClient(
     let listening = false;
     function lock() {
         epoch += 1;
-        transport?.lock();
+        const active = transport;
         transport = undefined;
+        active?.lock();
         store.setState({ unlockedUserId: null });
     }
     function listen() {
@@ -63,7 +64,15 @@ export function createAuthClient(
         input: WorkerRequests[K],
     ): Promise<WorkerResults[K]> {
         listen();
-        transport ??= createTransport();
+        if (!transport) {
+            const created = createTransport();
+            transport = created;
+            // A transport that closes itself (worker error, unanswered call) must not
+            // leave the UI believing the account is still unlocked.
+            created.onLock(() => {
+                if (transport === created) lock();
+            });
+        }
         const activeTransport = transport;
         try {
             return await activeTransport.request(operation, input);
@@ -186,7 +195,9 @@ export function createAuthClient(
         store,
         isAuthenticating: () => busy,
         initializeAccount,
-        async restore(user: SessionUser) {
+        // `validated`: the caller has just confirmed `user` against the live session
+        // (a route guard did), so the bundle can be checked without another request.
+        async restore(user: SessionUser, options: { validated?: boolean } = {}) {
             listen();
             if (store.getState().unlockedUserId === user.id) return;
             if (restoring) return restoring;
@@ -197,9 +208,16 @@ export function createAuthClient(
                     await store.persist.rehydrate();
                     const device = store.getState().device;
                     if (!device || device.userId !== user.id) return;
-                    const { user: sessionUser } = await request<{ user: SessionUser | null }>(
-                        'session',
-                    );
+                    let sessionUser: SessionUser | null;
+                    try {
+                        sessionUser = options.validated
+                            ? user
+                            : (await request<{ user: SessionUser | null }>('session')).user;
+                    } catch {
+                        // Offline or a flaky connection: the bundle may be fine. Keep it and
+                        // let the next focus or session check try again.
+                        return;
+                    }
                     if (
                         !sessionUser ||
                         sessionUser.id !== device.userId ||
@@ -231,10 +249,11 @@ export function createAuthClient(
             });
             return restoring;
         },
-        async expireSession() {
+        // The live session is gone or belongs to a newer credential revision. Another tab
+        // may have just written a fresh bundle for it, so only lock this tab; restore()
+        // validates the bundle against the live session and removes it if it is really dead.
+        resync() {
             lock();
-            store.setState({ device: null });
-            await deviceKeys.clear().catch(() => {});
         },
         async lock() {
             listen();
@@ -309,12 +328,20 @@ export function createAuthClient(
                     recovery: RecoveryEnvelope;
                 }>('recover/start', start);
                 const finish = await rpc('recoverFinish', { ...challenge, phrase });
-                await request('recover/finish', {
-                    userId: challenge.userId,
-                    attemptToken: challenge.attemptToken,
-                    credentialVersion: challenge.credentialVersion,
-                    ...finish,
-                });
+                try {
+                    await request('recover/finish', {
+                        userId: challenge.userId,
+                        attemptToken: challenge.attemptToken,
+                        credentialVersion: challenge.credentialVersion,
+                        ...finish,
+                    });
+                } catch (error) {
+                    // The server may have committed before the response was lost. Retrying
+                    // with the old phrase would then fail for the wrong reason.
+                    throw new Error(
+                        `${error instanceof Error ? error.message : 'Please try again.'} If it keeps failing, try signing in with your new password first: the reset may already have been applied.`,
+                    );
+                }
                 lock();
                 store.setState({
                     device: null,
@@ -347,11 +374,21 @@ export function createAuthClient(
                 const finish = await rpc('securityFinish', challenge);
                 if (epoch !== changeEpoch)
                     throw new Error('Your account was locked. Please try again.');
-                await request('security/finish', {
-                    action,
-                    attemptToken: challenge.attemptToken,
-                    ...finish,
-                });
+                let committed = true;
+                let failure: unknown;
+                try {
+                    await request('security/finish', {
+                        action,
+                        attemptToken: challenge.attemptToken,
+                        ...finish,
+                    });
+                } catch (error) {
+                    // A lost response leaves the outcome unknown: the server may have
+                    // replaced the credentials and revoked every session. Clean up as if it
+                    // had, then let the live session say which it was.
+                    committed = false;
+                    failure = error;
+                }
                 lock();
                 store.setState({
                     device: null,
@@ -359,14 +396,24 @@ export function createAuthClient(
                 });
                 broadcastLock();
                 await deviceKeys.clear().catch(() => {});
+                if (!committed) {
+                    let live: SessionUser | null = null;
+                    try {
+                        live = (await request<{ user: SessionUser | null }>('session')).user;
+                    } catch {
+                        /* Unknown either way. */
+                    }
+                    if (live && live.credentialVersion === user.credentialVersion) throw failure;
+                    return { signedIn: false, uncertain: true };
+                }
                 try {
                     await login(
                         user.email,
                         action === 'password' ? (newPassword ?? password) : password,
                     );
-                    return { signedIn: true };
+                    return { signedIn: true, uncertain: false };
                 } catch {
-                    return { signedIn: false };
+                    return { signedIn: false, uncertain: false };
                 }
             }),
         session: () => request<{ user: SessionUser | null }>('session'),

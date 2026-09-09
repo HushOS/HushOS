@@ -14,8 +14,24 @@ concurrency:
 
 jobs:
     check:
-        name: Check, test, and build
+        name: Check, migrate, test, and build
         runs-on: ubuntu-latest
+        services:
+            postgres:
+                image: postgres:18-alpine
+                env:
+                    POSTGRES_USER: hushos
+                    POSTGRES_PASSWORD: ci
+                    POSTGRES_DB: hushos
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hushos -d hushos"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            DATABASE_URL: postgresql://hushos:ci@127.0.0.1:5432/hushos
         steps:
             - uses: actions/checkout@v7
             - uses: actions/setup-node@v7
@@ -27,15 +43,31 @@ jobs:
             - run: bun install --frozen-lockfile
             - name: Lint, format, and typecheck
               run: bun run check
+            - name: Apply migrations to a fresh database
+              run: bun run --cwd packages/db db:migrate
+            - name: Check the schema matches the checked-in migrations
+              run: |
+                  bun run --cwd packages/db db:generate
+                  if [ -n "$(git status --porcelain packages/db/drizzle)" ]; then
+                    echo "Schema drift: run bun run db:generate and commit the migration." >&2
+                    git status --porcelain packages/db/drizzle >&2
+                    exit 1
+                  fi
+            - name: Check the rendered emails match the templates
+              run: |
+                  bun run email:render
+                  if [ -n "$(git status --porcelain packages/emails/src/rendered)" ]; then
+                    echo "Rendered emails are stale: run bun run email:render and commit." >&2
+                    exit 1
+                  fi
             - name: Test
               run: bun run test
             - name: Build
               run: bun run build
 
-    publish:
-        name: Publish ${{ matrix.image }}
+    images:
+        name: Image ${{ matrix.image }}
         needs: check
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -50,6 +82,9 @@ jobs:
                     - image: migrate
                       dockerfile: packages/db/Dockerfile
                       target: migrate
+                    - image: worker
+                      dockerfile: packages/jobs/Dockerfile
+                      target: worker
         steps:
             - uses: actions/checkout@v7
             - name: Set image name
@@ -60,12 +95,14 @@ jobs:
             - name: Set up Docker Buildx
               uses: docker/setup-buildx-action@v4
             - name: Log in to GHCR
+              if: github.event_name == 'push' && github.ref == 'refs/heads/main'
               uses: docker/login-action@v4
               with:
                   registry: ghcr.io
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
-            - name: Build and publish
+            # Pull requests build the images without publishing, so a broken Dockerfile cannot merge.
+            - name: Build (and publish on main)
               uses: docker/build-push-action@v7
               with:
                   context: .
@@ -73,7 +110,7 @@ jobs:
                   target: ${{ matrix.target }}
                   build-args: RELEASE_SHA=${{ github.sha }}
                   platforms: linux/amd64
-                  push: true
+                  push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
                   tags: |
                       ${{ steps.image.outputs.name }}:latest
                       ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
@@ -86,7 +123,7 @@ jobs:
 
     deploy:
         name: Deploy production
-        needs: publish
+        needs: images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 15

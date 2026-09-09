@@ -9,6 +9,7 @@ import { FormActions, FormNote, FormTable } from '@/components/form-rows';
 import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
+import { ensureSessionUser } from '@/lib/session';
 import { authError, emailValue } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 
@@ -20,14 +21,16 @@ const loginFields = z.object({
 export const Route = createFileRoute('/login')({
     validateSearch: z.object({
         securityChanged: z
-            .enum(['password', 'master-key', 'recovery-key'])
+            .enum(['password', 'master-key', 'recovery-key', 'uncertain'])
             .optional()
             .catch(undefined),
     }),
-    beforeLoad: ({ context, search }) => {
-        if (!context.user) return;
+    beforeLoad: async ({ context, search, preload }) => {
+        if (preload) return;
+        const user = await ensureSessionUser(context.queryClient).catch(() => null);
+        if (!user) return;
         const rotated =
-            search.securityChanged && search.securityChanged !== 'password'
+            search.securityChanged === 'master-key' || search.securityChanged === 'recovery-key'
                 ? search.securityChanged
                 : undefined;
         throw rotated
@@ -70,7 +73,9 @@ function LoginPage() {
                 cue('success');
                 router.options.context.queryClient.clear();
                 const rotated =
-                    securityChanged && securityChanged !== 'password' ? securityChanged : undefined;
+                    securityChanged === 'master-key' || securityChanged === 'recovery-key'
+                        ? securityChanged
+                        : undefined;
                 if (rotated)
                     await router.navigate({
                         to: '/setup/recovery-key',
@@ -111,7 +116,9 @@ function LoginPage() {
                         <FormNote>
                             {securityChanged === 'password'
                                 ? 'Password changed. Sign in with your new password.'
-                                : 'Your keys were rotated. Sign in to save your new recovery phrase.'}
+                                : securityChanged === 'uncertain'
+                                  ? 'The connection dropped before your security change was confirmed. It may have been applied: try your new password first, then the old one.'
+                                  : 'Your keys were rotated. Sign in to save your new recovery phrase.'}
                         </FormNote>
                     )}
                     <form.Field name="email">

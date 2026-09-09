@@ -30,6 +30,12 @@ export const authEnv = createEnv({
             .max(2000)
             .regex(/^[A-Za-z0-9_-]+$/),
         OPAQUE_SERVER_SETUP_ID: z.string().min(1).max(100).default('primary'),
+        // Behind a reverse proxy, the header that carries the real client address
+        // (for example `x-forwarded-for` or `cf-connecting-ip`). Unset: the socket address.
+        TRUSTED_PROXY_HEADER: z
+            .string()
+            .regex(/^[a-z0-9-]{1,64}$/)
+            .optional(),
     },
     runtimeEnv: process.env,
     emptyStringAsUndefined: true,

@@ -4,10 +4,12 @@
     "license": "AGPL-3.0-only",
     "type": "module",
     "exports": {
-        "./server": "./src/service.tsx"
+        "./server": "./src/service.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
+        "render": "bun scripts/render.tsx",
+        "build": "bun scripts/render.tsx",
         "preview": "email dev --dir src/templates --port 3001",
         "preview:build": "email build --dir src/templates",
         "preview:start": "email start"
@@ -16,9 +18,6 @@
         "@aws-sdk/client-sesv2": "3.1127.0",
         "@hushos/env": "workspace:*",
         "nodemailer": "10.0.1",
-        "react": "19.2.8",
-        "react-dom": "19.2.8",
-        "react-email": "6.9.3",
         "resend": "6.26.0"
     },
     "devDependencies": {
@@ -28,6 +27,9 @@
         "@types/nodemailer": "8.0.1",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
+        "react": "19.2.8",
+        "react-dom": "19.2.8",
+        "react-email": "6.9.3",
         "typescript": "7.0.2"
     }
 }

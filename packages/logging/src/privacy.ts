@@ -1,4 +1,4 @@
-import type { WideEvent } from 'evlog';
+import { initLogger, type WideEvent } from 'evlog';
 
 export const loggingOptions = {
     env: { service: 'HushOS Web' },
@@ -52,6 +52,14 @@ export const loggingOptions = {
     },
 };
 
+export function initProcessLogger(service: string) {
+    initLogger({
+        ...loggingOptions,
+        env: { service },
+        redact: { ...loggingOptions.redact, transform: redactAuthenticationEvent },
+    });
+}
+
 const safeAuthFields = new Set([
     'timestamp',
     'level',
@@ -91,6 +99,19 @@ const authActions = new Set([
     'delete/start',
     'delete/finish',
 ]);
+const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
+// Only an error's class name and machine code survive: enough to tell an SMTP refusal
+// from a database outage, never a message or stack that could carry an address.
+export function sanitizeFailure(value: unknown) {
+    if (!value || typeof value !== 'object') return undefined;
+    const input = value as Record<string, unknown>;
+    // `kind`, not `name`: bare `name` is a redacted leaf everywhere else in the event.
+    const kind =
+        typeof input.name === 'string' && FAILURE_TOKEN.test(input.name) ? input.name : 'unknown';
+    const code =
+        typeof input.code === 'string' && FAILURE_TOKEN.test(input.code) ? input.code : undefined;
+    return code ? { kind, code } : { kind };
+}
 export function authLogAction(pathname: string) {
     const action = pathname.slice('/api/auth/'.length);
     return authActions.has(action) ? action : 'unknown';
@@ -138,6 +159,7 @@ export function redactAuthenticationEvent(event: WideEvent) {
                 value.outcome === 'unavailable'
                     ? value.outcome
                     : 'unknown',
+            ...(value.failure ? { failure: sanitizeFailure(value.failure) } : {}),
         };
     } else delete event.auth;
 }

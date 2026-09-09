@@ -1,17 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
-import { createFileRoute, Outlet, redirect, useRouter } from '@tanstack/react-router';
+import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
 import { TextSwap } from '@/components/motion';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { fetchSessionUser } from '@/lib/session';
 import { getSidebarStateServerFn } from '@/lib/theme';
 
-export const Route = createFileRoute('/app')({
-    beforeLoad: ({ context }) => {
-        if (!context.user) throw redirect({ to: '/login' });
-        return { user: context.user };
-    },
+export const Route = createFileRoute('/_authenticated/app')({
     loader: () => getSidebarStateServerFn(),
     headers: () => ({
         'Cache-Control': 'private, no-store',
@@ -46,27 +43,40 @@ function AppLayout() {
     const { user } = Route.useRouteContext();
     const sidebarOpen = Route.useLoaderData();
     const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
+    // A lock from another tab means the session may have moved on: validate again.
+    // A plain navigation was just validated by the guard, so restore can trust `user`.
+    const seenLockRevision = useRef(lockRevision);
     useEffect(() => {
         let active = true;
+        const queryClient = router.options.context.queryClient;
+        // The guard just validated the session on the way in; this re-validates on
+        // focus and on an interval, and after another tab locks or changes the account.
         async function checkSession() {
             if (authClient.isAuthenticating()) return;
             try {
-                const { user: current } = await authClient.session();
+                let current = await fetchSessionUser(queryClient);
                 if (!active || authClient.isAuthenticating()) return;
+                if (!current) {
+                    // Another tab may be between revoking sessions and signing in again
+                    // after a security change. Look once more before acting on it.
+                    await new Promise((resolve) => setTimeout(resolve, 1_500));
+                    if (!active || authClient.isAuthenticating()) return;
+                    current = await fetchSessionUser(queryClient);
+                    if (!active || authClient.isAuthenticating()) return;
+                }
                 if (
                     !current ||
                     current.id !== user.id ||
                     current.credentialVersion !== user.credentialVersion
                 ) {
-                    await authClient.expireSession();
-                    router.options.context.queryClient.clear();
+                    authClient.resync();
+                    queryClient.clear();
                     await router.invalidate();
-                }
+                } else await authClient.restore(current, { validated: true }).catch(() => {});
             } catch {
                 /* Retry at the next focus or interval after a network interruption. */
             }
         }
-        void checkSession();
         const onFocus = () => {
             void checkSession();
         };
@@ -78,6 +88,11 @@ function AppLayout() {
             window.clearInterval(timer);
         };
     }, [lockRevision, router, user.id, user.credentialVersion]);
+    useEffect(() => {
+        const validated = seenLockRevision.current === lockRevision;
+        seenLockRevision.current = lockRevision;
+        void authClient.restore(user, { validated }).catch(() => {});
+    }, [user, lockRevision]);
     return (
         <SidebarProvider defaultOpen={sidebarOpen}>
             <AppSidebar user={user} />

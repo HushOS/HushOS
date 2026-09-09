@@ -1,16 +1,20 @@
 # Self-hosting HushOS
 
-The stack contains one app service, a migration job, and PostgreSQL. TanStack Start and Nitro host the UI and Elysia API together. Email-first OPAQUE authentication, client account-key wrapping, recovery, password changes, master/recovery-key rotation, remembered device access, and permanent deletion are implemented. Drive storage and content encryption are not yet implemented.
+The stack contains a web service, a background worker, a migration job, and PostgreSQL. TanStack Start and Nitro host the UI and Elysia API together. Email-first OPAQUE authentication, client account-key wrapping, recovery, password changes, master/recovery-key rotation, remembered device access, and permanent deletion are implemented. Drive storage and content encryption are not yet implemented.
 
 ## Run the full stack locally
 
 Install Docker with Compose 2.24.4+ (for the external-database override). With Bun installed, run `bun run setup` to create `.env`; alternatively copy `.env.example` to `.env` and replace every `change-me` with the same long, URL-safe random database password.
+
+Before the first `docker compose up`, set the mail adapter in `.env`. The setup script's default `SMTP_HOST=127.0.0.1` points at the web container itself once the app runs in Docker, and a failed verification email is the first thing every new user would hit. Use your provider's SMTP host, or `EMAIL_ADAPTER=resend` with `RESEND_API_KEY`, or `EMAIL_ADAPTER=ses` with AWS credentials. `.env.production.example` lists every required setting with a placeholder.
 
 Stop any host development server using port 5173, then run:
 
 ```sh
 docker compose up -d --build --remove-orphans
 ```
+
+Compose starts four services: `db`, the one-shot `migrate` job, `web`, and `worker`. The worker runs background jobs (today: sweeping expired sessions, attempts and rate-limit rows every five minutes and once at start; later: Drive upload reconciliation and object cleanup) with [pg-boss](https://pgboss.io), which keeps its queue in a `pgboss` schema inside the same database. It is its own small image (`hushos-worker`: a Bun base plus one bundled file, built from `packages/jobs/Dockerfile`), needs only `DATABASE_URL`, and runs as a second service on a platform such as Coolify from that published image. The worker migrates its own schema on start. Its database role needs `CREATE` on the database (the Compose role has it) and must own the `pgboss` schema it creates. Cleanup also requires `SELECT` and `DELETE` on `account_enrollments`, `opaque_login_attempts`, `account_recovery_attempts`, `sessions`, and `auth_rate_limits`, plus `USAGE` on their schema. Run it without a domain or published ports and allow at least 45 seconds for shutdown so its 30-second graceful stop can finish.
 
 Open [http://localhost:5173/app](http://localhost:5173/app). API health is available at [http://localhost:5173/api/health](http://localhost:5173/api/health). Compose publishes the app on `127.0.0.1:5173`; PostgreSQL remains inside the container network. The development override publishes PostgreSQL on port 5433 for host tools.
 
@@ -31,11 +35,11 @@ Use your hosting platform's HTTPS ingress or a reverse proxy you manage. Point o
 | On the same host       | `http://127.0.0.1:5173` |
 | On the Compose network | `http://web:5173`       |
 
-Route all paths to that upstream, including `/api` and static assets. The UI and API share the public origin. Your proxy or platform owns domain routing and TLS. Set `APP_ORIGIN` to that exact public HTTPS origin; it controls email links, social metadata, and allowed auth mutations. The application needs no separate API hostname.
+Route all paths to that upstream, including `/api` and static assets. The UI and API share the public origin. Your proxy or platform owns domain routing and TLS. Set `APP_ORIGIN` to that exact public HTTPS origin; it controls email links, social metadata, and allowed auth mutations. Set `TRUSTED_PROXY_HEADER` to the header your proxy fills with the client address (`x-forwarded-for` for Caddy, nginx and Traefik; `cf-connecting-ip` behind Cloudflare). Without it every visitor shares the proxy's address and one rate-limit budget. The application needs no separate API hostname.
 
 Browser API clients use the page's origin; SSR clients call Elysia directly within the same process. Database credentials are supplied to the app at runtime and never enter browser assets. Remote browser crypto APIs need HTTPS; localhost has a [secure-context exception](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts) for local development.
 
-For an existing deployment, remove the old API service and its separate hostname routing. `--remove-orphans` removes the old service container while preserving database volumes. Remove unused `WEB_ORIGIN`, `VITE_API_URL`, and `API_INTERNAL_URL` settings. Deploy matching versions of the web and migration images.
+For an existing deployment, remove the old API service and its separate hostname routing. `--remove-orphans` removes the old service container while preserving database volumes. Remove unused `WEB_ORIGIN`, `VITE_API_URL`, and `API_INTERNAL_URL` settings. Deploy matching versions of the web, worker, and migration images.
 
 ## Container publishing
 
@@ -45,17 +49,19 @@ The GitHub Actions workflow runs `bun run check` (lint, format, and typecheck), 
 | ---------- | ------------------------------- |
 | Web        | `ghcr.io/hushos/hushos-web`     |
 | Migrations | `ghcr.io/hushos/hushos-migrate` |
+| Worker     | `ghcr.io/hushos/hushos-worker`  |
 
-Each image receives `latest` and `sha-<full-commit-sha>` tags. Use the same commit tag for both services when pinning a deployment. Image names derive from the lowercase GitHub repository name, so forks publish under their own namespace.
+Each image receives `latest` and `sha-<full-commit-sha>` tags. Use the same commit tag for all three images when pinning a deployment. Image names derive from the lowercase GitHub repository name, so forks publish under their own namespace.
 
-Both HushOS images are public and support anonymous pulls. Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no separate registry secret is required. Forks create private GHCR packages by default; set their visibility to public to allow anonymous pulls. See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+All three HushOS images are public and support anonymous pulls. Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no separate registry secret is required. Forks create private GHCR packages by default; set their visibility to public to allow anonymous pulls. See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-The web image includes both the UI and Elysia API. It uses the current origin, so the same image can run behind any hostname without an API URL build argument. Publishing uploads images to GHCR. The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after both images publish, then verifies `/api/ready` reports the published commit. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. Keep hosting configuration and credentials in your platform and GitHub settings.
+The web image includes both the UI and Elysia API. It uses the current origin, so the same image can run behind any hostname without an API URL build argument. Publishing uploads images to GHCR. The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after all three images publish, then verifies `/api/ready` reports the published commit. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
 
 To build the app image directly:
 
 ```sh
 docker build -f apps/web/Dockerfile -t hushos-web:local .
+docker build -f packages/jobs/Dockerfile --target worker -t hushos-worker:local .
 ```
 
 The included Nitro configuration targets Bun. A different runtime needs a compatible deployment preset and database driver configuration.
@@ -121,20 +127,21 @@ Browser crypto APIs require a secure context. HTTP localhost works on the same d
 
 Run `bun run setup` once and preserve its generated `OPAQUE_SERVER_SETUP`. The startup plugin validates server environment with T3 Env and Zod. A missing setup or invalid selected email adapter fails startup. Never regenerate the OPAQUE setup on restart: existing credentials depend on it.
 
-| Setting                                                           | Purpose                                                                                 |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `APP_ORIGIN`                                                      | Exact public origin, HTTPS except HTTP localhost. No path, query, or credentials.       |
-| `OPAQUE_SERVER_SETUP`                                             | Persistent server-only OPAQUE setup generated by `bun run setup`.                       |
-| `OPAQUE_SERVER_SETUP_ID`                                          | Stable identifier for that setup; default `primary`.                                    |
-| `INITIAL_STORAGE_QUOTA_BYTES`                                     | Initial allowance for newly created accounts; default `1073741824` (1 GiB).             |
-| `EMAIL_ADAPTER`                                                   | `smtp`, `resend`, or `ses`.                                                             |
-| `EMAIL_FROM`                                                      | Sender address, optionally with display name.                                           |
-| `SMTP_HOST`, `SMTP_PORT`                                          | SMTP endpoint; local defaults `127.0.0.1:1025`.                                         |
-| `SMTP_SECURE`, `SMTP_REQUIRE_TLS`                                 | Implicit TLS and required STARTTLS respectively.                                        |
-| `SMTP_USER`, `SMTP_PASSWORD`                                      | Set both if SMTP requires authentication.                                               |
-| `RESEND_API_KEY`                                                  | Required for the Resend adapter.                                                        |
-| `AWS_REGION`                                                      | Required for SES. The AWS SDK supports workload credentials or environment credentials. |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Optional explicit AWS credentials; access key and secret must be supplied together.     |
+| Setting                                                           | Purpose                                                                                                                                          |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `APP_ORIGIN`                                                      | Exact public origin, HTTPS except HTTP localhost. No path, query, or credentials.                                                                |
+| `OPAQUE_SERVER_SETUP`                                             | Persistent server-only OPAQUE setup generated by `bun run setup`.                                                                                |
+| `OPAQUE_SERVER_SETUP_ID`                                          | Stable identifier for that setup; default `primary`.                                                                                             |
+| `INITIAL_STORAGE_QUOTA_BYTES`                                     | Initial allowance for newly created accounts; default `1073741824` (1 GiB).                                                                      |
+| `TRUSTED_PROXY_HEADER`                                            | Header your proxy sets with the client address, such as `x-forwarded-for`. Required behind a proxy so rate limits key on clients, not the proxy. |
+| `EMAIL_ADAPTER`                                                   | `smtp`, `resend`, or `ses`.                                                                                                                      |
+| `EMAIL_FROM`                                                      | Sender address, optionally with display name.                                                                                                    |
+| `SMTP_HOST`, `SMTP_PORT`                                          | SMTP endpoint; local defaults `127.0.0.1:1025`.                                                                                                  |
+| `SMTP_SECURE`, `SMTP_REQUIRE_TLS`                                 | Implicit TLS and required STARTTLS respectively.                                                                                                 |
+| `SMTP_USER`, `SMTP_PASSWORD`                                      | Set both if SMTP requires authentication.                                                                                                        |
+| `RESEND_API_KEY`                                                  | Required for the Resend adapter.                                                                                                                 |
+| `AWS_REGION`                                                      | Required for SES. The AWS SDK supports workload credentials or environment credentials.                                                          |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Optional explicit AWS credentials; access key and secret must be supplied together.                                                              |
 
 The development override runs MailHog at SMTP port 1025 and its inbox at `http://localhost:8025`. `bun run infra:up` starts it with PostgreSQL. For a local full-stack preview use `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`; the override points container SMTP to `mailhog`. The base production stack has no mail capture service: configure a reachable SMTP provider, Resend, or SES. Mail images use absolute URLs under `APP_ORIGIN`, which must be reachable by recipients. Verify your sender/domain with the chosen provider.
 

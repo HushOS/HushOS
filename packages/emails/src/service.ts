@@ -1,10 +1,8 @@
 import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
-import { render, toPlainText } from 'react-email';
 import { Resend } from 'resend';
-
-import VerifyEmail from './templates/verify-email';
+import { verifyEmail } from './rendered/verify-email';
 
 type EmailMessage = { to: string; subject: string; html: string; text: string };
 type EmailAdapter = { send: (message: EmailMessage) => Promise<void> };
@@ -44,7 +42,10 @@ function createEmailAdapter(): EmailAdapter {
             return {
                 async send(message) {
                     const { error } = await resend.emails.send({ from, ...message });
-                    if (error) throw new Error('Resend rejected email delivery.');
+                    if (error)
+                        throw new Error('Resend rejected email delivery.', {
+                            cause: Object.assign(new Error(error.name), { name: error.name }),
+                        });
                 },
             };
         }
@@ -78,24 +79,43 @@ function createEmailAdapter(): EmailAdapter {
 
 let adapter: EmailAdapter | undefined;
 
+function escapeHtml(value: string) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+/*
+ * The templates were rendered at build time (scripts/render.tsx). Filling them is
+ * two substitutions: the URL is escaped for the HTML variant because it sits in
+ * an href and in visible text, and left as is for the plain-text variant.
+ */
+function fillTemplate(template: string, values: Record<string, string>, html: boolean) {
+    let output = template;
+    for (const [name, value] of Object.entries(values))
+        output = output.replaceAll(`{{${name}}}`, html ? escapeHtml(value) : value);
+    return output;
+}
+
 export async function sendVerificationEmail(
     to: string,
     verificationUrl: string,
     purpose: 'register' | 'recover' = 'register',
 ) {
     adapter ??= createEmailAdapter();
-    const html = await render(
-        <VerifyEmail
-            verificationUrl={verificationUrl}
-            purpose={purpose}
-            logoUrl={new URL('/email/hushos-logo-dark.png', verificationUrl).href}
-        />,
-    );
+    const values = {
+        verificationUrl,
+        logoUrl: new URL('/email/hushos-logo-dark.png', verificationUrl).href,
+    };
+    const template = verifyEmail[purpose];
     await adapter.send({
         to,
         subject:
             purpose === 'recover' ? 'Recover your account · HushOS' : 'Verify your email · HushOS',
-        html,
-        text: toPlainText(html),
+        html: fillTemplate(template.html, values, true),
+        text: fillTemplate(template.text, values, false),
     });
 }

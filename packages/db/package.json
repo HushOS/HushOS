@@ -22,6 +22,7 @@
     },
     "dependencies": {
         "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
         "drizzle-orm": "1.0.0-rc.4",
         "pg": "^8.16.3"
     },

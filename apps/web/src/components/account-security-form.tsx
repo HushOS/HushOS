@@ -89,7 +89,7 @@ export function AccountSecurityForm({
                 if (!result.signedIn) {
                     await router.navigate({
                         to: '/login',
-                        search: { securityChanged: action },
+                        search: { securityChanged: result.uncertain ? 'uncertain' : action },
                         replace: true,
                     });
                 } else if (action === 'password') {

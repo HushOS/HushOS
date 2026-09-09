@@ -10,8 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AccountDeletedRouteRouteImport } from './routes/account-deleted/route'
-import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as DesignDotmdRouteImport } from './routes/design[.]md'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LoginRouteRouteImport } from './routes/login/route'
@@ -24,10 +24,8 @@ import { Route as SecurityRouteRouteImport } from './routes/security/route'
 import { Route as ShareOgDotjpgRouteImport } from './routes/share-og[.]jpg'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as TermsRouteRouteImport } from './routes/terms/route'
+import { Route as AuthenticatedAppRouteRouteImport } from './routes/_authenticated/app/route'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
-import { Route as AppIndexRouteImport } from './routes/app/index'
-import { Route as AppAccountRouteImport } from './routes/app/account'
-import { Route as AppRecoveryKeyRouteImport } from './routes/app/recovery-key'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
 import { Route as RecoverIndexRouteImport } from './routes/recover/index'
@@ -36,21 +34,23 @@ import { Route as RecoverCompleteRouteImport } from './routes/recover/complete'
 import { Route as RegisterIndexRouteImport } from './routes/register/index'
 import { Route as RegisterCheckEmailRouteImport } from './routes/register/check-email'
 import { Route as RegisterCompleteRouteImport } from './routes/register/complete'
-import { Route as SetupRecoveryKeyRouteImport } from './routes/setup/recovery-key'
+import { Route as AuthenticatedAppIndexRouteImport } from './routes/_authenticated/app/index'
+import { Route as AuthenticatedAppAccountRouteImport } from './routes/_authenticated/app/account'
+import { Route as AuthenticatedAppRecoveryKeyRouteImport } from './routes/_authenticated/app/recovery-key'
+import { Route as AuthenticatedSetupRecoveryKeyRouteImport } from './routes/_authenticated/setup/recovery-key'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedRoute = AuthenticatedRouteImport.update({
+  id: '/_authenticated',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AccountDeletedRouteRoute = AccountDeletedRouteRouteImport.update({
   id: '/account-deleted',
   path: '/account-deleted',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppRouteRoute = AppRouteRouteImport.update({
-  id: '/app',
-  path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesignDotmdRoute = DesignDotmdRouteImport.update({
@@ -113,25 +113,15 @@ const TermsRouteRoute = TermsRouteRouteImport.update({
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedAppRouteRoute = AuthenticatedAppRouteRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
-} as any)
-const AppIndexRoute = AppIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppAccountRoute = AppAccountRouteImport.update({
-  id: '/account',
-  path: '/account',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppRecoveryKeyRoute = AppRecoveryKeyRouteImport.update({
-  id: '/recovery-key',
-  path: '/recovery-key',
-  getParentRoute: () => AppRouteRoute,
 } as any)
 const BlogIndexRoute = BlogIndexRouteImport.update({
   id: '/blog/',
@@ -173,16 +163,32 @@ const RegisterCompleteRoute = RegisterCompleteRouteImport.update({
   path: '/complete',
   getParentRoute: () => RegisterRouteRoute,
 } as any)
-const SetupRecoveryKeyRoute = SetupRecoveryKeyRouteImport.update({
-  id: '/setup/recovery-key',
-  path: '/setup/recovery-key',
-  getParentRoute: () => rootRouteImport,
+const AuthenticatedAppIndexRoute = AuthenticatedAppIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AuthenticatedAppRouteRoute,
 } as any)
+const AuthenticatedAppAccountRoute = AuthenticatedAppAccountRouteImport.update({
+  id: '/account',
+  path: '/account',
+  getParentRoute: () => AuthenticatedAppRouteRoute,
+} as any)
+const AuthenticatedAppRecoveryKeyRoute =
+  AuthenticatedAppRecoveryKeyRouteImport.update({
+    id: '/recovery-key',
+    path: '/recovery-key',
+    getParentRoute: () => AuthenticatedAppRouteRoute,
+  } as any)
+const AuthenticatedSetupRecoveryKeyRoute =
+  AuthenticatedSetupRecoveryKeyRouteImport.update({
+    id: '/setup/recovery-key',
+    path: '/setup/recovery-key',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
-  '/app': typeof AppRouteRouteWithChildren
   '/login': typeof LoginRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
@@ -195,19 +201,20 @@ export interface FileRoutesByFullPath {
   '/robots.txt': typeof RobotsDottxtRoute
   '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
-  '/app/account': typeof AppAccountRoute
-  '/app/recovery-key': typeof AppRecoveryKeyRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/recover/check-email': typeof RecoverCheckEmailRoute
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
-  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
-  '/app/': typeof AppIndexRoute
   '/blog/': typeof BlogIndexRoute
   '/recover/': typeof RecoverIndexRoute
   '/register/': typeof RegisterIndexRoute
+  '/app/account': typeof AuthenticatedAppAccountRoute
+  '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
+  '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
+  '/app/': typeof AuthenticatedAppIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -223,56 +230,56 @@ export interface FileRoutesByTo {
   '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/$': typeof ApiSplatRoute
-  '/app/account': typeof AppAccountRoute
-  '/app/recovery-key': typeof AppRecoveryKeyRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/recover/check-email': typeof RecoverCheckEmailRoute
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
-  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
-  '/app': typeof AppIndexRoute
   '/blog': typeof BlogIndexRoute
   '/recover': typeof RecoverIndexRoute
   '/register': typeof RegisterIndexRoute
+  '/app/account': typeof AuthenticatedAppAccountRoute
+  '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
+  '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
+  '/app': typeof AuthenticatedAppIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
-  '/app': typeof AppRouteRouteWithChildren
   '/login': typeof LoginRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
   '/security': typeof SecurityRouteRoute
   '/terms': typeof TermsRouteRoute
+  '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design.md': typeof DesignDotmdRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/og.jpg': typeof OgDotjpgRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/_authenticated/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
-  '/app/account': typeof AppAccountRoute
-  '/app/recovery-key': typeof AppRecoveryKeyRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/recover/check-email': typeof RecoverCheckEmailRoute
   '/recover/complete': typeof RecoverCompleteRoute
   '/register/check-email': typeof RegisterCheckEmailRoute
   '/register/complete': typeof RegisterCompleteRoute
-  '/setup/recovery-key': typeof SetupRecoveryKeyRoute
-  '/app/': typeof AppIndexRoute
   '/blog/': typeof BlogIndexRoute
   '/recover/': typeof RecoverIndexRoute
   '/register/': typeof RegisterIndexRoute
+  '/_authenticated/app/account': typeof AuthenticatedAppAccountRoute
+  '/_authenticated/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
+  '/_authenticated/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
+  '/_authenticated/app/': typeof AuthenticatedAppIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/account-deleted'
-    | '/app'
     | '/login'
     | '/privacy'
     | '/recover'
@@ -285,19 +292,20 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/share-og.jpg'
     | '/sitemap.xml'
+    | '/app'
     | '/api/$'
-    | '/app/account'
-    | '/app/recovery-key'
     | '/blog/$slug'
     | '/recover/check-email'
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
-    | '/setup/recovery-key'
-    | '/app/'
     | '/blog/'
     | '/recover/'
     | '/register/'
+    | '/app/account'
+    | '/app/recovery-key'
+    | '/setup/recovery-key'
+    | '/app/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -313,60 +321,61 @@ export interface FileRouteTypes {
     | '/share-og.jpg'
     | '/sitemap.xml'
     | '/api/$'
-    | '/app/account'
-    | '/app/recovery-key'
     | '/blog/$slug'
     | '/recover/check-email'
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
-    | '/setup/recovery-key'
-    | '/app'
     | '/blog'
     | '/recover'
     | '/register'
+    | '/app/account'
+    | '/app/recovery-key'
+    | '/setup/recovery-key'
+    | '/app'
   id:
     | '__root__'
     | '/'
     | '/account-deleted'
-    | '/app'
     | '/login'
     | '/privacy'
     | '/recover'
     | '/register'
     | '/security'
     | '/terms'
+    | '/_authenticated'
     | '/design.md'
     | '/llms.txt'
     | '/og.jpg'
     | '/robots.txt'
     | '/share-og.jpg'
     | '/sitemap.xml'
+    | '/_authenticated/app'
     | '/api/$'
-    | '/app/account'
-    | '/app/recovery-key'
     | '/blog/$slug'
     | '/recover/check-email'
     | '/recover/complete'
     | '/register/check-email'
     | '/register/complete'
-    | '/setup/recovery-key'
-    | '/app/'
     | '/blog/'
     | '/recover/'
     | '/register/'
+    | '/_authenticated/app/account'
+    | '/_authenticated/app/recovery-key'
+    | '/_authenticated/setup/recovery-key'
+    | '/_authenticated/app/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountDeletedRouteRoute: typeof AccountDeletedRouteRoute
-  AppRouteRoute: typeof AppRouteRouteWithChildren
   LoginRouteRoute: typeof LoginRouteRoute
   PrivacyRouteRoute: typeof PrivacyRouteRoute
   RecoverRouteRoute: typeof RecoverRouteRouteWithChildren
   RegisterRouteRoute: typeof RegisterRouteRouteWithChildren
   SecurityRouteRoute: typeof SecurityRouteRoute
   TermsRouteRoute: typeof TermsRouteRoute
+  AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignDotmdRoute: typeof DesignDotmdRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   OgDotjpgRoute: typeof OgDotjpgRoute
@@ -375,7 +384,6 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiSplatRoute: typeof ApiSplatRoute
   BlogSlugRoute: typeof BlogSlugRoute
-  SetupRecoveryKeyRoute: typeof SetupRecoveryKeyRoute
   BlogIndexRoute: typeof BlogIndexRoute
 }
 
@@ -388,18 +396,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated': {
+      id: '/_authenticated'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthenticatedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/account-deleted': {
       id: '/account-deleted'
       path: '/account-deleted'
       fullPath: '/account-deleted'
       preLoaderRoute: typeof AccountDeletedRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/app': {
-      id: '/app'
-      path: '/app'
-      fullPath: '/app'
-      preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/design.md': {
@@ -486,33 +494,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TermsRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/app': {
+      id: '/_authenticated/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AuthenticatedAppRouteRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/api/$': {
       id: '/api/$'
       path: '/api/$'
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/app/': {
-      id: '/app/'
-      path: '/'
-      fullPath: '/app/'
-      preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/account': {
-      id: '/app/account'
-      path: '/account'
-      fullPath: '/app/account'
-      preLoaderRoute: typeof AppAccountRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/recovery-key': {
-      id: '/app/recovery-key'
-      path: '/recovery-key'
-      fullPath: '/app/recovery-key'
-      preLoaderRoute: typeof AppRecoveryKeyRouteImport
-      parentRoute: typeof AppRouteRoute
     }
     '/blog/': {
       id: '/blog/'
@@ -570,31 +564,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterCompleteRouteImport
       parentRoute: typeof RegisterRouteRoute
     }
-    '/setup/recovery-key': {
-      id: '/setup/recovery-key'
+    '/_authenticated/app/': {
+      id: '/_authenticated/app/'
+      path: '/'
+      fullPath: '/app/'
+      preLoaderRoute: typeof AuthenticatedAppIndexRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
+    '/_authenticated/app/account': {
+      id: '/_authenticated/app/account'
+      path: '/account'
+      fullPath: '/app/account'
+      preLoaderRoute: typeof AuthenticatedAppAccountRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
+    '/_authenticated/app/recovery-key': {
+      id: '/_authenticated/app/recovery-key'
+      path: '/recovery-key'
+      fullPath: '/app/recovery-key'
+      preLoaderRoute: typeof AuthenticatedAppRecoveryKeyRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
+    '/_authenticated/setup/recovery-key': {
+      id: '/_authenticated/setup/recovery-key'
       path: '/setup/recovery-key'
       fullPath: '/setup/recovery-key'
-      preLoaderRoute: typeof SetupRecoveryKeyRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthenticatedSetupRecoveryKeyRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
-
-interface AppRouteRouteChildren {
-  AppAccountRoute: typeof AppAccountRoute
-  AppRecoveryKeyRoute: typeof AppRecoveryKeyRoute
-  AppIndexRoute: typeof AppIndexRoute
-}
-
-const AppRouteRouteChildren: AppRouteRouteChildren = {
-  AppAccountRoute: AppAccountRoute,
-  AppRecoveryKeyRoute: AppRecoveryKeyRoute,
-  AppIndexRoute: AppIndexRoute,
-}
-
-const AppRouteRouteWithChildren = AppRouteRoute._addFileChildren(
-  AppRouteRouteChildren,
-)
 
 interface RecoverRouteRouteChildren {
   RecoverCheckEmailRoute: typeof RecoverCheckEmailRoute
@@ -628,16 +627,47 @@ const RegisterRouteRouteWithChildren = RegisterRouteRoute._addFileChildren(
   RegisterRouteRouteChildren,
 )
 
+interface AuthenticatedAppRouteRouteChildren {
+  AuthenticatedAppAccountRoute: typeof AuthenticatedAppAccountRoute
+  AuthenticatedAppRecoveryKeyRoute: typeof AuthenticatedAppRecoveryKeyRoute
+  AuthenticatedAppIndexRoute: typeof AuthenticatedAppIndexRoute
+}
+
+const AuthenticatedAppRouteRouteChildren: AuthenticatedAppRouteRouteChildren = {
+  AuthenticatedAppAccountRoute: AuthenticatedAppAccountRoute,
+  AuthenticatedAppRecoveryKeyRoute: AuthenticatedAppRecoveryKeyRoute,
+  AuthenticatedAppIndexRoute: AuthenticatedAppIndexRoute,
+}
+
+const AuthenticatedAppRouteRouteWithChildren =
+  AuthenticatedAppRouteRoute._addFileChildren(
+    AuthenticatedAppRouteRouteChildren,
+  )
+
+interface AuthenticatedRouteChildren {
+  AuthenticatedAppRouteRoute: typeof AuthenticatedAppRouteRouteWithChildren
+  AuthenticatedSetupRecoveryKeyRoute: typeof AuthenticatedSetupRecoveryKeyRoute
+}
+
+const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedAppRouteRoute: AuthenticatedAppRouteRouteWithChildren,
+  AuthenticatedSetupRecoveryKeyRoute: AuthenticatedSetupRecoveryKeyRoute,
+}
+
+const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
+  AuthenticatedRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountDeletedRouteRoute: AccountDeletedRouteRoute,
-  AppRouteRoute: AppRouteRouteWithChildren,
   LoginRouteRoute: LoginRouteRoute,
   PrivacyRouteRoute: PrivacyRouteRoute,
   RecoverRouteRoute: RecoverRouteRouteWithChildren,
   RegisterRouteRoute: RegisterRouteRouteWithChildren,
   SecurityRouteRoute: SecurityRouteRoute,
   TermsRouteRoute: TermsRouteRoute,
+  AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignDotmdRoute: DesignDotmdRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
   OgDotjpgRoute: OgDotjpgRoute,
@@ -646,7 +676,6 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiSplatRoute: ApiSplatRoute,
   BlogSlugRoute: BlogSlugRoute,
-  SetupRecoveryKeyRoute: SetupRecoveryKeyRoute,
   BlogIndexRoute: BlogIndexRoute,
 }
 export const routeTree = rootRouteImport

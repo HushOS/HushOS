@@ -13,21 +13,21 @@ COPY packages/logging/package.json ./packages/logging/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
 COPY packages/utils/package.json ./packages/utils/package.json
 
-FROM manifests AS migration-deps
-RUN bun install --frozen-lockfile --filter @hushos/db
+FROM manifests AS build
+RUN bun install --frozen-lockfile --filter @hushos/jobs
+COPY tsconfig.base.json ./
+COPY packages/config ./packages/config
+COPY packages/env ./packages/env
+COPY packages/logging ./packages/logging
+COPY packages/db ./packages/db
+COPY packages/jobs ./packages/jobs
+RUN bun run --cwd packages/jobs build
 
-FROM node:24-bookworm-slim AS migrate
-COPY --from=manifests /usr/local/bin/bun /usr/local/bin/bun
+FROM oven/bun:1.4.0-slim AS worker
 WORKDIR /app
-COPY --from=migration-deps /app/node_modules ./node_modules
-COPY --from=migration-deps /app/packages/db/node_modules ./packages/db/node_modules
-COPY --from=migration-deps /app/packages/env/node_modules ./packages/env/node_modules
-COPY packages/env/package.json ./packages/env/package.json
-COPY packages/env/src ./packages/env/src
-COPY packages/db/package.json packages/db/drizzle.config.ts ./packages/db/
-COPY packages/db/src/schema ./packages/db/src/schema
-COPY packages/db/drizzle ./packages/db/drizzle
-USER node
-WORKDIR /app/packages/db
-CMD ["bun", "run", "db:migrate"]
-
+ENV NODE_ENV=production
+ARG RELEASE_SHA
+ENV HUSHOS_RELEASE_SHA=$RELEASE_SHA
+COPY --from=build /app/packages/jobs/dist/worker.js ./worker.js
+USER bun
+CMD ["bun", "worker.js"]

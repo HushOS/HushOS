@@ -1,0 +1,26 @@
+{
+    "name": "@hushos/jobs",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        "./client": "./src/client.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "dev": "bun --watch src/worker.ts",
+        "start": "bun src/worker.ts",
+        "build": "NODE_ENV=production bun build src/worker.ts --target=bun --outdir dist --sourcemap=none"
+    },
+    "dependencies": {
+        "@hushos/db": "workspace:*",
+        "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
+        "pg-boss": "^12.30.0"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2"
+    }
+}

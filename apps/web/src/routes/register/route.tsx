@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
+import { ensureSessionUser } from '@/lib/session';
 
 export const Route = createFileRoute('/register')({
     headers: () => ({
@@ -6,8 +7,10 @@ export const Route = createFileRoute('/register')({
         Vary: 'Cookie',
         'Referrer-Policy': 'no-referrer',
     }),
-    beforeLoad: ({ context }) => {
-        if (context.user) throw redirect({ to: '/app' });
+    beforeLoad: async ({ context, preload }) => {
+        if (preload) return;
+        const user = await ensureSessionUser(context.queryClient).catch(() => null);
+        if (user) throw redirect({ to: '/app' });
     },
     head: () => ({
         meta: [

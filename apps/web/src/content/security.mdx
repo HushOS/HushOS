@@ -115,9 +115,9 @@ The plaintext account key lives only inside a Web Worker. To let a browser reope
             '32 random bytes, sent in a URL fragment, stored only as SHA-256, valid 30 minutes',
         ],
         ['Login attempts', 'Random handles, stored hashed, consumed after 5 minutes or one finish'],
-        ['Sessions', '7 days, 32-byte token, only its SHA-256 stored'],
+        ['Sessions', '7 days idle, 30 days at most, 32-byte token, only its SHA-256 stored'],
         ['Cookies', 'HttpOnly, SameSite=Lax, Secure with the __Host- prefix under HTTPS'],
-        ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, shared rate limits'],
+        ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, per-address rate limits'],
         ['Responses', 'private, no-store and no-referrer'],
     ]}
 />

@@ -14,7 +14,7 @@ import { authClient } from '@/lib/auth-client';
 import { storageQueryOptions } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
 
-export const Route = createFileRoute('/app/')({
+export const Route = createFileRoute('/_authenticated/app/')({
     head: () => ({ meta: [{ title: 'Overview · HushOS' }] }),
     component: WorkspacePage,
 });
@@ -33,7 +33,7 @@ function WorkspacePage() {
     useEffect(() => {
         let active = true;
         void authClient
-            .restore(user)
+            .restore(user, { validated: true })
             .then(() => authClient.initializeAccount(user))
             .then(async (needsBackup) => {
                 if (!active) return;

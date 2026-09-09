@@ -9,6 +9,7 @@ import { FormActions, FormNote, FormTable } from '@/components/form-rows';
 import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
+import { forgetSession } from '@/lib/session';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 
@@ -42,7 +43,8 @@ export function ProfileNameForm({
             try {
                 await authClient.updateProfile(value.name);
                 cue('success');
-                // The session user lives in root route context; invalidating refetches it everywhere.
+                // The name lives in the cached session; forget it so the guard refetches.
+                forgetSession(router.options.context.queryClient);
                 await router.invalidate();
                 onSuccess();
             } catch (error) {

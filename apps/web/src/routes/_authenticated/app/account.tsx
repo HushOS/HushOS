@@ -16,7 +16,7 @@ import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 
-export const Route = createFileRoute('/app/account')({
+export const Route = createFileRoute('/_authenticated/app/account')({
     head: () => ({ meta: [{ title: 'Account settings · HushOS' }] }),
     component: AccountPage,
 });

@@ -1,6 +1,7 @@
 import { cors } from '@elysia/cors';
 import { db } from '@hushos/db';
-import { EvlogError, parseError, authLogAction } from '@hushos/logging';
+import { EvlogError, parseError, authLogAction, sanitizeFailure } from '@hushos/logging';
+import { useRequest } from 'nitro/context';
 import { API_SERVICE, APP_NAME } from '@hushos/shared';
 import { welcomeMessage } from '@hushos/utils';
 import { Elysia, t, ValidationError, ParseError } from 'elysia';
@@ -12,10 +13,17 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
     .derive(() => ({ log: useLogger(), requestId: useRequestId() }))
     .error(({ error, status, request }) => {
         if (new URL(request.url).pathname.startsWith('/api/auth/')) {
-            if (error instanceof auth.AuthError)
+            if (error instanceof auth.AuthError) {
+                // A 5xx is an operator problem (mail, database): say what kind, never what it said.
+                if (error.status >= 500) {
+                    useLogger().set({ auth: { failure: describeFailure(error) } });
+                    useLogger().error(new Error('Authentication request failed.'));
+                }
                 return status(error.status, { message: error.message });
+            }
             if (error instanceof ValidationError || error instanceof ParseError)
                 return status(400, { message: 'Please check your information and try again.' });
+            useLogger().set({ auth: { failure: describeFailure(error) } });
             useLogger().error(new Error('Authentication request failed.'));
             return status(503, {
                 message: 'Authentication is temporarily unavailable. Please try again.',
@@ -33,6 +41,21 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
         }
     })
     .as('global');
+
+/* What the operator gets to see about a failure: the class and machine code, one cause deep. */
+function describeFailure(error: unknown) {
+    const source =
+        error instanceof auth.AuthError && error.cause instanceof Error ? error.cause : error;
+    if (!(source instanceof Error)) return sanitizeFailure({ name: 'unknown' });
+    const code = (source as Error & { code?: unknown }).code;
+    const name = /^[A-Za-z0-9_.:-]{1,64}$/.test(source.name)
+        ? source.name
+        : source.constructor.name;
+    return sanitizeFailure({ name, code });
+}
+function requestAddress(request: Request) {
+    return auth.clientAddress(request, useRequest().ip);
+}
 
 const emailSchema = t.String({
     minLength: 3,
@@ -116,8 +139,8 @@ export const apiApp = new Elysia({ prefix: '/api' })
         },
         ({ request, body }) => auth.initializeAccount(request, body),
     )
-    .post('/auth/register/email', { body: t.Object({ email: emailSchema }) }, ({ body }) =>
-        auth.requestRegistrationEmail(body.email),
+    .post('/auth/register/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
+        auth.requestRegistrationEmail(body.email, 'register', requestAddress(request)),
     )
     .post(
         '/auth/register/verify',
@@ -157,7 +180,8 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post(
         '/auth/login/start',
         { body: t.Object({ email: emailSchema, startLoginRequest: opaqueMessage }) },
-        ({ body }) => auth.startLogin(body.email, body.startLoginRequest),
+        ({ body, request }) =>
+            auth.startLogin(body.email, body.startLoginRequest, undefined, requestAddress(request)),
     )
     .post(
         '/auth/login/finish',
@@ -172,8 +196,8 @@ export const apiApp = new Elysia({ prefix: '/api' })
             return { user, envelope };
         },
     )
-    .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body }) =>
-        auth.requestRegistrationEmail(body.email, 'recover'),
+    .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
+        auth.requestRegistrationEmail(body.email, 'recover', requestAddress(request)),
     )
     .get('/auth/recover', async ({ request }) => ({
         enrollment: await auth.getEnrollment(request, 'recover'),
@@ -331,6 +355,8 @@ export async function handleApiRequest(request: Request) {
                 headers: request.headers,
                 body,
             });
+            // Consume the budget only for requests that passed the cheap checks above.
+            await auth.limitAuthMutation(requestAddress(request));
         }
         const result = await apiApp.fetch(request);
         log.set({
@@ -354,8 +380,10 @@ export async function handleApiRequest(request: Request) {
                         : 'unavailable',
             },
         });
-        if (!(error instanceof auth.AuthError))
+        if (!(error instanceof auth.AuthError) || error.status >= 500) {
+            log.set({ auth: { failure: describeFailure(error) } });
             log.error(new Error('Authentication request failed.'));
+        }
         return Response.json(
             {
                 message:

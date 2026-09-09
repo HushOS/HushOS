@@ -8,3 +8,6 @@ services:
     web:
         environment:
             DATABASE_URL: ${DATABASE_URL:?Set the external PostgreSQL connection URL}
+    worker:
+        environment:
+            DATABASE_URL: ${DATABASE_URL:?Set the external PostgreSQL connection URL}

@@ -39,7 +39,7 @@ export function RecoveryPhrase({
     useEffect(() => {
         let active = true;
         void authClient
-            .restore(user)
+            .restore(user, { validated: true })
             .then(() => authClient.recoveryBackup(user))
             .then((value) => {
                 if (active) setBackup(value);

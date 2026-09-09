@@ -340,7 +340,7 @@ Legal pages and blog posts are MDX under `apps/web/src/content`, compiled at bui
 
 ## Email
 
-Transactional emails (`packages/emails`) are the Ledger in table form: paper ground, an ink-bordered card, the blue brand cell with the white mark and HUSHOS in mono caps, a two-column ledger of facts about the link (purpose, expiry, uses, "password sent: never"), and one full-width blue action block. Dark mode is the black terminal via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Fonts fall back to the system mono and sans because mail clients do not load web fonts. Preview with `bun run email:preview` on port 3001.
+Transactional emails (`packages/emails`) are the Ledger in table form: paper ground, an ink-bordered card, the blue brand cell with the white mark and HUSHOS in mono caps, a two-column ledger of facts about the link (purpose, expiry, uses, "password sent: never"), and one full-width blue action block. Dark mode is the black terminal via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Fonts fall back to the system mono and sans because mail clients do not load web fonts. Templates are rendered once at build time (`bun run email:render`) and filled at send time; preview with `bun run email:preview` on port 3001.
 
 ## Accessibility
 

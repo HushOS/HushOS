@@ -8,6 +8,8 @@ export interface CryptoTransport {
         input: CryptoRequests[K],
     ): Promise<CryptoResults[K]>;
     lock(): void;
+    /* Called when the transport closes itself (worker error, unanswered call). */
+    onLock(listener: () => void): void;
 }
 
 export function createBrowserCryptoTransport(createWorker: () => Worker): CryptoTransport {
@@ -22,6 +24,7 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
             timer: ReturnType<typeof setTimeout>;
         }
     >();
+    const listeners = new Set<() => void>();
     function lock() {
         if (closed) return;
         closed = true;
@@ -31,6 +34,8 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
             task.reject(new Error('Your account was locked. Please try again.'));
         }
         pending.clear();
+        for (const listener of listeners) listener();
+        listeners.clear();
     }
     worker.onmessage = (event: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
         const task = pending.get(event.data.id);
@@ -43,6 +48,10 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
     worker.onerror = lock;
     return {
         lock,
+        onLock(listener) {
+            if (closed) listener();
+            else listeners.add(listener);
+        },
         request<K extends keyof CryptoRequests>(operation: K, input: CryptoRequests[K]) {
             if (closed) return Promise.reject(new Error('Your account is locked.'));
             const id = ++sequence;
