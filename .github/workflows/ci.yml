@@ -118,8 +118,6 @@ jobs:
                       org.opencontainers.image.source=https://github.com/${{ github.repository }}
                       org.opencontainers.image.revision=${{ github.sha }}
                       org.opencontainers.image.licenses=AGPL-3.0-only
-                  cache-from: type=gha,scope=${{ matrix.image }}
-                  cache-to: type=gha,mode=min,scope=${{ matrix.image }}
 
     deploy:
         name: Deploy production
