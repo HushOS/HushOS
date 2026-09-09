@@ -13,6 +13,7 @@ import {
     type RecoveryEnvelope,
 } from './recovery';
 import { rememberAccountKey, restoreAccountKey, type RememberedAccount } from './device';
+import { createWorkspaceGrant, type WorkspaceKeyEnvelope } from './workspace';
 import { client, ready } from '@serenity-kit/opaque';
 import { encryptKey, decryptKey } from './aead';
 import { encode, decode, wrappingKey, checkProfile } from './keys';
@@ -27,7 +28,12 @@ import {
 export type CryptoRequests = {
     securityStart: { password: string; newPassword?: string; action: SecurityAction };
     securityFinish: SecurityChallenge;
-    initialize: { userId: string; recovery: boolean; identity: boolean };
+    initialize: {
+        userId: string;
+        recovery: boolean;
+        identity: boolean;
+        workspace?: { id: string };
+    };
     remember: {
         deviceKey: CryptoKey;
         identity: Omit<RememberedAccount, 'nonce' | 'encryptedKey' | 'version'>;
@@ -52,7 +58,11 @@ export type CryptoRequests = {
 export type CryptoResults = {
     securityStart: { startLoginRequest: string; registrationRequest: string };
     securityFinish: SecurityUpdate;
-    initialize: { recovery?: RecoveryEnvelope; identity?: IdentityEnvelope };
+    initialize: {
+        recovery?: RecoveryEnvelope;
+        identity?: IdentityEnvelope;
+        workspace?: WorkspaceSetup;
+    };
     backup: { phrase: string };
     recoverFinish: {
         registrationRecord: string;
@@ -68,11 +78,14 @@ export type CryptoResults = {
         envelope: AccountKeyEnvelope;
         recovery: RecoveryEnvelope;
         identity: IdentityEnvelope;
+        workspace: WorkspaceSetup;
     };
     loginStart: { startLoginRequest: string };
     loginFinish: { finishLoginRequest: string };
     unlock: { userId: string };
 };
+/* A personal workspace chosen by the client: its id and the creator's grant. */
+export type WorkspaceSetup = { id: string; grant: WorkspaceKeyEnvelope };
 type Message = {
     [K in keyof CryptoRequests]: { id: number; operation: K; input: CryptoRequests[K] };
 }[keyof CryptoRequests];
@@ -136,6 +149,17 @@ export function createCryptoSession() {
                             : undefined,
                         identity: message.input.identity
                             ? await createIdentity(root, userId, keyVersion)
+                            : undefined,
+                        workspace: message.input.workspace
+                            ? {
+                                  id: message.input.workspace.id,
+                                  grant: await createWorkspaceGrant(
+                                      root,
+                                      userId,
+                                      message.input.workspace.id,
+                                      keyVersion,
+                                  ),
+                              }
                             : undefined,
                     };
                 } finally {
@@ -261,9 +285,19 @@ export function createCryptoSession() {
                                 recovered.signingKey,
                             ),
                         };
+                    const workspaceId = crypto.randomUUID();
                     return {
                         ...output,
                         identity: await createIdentity(root, message.input.userId),
+                        workspace: {
+                            id: workspaceId,
+                            grant: await createWorkspaceGrant(
+                                root,
+                                message.input.userId,
+                                workspaceId,
+                                keyVersion,
+                            ),
+                        },
                     };
                 } finally {
                     recovered?.signingKey.fill(0);

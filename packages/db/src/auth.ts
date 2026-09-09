@@ -1,6 +1,12 @@
 import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from './client';
-import { personalWorkspaces, workspaceStorage, storageEntitlements, workspaces } from './schema';
+import {
+    personalWorkspaces,
+    workspaceKeys,
+    workspaceStorage,
+    storageEntitlements,
+    workspaces,
+} from './schema';
 import {
     accountEnrollments,
     accountRecoveryKeys,
@@ -77,6 +83,7 @@ export async function registerAccount(input: {
     serverSetupId: string;
     identity: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
     recovery: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
+    workspace: WorkspaceGrantInput;
     envelope: Pick<
         typeof accountKeys.$inferInsert,
         'envelopeVersion' | 'wrappingSalt' | 'wrappingNonce' | 'encryptedKey'
@@ -110,12 +117,20 @@ export async function registerAccount(input: {
             .returning(userFields);
         if (!user) return { status: 'exists' as const };
 
-        const [workspace] = await tx.insert(workspaces).values({}).returning({ id: workspaces.id });
+        // The client chose the workspace id because its grant is bound to it.
+        const [workspace] = await tx
+            .insert(workspaces)
+            .values({ id: input.workspace.id })
+            .onConflictDoNothing()
+            .returning({ id: workspaces.id });
         if (!workspace) throw new Error('Could not create workspace.');
         await tx.insert(personalWorkspaces).values({ userId: user.id, workspaceId: workspace.id });
         await tx
             .insert(workspaceStorage)
             .values({ workspaceId: workspace.id, baseQuotaBytes: input.initialQuotaBytes });
+        await tx
+            .insert(workspaceKeys)
+            .values({ workspaceId: workspace.id, userId: user.id, ...input.workspace.grant });
         await tx.insert(opaqueCredentials).values({
             userId: user.id,
             registrationRecord: input.registrationRecord,
@@ -477,15 +492,29 @@ export async function getAccountSetup(userId: string) {
         .select({
             recovery: accountRecoveryKeys.userId,
             identity: accountIdentities.userId,
-            workspace: personalWorkspaces.userId,
+            workspace: personalWorkspaces.workspaceId,
+            workspaceKey: workspaceKeys.userId,
         })
         .from(users)
         .leftJoin(accountRecoveryKeys, eq(accountRecoveryKeys.userId, users.id))
         .leftJoin(accountIdentities, eq(accountIdentities.userId, users.id))
         .leftJoin(personalWorkspaces, eq(personalWorkspaces.userId, users.id))
+        .leftJoin(
+            workspaceKeys,
+            and(
+                eq(workspaceKeys.userId, users.id),
+                eq(workspaceKeys.workspaceId, personalWorkspaces.workspaceId),
+            ),
+        )
         .where(eq(users.id, userId));
     if (!row) return null;
-    return { recovery: !row.recovery, identity: !row.identity, workspace: !row.workspace };
+    return {
+        recovery: !row.recovery,
+        identity: !row.identity,
+        workspace: !row.workspace,
+        workspaceKey: !row.workspaceKey,
+        workspaceId: row.workspace ?? null,
+    };
 }
 
 // Existing accounts can add missing features, but can never overwrite permanent keys here.
@@ -496,13 +525,15 @@ export async function initializeAccount(input: {
     initialQuotaBytes: bigint;
     recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
     identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
+    workspace?: WorkspaceGrantInput;
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
-            .select({ id: users.id })
+            .select({ id: users.id, keyVersion: accountKeys.keyVersion })
             .from(users)
+            .innerJoin(accountKeys, eq(accountKeys.userId, users.id))
             .where(eq(users.id, input.userId))
-            .for('update');
+            .for('update', { of: users });
         if (!user) return false;
         const [session] = await tx
             .select({ id: sessions.id })
@@ -534,22 +565,34 @@ export async function initializeAccount(input: {
                 .values({ userId: user.id, ...input.identity })
                 .onConflictDoNothing();
         const [personal] = await tx
-            .select({ id: personalWorkspaces.userId })
+            .select({ workspaceId: personalWorkspaces.workspaceId })
             .from(personalWorkspaces)
             .where(eq(personalWorkspaces.userId, user.id));
-        if (!personal) {
+        let workspaceId = personal?.workspaceId;
+        if (!workspaceId) {
             const [workspace] = await tx
                 .insert(workspaces)
-                .values({})
+                .values(input.workspace ? { id: input.workspace.id } : {})
+                .onConflictDoNothing()
                 .returning({ id: workspaces.id });
             if (!workspace) throw new Error('Could not create workspace.');
-            await tx
-                .insert(personalWorkspaces)
-                .values({ userId: user.id, workspaceId: workspace.id });
+            workspaceId = workspace.id;
+            await tx.insert(personalWorkspaces).values({ userId: user.id, workspaceId });
             await tx
                 .insert(workspaceStorage)
-                .values({ workspaceId: workspace.id, baseQuotaBytes: input.initialQuotaBytes });
+                .values({ workspaceId, baseQuotaBytes: input.initialQuotaBytes });
         }
+        // A grant is bound to its workspace id and root revision; anything else waits for
+        // the next setup round, which reports the ids the client should use.
+        if (
+            input.workspace &&
+            input.workspace.id === workspaceId &&
+            input.workspace.grant.keyVersion === user.keyVersion
+        )
+            await tx
+                .insert(workspaceKeys)
+                .values({ workspaceId, userId: user.id, ...input.workspace.grant })
+                .onConflictDoNothing();
         return true;
     });
 }
@@ -565,8 +608,19 @@ export async function getSecurityBundles(userId: string) {
         .innerJoin(accountRecoveryKeys, eq(accountRecoveryKeys.userId, accountKeys.userId))
         .innerJoin(accountIdentities, eq(accountIdentities.userId, accountKeys.userId))
         .where(eq(accountKeys.userId, userId));
-    return bundles ?? null;
+    if (!bundles) return null;
+    const grants = await db
+        .select()
+        .from(workspaceKeys)
+        .where(eq(workspaceKeys.userId, userId))
+        .orderBy(workspaceKeys.workspaceId);
+    return { ...bundles, workspaces: grants };
 }
+
+export type WorkspaceGrantInput = {
+    id: string;
+    grant: Omit<typeof workspaceKeys.$inferInsert, 'userId' | 'workspaceId'>;
+};
 
 export async function changeAccountSecurity(input: {
     userId: string;
@@ -580,6 +634,7 @@ export async function changeAccountSecurity(input: {
     >;
     recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
     identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
+    workspaces?: WorkspaceGrantInput[];
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
@@ -637,24 +692,32 @@ export async function changeAccountSecurity(input: {
                 !input.identity.signingPublicKey.equals(current.identity.signingPublicKey)
             )
                 return false;
-            // Drive has no encrypted objects yet. Do not allow root replacement once
-            // stored data exists until its key rewrapping participates in this transaction.
-            const [storage] = await tx
-                .select({ storage: workspaceStorage })
-                .from(personalWorkspaces)
-                .innerJoin(
-                    workspaceStorage,
-                    eq(workspaceStorage.workspaceId, personalWorkspaces.workspaceId),
-                )
-                .where(eq(personalWorkspaces.userId, user.id))
+            // Every grant this member holds must follow the root, with its workspace key
+            // epoch unchanged; folder and file keys hang off the workspace key, not the root.
+            const grants = await tx
+                .select({
+                    workspaceId: workspaceKeys.workspaceId,
+                    workspaceKeyVersion: workspaceKeys.workspaceKeyVersion,
+                })
+                .from(workspaceKeys)
+                .where(eq(workspaceKeys.userId, user.id))
                 .for('update');
+            const replacements = new Map(input.workspaces?.map((w) => [w.id, w.grant]) ?? []);
             if (
-                !storage ||
-                storage.storage.usedBytes !== 0n ||
-                storage.storage.reservedBytes !== 0n
+                !input.workspaces ||
+                replacements.size !== input.workspaces.length ||
+                replacements.size !== grants.length ||
+                grants.some((grant) => {
+                    const next = replacements.get(grant.workspaceId);
+                    return (
+                        !next ||
+                        next.keyVersion !== input.envelope.keyVersion ||
+                        next.workspaceKeyVersion !== grant.workspaceKeyVersion
+                    );
+                })
             )
                 return false;
-        } else if (input.identity) return false;
+        } else if (input.identity || input.workspaces) return false;
         const version = input.credentialVersion + 1;
         await tx
             .update(opaqueCredentials)
@@ -674,6 +737,16 @@ export async function changeAccountSecurity(input: {
                 .update(accountIdentities)
                 .set(input.identity)
                 .where(eq(accountIdentities.userId, user.id));
+        for (const workspace of input.workspaces ?? [])
+            await tx
+                .update(workspaceKeys)
+                .set({ ...workspace.grant, updatedAt: new Date() })
+                .where(
+                    and(
+                        eq(workspaceKeys.userId, user.id),
+                        eq(workspaceKeys.workspaceId, workspace.id),
+                    ),
+                );
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
         await tx.delete(opaqueLoginAttempts).where(eq(opaqueLoginAttempts.userId, user.id));
         await tx.delete(accountRecoveryAttempts).where(eq(accountRecoveryAttempts.userId, user.id));

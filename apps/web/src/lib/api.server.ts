@@ -74,6 +74,20 @@ const identitySchema = t.Object({
     encryptedSigningSeed: t.String({ minLength: 64, maxLength: 64 }),
 });
 
+const workspaceIdSchema = t.String({
+    pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+});
+const workspaceKeySchema = t.Object({
+    version: t.Literal(1),
+    workspaceId: workspaceIdSchema,
+    keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
+    workspaceKeyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
+    wrappingSalt: tokenSchema,
+    wrappingNonce: t.String({ minLength: 32, maxLength: 32 }),
+    encryptedKey: t.String({ minLength: 64, maxLength: 64 }),
+});
+const workspaceSetupSchema = t.Object({ id: workspaceIdSchema, grant: workspaceKeySchema });
+
 const securityActionSchema = t.Union([
     t.Literal('password'),
     t.Literal('master-key'),
@@ -97,6 +111,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
             body: t.Object({
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
+                workspace: t.Optional(workspaceSetupSchema),
             }),
         },
         ({ request, body }) => auth.initializeAccount(request, body),
@@ -130,6 +145,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 envelope: envelopeSchema,
                 recovery: recoverySchema,
                 identity: identitySchema,
+                workspace: workspaceSetupSchema,
             }),
         },
         async ({ request, body, set }) => {
@@ -225,6 +241,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 envelope: envelopeSchema,
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
+                workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
         },
         async ({ request, body, set }) => {

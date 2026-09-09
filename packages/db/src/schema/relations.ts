@@ -2,8 +2,9 @@ import { defineRelations } from 'drizzle-orm';
 import * as auth from './auth';
 import * as storage from './storage';
 import { workspaces } from './workspaces';
+import { workspaceKeys } from './workspace-keys';
 
-const schema = { ...auth, ...storage, workspaces };
+const schema = { ...auth, ...storage, workspaces, workspaceKeys };
 
 export const relations = defineRelations(schema, (r) => ({
     workspaces: {
@@ -19,6 +20,15 @@ export const relations = defineRelations(schema, (r) => ({
             from: r.workspaces.id,
             to: r.storageEntitlements.workspaceId,
         }),
+        keys: r.many.workspaceKeys({ from: r.workspaces.id, to: r.workspaceKeys.workspaceId }),
+    },
+    workspaceKeys: {
+        workspace: r.one.workspaces({
+            from: r.workspaceKeys.workspaceId,
+            to: r.workspaces.id,
+            optional: false,
+        }),
+        user: r.one.users({ from: r.workspaceKeys.userId, to: r.users.id, optional: false }),
     },
     personalWorkspaces: {
         user: r.one.users({ from: r.personalWorkspaces.userId, to: r.users.id, optional: false }),
@@ -70,6 +80,7 @@ export const relations = defineRelations(schema, (r) => ({
             to: r.accountRecoveryKeys.userId,
         }),
         identity: r.one.accountIdentities({ from: r.users.id, to: r.accountIdentities.userId }),
+        workspaceKeys: r.many.workspaceKeys({ from: r.users.id, to: r.workspaceKeys.userId }),
         credential: r.one.opaqueCredentials({ from: r.users.id, to: r.opaqueCredentials.userId }),
         accountKey: r.one.accountKeys({ from: r.users.id, to: r.accountKeys.userId }),
         sessions: r.many.sessions({ from: r.users.id, to: r.sessions.userId }),

@@ -1,4 +1,9 @@
-import type { SecurityAction, SecurityChallenge, SecurityUpdate } from '@hushos/crypto';
+import type {
+    SecurityAction,
+    SecurityChallenge,
+    SecurityUpdate,
+    WorkspaceKeyEnvelope,
+} from '@hushos/crypto';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import {
     verifyRecoveryReset,
@@ -203,6 +208,7 @@ export async function finishRegistration(
         envelope: AccountKeyEnvelope;
         recovery: RecoveryEnvelope;
         identity: IdentityEnvelope;
+        workspace: { id: string; grant: WorkspaceKeyEnvelope };
     },
 ) {
     const token = readToken(request, 'enrollment');
@@ -236,6 +242,7 @@ export async function finishRegistration(
         enrollmentTokenHash: hash(token),
         recovery: decodeRecovery(input.recovery, 1),
         identity: decodeIdentity(input.identity),
+        workspace: decodeWorkspaceGrant(input.workspace, 1),
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
         name,
         registrationRecord: input.registrationRecord,
@@ -540,6 +547,52 @@ export async function getStorageAllowance(request: Request) {
     return { storage: await authRepository.getStorageAllowance(user.id) };
 }
 
+const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function decodeWorkspaceGrant(
+    input: { id: string; grant: WorkspaceKeyEnvelope },
+    keyVersion?: number,
+    workspaceKeyVersion?: number,
+) {
+    const grant = input.grant;
+    if (
+        grant.version !== 1 ||
+        !WORKSPACE_ID_PATTERN.test(input.id) ||
+        grant.workspaceId !== input.id ||
+        !Number.isSafeInteger(grant.keyVersion) ||
+        grant.keyVersion < 1 ||
+        (keyVersion !== undefined && grant.keyVersion !== keyVersion) ||
+        !Number.isSafeInteger(grant.workspaceKeyVersion) ||
+        grant.workspaceKeyVersion < 1 ||
+        (workspaceKeyVersion !== undefined && grant.workspaceKeyVersion !== workspaceKeyVersion)
+    )
+        throw new AuthError('Unsupported workspace key envelope.');
+    return {
+        id: input.id,
+        grant: {
+            version: 1 as const,
+            keyVersion: grant.keyVersion,
+            workspaceKeyVersion: grant.workspaceKeyVersion,
+            wrappingSalt: decodeField(grant.wrappingSalt, 32),
+            wrappingNonce: decodeField(grant.wrappingNonce, 24),
+            encryptedKey: decodeField(grant.encryptedKey, 48),
+        },
+    };
+}
+function encodeWorkspaceGrant(
+    grant: NonNullable<
+        Awaited<ReturnType<typeof authRepository.getSecurityBundles>>
+    >['workspaces'][number],
+): WorkspaceKeyEnvelope {
+    return {
+        version: 1,
+        workspaceId: grant.workspaceId,
+        keyVersion: grant.keyVersion,
+        workspaceKeyVersion: grant.workspaceKeyVersion,
+        wrappingSalt: grant.wrappingSalt.toString('base64url'),
+        wrappingNonce: grant.wrappingNonce.toString('base64url'),
+        encryptedKey: grant.encryptedKey.toString('base64url'),
+    };
+}
 function decodeIdentity(input: IdentityEnvelope, keyVersion = 1) {
     if (input.version !== 1 || input.keyVersion !== keyVersion)
         throw new AuthError('Unsupported identity key version.');
@@ -615,7 +668,11 @@ export async function getAccountSetup(request: Request) {
 
 export async function initializeAccount(
     request: Request,
-    input: { recovery?: RecoveryEnvelope; identity?: IdentityEnvelope },
+    input: {
+        recovery?: RecoveryEnvelope;
+        identity?: IdentityEnvelope;
+        workspace?: { id: string; grant: WorkspaceKeyEnvelope };
+    },
 ) {
     const user = await getSessionUser(request);
     const token = readToken(request, 'session');
@@ -627,6 +684,9 @@ export async function initializeAccount(
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
         recovery: input.recovery ? decodeRecovery(input.recovery, 1) : undefined,
         identity: input.identity ? decodeIdentity(input.identity) : undefined,
+        workspace: input.workspace
+            ? decodeWorkspaceGrant(input.workspace, undefined, 1)
+            : undefined,
     });
     if (!initialized) throw new AuthError('Sign in to finish account setup.', 401);
     return { ok: true };
@@ -646,14 +706,6 @@ export async function startSecurityChange(
     const bundles = await authRepository.getSecurityBundles(user.id);
     if (!bundles || bundles.envelope.credentialVersion !== user.credentialVersion)
         throw new AuthError('Unlock your account and finish recovery setup first.', 409);
-    if (input.action === 'master-key') {
-        const storage = await authRepository.getStorageAllowance(user.id);
-        if (!storage || storage.usedBytes !== '0' || storage.reservedBytes !== '0')
-            throw new AuthError(
-                'Master-key rotation is not available for accounts with stored data yet.',
-                409,
-            );
-    }
     const challenge = await startLogin(user.email, input.startLoginRequest, {
         purpose: input.action,
         sessionTokenHash: hash(token),
@@ -684,6 +736,7 @@ export async function startSecurityChange(
             encryptedKey: e.encryptedKey.toString('base64url'),
         },
         recovery: encodeRecovery(bundles.recovery),
+        workspaces: bundles.workspaces.map(encodeWorkspaceGrant),
         identity: {
             version: 1,
             keyVersion: i.keyVersion,
@@ -745,7 +798,8 @@ export async function finishSecurityChange(
         input.envelope.keyVersion !== keyVersion ||
         input.envelope.credentialVersion !== user.credentialVersion + 1 ||
         (input.action === 'password' ? input.recovery !== undefined : !input.recovery) ||
-        (input.action === 'master-key' ? !input.identity : input.identity !== undefined)
+        (input.action === 'master-key' ? !input.identity : input.identity !== undefined) ||
+        (input.action === 'master-key' ? !input.workspaces : input.workspaces !== undefined)
     )
         throw failure();
     const changed = await authRepository.changeAccountSecurity({
@@ -764,6 +818,9 @@ export async function finishSecurityChange(
             ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
             : undefined,
         identity: input.identity ? decodeIdentity(input.identity, keyVersion) : undefined,
+        workspaces: input.workspaces?.map((grant) =>
+            decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
+        ),
     });
     if (!changed) throw failure();
     return { success: true };

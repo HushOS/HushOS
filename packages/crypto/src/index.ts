@@ -11,3 +11,4 @@ export {
 } from './device';
 
 export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './security';
+export { WORKSPACE_ID_PATTERN, type WorkspaceKeyEnvelope } from './workspace';

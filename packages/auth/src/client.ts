@@ -139,11 +139,29 @@ export function createAuthClient(
         const setupEpoch = epoch;
         initializing = (async () => {
             const { missing } = await request<{
-                missing: { recovery: boolean; identity: boolean; workspace: boolean } | null;
+                missing: {
+                    recovery: boolean;
+                    identity: boolean;
+                    workspace: boolean;
+                    workspaceKey: boolean;
+                    workspaceId: string | null;
+                } | null;
             }>('setup');
-            if (!missing || !Object.values(missing).some(Boolean)) return false;
+            if (
+                !missing ||
+                !(missing.recovery || missing.identity || missing.workspace || missing.workspaceKey)
+            )
+                return false;
             if (epoch !== setupEpoch) throw new Error('Your account was locked.');
-            const bundles = await rpc('initialize', { userId: user.id, ...missing });
+            const bundles = await rpc('initialize', {
+                userId: user.id,
+                recovery: missing.recovery,
+                identity: missing.identity,
+                workspace:
+                    missing.workspace || missing.workspaceKey
+                        ? { id: missing.workspaceId ?? crypto.randomUUID() }
+                        : undefined,
+            });
             if (epoch !== setupEpoch) throw new Error('Your account was locked.');
             await request('setup', bundles);
             return missing.recovery;

@@ -1,6 +1,6 @@
 ---
 title: Security model
-updated: 2026-09-08
+updated: 2026-09-09
 summary: How HushOS authenticates you and derives your keys, written so you can check each claim against the code. This page covers accounts; Drive and file encryption will be added here when they ship.
 ---
 
@@ -8,7 +8,7 @@ import { Ledger, Note } from '../components/mdx';
 
 ## Scope
 
-This page describes what is implemented. It covers sign-in, password changes, account and recovery-key rotation, identity keys, recovery, and remembered browser unlock. The byte-level protocol lives in the `@hushos/crypto` package and is specified in `docs/opaque-auth-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
+This page describes what is implemented. It covers sign-in, password changes, account and recovery-key rotation, identity keys, the workspace key, recovery, and remembered browser unlock. The byte-level protocol lives in the `@hushos/crypto` package and is specified in `docs/opaque-auth-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
 
 ## Sign-in without sending a password
 
@@ -45,6 +45,24 @@ Every envelope carries associated data that names its purpose, version, and owne
 
 At signup the browser also generates an X25519 key pair for encryption and an Ed25519 key pair for signatures. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. These identities prepare for recipient key exchange and signatures; they are not a sharing protocol on their own.
 
+## The workspace key
+
+Every account starts with a personal workspace, and every workspace has its own 32-byte key, generated in your browser. It is random, not derived from your account key, so it can be granted to another person later without giving them anything of yours. What you hold is a **grant**: the workspace key wrapped under a key derived from your account key.
+
+<Ledger
+    rows={[
+        ['Workspace key', '32 random bytes, created on your device when the workspace is'],
+        ['Grant wrap', 'HKDF-SHA-256 over the account key, then XChaCha20-Poly1305'],
+        [
+            'Bound to',
+            'Your account ID, the workspace ID, your root revision, and the workspace key revision',
+        ],
+        ['Server stores', 'One grant per member per workspace, never the key'],
+    ]}
+/>
+
+Folder and file keys will hang off the workspace key, not off your account key. That is what keeps rotation cheap: replacing your account key rewraps one grant per workspace you belong to, and nothing beneath it moves.
+
 ## Recovery
 
 A 32-byte recovery secret is generated on your device and displayed as 24 English BIP39 words. It wraps the same account key, so recovering with the phrase preserves everything the key protects. A backup of the secret is stored encrypted by the account key, which is how the phrase can be shown again while your device is unlocked.
@@ -75,14 +93,14 @@ Resetting a password requires a verified email link and the phrase. The browser 
         ],
         [
             'Rotate master key',
-            'Generates a new master key and recovery phrase; rewraps the existing identity keys and preserves the password',
+            'Generates a new master key and recovery phrase; rewraps the existing identity keys and every workspace grant, and preserves the password',
         ],
     ]}
 />
 
 The server replaces the affected records in one transaction and rejects stale concurrent changes. Each action revokes existing sessions and pending recovery attempts. Your browser then signs in again and saves a fresh device-unlock bundle. If that sign-in fails, the sign-in page confirms the change and explains which password to use. After either rotation, save and confirm the new recovery phrase before continuing into the app.
 
-Master-key rotation currently supports accounts with no used or reserved storage. Drive storage is not implemented; future file and workspace-key envelopes must be included in rotation before accounts with stored data can use it. Rotating a master key cannot erase old ciphertext, or revoke private identity keys someone already extracted from an older key bundle.
+Master-key rotation rewraps every workspace grant you hold in the same transaction, so the workspace keys, and everything that will hang off them, stay unchanged. Rotating a master key cannot erase old ciphertext, or revoke private identity keys someone already extracted from an older key bundle.
 
 ## Remembered browser unlock
 
@@ -106,4 +124,4 @@ The plaintext account key lives only inside a Web Worker. To let a browser reope
 
 ## What comes next
 
-Drive will apply the same shape to files: keys created on your device, content encrypted before it leaves, and envelopes bound to their owner and version. When it ships, this page will document the file and folder key hierarchy in the same detail. Until then, treat anything not on this page as not implemented.
+Drive will apply the same shape to files: folder and file keys created on your device and wrapped under the workspace key, content encrypted before it leaves, and envelopes bound to their owner and version. When it ships, this page will document the folder and file key hierarchy in the same detail. Until then, treat anything not on this page as not implemented.

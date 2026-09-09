@@ -1,6 +1,6 @@
 # Authentication, account keys, and recovery
 
-Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, authenticated password changes, master/recovery-key rotation, stable account identity keys, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, billing checkout, and cryptographic suite migrations remain future work.
+Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, authenticated password changes, master/recovery-key rotation, stable account identity keys, the personal workspace key and its grant, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, billing checkout, and cryptographic suite migrations remain future work.
 
 ## Key hierarchy
 
@@ -15,11 +15,12 @@ flowchart TD
     A --> X[Wrapped X25519 private key]
     A --> S[Wrapped Ed25519 signing seed]
     A --> B[Wrapped recovery-secret backup]
-    A -. Future grants .-> K[Independent workspace keys]
+    A --> G[Workspace grant: wrapped workspace key]
+    G --> K[Independent random workspace key]
     K -. Future Drive .-> F[Folder and file keys]
 ```
 
-Each future workspace key must be independent of the owner's account key, including personal workspaces. Grant a member access to that workspace, never to another person's account root. Workspace keys must be able to outlive their creator's membership. Current workspace records provision ownership and quota, not an encrypted Drive root or member grants.
+Every workspace key is independent of the owner's account key, including personal workspaces. A member holds a **grant**: the workspace key wrapped under a key derived from that member's account root. Grant a member access to that workspace, never to another person's account root. Workspace keys can outlive their creator's membership because they are random, not derived. Folder and file keys will hang off the workspace key, so rotating an account root rewraps one grant per workspace and nothing beneath it.
 
 The stable X25519 and Ed25519 identities prepare for recipient key exchange and signatures. They do not constitute a sharing protocol. Sharing still needs authenticated recipient-key verification, membership and key epochs. Chat additionally needs device identities, prekeys/session establishment, replay protection, and forward-secret session keys. Never use one static account encryption key directly for all chat messages. Removed recipients cannot be made to forget keys or plaintext already obtained.
 
@@ -56,6 +57,24 @@ encryptedKey = XChaCha20-Poly1305-IETF(accountKey, wrappingKey, nonce, aad)
 Use the full decoded export key, not its Base64 text or a truncated prefix. The password envelope stores its suite, root version, credential revision, salt (32 bytes), nonce (24 bytes), and ciphertext (48 bytes). Generate new salt and nonce on replacement.
 
 OPAQUE's export key is client-only; its separate session key is shared with the server and must never encrypt the account root or content. Export-key stability applies to repeated logins of the same registration, not fresh registration or a password change. [Serenity interface](https://opaque-auth.com/docs), [HKDF specification](https://datatracker.ietf.org/doc/html/rfc5869#section-3), [XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction).
+
+## Workspace key and grant
+
+The client generates the personal workspace's UUID and a random 32-byte workspace key at registration, because the grant is bound to the workspace id. The server inserts the workspace under that id and refuses a collision.
+
+```text
+workspaceKey = random(32)
+salt = random(32)
+nonce = random(24)
+wrappingKey = HKDF-SHA-256(accountKey, salt, UTF8("hushos/workspace/grant-wrap/v1"), 32)
+aad = UTF8(JSON.stringify([
+    "hushos/workspace/grant", 1,
+    lowercase(userId), lowercase(workspaceId), keyVersion, workspaceKeyVersion
+]))
+encryptedKey = XChaCha20-Poly1305-IETF(workspaceKey, wrappingKey, nonce, aad)
+```
+
+`workspace_keys` holds one row per member per workspace: suite, the member's root revision (`key_version`), the workspace key epoch (`workspace_key_version`, starting at 1), salt, nonce, and 48-byte ciphertext. Password change and password recovery leave grants untouched because the root is unchanged. Master-key rotation opens every grant with the old root and rewraps it under the new root with fresh salt and nonce and the new root revision; the workspace key epoch stays the same, and the server requires every existing grant to be replaced with a matching epoch in the rotation transaction. Changing a workspace key (a future member removal) increments its epoch and rewraps that workspace's root folder key and the remaining members' grants, never the account roots.
 
 ## Stable account identity
 
@@ -128,7 +147,7 @@ Signup progresses through `/register`, `/register/check-email`, `/register/compl
 
 Email addresses must be a single bare mailbox, without display names, comments, or address lists. They are trimmed and lowercased consistently for lookup, rate limiting, and delivery, without provider-specific alias rules. Recovery email delivery and verified recovery attempts have separate rate-limit budgets. Display names use NFC and 1–100 Unicode code points. These are server-readable metadata, not encryption identifiers. The immutable account UUID is the OPAQUE identifier.
 
-Email enrollment lasts 30 minutes. A random 32-byte verification token is stored only as SHA-256 and sent in a URL fragment; it never enters an HTTP path. Verification atomically consumes it and issues a different random hashed enrollment token in an HttpOnly cookie. Registration inserts the user, credential, password/recovery/identity bundles, personal workspace, and base quota in one transaction, then consumes enrollment. Existing users cannot be reinitialized by signup.
+Email enrollment lasts 30 minutes. A random 32-byte verification token is stored only as SHA-256 and sent in a URL fragment; it never enters an HTTP path. Verification atomically consumes it and issues a different random hashed enrollment token in an HttpOnly cookie. Registration inserts the user, credential, password/recovery/identity bundles, personal workspace, its workspace grant, and base quota in one transaction, then consumes enrollment. Existing users cannot be reinitialized by signup.
 
 Login attempts last five minutes, use random 32-byte handles stored as hashes, and are consumed even for a bad finish. Unknown emails use OPAQUE decoy records. After OPAQUE verification, the server locks the user, checks the credential revision and matching envelope, and creates a seven-day session with a fresh independent 32-byte token. Only its SHA-256 hash is stored in PostgreSQL. Reauthentication replaces the current browser session. Requests join the session to the current credential revision; revocation takes effect on subsequent requests.
 
@@ -181,10 +200,10 @@ Account settings expose three operations, each authorized by a fresh OPAQUE exch
 
 - **Password change:** use the new password for registration, preserve the root, recovery envelopes, and identity envelopes, and increment the credential revision.
 - **Recovery-key rotation:** register again with the same password, preserve the root and identity envelopes, generate a new recovery secret and authorization key, and increment both recovery and credential revisions.
-- **Master-key rotation:** register again with the same password, generate a new random 32-byte root, increment the root and credential revisions, rewrap both existing identity private keys under the new root, and generate a new recovery secret with an incremented recovery revision. The worker verifies that decrypted identity private keys reconstruct the stored public keys. The server also requires unchanged identity public keys.
+- **Master-key rotation:** register again with the same password, generate a new random 32-byte root, increment the root and credential revisions, rewrap both existing identity private keys and every workspace grant under the new root, and generate a new recovery secret with an incremented recovery revision. The worker verifies that decrypted identity private keys reconstruct the stored public keys. The server also requires unchanged identity public keys and a replacement for every grant the member holds, with unchanged workspace key epochs.
 
 `keyVersion` is the root revision, beginning at 1; it is not the envelope suite. Recovery and identity associated data now use that revision in the position previously fixed at 1, retaining byte-for-byte compatibility for existing accounts. Password recovery after rotation preserves the current root revision. Remembered-device bundles also bind that revision.
 
 `/api/auth/security/finish` consumes the attempt before OPAQUE verification. The database transaction locks the user and rechecks the live session, credential revision, root revision, recovery revision, and operation-specific replacement fields. It replaces all affected records together, revokes every session and outstanding login/recovery attempt, and invalidates pending email-recovery enrollments. A stale concurrent operation cannot overwrite the winning transaction. The browser clears remembered access across tabs and signs in again to establish a fresh session and device envelope. If automatic sign-in fails after the change commits, the UI takes the user to sign-in. Both rotation actions then lead to `/setup/recovery-key` to save and confirm the new phrase.
 
-Master-key rotation currently covers the password envelope, recovery envelopes, and identity envelopes: Drive object storage does not exist yet. The transaction refuses root rotation when the personal workspace reports used or reserved storage. Future encrypted object/workspace-key envelopes must participate in the rotation before that restriction can be lifted. Rotation cannot erase previously copied ciphertext or revoke identity private keys already extracted from an older root and bundle.
+Master-key rotation covers the password envelope, recovery envelopes, identity envelopes, and workspace grants. Because folder and file keys will hang off workspace keys rather than the root, future Drive envelopes do not need to join this transaction. Rotation cannot erase previously copied ciphertext or revoke identity private keys already extracted from an older root and bundle.

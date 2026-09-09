@@ -9,6 +9,7 @@ import {
 } from './protocol';
 import { rewrapIdentity, type IdentityEnvelope } from './identity';
 import { createRecovery, type RecoveryEnvelope } from './recovery';
+import { rewrapWorkspaceGrant, type WorkspaceKeyEnvelope } from './workspace';
 
 export type SecurityAction = 'password' | 'master-key' | 'recovery-key';
 export type SecurityChallenge = {
@@ -21,6 +22,7 @@ export type SecurityChallenge = {
     envelope: AccountKeyEnvelope;
     recovery: RecoveryEnvelope;
     identity: IdentityEnvelope;
+    workspaces: WorkspaceKeyEnvelope[];
 };
 export type SecurityUpdate = {
     finishLoginRequest: string;
@@ -28,6 +30,7 @@ export type SecurityUpdate = {
     envelope: AccountKeyEnvelope;
     recovery?: RecoveryEnvelope;
     identity?: IdentityEnvelope;
+    workspaces?: WorkspaceKeyEnvelope[];
 };
 
 // A single short-lived exchange proves the current password and prepares replacement
@@ -88,7 +91,8 @@ export function createSecurityChange() {
                 old.keyVersion >= 2147483646 ||
                 old.credentialVersion >= 2147483646 ||
                 input.recovery.keyVersion !== old.keyVersion ||
-                input.identity.keyVersion !== old.keyVersion
+                input.identity.keyVersion !== old.keyVersion ||
+                input.workspaces.some((grant) => grant.keyVersion !== old.keyVersion)
             )
                 throw new Error('Unsupported account-key envelope.');
             const login = client.finishLogin({
@@ -161,6 +165,21 @@ export function createSecurityChange() {
                               input.userId,
                               input.identity,
                               keyVersion,
+                          )
+                        : undefined,
+                // Every workspace grant follows the root; the workspace keys themselves stay put.
+                workspaces:
+                    input.action === 'master-key'
+                        ? await Promise.all(
+                              input.workspaces.map((grant) =>
+                                  rewrapWorkspaceGrant(
+                                      root,
+                                      nextRoot,
+                                      input.userId,
+                                      grant,
+                                      keyVersion,
+                                  ),
+                              ),
                           )
                         : undefined,
             };
