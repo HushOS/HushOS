@@ -1,0 +1,62 @@
+CONTRIBUTING.md
+  s_8ff38914bac5ae::t_0ec5cf051cd076 39,97,101
+apps/web/src/content/blog/why-your-password-never-leaves-your-device.mdx
+  s_8ff38914bac5ae::t_0ec5cf051cd076 35
+packages/db/drizzle/20260909171407_old_cardiac/snapshot.json
+  s_8ff38914bac5ae::t_0ec5cf051cd076 2-2254,2256-2258
+  s_8ff38914bac5ae::t_7b0c9d4763c0be 1,2255
+packages/crypto/src/index.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 14
+apps/web/src/lib/api.server.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 77-90,114,148,244
+packages/db/src/schema/workspace-keys.ts
+  s_8ff38914bac5ae::t_073d3bf38781bb 2-11
+  s_8ff38914bac5ae::t_5ad4a9ff5b31c9 1,12-50
+packages/db/src/schema/index.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 3
+docs/opaque-auth-design.md
+  s_8ff38914bac5ae::t_0ec5cf051cd076 3,18-19,23,61-78,150,203,209
+README.md
+  s_8ff38914bac5ae::t_0ec5cf051cd076 90,94
+packages/crypto/src/workspace.ts
+  s_8ff38914bac5ae::t_afe63e3f37b30a 1-166
+packages/db/src/schema/relations.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 5,7,23-31,83
+packages/crypto/src/session.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 16,31-36,61-65,81,87-88,153-163,288,292-300
+packages/auth/src/client.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 142-148,150-154,156-164
+apps/web/src/content/security.mdx
+  s_8ff38914bac5ae::t_0ec5cf051cd076 3,11,48-65,96,103,127
+packages/db/drizzle/20260909171407_old_cardiac/migration.sql
+  s_8ff38914bac5ae::t_7b0c9d4763c0be 1-19
+packages/crypto/src/security.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 12,25,33,94-95,170-182
+  s_8ff38914bac5ae::t_658bdef12e7fc0 183-184
+packages/auth/src/server.ts
+  s_8ff38914bac5ae::t_073d3bf38781bb 582-584,687-689
+  s_8ff38914bac5ae::t_dc755b6f80ea19 1-6,211,245,550-581,585-595,671-675,739,801-802,821-823
+packages/db/src/schema/auth.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 14
+apps/web/src/routes/llms[.]txt.ts
+  s_8ff38914bac5ae::t_0ec5cf051cd076 18
+packages/db/src/auth.ts
+  s_8ff38914bac5ae::t_dc755b6f80ea19 4-9,86,120-125,131-133,495-496,502-508,511-517,528,532,534,536,568,571-572,575-576,579-580,583,585-595,611-617,620-624,637,695-703,705,707-717,720,740-749
+  s_8ff38914bac5ae::t_43bf1062b6cba8 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "7dd1f8718e1542e71c3409f3ab4ec26bdcf75e5e",
+  "prompts": {},
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
