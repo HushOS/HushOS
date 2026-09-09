@@ -1,4 +1,9 @@
-import { createCryptoSession, type CryptoRequests, type CryptoResults } from '@hushos/crypto';
+import {
+    createCryptoSession,
+    CryptoError,
+    type CryptoRequests,
+    type CryptoResults,
+} from '@hushos/crypto';
 
 export type WorkerRequests = CryptoRequests;
 export type WorkerResults = CryptoResults;
@@ -11,7 +16,10 @@ self.onmessage = async (event: MessageEvent<Message>) => {
         session.reset();
         self.postMessage({
             id: event.data.id,
-            error: error instanceof Error ? error.message : 'Could not unlock your account.',
+            error:
+                error instanceof CryptoError
+                    ? error.message
+                    : 'Something went wrong on this device. Please try again.',
         });
     }
 };

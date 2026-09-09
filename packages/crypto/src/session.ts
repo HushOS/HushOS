@@ -1,3 +1,5 @@
+import { CryptoError } from './errors';
+import { checkPassword } from './password';
 import {
     createSecurityChange,
     type SecurityAction,
@@ -122,7 +124,8 @@ export function createCryptoSession() {
         pending.clear();
     }
     function checkGeneration(expected: number) {
-        if (expected !== generation) throw new Error('Your account was locked. Please try again.');
+        if (expected !== generation)
+            throw new CryptoError('Your account was locked. Please try again.');
     }
     async function execute(
         message: Message,
@@ -138,7 +141,7 @@ export function createCryptoSession() {
                 return security.finish(message.input);
             case 'initialize': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
-                    throw new Error('Unlock your account to finish setup.');
+                    throw new CryptoError('Unlock your account to finish setup.');
                 const root = accountKey.slice();
                 const userId = unlockedUserId;
                 const keyVersion = accountKeyVersion;
@@ -168,7 +171,7 @@ export function createCryptoSession() {
             }
             case 'backup': {
                 if (!accountKey || unlockedUserId !== message.input.userId)
-                    throw new Error('Unlock your account to view your recovery key.');
+                    throw new CryptoError('Unlock your account to view your recovery key.');
                 const root = accountKey.slice();
                 try {
                     return {
@@ -184,7 +187,7 @@ export function createCryptoSession() {
             }
             case 'remember': {
                 if (!accountKey || unlockedUserId !== message.input.identity.userId)
-                    throw new Error('Unlock your account before saving it on this device.');
+                    throw new CryptoError('Unlock your account before saving it on this device.');
                 const root = accountKey.slice();
                 try {
                     return await rememberAccountKey(
@@ -211,7 +214,7 @@ export function createCryptoSession() {
 
             case 'registerStart': {
                 clearState();
-                password = message.input.password;
+                password = checkPassword(message.input.password);
                 const result = client.startRegistration({ password });
                 state = result.clientRegistrationState;
                 phase = 'register';
@@ -221,7 +224,7 @@ export function createCryptoSession() {
             case 'registerFinish': {
                 checkProfile(message.input.profileVersion);
                 if (phase !== 'register')
-                    throw new Error('Registration expired. Please try again.');
+                    throw new CryptoError('Registration expired. Please try again.');
                 const result = client.finishRegistration({
                     password,
                     clientRegistrationState: state,
@@ -264,7 +267,7 @@ export function createCryptoSession() {
                         recovery,
                         registrationRecord: result.registrationRecord,
                         envelope: {
-                            envelopeVersion: ENVELOPE_VERSION,
+                            envelopeVersion: ENVELOPE_VERSION as typeof ENVELOPE_VERSION,
                             keyVersion,
                             credentialVersion,
                             wrappingSalt: encode(salt),
@@ -316,7 +319,7 @@ export function createCryptoSession() {
             }
             case 'loginFinish': {
                 checkProfile(message.input.profileVersion);
-                if (phase !== 'login') throw new Error('Sign-in expired. Please try again.');
+                if (phase !== 'login') throw new CryptoError('Sign-in expired. Please try again.');
                 const result = client.finishLogin({
                     password,
                     clientLoginState: state,
@@ -326,13 +329,15 @@ export function createCryptoSession() {
                 });
                 password = '';
                 state = '';
-                if (!result) throw new Error('Unable to sign in. Check your email and password.');
+                if (!result)
+                    throw new CryptoError('Unable to sign in. Check your email and password.');
                 exportKey = result.exportKey;
                 phase = 'unlock';
                 return { finishLoginRequest: result.finishLoginRequest };
             }
             case 'unlock': {
-                if (phase !== 'unlock') throw new Error('Sign in again to unlock your account.');
+                if (phase !== 'unlock')
+                    throw new CryptoError('Sign in again to unlock your account.');
                 const { userId, envelope } = message.input;
                 if (
                     envelope.envelopeVersion !== ENVELOPE_VERSION ||
@@ -341,7 +346,7 @@ export function createCryptoSession() {
                     !Number.isSafeInteger(envelope.credentialVersion) ||
                     envelope.credentialVersion < 1
                 )
-                    throw new Error('This account-key version is not supported.');
+                    throw new CryptoError('This account-key version is not supported.');
                 const key = await wrappingKey(exportKey, decode(envelope.wrappingSalt, 32));
                 exportKey = '';
                 phase = 'idle';
@@ -355,7 +360,7 @@ export function createCryptoSession() {
                     if (expected !== generation || root.length !== 32) {
                         root.fill(0);
                         checkGeneration(expected);
-                        throw new Error('Invalid account key.');
+                        throw new CryptoError('Invalid account key.');
                     }
                     accountKey = root;
                     unlockedUserId = userId;

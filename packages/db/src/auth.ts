@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
@@ -22,6 +22,8 @@ import {
 } from './schema';
 
 const userFields = { id: users.id, name: users.name, email: users.email };
+// For writers that touch enrollments by email; never returned to a client.
+const userFieldsWithEmailKey = { ...userFields, normalizedEmail: users.normalizedEmail };
 
 export async function createEnrollment(input: typeof accountEnrollments.$inferInsert) {
     await db.insert(accountEnrollments).values(input);
@@ -144,6 +146,28 @@ export async function registerAccount(input: {
         await tx.delete(accountEnrollments).where(eq(accountEnrollments.id, enrollment.id));
         return { status: 'created' as const, user };
     });
+}
+
+export async function getAccountKeyVersion(userId: string) {
+    const [row] = await db
+        .select({ keyVersion: accountKeys.keyVersion })
+        .from(accountKeys)
+        .where(eq(accountKeys.userId, userId));
+    return row?.keyVersion ?? null;
+}
+
+export async function hasCredentialsOutside(profileVersion: number, serverSetupId: string) {
+    const [row] = await db
+        .select({ userId: opaqueCredentials.userId })
+        .from(opaqueCredentials)
+        .where(
+            or(
+                ne(opaqueCredentials.profileVersion, profileVersion),
+                ne(opaqueCredentials.serverSetupId, serverSetupId),
+            ),
+        )
+        .limit(1);
+    return row !== undefined;
 }
 
 export async function findCredential(normalizedEmail: string) {
@@ -386,12 +410,13 @@ export async function resetAccountPassword(input: {
     recovery: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
 }) {
     return db.transaction(async (tx) => {
-        const [user] = await tx
-            .select(userFields)
+        const [row] = await tx
+            .select(userFieldsWithEmailKey)
             .from(users)
             .where(eq(users.id, input.userId))
             .for('update');
-        if (!user) return null;
+        if (!row) return null;
+        const { normalizedEmail, ...user } = row;
         const [enrollment] = await tx
             .select()
             .from(accountEnrollments)
@@ -400,7 +425,7 @@ export async function resetAccountPassword(input: {
                     eq(accountEnrollments.id, input.enrollmentId),
                     eq(accountEnrollments.enrollmentTokenHash, input.enrollmentTokenHash),
                     eq(accountEnrollments.purpose, 'recover'),
-                    eq(accountEnrollments.normalizedEmail, user.email.toLowerCase()),
+                    eq(accountEnrollments.normalizedEmail, normalizedEmail),
                     isNotNull(accountEnrollments.verifiedAt),
                     gt(accountEnrollments.expiresAt, new Date()),
                 ),
@@ -443,7 +468,7 @@ export async function resetAccountPassword(input: {
             .delete(accountEnrollments)
             .where(
                 and(
-                    eq(accountEnrollments.normalizedEmail, user.email.toLowerCase()),
+                    eq(accountEnrollments.normalizedEmail, normalizedEmail),
                     eq(accountEnrollments.purpose, 'recover'),
                 ),
             );
@@ -498,7 +523,7 @@ export async function deleteAccount(input: {
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
-            .select(userFields)
+            .select(userFieldsWithEmailKey)
             .from(users)
             .where(eq(users.id, input.userId))
             .for('update');
@@ -529,7 +554,7 @@ export async function deleteAccount(input: {
         if (personal) await tx.delete(workspaces).where(eq(workspaces.id, personal.workspaceId));
         await tx
             .delete(accountEnrollments)
-            .where(eq(accountEnrollments.normalizedEmail, user.email.toLowerCase()));
+            .where(eq(accountEnrollments.normalizedEmail, user.normalizedEmail));
         await tx.delete(users).where(eq(users.id, user.id));
         return true;
     });
@@ -686,7 +711,7 @@ export async function changeAccountSecurity(input: {
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
-            .select(userFields)
+            .select(userFieldsWithEmailKey)
             .from(users)
             .where(eq(users.id, input.userId))
             .for('update');
@@ -802,7 +827,7 @@ export async function changeAccountSecurity(input: {
             .delete(accountEnrollments)
             .where(
                 and(
-                    eq(accountEnrollments.normalizedEmail, user.email.toLowerCase()),
+                    eq(accountEnrollments.normalizedEmail, user.normalizedEmail),
                     eq(accountEnrollments.purpose, 'recover'),
                 ),
             );

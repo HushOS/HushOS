@@ -1,4 +1,3 @@
-import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useState, useTransition, type ReactNode } from 'react';
 
 import { isTheme, setThemeServerFn, type Theme } from '@/lib/theme';
@@ -10,10 +9,12 @@ const ThemeContext = createContext<{
     error: string | null;
 } | null>(null);
 
-export function ThemeProvider({ children, theme }: { children: ReactNode; theme: Theme }) {
-    const router = useRouter();
+export function ThemeProvider({ children, theme: initial }: { children: ReactNode; theme: Theme }) {
     const [isPending, startTransition] = useTransition();
     const [error, setError] = useState<string | null>(null);
+    // The local choice wins until the loader hands over a different cookie value.
+    const [chosen, setChosen] = useState<{ theme: Theme; initial: Theme } | null>(null);
+    const theme = chosen?.initial === initial ? chosen.theme : initial;
 
     function setTheme(value: unknown) {
         if (!isTheme(value) || isPending || value === theme) return;
@@ -21,7 +22,7 @@ export function ThemeProvider({ children, theme }: { children: ReactNode; theme:
         startTransition(async () => {
             try {
                 await setThemeServerFn({ data: value });
-                await router.invalidate({ sync: true });
+                setChosen({ theme: value, initial });
             } catch {
                 setError('Could not save appearance. Please try again.');
             }

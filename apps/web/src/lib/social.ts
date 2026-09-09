@@ -43,14 +43,11 @@ export function structuredData(origin: string) {
         },
     ];
 }
-export function publicSocialMeta(origin: string, kind: 'home' | 'share' = 'home') {
-    const title =
-        kind === 'home' ? 'HushOS · A private place for your work' : 'Shared with you · HushOS';
+export function publicSocialMeta(origin: string) {
+    const title = 'HushOS · A private place for your work';
     const description =
-        kind === 'home'
-            ? 'An open-source, self-hostable productivity suite. Your password never leaves your device.'
-            : 'A private share on HushOS.';
-    const image = new URL(kind === 'home' ? '/og.jpg' : '/share-og.jpg', origin).href;
+        'An open-source, self-hostable productivity suite. Your password never leaves your device.';
+    const image = new URL('/og.jpg', origin).href;
     return [
         { title },
         { name: 'description', content: description },

@@ -21,7 +21,6 @@ import { Route as RecoverRouteRouteImport } from './routes/recover/route'
 import { Route as RegisterRouteRouteImport } from './routes/register/route'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
 import { Route as SecurityRouteRouteImport } from './routes/security/route'
-import { Route as ShareOgDotjpgRouteImport } from './routes/share-og[.]jpg'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as TermsRouteRouteImport } from './routes/terms/route'
 import { Route as AuthenticatedAppRouteRouteImport } from './routes/_authenticated/app/route'
@@ -96,11 +95,6 @@ const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
 const SecurityRouteRoute = SecurityRouteRouteImport.update({
   id: '/security',
   path: '/security',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ShareOgDotjpgRoute = ShareOgDotjpgRouteImport.update({
-  id: '/share-og.jpg',
-  path: '/share-og.jpg',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -199,7 +193,6 @@ export interface FileRoutesByFullPath {
   '/llms.txt': typeof LlmsDottxtRoute
   '/og.jpg': typeof OgDotjpgRoute
   '/robots.txt': typeof RobotsDottxtRoute
-  '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -227,7 +220,6 @@ export interface FileRoutesByTo {
   '/llms.txt': typeof LlmsDottxtRoute
   '/og.jpg': typeof OgDotjpgRoute
   '/robots.txt': typeof RobotsDottxtRoute
-  '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
@@ -258,7 +250,6 @@ export interface FileRoutesById {
   '/llms.txt': typeof LlmsDottxtRoute
   '/og.jpg': typeof OgDotjpgRoute
   '/robots.txt': typeof RobotsDottxtRoute
-  '/share-og.jpg': typeof ShareOgDotjpgRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -290,7 +281,6 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/og.jpg'
     | '/robots.txt'
-    | '/share-og.jpg'
     | '/sitemap.xml'
     | '/app'
     | '/api/$'
@@ -318,7 +308,6 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/og.jpg'
     | '/robots.txt'
-    | '/share-og.jpg'
     | '/sitemap.xml'
     | '/api/$'
     | '/blog/$slug'
@@ -348,7 +337,6 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/og.jpg'
     | '/robots.txt'
-    | '/share-og.jpg'
     | '/sitemap.xml'
     | '/_authenticated/app'
     | '/api/$'
@@ -380,7 +368,6 @@ export interface RootRouteChildren {
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   OgDotjpgRoute: typeof OgDotjpgRoute
   RobotsDottxtRoute: typeof RobotsDottxtRoute
-  ShareOgDotjpgRoute: typeof ShareOgDotjpgRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiSplatRoute: typeof ApiSplatRoute
   BlogSlugRoute: typeof BlogSlugRoute
@@ -471,13 +458,6 @@ declare module '@tanstack/react-router' {
       path: '/security'
       fullPath: '/security'
       preLoaderRoute: typeof SecurityRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/share-og.jpg': {
-      id: '/share-og.jpg'
-      path: '/share-og.jpg'
-      fullPath: '/share-og.jpg'
-      preLoaderRoute: typeof ShareOgDotjpgRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sitemap.xml': {
@@ -672,7 +652,6 @@ const rootRouteChildren: RootRouteChildren = {
   LlmsDottxtRoute: LlmsDottxtRoute,
   OgDotjpgRoute: OgDotjpgRoute,
   RobotsDottxtRoute: RobotsDottxtRoute,
-  ShareOgDotjpgRoute: ShareOgDotjpgRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiSplatRoute: ApiSplatRoute,
   BlogSlugRoute: BlogSlugRoute,

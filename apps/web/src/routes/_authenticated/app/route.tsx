@@ -88,11 +88,15 @@ function AppLayout() {
             window.clearInterval(timer);
         };
     }, [lockRevision, router, user.id, user.credentialVersion]);
+    const latestUser = useRef(user);
+    useEffect(() => {
+        latestUser.current = user;
+    }, [user]);
     useEffect(() => {
         const validated = seenLockRevision.current === lockRevision;
         seenLockRevision.current = lockRevision;
-        void authClient.restore(user, { validated }).catch(() => {});
-    }, [user, lockRevision]);
+        void authClient.restore(latestUser.current, { validated }).catch(() => {});
+    }, [user.id, user.credentialVersion, lockRevision]);
     return (
         <SidebarProvider defaultOpen={sidebarOpen}>
             <AppSidebar user={user} />

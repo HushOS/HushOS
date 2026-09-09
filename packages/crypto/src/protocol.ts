@@ -6,7 +6,7 @@ export const KEY_STRETCHING = {
 };
 
 export type AccountKeyEnvelope = {
-    envelopeVersion: number;
+    envelopeVersion: typeof ENVELOPE_VERSION;
     keyVersion: number;
     credentialVersion: number;
     wrappingSalt: string;
@@ -27,3 +27,5 @@ export function accountKeyContext(userId: string, keyVersion: number, credential
 }
 
 export const PASSWORD_WRAPPING_CONTEXT = 'hushos/account-key/password-wrap/v1';
+export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MAX_LENGTH = 128;

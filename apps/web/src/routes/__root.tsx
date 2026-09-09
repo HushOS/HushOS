@@ -14,7 +14,7 @@ import { useEffect, type ReactNode } from 'react';
 
 import { MotionProvider } from '@/components/motion';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { ThemeProvider } from '@/components/theme-provider';
+import { ThemeProvider, useTheme } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -72,6 +72,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     // Public pages only need to know whether a session cookie exists; no lookup here.
     // The protected layout validates for real when the user goes in.
     beforeLoad: ({ context }) => ({ hasSession: sessionHint(context.queryClient) }),
+    headers: () => ({ 'Cache-Control': 'private, no-store', Vary: 'Cookie' }),
     shellComponent: RootDocument,
     loader: () => getThemeServerFn(),
     component: Outlet,
@@ -135,7 +136,15 @@ function StatusPage({
 }
 
 function RootDocument({ children }: { children: ReactNode }) {
-    const theme = Route.useLoaderData() ?? 'system';
+    return (
+        <ThemeProvider theme={Route.useLoaderData() ?? 'system'}>
+            <Document>{children}</Document>
+        </ThemeProvider>
+    );
+}
+
+function Document({ children }: { children: ReactNode }) {
+    const { theme } = useTheme();
     useEffect(() => {
         initSounds();
     }, []);
@@ -145,13 +154,11 @@ function RootDocument({ children }: { children: ReactNode }) {
                 <HeadContent />
             </head>
             <body>
-                <ThemeProvider theme={theme}>
-                    <MotionProvider>
-                        <TooltipProvider delay={0} closeDelay={0}>
-                            <Toaster>{children}</Toaster>
-                        </TooltipProvider>
-                    </MotionProvider>
-                </ThemeProvider>
+                <MotionProvider>
+                    <TooltipProvider delay={0} closeDelay={0}>
+                        <Toaster>{children}</Toaster>
+                    </TooltipProvider>
+                </MotionProvider>
                 <Scripts />
             </body>
         </html>

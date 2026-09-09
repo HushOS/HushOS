@@ -87,7 +87,7 @@ export const sessions = pgTable(
         credentialVersion: integer('credential_version').notNull(),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-        lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+        lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [
         index('sessions_user_idx').on(table.userId),
@@ -148,6 +148,7 @@ export const accountEnrollments = pgTable(
             sql`${table.purpose} in ('register', 'recover')`,
         ),
         index('account_enrollments_expiry_idx').on(table.expiresAt),
+        index('account_enrollments_email_idx').on(table.normalizedEmail),
         check('account_enrollments_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
         check(
             'account_enrollments_state_valid',

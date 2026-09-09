@@ -1,3 +1,4 @@
+import '@/lib/server-only';
 import geistFont from '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?inline';
 import { Renderer } from 'takumi-js/node';
 import { fromJsx } from 'takumi-js/helpers/jsx';
@@ -9,11 +10,6 @@ const cards = {
         title: 'A private place\nfor your work.',
         description: 'Open source. Easy to self-host.',
         label: 'HushOS',
-    },
-    share: {
-        title: 'Shared with you.\nKept private.',
-        description: 'A private share on HushOS.',
-        label: 'HushOS · Private sharing',
     },
 };
 const rendered = new Map<keyof typeof cards, Promise<Uint8Array>>();

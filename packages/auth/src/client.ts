@@ -1,15 +1,16 @@
-import type { SecurityAction, SecurityChallenge } from '@hushos/crypto';
+import type { SecurityAction } from '@hushos/crypto';
+import type { AuthApi } from './api';
 import type { CryptoTransport } from './crypto-transport';
-import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
 import type { DeviceKeyStore } from './device-storage';
-import type { AccountKeyEnvelope, AuthUser, SessionUser } from './protocol';
+import type { SessionUser } from './protocol';
 import type { WorkerRequests, WorkerResults } from './worker';
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
     deviceKeys: DeviceKeyStore,
+    api: AuthApi,
 ) {
     let transport: CryptoTransport | undefined;
     let epoch = 0;
@@ -81,33 +82,14 @@ export function createAuthClient(
             throw error;
         }
     }
-    async function request<T>(path: string, input?: object): Promise<T> {
-        const response = await fetch(`/api/auth/${path}`, {
-            method: input ? 'POST' : 'GET',
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: input ? { 'Content-Type': 'application/json' } : undefined,
-            body: input ? JSON.stringify(input) : undefined,
-            signal: AbortSignal.timeout(30_000),
-        });
-        const data = await response.json();
-        if (!response.ok)
-            throw new Error(typeof data.message === 'string' ? data.message : 'Please try again.');
-        return data as T;
-    }
     async function login(email: string, password: string) {
-        const start = await rpc('loginStart', { password });
-        const challenge = await request<{
-            attemptToken: string;
-            loginResponse: string;
-            profileVersion: number;
-        }>('login/start', { email, ...start });
-        const finish = await rpc('loginFinish', challenge);
-        const result = await request<{ user: AuthUser; envelope: AccountKeyEnvelope }>(
-            'login/finish',
-            { attemptToken: challenge.attemptToken, ...finish },
-        );
         const loginEpoch = epoch;
+        const start = await rpc('loginStart', { password });
+        const challenge = await api.loginStart({ email, ...start });
+        const finish = await rpc('loginFinish', challenge);
+        // A lock here has already dropped the export key; do not create a session for it.
+        if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
+        const result = await api.loginFinish({ attemptToken: challenge.attemptToken, ...finish });
         try {
             await rpc('unlock', { userId: result.user.id, envelope: result.envelope });
         } catch {
@@ -147,15 +129,7 @@ export function createAuthClient(
         if (initializing) return initializing;
         const setupEpoch = epoch;
         initializing = (async () => {
-            const { missing } = await request<{
-                missing: {
-                    recovery: boolean;
-                    identity: boolean;
-                    workspace: boolean;
-                    workspaceKey: boolean;
-                    workspaceId: string | null;
-                } | null;
-            }>('setup');
+            const { missing } = await api.setup();
             if (
                 !missing ||
                 !(missing.recovery || missing.identity || missing.workspace || missing.workspaceKey)
@@ -172,7 +146,7 @@ export function createAuthClient(
                         : undefined,
             });
             if (epoch !== setupEpoch) throw new Error('Your account was locked.');
-            await request('setup', bundles);
+            await api.initialize(bundles);
             return missing.recovery;
         })().finally(() => {
             initializing = undefined;
@@ -210,9 +184,7 @@ export function createAuthClient(
                     if (!device || device.userId !== user.id) return;
                     let sessionUser: SessionUser | null;
                     try {
-                        sessionUser = options.validated
-                            ? user
-                            : (await request<{ user: SessionUser | null }>('session')).user;
+                        sessionUser = options.validated ? user : (await api.session()).user;
                     } catch {
                         // Offline or a flaky connection: the bundle may be fine. Keep it and
                         // let the next focus or session check try again.
@@ -266,24 +238,15 @@ export function createAuthClient(
             await deviceKeys.clear();
         },
         requestEmail: (email: string, purpose: 'register' | 'recover' = 'register') =>
-            request<{ message: string }>(`${purpose}/email`, { email }),
-        verifyEmail: (token: string) =>
-            request<{ enrollment: { id: string; email: string; purpose: 'register' | 'recover' } }>(
-                'register/verify',
-                { token },
-            ),
-        enrollment: (purpose: 'register' | 'recover' = 'register') =>
-            request<{ enrollment: { id: string; email: string } | null }>(purpose),
+            api.requestEmail(purpose, email),
+        verifyEmail: (token: string) => api.verifyEmail(token),
+        enrollment: (purpose: 'register' | 'recover' = 'register') => api.enrollment(purpose),
         deleteAccount: (password: string) =>
             exclusive(async () => {
                 const start = await rpc('loginStart', { password });
-                const challenge = await request<{
-                    attemptToken: string;
-                    loginResponse: string;
-                    profileVersion: number;
-                }>('delete/start', start);
+                const challenge = await api.deleteStart(start);
                 const finish = await rpc('loginFinish', challenge);
-                await request('delete/finish', { attemptToken: challenge.attemptToken, ...finish });
+                await api.deleteFinish({ attemptToken: challenge.attemptToken, ...finish });
                 lock();
                 store.setState({
                     device: null,
@@ -296,40 +259,20 @@ export function createAuthClient(
             if (store.getState().unlockedUserId !== user.id)
                 throw new Error('Unlock your account to view your recovery key.');
             await initializeAccount(user);
-            const backup = await request<{
-                userId: string;
-                recovery: RecoveryEnvelope;
-                confirmed: boolean;
-            }>('recovery-key');
+            const backup = await api.recoveryBackup();
             const { phrase } = await rpc('backup', backup);
             return { ...backup, phrase };
         },
         confirmRecoveryBackup: (recoveryVersion: number) =>
-            request('recovery-key/confirm', { recoveryVersion }),
-        storage: () =>
-            request<{
-                storage: {
-                    workspaceId: string;
-                    quotaBytes: string;
-                    usedBytes: string;
-                    reservedBytes: string;
-                    availableBytes: string;
-                } | null;
-            }>('storage'),
+            api.confirmRecoveryBackup(recoveryVersion),
+        storage: () => api.storage(),
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
                 const start = await rpc('registerStart', { password });
-                const challenge = await request<{
-                    registrationResponse: string;
-                    userId: string;
-                    profileVersion: number;
-                    credentialVersion: number;
-                    attemptToken: string;
-                    recovery: RecoveryEnvelope;
-                }>('recover/start', start);
+                const challenge = await api.recoverStart(start);
                 const finish = await rpc('recoverFinish', { ...challenge, phrase });
                 try {
-                    await request('recover/finish', {
+                    await api.recoverFinish({
                         userId: challenge.userId,
                         attemptToken: challenge.attemptToken,
                         credentialVersion: challenge.credentialVersion,
@@ -364,10 +307,7 @@ export function createAuthClient(
             exclusive(async () => {
                 lock();
                 const start = await rpc('securityStart', { action, password, newPassword });
-                const challenge = await request<SecurityChallenge>('security/start', {
-                    action,
-                    ...start,
-                });
+                const challenge = await api.securityStart({ action, ...start });
                 if (challenge.userId !== user.id || challenge.action !== action)
                     throw new Error('Your account changed. Sign in again.');
                 const changeEpoch = epoch;
@@ -377,7 +317,7 @@ export function createAuthClient(
                 let committed = true;
                 let failure: unknown;
                 try {
-                    await request('security/finish', {
+                    await api.securityFinish({
                         action,
                         attemptToken: challenge.attemptToken,
                         ...finish,
@@ -399,7 +339,7 @@ export function createAuthClient(
                 if (!committed) {
                     let live: SessionUser | null = null;
                     try {
-                        live = (await request<{ user: SessionUser | null }>('session')).user;
+                        live = (await api.session()).user;
                     } catch {
                         /* Unknown either way. */
                     }
@@ -416,37 +356,31 @@ export function createAuthClient(
                     return { signedIn: false, uncertain: false };
                 }
             }),
-        session: () => request<{ user: SessionUser | null }>('session'),
-        updateProfile: (name: string) => request<{ user: SessionUser }>('profile', { name }),
+        session: () => api.session(),
+        updateProfile: (name: string) => api.updateProfile(name),
         login: (email: string, password: string) => exclusive(() => login(email, password)),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
                 const start = await rpc('registerStart', { password });
-                const challenge = await request<{
-                    registrationResponse: string;
-                    userId: string;
-                    profileVersion: number;
-                }>('register/start', start);
+                const challenge = await api.registerStart(start);
                 const finish = await rpc('registerFinish', challenge);
-                await request<{ user: AuthUser }>('register/finish', { name, ...finish });
+                await api.registerFinish({ name, ...finish });
                 try {
                     return await login(email, password);
                 } catch {
                     throw new Error('Your account was created. Please sign in to unlock it.');
                 }
             }),
-        async logout() {
-            listen();
-            lock();
-            broadcastLock();
-            store.setState({
-                device: null,
-                lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
-            });
-            await Promise.all([deviceKeys.clear().catch(() => {}), request('logout', {})]);
-            store.setState({
-                lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
-            });
-        },
+        logout: () =>
+            exclusive(async () => {
+                listen();
+                lock();
+                broadcastLock();
+                store.setState({ device: null });
+                await Promise.all([deviceKeys.clear().catch(() => {}), api.logout()]);
+                store.setState({
+                    lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
+                });
+            }),
     };
 }

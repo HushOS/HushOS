@@ -7,10 +7,12 @@ export const Route = createFileRoute('/register')({
         Vary: 'Cookie',
         'Referrer-Policy': 'no-referrer',
     }),
-    beforeLoad: async ({ context, preload }) => {
-        if (preload) return;
+    beforeLoad: async ({ context, location, preload }) => {
+        if (preload) return { user: null };
         const user = await ensureSessionUser(context.queryClient).catch(() => null);
-        if (user) throw redirect({ to: '/app' });
+        // The complete page holds a one-time link; it offers sign-out instead of bouncing.
+        if (user && location.pathname !== '/register/complete') throw redirect({ to: '/app' });
+        return { user };
     },
     head: () => ({
         meta: [

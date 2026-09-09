@@ -1,3 +1,4 @@
+import { CryptoError } from './errors';
 import sodium from 'libsodium-wrappers';
 import { encryptKey, decryptKey } from './aead';
 import { encode, decode } from './keys';
@@ -114,7 +115,7 @@ export async function rewrapIdentity(
         !Number.isSafeInteger(envelope.keyVersion) ||
         envelope.keyVersion < 1
     )
-        throw new Error('Unsupported identity envelope.');
+        throw new CryptoError('Unsupported identity envelope.');
     await sodium.ready;
     const oldSalt = decode(envelope.wrappingSalt, 32);
     const salt = crypto.getRandomValues(new Uint8Array(32));
@@ -137,7 +138,8 @@ export async function rewrapIdentity(
                       secrets.push(pair.privateKey);
                       return pair.publicKey;
                   })();
-        if (encode(derivedPublic) !== publicKey) throw new Error('Identity keys do not match.');
+        if (encode(derivedPublic) !== publicKey)
+            throw new CryptoError('Identity keys do not match.');
         const wrap = await identityWrappingKey(newRoot, salt, purpose);
         secrets.push(wrap);
         const nextNonce = crypto.getRandomValues(new Uint8Array(24));

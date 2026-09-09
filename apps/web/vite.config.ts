@@ -13,8 +13,8 @@ export default defineConfig({
     server: {
         host: '0.0.0.0',
         port: Number(process.env.PORT ?? 5173),
-        // Development is intentionally reachable through LAN and Tailscale hostnames.
-        allowedHosts: true,
+        // IP addresses are allowed by default; this adds Tailscale hostnames.
+        allowedHosts: ['.ts.net'],
     },
     resolve: { tsconfigPaths: true },
     plugins: [

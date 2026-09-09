@@ -1,3 +1,4 @@
+import '@/lib/server-only';
 import type { RequestLogger } from '@hushos/logging';
 import { useRequest } from 'nitro/context';
 

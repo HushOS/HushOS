@@ -1,13 +1,20 @@
+import '@/lib/server-only';
 import { cors } from '@elysia/cors';
 import { db } from '@hushos/db';
 import { EvlogError, parseError, authLogAction, sanitizeFailure } from '@hushos/logging';
 import { useRequest } from 'nitro/context';
-import { API_SERVICE, APP_NAME } from '@hushos/shared';
-import { welcomeMessage } from '@hushos/utils';
+import { API_SERVICE } from '@hushos/shared';
 import { Elysia, t, ValidationError, ParseError } from 'elysia';
 import * as auth from '@hushos/auth/server';
 
 import { useLogger, useRequestId } from '@/lib/logging.server';
+
+// A non-literal status here would erase every response type Eden Treaty infers.
+const ERROR_CODES = [400, 401, 403, 404, 409, 422, 429, 500, 503] as const;
+type ErrorCode = (typeof ERROR_CODES)[number];
+function errorStatus(value: number): ErrorCode {
+    return (ERROR_CODES as readonly number[]).includes(value) ? (value as ErrorCode) : 500;
+}
 
 const requestContext = new Elysia({ name: 'hushos-api-context' })
     .derive(() => ({ log: useLogger(), requestId: useRequestId() }))
@@ -32,7 +39,7 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
         if (error instanceof Error) useLogger().error(error);
         if (error instanceof EvlogError) {
             const parsed = parseError(error);
-            return status(parsed.status, {
+            return status(errorStatus(parsed.status), {
                 message: parsed.message,
                 why: parsed.why,
                 fix: parsed.fix,
@@ -295,10 +302,6 @@ export const apiApp = new Elysia({ prefix: '/api' })
         return { success: true };
     })
     .get('/health', () => ({ status: 'ok' as const, service: API_SERVICE }))
-    .get('/greeting', ({ log }) => {
-        log.set({ action: 'greeting' });
-        return { message: welcomeMessage(APP_NAME) };
-    })
     .get('/ready', async ({ status, log, set }) => {
         set.headers['Cache-Control'] = 'no-store';
         try {
@@ -313,7 +316,13 @@ export const apiApp = new Elysia({ prefix: '/api' })
 export type Api = typeof apiApp;
 
 // Bound auth bodies before JSON parsing; never log protocol messages or tokens.
-export async function handleApiRequest(request: Request) {
+export async function handleApiRequest(request: Request): Promise<Response> {
+    if (request.method === 'HEAD') {
+        const result = await handleApiRequest(
+            new Request(request.url, { method: 'GET', headers: request.headers }),
+        );
+        return new Response(null, { status: result.status, headers: result.headers });
+    }
     if (!new URL(request.url).pathname.startsWith('/api/auth/')) return apiApp.fetch(request);
     const log = useLogger();
     log.set({ auth: { action: authLogAction(new URL(request.url).pathname) } });

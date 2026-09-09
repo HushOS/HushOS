@@ -6,7 +6,7 @@
     "scripts": {
         "dev": "vite --strictPort",
         "build": "vite build",
-        "start": "PORT=${PORT:-5173} bun .output/server/index.mjs",
+        "start": "NODE_ENV=production PORT=${PORT:-5173} bun .output/server/index.mjs",
         "typecheck": "tsr generate && tsc --noEmit",
         "test": "vitest run",
         "test:watch": "vitest",

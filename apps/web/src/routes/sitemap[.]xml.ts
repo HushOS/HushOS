@@ -4,8 +4,6 @@ import { publicOrigin } from '@/lib/social';
 
 const pages = [
     '/',
-    '/login',
-    '/register',
     '/blog',
     ...posts.map((post) => `/blog/${post.slug}`),
     '/security',

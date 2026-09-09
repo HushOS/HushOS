@@ -1,3 +1,4 @@
+import { CryptoError } from './errors';
 import sodium from 'libsodium-wrappers';
 import { entropyToMnemonic, mnemonicToEntropy } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -140,7 +141,7 @@ function checkEnvelope(envelope: RecoveryEnvelope) {
         !Number.isSafeInteger(envelope.recoveryVersion) ||
         envelope.recoveryVersion < 1
     )
-        throw new Error('Unsupported recovery key version.');
+        throw new CryptoError('Unsupported recovery key version.');
 }
 export async function readRecoveryPhrase(
     accountKey: Uint8Array<ArrayBuffer>,
@@ -166,12 +167,19 @@ export async function readRecoveryPhrase(
 export async function openRecovery(phrase: string, userId: string, envelope: RecoveryEnvelope) {
     checkEnvelope(envelope);
     await sodium.ready;
-    const secret = new Uint8Array(
-        mnemonicToEntropy(phrase.trim().toLowerCase().split(/\s+/).join(' '), wordlist),
-    );
+    let secret: Uint8Array<ArrayBuffer>;
+    try {
+        secret = new Uint8Array(
+            mnemonicToEntropy(phrase.trim().toLowerCase().split(/\s+/).join(' '), wordlist),
+        );
+    } catch {
+        throw new CryptoError(
+            'That is not a valid recovery phrase. Check each word and try again.',
+        );
+    }
     if (secret.length !== 32) {
         secret.fill(0);
-        throw new Error('Enter your 24-word recovery phrase.');
+        throw new CryptoError('Enter your 24-word recovery phrase.');
     }
     const salt = decode(envelope.wrappingSalt, 32);
     const key = await derive(secret, salt, 'account-wrap');
@@ -179,7 +187,7 @@ export async function openRecovery(phrase: string, userId: string, envelope: Rec
     const pair = sodium.crypto_sign_seed_keypair(seed);
     try {
         if (encode(pair.publicKey) !== envelope.publicKey)
-            throw new Error('The recovery phrase does not match this account.');
+            throw new CryptoError('The recovery phrase does not match this account.');
         const accountKey = await decryptKey(
             decode(envelope.encryptedKey, 48),
             key,

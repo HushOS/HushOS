@@ -26,11 +26,11 @@ Both editors use four spaces. Per-package `tsconfig.json` files extend the root 
 
 ## Web and API requests
 
-Develop at `http://localhost:5173/app`; API endpoints live at `/api/health`, `/api/ready`, and `/api/greeting` on the same server. Nitro hosts both TanStack Start and the mounted Elysia app. Local development needs no custom hostname or certificate.
+Develop at `http://localhost:5173/app`; API endpoints live under `/api` on the same server (`/api/health`, `/api/ready`, `/api/auth/*`). Nitro hosts both TanStack Start and the mounted Elysia app. Local development needs no custom hostname or certificate.
 
-Use `getApi()` or `getApiFetch()` from `@/lib/api`. In the browser, they call the current origin. During SSR, they call Elysia directly and retain the outer request's logging context. `getApi()` exposes methods such as `.health.get()`; `getApiFetch()` takes full paths such as `/api/greeting`.
+The browser reaches the API through the `AuthApi` adapter in `apps/web/src/lib/auth-api.ts` (Eden Treaty, typed by the Elysia app). Server code reads the database directly through server functions and `createIsomorphicFn().server(...)` branches; there is no in-process HTTP client.
 
-Development CORS applies to the public demo API; auth mutations require `Origin` to match `APP_ORIGIN`. Production does not enable cross-origin API access. Remote HTTPS can be provided by Tailscale Serve or your hosting platform; one origin serves both the UI and API.
+Auth mutations require `Origin` to match `APP_ORIGIN`, so signing in from a LAN address or a Tailscale hostname needs `APP_ORIGIN` set to that origin and HTTPS in front of it. The dev server answers LAN addresses and `*.ts.net` hostnames; add others to `allowedHosts` in `apps/web/vite.config.ts`. Production does not enable cross-origin API access.
 
 ## Database
 
@@ -96,7 +96,7 @@ This is the foundation for HushOS Drive and the later productivity suite. Email 
 
 ## Authentication, cryptography, and email packages
 
-`@hushos/auth/server` owns account enrollment, sessions, and authorization checks. `@hushos/auth/client` orchestrates the browser flow through `CryptoTransport` and `DeviceKeyStore` adapters; web routes own the UI. `@hushos/crypto` owns the protocol versions, OPAQUE client operations, HKDF, and the account-key and workspace-grant envelopes. Its crypto session has no React, HTTP, or worker dependency. Other clients can reuse the protocol and primitives where WebAssembly/Web Crypto are available; native mobile runtime integration is still required. Server OPAQUE primitives have a separate `@hushos/crypto/server` export.
+`@hushos/auth/server` owns account enrollment, sessions, and authorization checks. `@hushos/auth/client` orchestrates the browser flow through `CryptoTransport`, `DeviceKeyStore` and `AuthApi` adapters; web routes own the UI. `AuthApi` (`packages/auth/src/api.ts`) is the contract the client needs from the server; the web app implements it in `apps/web/src/lib/auth-api.ts` with an Eden Treaty client typed by the Elysia app, so a route or response change that the client does not expect fails `bun run typecheck` there. Error handlers in `api.server.ts` must return literal status codes: a plain `number` erases every inferred response type. `@hushos/crypto` owns the protocol versions, OPAQUE client operations, HKDF, and the account-key and workspace-grant envelopes. Its crypto session has no React, HTTP, or worker dependency. Other clients can reuse the protocol and primitives where WebAssembly/Web Crypto are available; native mobile runtime integration is still required. Server OPAQUE primitives have a separate `@hushos/crypto/server` export.
 
 `@hushos/emails/server` owns the SMTP/Resend/SES adapters and fills templates that were rendered at build time: `bun run email:render` renders `packages/emails/src/templates` into `packages/emails/src/rendered/*.ts` with `{{verificationUrl}}` and `{{logoUrl}}` placeholders, and the running server only substitutes those, so React and React Email never load at runtime. Commit the rendered output; CI fails when it is stale. `bun run dev` renders them first, so a fresh dev session starts with current templates; nothing watches the template files after that. Run `bun run email:preview` independently from the app to edit templates. The email PNG is rendered from `apps/web/src/components/logo.tsx`, at three times its displayed size; keep the preview and `apps/web/public/email` copies in sync when changing the mark. Use a public HTTPS app origin for images in delivered emails.
 

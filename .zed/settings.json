@@ -7,7 +7,7 @@
         "yaml-language-server": {
             "settings": {
                 "yaml": {
-                    "customTags": ["!reset mapping"]
+                    "customTags": ["!reset mapping", "!reset"]
                 }
             }
         },

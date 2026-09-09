@@ -34,6 +34,7 @@ export function createBrowserDeviceKeyStore(): DeviceKeyStore {
             const key = await createDeviceKey();
             const id = crypto.randomUUID();
             await write((store) => {
+                store.clear();
                 store.put(key, id);
             });
             return { id, key };

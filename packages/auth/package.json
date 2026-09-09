@@ -9,7 +9,8 @@
         "./worker": "./src/worker.ts",
         "./client": "./src/client.ts",
         "./device-storage": "./src/device-storage.ts",
-        "./crypto-transport": "./src/crypto-transport.ts"
+        "./crypto-transport": "./src/crypto-transport.ts",
+        "./api": "./src/api.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit"

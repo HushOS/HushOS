@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { ArrowRightIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
 import { IconSwap, Spinner, TextSwap } from '@/components/motion';
@@ -30,11 +30,17 @@ function WorkspacePage() {
     const [error, setError] = useState('');
     const unlocked = unlockedUser === user.id;
     const opening = !initialized || restoring;
+    // Keyed on identity, not the `user` object, so a name change does not rerun setup.
+    const latestUser = useRef(user);
+    useEffect(() => {
+        latestUser.current = user;
+    }, [user]);
     useEffect(() => {
         let active = true;
+        const current = latestUser.current;
         void authClient
-            .restore(user, { validated: true })
-            .then(() => authClient.initializeAccount(user))
+            .restore(current, { validated: true })
+            .then(() => authClient.initializeAccount(current))
             .then(async (needsBackup) => {
                 if (!active) return;
                 if (needsBackup)
@@ -51,7 +57,7 @@ function WorkspacePage() {
         return () => {
             active = false;
         };
-    }, [user, router, queryClient]);
+    }, [user.id, user.credentialVersion, router, queryClient]);
     function lock() {
         setError('');
         void authClient

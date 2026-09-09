@@ -21,7 +21,11 @@ export default definePlugin((nitroApp) => {
         const requestId = event.req.context?.requestId;
         if (typeof requestId === 'string') response.headers.set('x-request-id', requestId);
         const release = process.env.HUSHOS_RELEASE_SHA;
-        if (release && /^[a-f0-9]{40}$/.test(release))
+        if (
+            release &&
+            /^[a-f0-9]{40}$/.test(release) &&
+            new URL(event.req.url).pathname === '/api/ready'
+        )
             response.headers.set('x-hushos-release', release);
     });
 });

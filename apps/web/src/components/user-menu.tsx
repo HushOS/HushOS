@@ -71,10 +71,10 @@ export function UserMenu({
         setError('');
         try {
             await authClient.logout();
-            router.options.context.queryClient.clear();
             forgetSession(router.options.context.queryClient, false);
-            await router.invalidate();
             await router.navigate({ to: '/login' });
+            // Clearing before leaving would refetch queries the old page still holds.
+            router.options.context.queryClient.clear();
         } catch {
             cue('error');
             setError('Your account is locked, but sign-out could not finish. Please try again.');

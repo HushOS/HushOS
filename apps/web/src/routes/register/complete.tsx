@@ -1,4 +1,5 @@
-import { createFileRoute, useRouter } from '@tanstack/react-router';
+import type { SessionUser } from '@hushos/auth/protocol';
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
@@ -13,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { getCurrentEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
 import { authError, newPasswordValue } from '@/lib/form';
+import { forgetSession } from '@/lib/session';
 import { cue } from '@/lib/sounds';
 
 const signupFields = z
@@ -30,12 +32,74 @@ export const Route = createFileRoute('/register/complete')({
     loader: () => getCurrentEnrollment(),
     staleTime: 0,
     gcTime: 0,
-    component: () => (
-        <VerifiedEmailStep initialEnrollment={Route.useLoaderData()} purpose="register">
+    component: CompletePage,
+});
+
+function CompletePage() {
+    const { user } = Route.useRouteContext();
+    const initialEnrollment = Route.useLoaderData();
+    const [signedOut, setSignedOut] = useState(false);
+    if (user && !signedOut)
+        return <SignOutFirst user={user} onSignedOut={() => setSignedOut(true)} />;
+    return (
+        <VerifiedEmailStep initialEnrollment={initialEnrollment} purpose="register">
             {(enrollment) => <CompleteForm enrollment={enrollment} />}
         </VerifiedEmailStep>
-    ),
-});
+    );
+}
+
+function SignOutFirst({ user, onSignedOut }: { user: SessionUser; onSignedOut: () => void }) {
+    const router = useRouter();
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function signOut() {
+        setPending(true);
+        setError('');
+        try {
+            await authClient.logout();
+            forgetSession(router.options.context.queryClient, false);
+            onSignedOut();
+        } catch {
+            cue('error');
+            setError('Sign-out could not finish. Please try again.');
+            setPending(false);
+        }
+    }
+    return (
+        <AuthLayout
+            purpose="register"
+            title="You’re already signed in"
+            stamp="Signed in"
+            description={`This browser is signed in as ${user.name} (${user.email}). Sign out to create a new account with this link; the link stays valid.`}
+        >
+            <FormTable>
+                {error && <FormNote tone="destructive">{error}</FormNote>}
+                <FormActions
+                    action={
+                        <Button
+                            type="button"
+                            size="lg"
+                            disabled={pending}
+                            onClick={() => void signOut()}
+                            data-cuelume-press="pulse"
+                        >
+                            <PendingLabel
+                                pending={pending}
+                                idle="Sign out and continue"
+                                busy="Signing out…"
+                            />
+                            <ArrowRightIcon aria-hidden="true" />
+                        </Button>
+                    }
+                >
+                    <Link to="/app" className="text-link">
+                        Keep this account and open the app
+                    </Link>
+                </FormActions>
+            </FormTable>
+        </AuthLayout>
+    );
+}
 function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     const router = useRouter();
     const [error, setError] = useState('');

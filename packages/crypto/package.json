@@ -5,6 +5,7 @@
     "type": "module",
     "exports": {
         ".": "./src/index.ts",
+        "./protocol": "./src/protocol.ts",
         "./server": "./src/server.ts",
         "./device": "./src/device.ts",
         "./recovery": "./src/recovery.ts",

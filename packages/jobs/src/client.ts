@@ -29,6 +29,8 @@ export function createBoss(role: 'worker' | 'client') {
         supervise: worker,
         schedule: worker,
         max: worker ? 4 : 2,
+        persistWarnings: true,
+        persistQueueStats: true,
     });
 }
 

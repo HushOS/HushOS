@@ -1,3 +1,5 @@
+import { CryptoError } from './errors';
+import { checkPassword } from './password';
 import { client, ready } from '@serenity-kit/opaque';
 import { decryptKey, encryptKey } from './aead';
 import { checkProfile, decode, encode, wrappingKey } from './keys';
@@ -55,9 +57,8 @@ export function createSecurityChange() {
     }) {
         reset();
         await ready;
-        const nextPassword = input.action === 'password' ? input.newPassword : input.password;
-        if (!nextPassword || nextPassword.length < 12 || nextPassword.length > 128)
-            throw new Error('Use a password between 12 and 128 characters.');
+        const nextPassword =
+            input.action === 'password' ? checkPassword(input.newPassword) : input.password;
         const login = client.startLogin({ password: input.password });
         const registration = client.startRegistration({ password: nextPassword });
         pending = {
@@ -76,7 +77,7 @@ export function createSecurityChange() {
         const attempt = pending;
         reset();
         if (!attempt || attempt.action !== input.action)
-            throw new Error('Security change expired. Please try again.');
+            throw new CryptoError('Security change expired. Please try again.');
         const secrets: Uint8Array[] = [];
         try {
             await ready;
@@ -94,7 +95,7 @@ export function createSecurityChange() {
                 input.identity.keyVersion !== old.keyVersion ||
                 input.workspaces.some((grant) => grant.keyVersion !== old.keyVersion)
             )
-                throw new Error('Unsupported account-key envelope.');
+                throw new CryptoError('Unsupported account-key envelope.');
             const login = client.finishLogin({
                 password: attempt.password,
                 clientLoginState: attempt.loginState,
@@ -102,7 +103,7 @@ export function createSecurityChange() {
                 identifiers: OPAQUE_IDENTIFIERS,
                 keyStretching: KEY_STRETCHING,
             });
-            if (!login) throw new Error('Your current password is incorrect.');
+            if (!login) throw new CryptoError('Your current password is incorrect.');
             const oldWrap = await wrappingKey(login.exportKey, decode(old.wrappingSalt, 32));
             secrets.push(oldWrap);
             const root = await decryptKey(

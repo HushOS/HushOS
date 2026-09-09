@@ -232,6 +232,12 @@ export async function startRegistration(request: Request, registrationRequest: s
     }
 }
 
+function supportedEnvelope(version: number): typeof ENVELOPE_VERSION {
+    if (version !== ENVELOPE_VERSION)
+        throw new AuthError('This account-key envelope is not supported.', 503);
+    return ENVELOPE_VERSION;
+}
+
 function decodeField(value: string, length: number) {
     const bytes = Buffer.from(value, 'base64url');
     if (bytes.length !== length || bytes.toString('base64url') !== value)
@@ -301,6 +307,25 @@ export async function finishRegistration(
     return { user: result.user, cookie: authCookie('enrollment', null) };
 }
 
+// Refusing every sign-in, not only stranded accounts, keeps known and unknown emails
+// indistinguishable after a setup rotation.
+let setupChecked = 0;
+async function assertCredentialsMatchSetup() {
+    if (Date.now() - setupChecked < 60_000) return;
+    if (await authRepository.hasCredentialsOutside(OPAQUE_PROFILE_VERSION, config().serverSetupId))
+        throw new AuthError(
+            'Sign-in is unavailable until the server configuration is fixed.',
+            503,
+            {
+                cause: Object.assign(new Error('OPAQUE setup mismatch'), {
+                    name: 'ConfigurationError',
+                    code: 'OPAQUE_SETUP_MISMATCH',
+                }),
+            },
+        );
+    setupChecked = Date.now();
+}
+
 export async function startLogin(
     email: string,
     startLoginRequest: string,
@@ -311,13 +336,8 @@ export async function startLogin(
     await limitPasswordAttempts(
         binding ? `auth:security:${binding.userId}` : `auth:login:${normalizedEmail}:${address}`,
     );
+    await assertCredentialsMatchSetup();
     const credential = await authRepository.findCredential(normalizedEmail);
-    if (
-        credential &&
-        (credential.profileVersion !== OPAQUE_PROFILE_VERSION ||
-            credential.serverSetupId !== config().serverSetupId)
-    )
-        throw new AuthError('This account requires a supported authentication configuration.', 503);
     await ready;
     let response;
     try {
@@ -392,7 +412,7 @@ export async function finishLogin(
     return {
         user,
         envelope: {
-            envelopeVersion: key.envelopeVersion,
+            envelopeVersion: supportedEnvelope(key.envelopeVersion),
             keyVersion: key.keyVersion,
             credentialVersion: key.credentialVersion,
             wrappingSalt: key.wrappingSalt.toString('base64url'),
@@ -730,15 +750,17 @@ export async function initializeAccount(
     const user = await getSessionUser(request);
     const token = readToken(request, 'session');
     if (!user || !token) throw new AuthError('Sign in to finish account setup.', 401);
+    const keyVersion = await authRepository.getAccountKeyVersion(user.id);
+    if (!keyVersion) throw new AuthError('Sign in to finish account setup.', 401);
     const initialized = await authRepository.initializeAccount({
         userId: user.id,
         credentialVersion: user.credentialVersion,
         sessionTokenHash: hash(token),
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
-        recovery: input.recovery ? decodeRecovery(input.recovery, 1) : undefined,
-        identity: input.identity ? decodeIdentity(input.identity) : undefined,
+        recovery: input.recovery ? decodeRecovery(input.recovery, 1, keyVersion) : undefined,
+        identity: input.identity ? decodeIdentity(input.identity, keyVersion) : undefined,
         workspace: input.workspace
-            ? decodeWorkspaceGrant(input.workspace, undefined, 1)
+            ? decodeWorkspaceGrant(input.workspace, undefined, keyVersion)
             : undefined,
     });
     if (!initialized) throw new AuthError('Sign in to finish account setup.', 401);
@@ -782,7 +804,7 @@ export async function startSecurityChange(
         action: input.action,
         userId: user.id,
         envelope: {
-            envelopeVersion: e.envelopeVersion,
+            envelopeVersion: supportedEnvelope(e.envelopeVersion),
             keyVersion: e.keyVersion,
             credentialVersion: e.credentialVersion,
             wrappingSalt: e.wrappingSalt.toString('base64url'),

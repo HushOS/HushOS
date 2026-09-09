@@ -1,3 +1,4 @@
+import { CryptoError } from './errors';
 import { decode, encode } from './keys';
 
 export type RememberedAccount = {
@@ -49,7 +50,7 @@ export async function restoreAccountKey(bundle: RememberedAccount, deviceKey: Cr
         !Number.isSafeInteger(bundle.credentialVersion) ||
         bundle.credentialVersion < 1
     )
-        throw new Error('This saved account-key version is not supported.');
+        throw new CryptoError('This saved account-key version is not supported.');
     const decrypted = await crypto.subtle.decrypt(
         {
             name: 'AES-GCM',
@@ -61,6 +62,6 @@ export async function restoreAccountKey(bundle: RememberedAccount, deviceKey: Cr
         decode(bundle.encryptedKey, 48),
     );
     const key = new Uint8Array(decrypted);
-    if (key.length !== 32) throw new Error('Invalid saved account key.');
+    if (key.length !== 32) throw new CryptoError('Invalid saved account key.');
     return key;
 }

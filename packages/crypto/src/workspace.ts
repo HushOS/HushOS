@@ -1,3 +1,4 @@
+import { CryptoError } from './errors';
 import { encryptKey, decryptKey } from './aead';
 import { encode, decode } from './keys';
 
@@ -61,7 +62,7 @@ function checkEnvelope(envelope: WorkspaceKeyEnvelope) {
         !Number.isSafeInteger(envelope.workspaceKeyVersion) ||
         envelope.workspaceKeyVersion < 1
     )
-        throw new Error('Unsupported workspace key envelope.');
+        throw new CryptoError('Unsupported workspace key envelope.');
 }
 async function wrapWorkspaceKey(
     workspaceKey: Uint8Array<ArrayBuffer>,
@@ -103,7 +104,7 @@ export async function createWorkspaceGrant(
     workspaceId: string,
     keyVersion: number,
 ): Promise<WorkspaceKeyEnvelope> {
-    if (!WORKSPACE_ID_PATTERN.test(workspaceId)) throw new Error('Invalid workspace id.');
+    if (!WORKSPACE_ID_PATTERN.test(workspaceId)) throw new CryptoError('Invalid workspace id.');
     const workspaceKey = crypto.getRandomValues(new Uint8Array(32));
     try {
         return await wrapWorkspaceKey(workspaceKey, root, userId, workspaceId, keyVersion, 1);
@@ -134,7 +135,7 @@ export async function openWorkspaceKey(
         );
         if (key.length !== 32) {
             key.fill(0);
-            throw new Error('Invalid workspace key.');
+            throw new CryptoError('Invalid workspace key.');
         }
         return key;
     } finally {

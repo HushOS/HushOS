@@ -17,7 +17,7 @@
     "oxc.fixKind": "safe_fix",
     "oxc.typeAware": true,
     "prettier.enable": false,
-    "yaml.customTags": ["!reset mapping"],
+    "yaml.customTags": ["!reset mapping", "!reset"],
     "tailwindCSS.experimental.configFile": {
         "apps/web/src/styles.css": "apps/web/src/**"
     },

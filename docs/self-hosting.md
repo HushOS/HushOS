@@ -37,7 +37,7 @@ Use your hosting platform's HTTPS ingress or a reverse proxy you manage. Point o
 
 Route all paths to that upstream, including `/api` and static assets. The UI and API share the public origin. Your proxy or platform owns domain routing and TLS. Set `APP_ORIGIN` to that exact public HTTPS origin; it controls email links, social metadata, and allowed auth mutations. Set `TRUSTED_PROXY_HEADER` to the header your proxy fills with the client address (`x-forwarded-for` for Caddy, nginx and Traefik; `cf-connecting-ip` behind Cloudflare). Without it every visitor shares the proxy's address and one rate-limit budget. The application needs no separate API hostname.
 
-Browser API clients use the page's origin; SSR clients call Elysia directly within the same process. Database credentials are supplied to the app at runtime and never enter browser assets. Remote browser crypto APIs need HTTPS; localhost has a [secure-context exception](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts) for local development.
+The browser's auth client is an Eden Treaty client typed by the Elysia app, so the request and response types come from the route schemas; server-side rendering reads sessions in process without HTTP. Database credentials are supplied to the app at runtime and never enter browser assets. Remote browser crypto APIs need HTTPS; localhost has a [secure-context exception](https://developer.mozilla.org/en-US/docs/Web/Security/Defenses/Secure_Contexts) for local development.
 
 For an existing deployment, remove the old API service and its separate hostname routing. `--remove-orphans` removes the old service container while preserving database volumes. Remove unused `WEB_ORIGIN`, `VITE_API_URL`, and `API_INTERNAL_URL` settings. Deploy matching versions of the web, worker, and migration images.
 
@@ -56,6 +56,20 @@ Each image receives `latest` and `sha-<full-commit-sha>` tags. Use the same comm
 All three HushOS images are public and support anonymous pulls. Publishing uses the workflow's `GITHUB_TOKEN` with `packages: write`; no separate registry secret is required. Forks create private GHCR packages by default; set their visibility to public to allow anonymous pulls. See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 The web image includes both the UI and Elysia API. It uses the current origin, so the same image can run behind any hostname without an API URL build argument. Publishing uploads images to GHCR. The optional deployment job calls `DEPLOY_WEBHOOK_URL` with `DEPLOY_WEBHOOK_TOKEN` after all three images publish, then verifies `/api/ready` reports the published commit. Enable it with the repository variable `DEPLOY_ENABLED=true` and set `DEPLOY_ORIGIN`. For Coolify, a single deploy webhook can target both web and worker by listing their resource UUIDs separated by a comma in its `uuid` query parameter. Keep hosting configuration and credentials in your platform and GitHub settings.
+
+To run the published images without a source checkout, copy `compose.yaml`, `compose.images.yaml`, and `.env.production.example` (as `.env`) to the host, then:
+
+```sh
+docker compose -f compose.yaml -f compose.images.yaml up -d
+```
+
+`HUSHOS_IMAGE_TAG=sha-<commit>` pins all three images to one release. The OPAQUE server setup can be generated without the repository:
+
+```sh
+docker run --rm oven/bun:1-slim sh -c 'cd /tmp && bun add --silent @serenity-kit/opaque >/dev/null && bun -e "import { ready, server } from \"@serenity-kit/opaque\"; await ready; console.log(server.createSetup())"'
+```
+
+Put the output in `OPAQUE_SERVER_SETUP` once and keep it; existing credentials depend on it.
 
 To build the app image directly:
 
@@ -119,7 +133,7 @@ The migrator tracks applied migrations and can run repeatedly. Keep the same `.e
 
 ## Remote development
 
-Expose the development server on port 5173 through Tailscale Serve or another trusted HTTPS proxy. The browser uses `/api` on that same origin, so only one upstream is needed. Vite listens on all interfaces and accepts development hostnames. Development API CORS allows all origins for external tooling; production uses same-origin access.
+Expose the development server on port 5173 through Tailscale Serve or another trusted HTTPS proxy. The browser uses `/api` on that same origin, so only one upstream is needed. Vite listens on all interfaces and answers LAN addresses and `*.ts.net` hostnames; add other hostnames to `allowedHosts` in `apps/web/vite.config.ts`. Signing in from a remote hostname needs `APP_ORIGIN` set to that HTTPS origin, because auth requests are rejected unless their `Origin` matches it. Development API CORS allows all origins for external tooling; production uses same-origin access.
 
 Browser crypto APIs require a secure context. HTTP localhost works on the same device; remote hostnames and LAN IPs need HTTPS. The repository does not configure DNS, certificates, or Tailscale.
 
@@ -161,7 +175,7 @@ For an existing 17 installation, keep the old volume, take a logical `pg_dump`/`
 
 ## Logs and storage allowances
 
-Nitro emits one evlog completion event for each request, including pre-parser auth rejections. Production output is JSON; development output is readable text. Redaction is enabled in both environments, with an auth-specific field allowlist. Logs contain request IDs, routes, status, duration, and operation outcomes; they exclude auth bodies, cookies, keys, passwords, recovery phrases, and raw protocol/provider/database errors. No external drain is configured.
+Nitro emits one evlog completion event for each request, including pre-parser auth rejections. Production output (`NODE_ENV=production`, which the images and `bun run start` set) is JSON; development output is readable text. Redaction is enabled in both environments, with an auth-specific field allowlist. Logs contain request IDs, routes, status, duration, and operation outcomes; they exclude auth bodies, cookies, keys, passwords, recovery phrases, and raw protocol/provider/database errors. No external drain is configured.
 
 A personal workspace and initial quota are created in the signup transaction. Quota counts use PostgreSQL bigint and serialize as decimal strings. Extra entitlements are separate, expiring/revocable records with a unique source reference for future idempotent billing integration. Changing the initial-quota environment variable affects new accounts only. There is no paid checkout or automatic billing integration yet.
 
