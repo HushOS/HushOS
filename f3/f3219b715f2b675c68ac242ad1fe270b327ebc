@@ -1,0 +1,165 @@
+packages/crypto/src/index.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 2,4,6
+packages/crypto/src/keys.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,11,16,41
+packages/crypto/src/password.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1-14
+packages/crypto/package.json
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 8
+packages/crypto/src/identity.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,118,141-142
+apps/web/src/routes/robots[.]txt.ts
+  s_8ff38914bac5ae::t_ef6015b47ee934 18-23
+packages/auth/src/worker.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1-6,19-22
+apps/web/src/lib/og.server.tsx
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 1
+packages/auth/src/protocol.ts
+  s_8ff38914bac5ae::t_66d5f1c7d1ac4e 2
+apps/web/src/routes/register/route.tsx
+  s_8ff38914bac5ae::t_3a1291aefed1c6 10-11,13-15
+packages/db/src/schema/auth.ts
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 90,151
+apps/web/src/routes/llms[.]txt.ts
+  s_8ff38914bac5ae::t_ef6015b47ee934 19
+apps/web/src/lib/theme.ts
+  s_8ff38914bac5ae::t_176be51d80da5b 2
+apps/web/src/routes/_authenticated/app/index.tsx
+  s_8ff38914bac5ae::t_176be51d80da5b 42-43
+  s_8ff38914bac5ae::t_ade3fa2c04b063 33
+  s_8ff38914bac5ae::t_ef6015b47ee934 3,34-37,40,60
+CONTRIBUTING.md
+  s_8ff38914bac5ae::t_099e46cdc25aaf 99
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 29,31,33
+apps/web/src/lib/logging.server.ts
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 1
+apps/web/server/plugins/request-context.ts
+  s_8ff38914bac5ae::t_ef6015b47ee934 24-28
+apps/web/src/components/theme-provider.tsx
+  s_8ff38914bac5ae::t_ade3fa2c04b063 15
+  s_8ff38914bac5ae::t_176be51d80da5b 12,16-17,25
+apps/web/vite.config.ts
+  s_8ff38914bac5ae::t_ef6015b47ee934 17
+  s_8ff38914bac5ae::t_ade3fa2c04b063 16
+.zed/settings.json
+  h_f7ba60a6997566 10
+packages/auth/src/device-storage.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 37
+README.md
+  s_8ff38914bac5ae::t_a1d3b2778d4f94 118
+packages/db/src/auth.ts
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 25-26,413-414,418-419,428,471,526,557,714,830
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,151-171
+  s_8ff38914bac5ae::t_8f204eea0a3cfd 172
+packages/crypto/src/session.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1-2,127-128,144,174,190,217,227,270,322,332-333,339-340,349,363
+apps/web/src/lib/api.server.ts
+  s_b2c35164ad1785::t_133d49c059418f 6
+  s_8ff38914bac5ae::t_0fffdbf308df60 12
+  s_8ff38914bac5ae::t_ac8a982456f528 13-18,42
+  s_8ff38914bac5ae::t_083cf69ffe2178 319-325
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 1
+apps/web/src/routes/register/complete.tsx
+  s_8ff38914bac5ae::t_3a1291aefed1c6 1-2,17,35-39,41-44,48-93,99-102
+  s_8ff38914bac5ae::t_eecc6eb4cb8c67 40,45
+  s_8ff38914bac5ae::t_15349e81c902ad 94-98
+apps/web/src/lib/auth-client.ts
+  s_b2c35164ad1785::t_133d49c059418f 4,12
+apps/web/src/lib/social.ts
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 46-47,49-50
+packages/crypto/src/workspace.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,65,107,138
+apps/web/src/lib/auth-api.ts
+  s_8ff38914bac5ae::t_a1d3b2778d4f94 19-21
+  s_b2c35164ad1785::t_133d49c059418f 1-18,22-52
+packages/auth/src/api.ts
+  s_b2c35164ad1785::t_2fe68342b1fd59 7
+  s_8ff38914bac5ae::t_a1d3b2778d4f94 17-21,47-49,67-71
+  s_b2c35164ad1785::t_133d49c059418f 1-6,8-16,22-43,45-46,50-66,72-87
+  s_8ff38914bac5ae::t_425d19cbaaf885 44
+packages/jobs/src/client.ts
+  h_f7ba60a6997566 32-33
+compose.images.yaml
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 1-16
+packages/crypto/src/errors.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1-7
+packages/db/drizzle/20260909223154_colossal_darkhawk/snapshot.json
+  s_8ff38914bac5ae::t_0ddb7e4e4e9907 1,2276
+  s_8ff38914bac5ae::t_0584210408a52e 2-2275,2277-2279
+packages/db/src/schema/workspaces.ts
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 6
+apps/web/src/lib/form.ts
+  s_8ff38914bac5ae::t_66d5f1c7d1ac4e 1
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 8-9
+packages/crypto/src/recovery.ts
+  s_8ff38914bac5ae::t_8e769eada67002 170
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,144,171-179,182,190
+packages/crypto/src/security.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1-2,60-61,80,98,106
+apps/web/src/routes/__root.tsx
+  s_8ff38914bac5ae::t_176be51d80da5b 17,75,139-147,157-161
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_8ff38914bac5ae::t_ef6015b47ee934 91-94,98-99
+apps/web/src/lib/server-only.ts
+  s_8ff38914bac5ae::t_ade3fa2c04b063 1
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 2-3
+packages/auth/src/client.ts
+  s_8ff38914bac5ae::t_a1d3b2778d4f94 187
+  s_b2c35164ad1785::t_2fe68342b1fd59 1,7
+  s_b2c35164ad1785::t_133d49c059418f 2,13,88,92,132,149,241-243,247,249,262,267-268,272,275,310,320,342,359-360,365,367
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 86,90-91
+  s_8ff38914bac5ae::t_ef6015b47ee934 374-384
+packages/db/drizzle/20260909223154_colossal_darkhawk/migration.sql
+  s_8ff38914bac5ae::t_eea9c40b649773 3
+  s_8ff38914bac5ae::t_0ddb7e4e4e9907 1-2,4-5
+packages/auth/src/server.ts
+  s_8ff38914bac5ae::t_fd07dd1e10821e 310-311
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 312-328,339,753-754,760-761,763
+  s_8ff38914bac5ae::t_ac8a982456f528 235-240,415,807
+docs/self-hosting.md
+  s_b2c35164ad1785::t_133d49c059418f 40
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 60-73,136,178
+apps/web/src/components/user-menu.tsx
+  s_8ff38914bac5ae::t_d8abed56d7d4ad 77
+  s_8ff38914bac5ae::t_ade3fa2c04b063 76
+apps/web/package.json
+  s_8ff38914bac5ae::t_5493ae8f9ddf54 9
+packages/auth/package.json
+  s_b2c35164ad1785::t_133d49c059418f 12-13
+packages/crypto/src/protocol.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 30-31
+  s_8ff38914bac5ae::t_ac8a982456f528 9
+packages/crypto/src/device.ts
+  s_8ff38914bac5ae::t_bd3d9a8174b6bf 1,53,65
+.vscode/settings.json
+  h_f7ba60a6997566 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f3f3219b715f2b675c68ac242ad1fe270b327ebc",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b2c35164ad1785": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07ddf-9823-7691-8528-a6afd87fa34d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
