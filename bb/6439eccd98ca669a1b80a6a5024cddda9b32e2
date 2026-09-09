@@ -1,0 +1,49 @@
+packages/auth/src/client.ts
+  s_8ff38914bac5ae::t_98b619f518c45e 355
+packages/auth/src/server.ts
+  s_8ff38914bac5ae::t_98b619f518c45e 83-89,212,362-365,367-368
+  s_8ff38914bac5ae::t_fc2c32a6c2a149 366
+  s_8ff38914bac5ae::t_4eb22048bf7253 369
+DESIGN.md
+  s_8ff38914bac5ae::t_697a4d28baa8bd 264
+  s_8ff38914bac5ae::t_1cd43ebcb67eb4 289
+apps/web/src/routes/register/complete.tsx
+  s_8ff38914bac5ae::t_697a4d28baa8bd 66
+packages/db/src/auth.ts
+  s_8ff38914bac5ae::t_98b619f518c45e 240-248
+apps/web/src/routes/recover/complete.tsx
+  s_8ff38914bac5ae::t_697a4d28baa8bd 72
+apps/web/src/components/verified-email-step.tsx
+  s_8ff38914bac5ae::t_697a4d28baa8bd 54
+apps/web/src/lib/api.server.ts
+  s_8ff38914bac5ae::t_98b619f518c45e 247-251
+apps/web/src/components/auth-layout.tsx
+  s_8ff38914bac5ae::t_697a4d28baa8bd 17-48,60-68,138,147,171
+apps/web/src/components/email-step.tsx
+  s_8ff38914bac5ae::t_697a4d28baa8bd 49,151
+apps/web/src/components/profile-name-form.tsx
+  s_8ff38914bac5ae::t_899928f0936985 70
+  s_8ff38914bac5ae::t_98b619f518c45e 1-69,71-114
+apps/web/src/routes/app/account.tsx
+  s_8ff38914bac5ae::t_d2d3577d827a22 65
+  s_8ff38914bac5ae::t_899928f0936985 4,24-28,30,33-35,40-64,66-67,220-222,224,231,233
+  s_8ff38914bac5ae::t_98b619f518c45e 8,158-159,163,167-168,214-219,223,225-230,232,234-243,332-333
+  s_8ff38914bac5ae::t_751124e04fdf87 29
+  s_8ff38914bac5ae::t_5729d63e645539 68-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "bb6439eccd98ca669a1b80a6a5024cddda9b32e2",
+  "prompts": {},
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
