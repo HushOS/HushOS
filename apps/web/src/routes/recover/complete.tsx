@@ -69,6 +69,7 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     });
     return (
         <AuthLayout
+            purpose="recover"
             eyebrow={<Badge variant="success">Verified · {enrollment.email}</Badge>}
             title="Choose a new password"
             stamp="Step 2 of 2"

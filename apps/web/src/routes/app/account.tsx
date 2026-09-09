@@ -1,10 +1,11 @@
 import type { SecurityAction, SessionUser } from '@hushos/auth/protocol';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { ArrowRightIcon, TriangleAlertIcon } from 'lucide-react';
+import { ArrowRightIcon, PencilIcon, TriangleAlertIcon } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
 import { AccountSecurityForm, securityLabels } from '@/components/account-security-form';
+import { ProfileNameForm } from '@/components/profile-name-form';
 import { AuthInput } from '@/components/auth-input';
 import { CopyValue } from '@/components/copy-value';
 import { FormActions, FormNote, FormTable } from '@/components/form-rows';
@@ -20,16 +21,50 @@ export const Route = createFileRoute('/app/account')({
     component: AccountPage,
 });
 
+/* A ledger row on the same 152px grid as the form tables, so rows and forms line up. */
+const rowGrid = 'grid sm:grid-cols-[9.5rem_minmax(0,1fr)]';
+const rowLabel =
+    'eyebrow flex items-center px-4 pt-3.5 text-muted-foreground sm:h-12 sm:border-r sm:pt-0';
+const rowValue =
+    'flex min-w-0 items-center py-3.5 pr-5 pl-4 font-mono text-[13px] wrap-anywhere sm:h-12 sm:py-0 sm:pr-6';
+
 function Row({ label, value, copy }: { label: string; value: string; copy?: boolean }) {
     return (
-        <div className="grid border-b last:border-b-0 sm:grid-cols-[10rem_1fr]">
-            <dt className="eyebrow flex items-center px-5 pt-3.5 text-muted-foreground sm:border-r sm:px-8 sm:pt-0">
-                {label}
-            </dt>
-            <dd className="flex items-center px-5 py-3.5 font-mono text-[13px] wrap-anywhere sm:px-6">
-                {copy ? <CopyValue value={value} label={label} /> : value}
-            </dd>
+        <div className={`${rowGrid} border-b last:border-b-0`}>
+            <dt className={rowLabel}>{label}</dt>
+            <dd className={rowValue}>{copy ? <CopyValue value={value} label={label} /> : value}</dd>
         </div>
+    );
+}
+
+/* An editable row: the whole row is the control, and the blue pencil says so. */
+function EditableRow({
+    label,
+    value,
+    disabled,
+    onEdit,
+}: {
+    label: string;
+    value: string;
+    disabled?: boolean;
+    onEdit: () => void;
+}) {
+    return (
+        <button
+            type="button"
+            disabled={disabled}
+            onClick={onEdit}
+            aria-label={`Edit ${label.toLowerCase()}`}
+            data-cuelume-press="press"
+            data-cuelume-release="release"
+            className={`${rowGrid} w-full cursor-pointer border-b text-left transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50`}
+        >
+            <span className={rowLabel}>{label}</span>
+            <span className={`${rowValue} justify-between gap-4`}>
+                <span className="truncate">{value}</span>
+                <PencilIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+            </span>
+        </button>
     );
 }
 
@@ -120,12 +155,17 @@ function AccountPage() {
     const [securityAction, setSecurityAction] = useState<SecurityAction | null>(null);
     const [securityPending, setSecurityPending] = useState(false);
     const [securitySuccess, setSecuritySuccess] = useState('');
+    const [editingName, setEditingName] = useState(false);
+    const [nameSuccess, setNameSuccess] = useState('');
     const [confirming, setConfirming] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    /* One inline form at a time: opening any of them closes the others. */
     function openSecurity(action: SecurityAction) {
         setSecurityAction(action);
         setSecuritySuccess('');
+        setEditingName(false);
+        setNameSuccess('');
         setConfirming(false);
     }
     const deleteFields = z.object({
@@ -171,8 +211,37 @@ function AccountPage() {
                 title="Profile"
                 description="Your name, email, and account ID."
             >
+                <Collapse open={Boolean(nameSuccess)} className="border-b">
+                    <output className="block">
+                        <FormNote>{nameSuccess}</FormNote>
+                    </output>
+                </Collapse>
+                <Collapse open={!editingName}>
+                    <EditableRow
+                        label="Name"
+                        value={user.name}
+                        disabled={securityPending || pending}
+                        onEdit={() => {
+                            setEditingName(true);
+                            setNameSuccess('');
+                            setSecurityAction(null);
+                            setSecuritySuccess('');
+                            setConfirming(false);
+                        }}
+                    />
+                </Collapse>
+                <Collapse open={editingName} className="border-b">
+                    <ProfileNameForm
+                        user={user}
+                        onCancel={() => setEditingName(false)}
+                        onPending={setSecurityPending}
+                        onSuccess={() => {
+                            setEditingName(false);
+                            setNameSuccess('Name updated.');
+                        }}
+                    />
+                </Collapse>
                 <dl>
-                    <Row label="Name" value={user.name} />
                     <Row label="Email" value={user.email} />
                     <Row label="Account ID" value={user.id} copy />
                 </dl>
@@ -260,6 +329,8 @@ function AccountPage() {
                             setConfirming(true);
                             setSecurityAction(null);
                             setSecuritySuccess('');
+                            setEditingName(false);
+                            setNameSuccess('');
                         }}
                     >
                         Delete account… <ArrowRightIcon aria-hidden="true" />

@@ -237,6 +237,15 @@ export async function getSessionUser(tokenHash: Buffer) {
     return result.user;
 }
 
+export async function updateUserName(userId: string, name: string) {
+    const [user] = await db
+        .update(users)
+        .set({ name, updatedAt: new Date() })
+        .where(eq(users.id, userId))
+        .returning(userFields);
+    return user ?? null;
+}
+
 export async function deleteSession(tokenHash: Buffer) {
     await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
 }

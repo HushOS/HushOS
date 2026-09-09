@@ -63,6 +63,7 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     });
     return (
         <AuthLayout
+            purpose="register"
             eyebrow={<Badge variant="success">Verified · {enrollment.email}</Badge>}
             title="Set up your account"
             stamp="Step 2 of 2"

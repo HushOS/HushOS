@@ -80,6 +80,13 @@ export function normalizeEmail(email: string) {
 
 let nextCleanupAt = 0;
 
+function normalizeName(value: string) {
+    const name = value.trim().normalize('NFC');
+    if (Array.from(name).length < 1 || Array.from(name).length > 100)
+        throw new AuthError('Use a name between 1 and 100 characters.');
+    return name;
+}
+
 export async function guardAuthMutation(request: Request) {
     if (request.headers.get('origin') !== config().origin)
         throw new AuthError('This request must come from HushOS.', 403);
@@ -202,9 +209,7 @@ export async function finishRegistration(
     const enrollment = token ? await getEnrollment(request) : null;
     if (!token || !enrollment)
         throw new AuthError('Your registration session expired. Verify your email again.', 401);
-    const name = input.name.trim().normalize('NFC');
-    if (Array.from(name).length < 1 || Array.from(name).length > 100)
-        throw new AuthError('Use a name between 1 and 100 characters.');
+    const name = normalizeName(input.name);
     if (
         input.envelope.envelopeVersion !== ENVELOPE_VERSION ||
         input.envelope.keyVersion !== 1 ||
@@ -352,6 +357,14 @@ export async function finishLogin(
 export async function getSessionUser(request: Request) {
     const token = readToken(request, 'session');
     return token ? authRepository.getSessionUser(hash(token)) : null;
+}
+
+export async function updateProfile(request: Request, input: { name: string }) {
+    const user = await getSessionUser(request);
+    if (!user) throw new AuthError('Sign in to update your profile.', 401);
+    const updated = await authRepository.updateUserName(user.id, normalizeName(input.name));
+    if (!updated) throw new AuthError('Sign in to update your profile.', 401);
+    return { user: { ...updated, credentialVersion: user.credentialVersion } };
 }
 
 export async function logout(request: Request) {

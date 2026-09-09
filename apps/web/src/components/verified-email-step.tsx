@@ -51,6 +51,7 @@ export function VerifiedEmailStep({
     if (enrollment && !pending && !error) return children(enrollment);
     return (
         <AuthLayout
+            purpose={purpose}
             title={pending ? 'Verifying your email…' : 'Verify your email'}
             stamp={pending ? 'Checking link' : 'Link required'}
             description={

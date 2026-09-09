@@ -46,6 +46,7 @@ export function EmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
     });
     return (
         <AuthLayout
+            purpose={purpose}
             title={purpose === 'register' ? 'Create your account' : 'Recover your account'}
             stamp={purpose === 'register' ? 'Step 1 of 2' : 'Step 1 of 2'}
             description={
@@ -147,6 +148,7 @@ export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' })
     ];
     return (
         <AuthLayout
+            purpose={purpose}
             title="Check your inbox"
             stamp="Link sent"
             description="We’ve sent a verification link. It’s valid for 30 minutes and only works once."

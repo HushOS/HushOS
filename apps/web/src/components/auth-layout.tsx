@@ -14,7 +14,38 @@ const ledger = [
     ['Source', 'AGPL · Public'],
 ] as const;
 
-export function SessionLedger() {
+export type AuthPurpose = 'login' | 'register' | 'recover';
+
+/* Three plain sentences per flow: what this page will do, in order, and nothing it won't. */
+const steps: Record<AuthPurpose, { title: string; items: readonly string[] }> = {
+    login: {
+        title: 'What happens when you sign in',
+        items: [
+            'Your browser proves your password to the server without revealing it.',
+            'Your account key is unwrapped on this device. The server only ever holds it encrypted.',
+            'This device stays unlocked until you lock it or sign out.',
+        ],
+    },
+    register: {
+        title: 'What happens when you create an account',
+        items: [
+            'We email you a link to confirm the address is yours.',
+            'Your browser creates your account key and wraps it with your password. The password itself is never sent.',
+            'You get a 24-word recovery phrase, the only way back in if you forget the password.',
+        ],
+    },
+    recover: {
+        title: 'What happens when you recover',
+        items: [
+            'We email you a link to confirm the address is yours.',
+            'Your 24-word phrase unwraps your account key on this device.',
+            'You choose a new password. Your account key stays the same.',
+        ],
+    },
+};
+
+export function SessionLedger({ purpose = 'login' }: { purpose?: AuthPurpose }) {
+    const guide = steps[purpose];
     return (
         <aside className="hidden flex-col border-r lg:flex">
             <p className="eyebrow border-b px-5 py-4 text-muted-foreground">Session ledger</p>
@@ -26,16 +57,15 @@ export function SessionLedger() {
                     </div>
                 ))}
             </dl>
-            <ul className="flex flex-col gap-2.5 px-5 py-5 font-mono text-xs text-muted-foreground">
-                <li className="flex items-center gap-2.5">
-                    <span aria-hidden="true" className="size-2.5 bg-success" />
-                    Server reachable
-                </li>
-                <li className="flex items-center gap-2.5">
-                    <span aria-hidden="true" className="size-2.5 bg-ink" />
-                    Device locked until you sign in
-                </li>
-            </ul>
+            <p className="eyebrow px-5 pt-5 text-muted-foreground">{guide.title}</p>
+            <ol className="flex flex-col gap-3.5 px-5 py-4 text-[13px] leading-relaxed">
+                {guide.items.map((item, index) => (
+                    <li key={item} className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2.5">
+                        <span className="eyebrow pt-1 text-muted-foreground">{index + 1}</span>
+                        <span className="text-pretty">{item}</span>
+                    </li>
+                ))}
+            </ol>
             <p className="mt-auto border-t px-5 py-6 font-mono text-[2.6rem] leading-[1.05] font-medium tracking-tight text-balance">
                 A private place for your work.
             </p>
@@ -105,6 +135,7 @@ export function Stamp({
 
 export function AuthLayout({
     embedded = false,
+    purpose = 'login',
     title,
     stamp,
     description,
@@ -113,6 +144,7 @@ export function AuthLayout({
     footer,
 }: {
     embedded?: boolean;
+    purpose?: AuthPurpose;
     title: string;
     stamp?: string;
     description?: ReactNode;
@@ -136,7 +168,7 @@ export function AuthLayout({
         <div className="flex min-h-svh flex-col">
             <SiteHeader />
             <main className="grid flex-1 lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
-                <SessionLedger />
+                <SessionLedger purpose={purpose} />
                 <div className="flex flex-col justify-center px-5 py-10 animate-in fade-in slide-in-from-bottom-2 duration-400 ease-out-expo sm:px-10 lg:px-16">
                     {card}
                 </div>

@@ -244,6 +244,11 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ request, body }) => auth.confirmRecoveryBackup(request, body.recoveryVersion),
     )
     .get('/auth/session', async ({ request }) => ({ user: await auth.getSessionUser(request) }))
+    .post(
+        '/auth/profile',
+        { body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }) },
+        ({ request, body }) => auth.updateProfile(request, body),
+    )
     .post('/auth/logout', { body: t.Object({}) }, async ({ request, set }) => {
         set.headers['set-cookie'] = await auth.logout(request);
         return { success: true };

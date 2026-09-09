@@ -352,6 +352,7 @@ export function createAuthClient(
                 }
             }),
         session: () => request<{ user: SessionUser | null }>('session'),
+        updateProfile: (name: string) => request<{ user: SessionUser }>('profile', { name }),
         login: (email: string, password: string) => exclusive(() => login(email, password)),
         register: (email: string, name: string, password: string) =>
             exclusive(async () => {
