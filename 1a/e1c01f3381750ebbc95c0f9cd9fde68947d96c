@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_8ff38914bac5ae::t_adcb96657a578b 122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1ae1c01f3381750ebbc95c0f9cd9fde68947d96c",
+  "prompts": {},
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
