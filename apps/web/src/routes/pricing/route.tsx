@@ -6,6 +6,7 @@ import { authError } from '@/lib/form';
 import { billingQueryOptions, catalogueQueryOptions, formatGiB, formatMoney } from '@/lib/queries';
 import { publicOrigin } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
+import { tiersOf } from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
@@ -127,34 +128,6 @@ function cheapest(plans: Plan[]) {
         ? monthly.reduce((a, b) => (a.amount <= b.amount ? a : b))
         : plans[0];
     return plan ? formatMoney(plan.amount, plan.currency) : '$0';
-}
-
-type Tier = {
-    key: string;
-    name: string;
-    description: string | null;
-    quotaBytes: string;
-    recommended: boolean;
-    month?: Plan;
-    year?: Plan;
-};
-
-/* Monthly and yearly are separate products at Polar; here they are one column per storage size. */
-function tiersOf(plans: Plan[]) {
-    const tiers = new Map<string, Tier>();
-    for (const plan of plans) {
-        const tier = tiers.get(plan.quotaBytes) ?? {
-            key: plan.quotaBytes,
-            name: plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, ''),
-            description: plan.description,
-            quotaBytes: plan.quotaBytes,
-            recommended: false,
-        };
-        tier[plan.interval] = plan;
-        tier.recommended ||= plan.recommended;
-        tiers.set(plan.quotaBytes, tier);
-    }
-    return [...tiers.values()];
 }
 
 type Interval = 'month' | 'year';
