@@ -1,0 +1,268 @@
+.env.production.example
+  s_8ff38914bac5ae::t_51648d85fb88ba 47-57
+  s_8ff38914bac5ae::t_0039fd7fd5872d 17-19
+packages/db/src/index.ts
+  s_8ff38914bac5ae::t_be21c298c05081 3
+packages/env/src/server.ts
+  s_8ff38914bac5ae::t_be21c298c05081 2,8-9
+apps/web/src/routes/register/route.tsx
+  s_8ff38914bac5ae::t_36a125f2526a93 5-6
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_8ff38914bac5ae::t_c07b91e89829a3 480
+  s_8ff38914bac5ae::t_172fdb8cafdf2a 482-496,500-503,505-516,518-524,561,567-568
+  s_8ff38914bac5ae::t_70e5d9c11ddd35 10,334,336-337
+  s_8ff38914bac5ae::t_618b667594443c 307,556-560,573-583
+  s_8ff38914bac5ae::t_2a39bfa9904658 15-21,103-107,156,159-162,164-177
+  s_8ff38914bac5ae::t_d17f08c0b98339 223,322,327-328,335,338-341
+  s_8ff38914bac5ae::t_4f30cff22e8b91 123-139,144,146,266,418,434
+  s_8ff38914bac5ae::t_1bb039a70c1f14 152-153,201,267-270,385,406-409,436-440,551-553
+  s_8ff38914bac5ae::t_63ba2bafb5287f 1-9,11-14,22-33,39,43-102,108-122,140-143,145,147-151,154-155,157-158,163,178-200,202-222,224-229,231-236,244-265,271-275,277-283,285-287,289-295,297,302-306,308-321,343-384,386-405,410-417,419-433,435,441-479,481,525-550,554-555,569-572,584-599
+  s_8ff38914bac5ae::t_4207b3b01a1b7c 34-38
+  s_8ff38914bac5ae::t_1d97bb8ad740f6 230,323-326,329-333,342,517,562-566
+  s_8ff38914bac5ae::t_c65e400138aa0a 237-243,276
+  s_8ff38914bac5ae::t_a6af998083fc81 284,288,497-499
+  s_8ff38914bac5ae::t_85e4d3caaa5e83 296,298-301
+  s_8ff38914bac5ae::t_40fc10e3d1fe4b 504
+  s_8ff38914bac5ae::t_36a125f2526a93 40-42
+apps/web/src/components/app-sidebar.tsx
+  s_8ff38914bac5ae::t_c8bdd5e9cba7c6 70
+  s_8ff38914bac5ae::t_505ad4f5ea81c0 4,33,39,62-67,69,71-72,82,122-124
+  s_8ff38914bac5ae::t_118024c71e1c7a 22-28,40-41,43-49,68
+  s_8ff38914bac5ae::t_1bb039a70c1f14 125-135
+apps/web/src/lib/billing.ts
+  s_8ff38914bac5ae::t_8782f02ec2bb89 5,47-48,51-52,55,63,65
+  s_8ff38914bac5ae::t_c65e400138aa0a 8-10
+  s_8ff38914bac5ae::t_4207b3b01a1b7c 1-3,6-7,11-46
+  s_8ff38914bac5ae::t_f297430ca8a178 4,49-50,53-54,56-62,64
+apps/web/src/routes/register/index.tsx
+  s_8ff38914bac5ae::t_5ff0ec7dde266e 1,3-5,7,9,11-12,14
+  s_8ff38914bac5ae::t_244adb22aa0606 10,13
+packages/env/src/auth.ts
+  s_8ff38914bac5ae::t_918a8defcb873e 3,5,7
+packages/auth/src/server.ts
+  s_8ff38914bac5ae::t_4f30cff22e8b91 16
+  s_8ff38914bac5ae::t_f55938f8b080ec 157-167,172,184
+  s_8ff38914bac5ae::t_a180610deda1bc 711,740-742
+apps/web/src/routes/index.tsx
+  s_8ff38914bac5ae::t_b2e5ada00a4d44 23-25
+  s_8ff38914bac5ae::t_8a2c323e1aa17b 22
+apps/web/src/components/legal-layout.tsx
+  s_8ff38914bac5ae::t_0039fd7fd5872d 1-2,38-51,55,59,63-71
+apps/web/src/components/site-header.tsx
+  s_8ff38914bac5ae::t_8782f02ec2bb89 46,50
+  s_8ff38914bac5ae::t_b2e5ada00a4d44 104
+package.json
+  s_8ff38914bac5ae::t_a81b64cc674a38 34
+  s_8ff38914bac5ae::t_1b283fb1afa362 35
+packages/billing/tsconfig.json
+  s_8ff38914bac5ae::t_cf6203ef1a3dfb 1-3,6,8
+  s_8ff38914bac5ae::t_9ee0863201c688 4-5,7
+packages/billing/scripts/seed.ts
+  s_8ff38914bac5ae::t_9220bf5bd8a249 43-45,84-86
+  s_8ff38914bac5ae::t_a81b64cc674a38 2-5,10-13,15-23,25,27,29-33,59,76-77,83,88-89
+  s_8ff38914bac5ae::t_fa8ba8add9e60a 1,6-9,14,24,26,28,34-40,46-58,60-75,78-82,87
+  s_8ff38914bac5ae::t_1df19da3fd8694 41-42
+packages/db/src/schema/auth.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 20-21,145-146
+  s_8ff38914bac5ae::t_1bb039a70c1f14 7
+packages/billing/src/api.ts
+  s_8ff38914bac5ae::t_c15047396d29dd 37-38
+  s_8ff38914bac5ae::t_85e4d3caaa5e83 44-45
+  s_8ff38914bac5ae::t_33db24f3242b91 1-15,17-36,39-43,46-50
+  s_8ff38914bac5ae::t_d66bf758506f56 16
+packages/jobs/package.json
+  s_8ff38914bac5ae::t_7881b81f839620 16
+apps/web/src/routes/__root.tsx
+  s_8ff38914bac5ae::t_f297430ca8a178 75,77
+  s_8ff38914bac5ae::t_8782f02ec2bb89 21,76,78
+apps/web/src/routeTree.gen.ts
+  s_8ff38914bac5ae::t_a831677be92c44 19,39,77-81,177-181,199,221,230,249,259,282,293,315,324,343,352,375,385,453-459,593-599,651,658,686
+packages/env/package.json
+  s_8ff38914bac5ae::t_918a8defcb873e 11-12
+  s_8ff38914bac5ae::t_be21c298c05081 10
+apps/web/src/lib/queries.ts
+  s_8ff38914bac5ae::t_8782f02ec2bb89 2,32
+  s_8ff38914bac5ae::t_7881b81f839620 18-19,21-27
+  s_8ff38914bac5ae::t_36a125f2526a93 28-31
+  s_8ff38914bac5ae::t_758ffc5b7ea424 15-17
+  s_8ff38914bac5ae::t_4207b3b01a1b7c 20
+apps/web/src/content/legal/privacy.mdx
+  s_8ff38914bac5ae::t_0039fd7fd5872d 7
+  s_8ff38914bac5ae::t_c0bb44c6b12c0f 12-14
+  s_8ff38914bac5ae::t_3f43e7cba5385c 3,30-37,59-65,71,73,75,79
+packages/jobs/src/client.ts
+  s_8ff38914bac5ae::t_51648d85fb88ba 12,19,50-55
+  s_8ff38914bac5ae::t_f46ecf7f308a60 56-57
+packages/db/src/schema/billing.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 53-65
+  s_8ff38914bac5ae::t_be21c298c05081 1-52
+packages/jobs/src/worker.ts
+  s_8ff38914bac5ae::t_51648d85fb88ba 1,5,33-44
+  s_8ff38914bac5ae::t_feda37e9321e2d 45
+apps/web/src/components/email-step.tsx
+  s_8ff38914bac5ae::t_bebcf277d10254 1,17-23,40
+apps/web/src/routes/pricing/route.tsx
+  h_f7ba60a6997566 5-9,200,372
+  s_8ff38914bac5ae::t_035a8b0d9a5d5a 351
+  s_8ff38914bac5ae::t_b9360a4896a07d 134,139,148,151,157-158,164,187-191,198-199,204-206,225-228,239-269,273,276-277,280-284,305-319,321-326,329-331,337-339,345-347,353-360,367-370
+  s_8ff38914bac5ae::t_ba7e2fadaf301b 185,202-203,209,211,285
+  s_8ff38914bac5ae::t_5ff0ec7dde266e 21-93,96-111,113-122,126-127,287-300
+  s_8ff38914bac5ae::t_f297430ca8a178 192-197
+  s_8ff38914bac5ae::t_c65e400138aa0a 1-2,4,10-11,14,18-20,94-95,128,138,140-147,149-150,152-156,159-161,163,170-179,183-184,207-208,210,212-213,215,222-224,286,301-304,327-328,332,334-336,340-344,348-350,364,366,371,373-375
+  s_8ff38914bac5ae::t_4207b3b01a1b7c 12-13,15-17
+  s_8ff38914bac5ae::t_1bb039a70c1f14 123-125,129-133,135-137,180-182
+  s_8ff38914bac5ae::t_d0593ceb73d722 186,320
+  s_8ff38914bac5ae::t_a6001729512503 162
+  s_8ff38914bac5ae::t_c07b91e89829a3 112
+  s_8ff38914bac5ae::t_ab000c62f2d1fd 3
+  s_8ff38914bac5ae::t_b687341fc12290 165-169,214,216-221,229-238,270-272,274-275,278-279
+  s_8ff38914bac5ae::t_a9e67adac8295e 201,333,352,361-363,365
+packages/auth/src/protocol.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 6-8
+.env.example
+  s_8ff38914bac5ae::t_0039fd7fd5872d 14-16
+  s_8ff38914bac5ae::t_51648d85fb88ba 38-45
+packages/billing/package.json
+  s_8ff38914bac5ae::t_cf6203ef1a3dfb 1-11,14-26
+  s_8ff38914bac5ae::t_a81b64cc674a38 12-13
+packages/auth/src/client.ts
+  s_8ff38914bac5ae::t_bebcf277d10254 7
+  s_8ff38914bac5ae::t_f55938f8b080ec 240-244
+apps/web/src/lib/api-client.ts
+  s_8ff38914bac5ae::t_7881b81f839620 1-26
+packages/billing/src/protocol.ts
+  s_8ff38914bac5ae::t_33db24f3242b91 1-27
+packages/db/drizzle/20260911025137_billing/migration.sql
+  s_8ff38914bac5ae::t_6956b6649e77c8 1-48
+apps/web/src/content/legal/terms.mdx
+  s_8ff38914bac5ae::t_0039fd7fd5872d 7-8,11
+  s_8ff38914bac5ae::t_3f43e7cba5385c 3,36-48,52,54,56,60,64
+apps/web/src/routes/terms/route.tsx
+  s_8ff38914bac5ae::t_0039fd7fd5872d 4,7,15,17-21
+README.md
+  s_8ff38914bac5ae::t_030b086b665bd8 3,90
+packages/billing/src/server.ts
+  s_8ff38914bac5ae::t_c07b91e89829a3 192-193,197
+  s_8ff38914bac5ae::t_f297430ca8a178 56-61,203
+  s_8ff38914bac5ae::t_35d3d75d43605a 1,3-10,13-49,62-89,93-102,104-141,143-154,168-184,186-187,199-202,210-211,221,234-236,258-263,265-308,316-456
+  s_8ff38914bac5ae::t_70e5d9c11ddd35 212-215,218-220,222-233,237-244
+  s_8ff38914bac5ae::t_1bb039a70c1f14 90-92,309-314
+  s_8ff38914bac5ae::t_918a8defcb873e 2,142,216-217,264
+  s_8ff38914bac5ae::t_85e4d3caaa5e83 204-209,245-257
+  s_8ff38914bac5ae::t_c15047396d29dd 155-167
+  s_8ff38914bac5ae::t_618b667594443c 50-55,185,188-191,194-196,198
+  s_8ff38914bac5ae::t_5b2d7c6374803f 315
+  s_8ff38914bac5ae::t_ddbe0e6fe8fac6 11-12,103
+apps/web/package.json
+  s_8ff38914bac5ae::t_7881b81f839620 23
+turbo.json
+  s_8ff38914bac5ae::t_51648d85fb88ba 30-35,71-76
+  s_8ff38914bac5ae::t_0039fd7fd5872d 13-14,54-55
+compose.yaml
+  s_8ff38914bac5ae::t_51648d85fb88ba 63-67,93-97
+  s_8ff38914bac5ae::t_0039fd7fd5872d 45-46
+packages/db/src/schema/index.ts
+  s_8ff38914bac5ae::t_be21c298c05081 6
+apps/web/src/routes/privacy/route.tsx
+  s_8ff38914bac5ae::t_0039fd7fd5872d 4,7,15,17-21
+CONTRIBUTING.md
+  s_8ff38914bac5ae::t_030b086b665bd8 31,97-99
+  s_8ff38914bac5ae::t_e471a13d3f5bda 100
+packages/env/src/billing.ts
+  s_8ff38914bac5ae::t_be21c298c05081 1-22
+apps/web/src/routes/sitemap[.]xml.ts
+  s_8ff38914bac5ae::t_b2e5ada00a4d44 10
+packages/env/src/app.ts
+  s_8ff38914bac5ae::t_918a8defcb873e 1-27,32-35
+  s_8ff38914bac5ae::t_0039fd7fd5872d 28-31
+docs/opaque-auth-design.md
+  s_8ff38914bac5ae::t_030b086b665bd8 3,174,178
+apps/web/src/lib/social.ts
+  s_8ff38914bac5ae::t_1bb039a70c1f14 49-54
+  s_8ff38914bac5ae::t_918a8defcb873e 1,5
+  s_8ff38914bac5ae::t_c0bb44c6b12c0f 11-14
+  s_8ff38914bac5ae::t_0039fd7fd5872d 7-10,15-16
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_8ff38914bac5ae::t_51648d85fb88ba 1-32
+packages/auth/src/api.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 8,43-47
+docs/self-hosting.md
+  s_8ff38914bac5ae::t_f1d826e5cb81d3 183
+  s_8ff38914bac5ae::t_a824eeacaa567c 175-177,179-181
+  s_8ff38914bac5ae::t_c0bb44c6b12c0f 144-146,148-159
+  s_d51d4fab781458::t_521807a6835803 17
+  s_8ff38914bac5ae::t_030b086b665bd8 171-174,178,182,184-188,199
+  s_8ff38914bac5ae::t_0039fd7fd5872d 147
+apps/web/src/routes/_authenticated/app/index.tsx
+  s_8ff38914bac5ae::t_1e99e0b964a2bb 14,31,51-52,54-65,93-104
+  s_8ff38914bac5ae::t_c15047396d29dd 15,66-70
+  s_8ff38914bac5ae::t_1bb039a70c1f14 53
+apps/web/src/routes/llms[.]txt.ts
+  s_8ff38914bac5ae::t_b2e5ada00a4d44 35
+  s_8ff38914bac5ae::t_5ff0ec7dde266e 2-3,10,12-22,37-39,45
+  s_8ff38914bac5ae::t_32789a60c47639 36
+packages/db/src/billing.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 4,227-242
+  s_8ff38914bac5ae::t_7fc8a93ec4accb 1-3,5-11,15-49,58-106,110-204,209-226,243
+  s_8ff38914bac5ae::t_1bb039a70c1f14 205-208
+  s_8ff38914bac5ae::t_337521995204d1 12-14,50-57,107-109
+apps/web/src/lib/billing-api.ts
+  s_8ff38914bac5ae::t_7881b81f839620 1-14
+packages/db/src/auth.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 13,123-129
+apps/web/src/lib/api.server.ts
+  s_8ff38914bac5ae::t_bc1ebbea2bae67 108
+  s_8ff38914bac5ae::t_bebcf277d10254 100-106,194-197
+  s_8ff38914bac5ae::t_a180610deda1bc 9-10,41-56,73-76,88-99,107,109-110,361-387,410-412,493-505,507
+  s_8ff38914bac5ae::t_1bb039a70c1f14 198-203,298-302
+  s_8ff38914bac5ae::t_27dc08135e14b0 111,506
+packages/db/drizzle/20260911025137_billing/snapshot.json
+  s_8ff38914bac5ae::t_1bb039a70c1f14 2-2816,2818-2820
+  s_8ff38914bac5ae::t_6956b6649e77c8 1,2817
+apps/web/src/components/ui/select.tsx
+  s_8ff38914bac5ae::t_7c2964d4875a9d 1-4,6,9-15,19-25,28-46,50-55,57,59-74,76,78-88,91-98,101-105,107-122,125-132,136-137,139-150,154-155,157-168,172-182
+  s_8ff38914bac5ae::t_7044133ec087cb 106
+  s_8ff38914bac5ae::t_dc949eb6464eaa 56,75,77
+  s_8ff38914bac5ae::t_e5246884a2156e 5,7-8,16-18,26-27,47-49,58,89-90,99-100,123-124,133-135,138,151-153,156,169-171
+packages/db/src/schema/relations.ts
+  s_8ff38914bac5ae::t_f55938f8b080ec 56-58
+  s_8ff38914bac5ae::t_be21c298c05081 3,8,54-55,59-69,71
+  s_8ff38914bac5ae::t_f9792f58b92a5d 70
+apps/web/src/components/user-menu.tsx
+  s_8ff38914bac5ae::t_505ad4f5ea81c0 126-133
+  s_8ff38914bac5ae::t_36a125f2526a93 4,26,69
+apps/web/src/lib/auth-api.ts
+  s_8ff38914bac5ae::t_bebcf277d10254 7-8
+  s_8ff38914bac5ae::t_7881b81f839620 2,4
+bun.lock
+  s_8ff38914bac5ae::t_e108460b2f0dc2 26,96-109,182,393-394,607-608
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "21bd92247003b010c64b7bdec282be4dace502d9",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_8ff38914bac5ae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83d8759b-56a9-40dd-87c4-106e3f5bd99b",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
