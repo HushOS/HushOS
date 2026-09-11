@@ -31,7 +31,8 @@
         "email:preview": "bun run --cwd packages/emails preview",
         "email:build": "bun run --cwd packages/emails preview:build",
         "email:start": "bun run --cwd packages/emails preview:start",
-        "images:optimize": "bun run --cwd apps/web images:optimize"
+        "images:optimize": "bun run --cwd apps/web images:optimize",
+        "polar:seed": "bun --env-file=../../.env run --cwd packages/billing seed"
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",

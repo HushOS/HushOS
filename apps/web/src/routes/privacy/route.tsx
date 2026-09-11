@@ -1,10 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { LegalLayout } from '@/components/legal-layout';
 import Privacy, { frontmatter } from '@/content/legal/privacy.mdx';
-import { publicOrigin } from '@/lib/social';
+import { publicOrigin, readOperator } from '@/lib/social';
 
 export const Route = createFileRoute('/privacy')({
-    loader: () => ({ origin: publicOrigin() }),
+    loader: () => ({ origin: publicOrigin(), operator: readOperator() }),
     head: ({ loaderData }) => ({
         meta: [
             { title: `${String(frontmatter.title)} · HushOS` },
@@ -12,5 +12,10 @@ export const Route = createFileRoute('/privacy')({
         ],
         links: loaderData ? [{ rel: 'canonical', href: `${loaderData.origin}/privacy` }] : [],
     }),
-    component: () => <LegalLayout document={Privacy} frontmatter={frontmatter} />,
+    component: LegalPage,
 });
+
+function LegalPage() {
+    const { operator } = Route.useLoaderData();
+    return <LegalLayout document={Privacy} frontmatter={frontmatter} operator={operator} />;
+}

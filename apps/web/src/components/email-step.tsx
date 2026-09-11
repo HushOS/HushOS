@@ -1,3 +1,4 @@
+import type { SignupIntent } from '@hushos/auth/protocol';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { Link, useRouter } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
@@ -13,7 +14,13 @@ import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 
-export function EmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
+export function EmailStep({
+    purpose,
+    intent,
+}: {
+    purpose: 'register' | 'recover';
+    intent?: SignupIntent;
+}) {
     const router = useRouter();
     const [error, setError] = useState('');
     const [pending, setPending] = useState(false);
@@ -30,7 +37,7 @@ export function EmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
             setError('');
             setPending(true);
             try {
-                await authClient.requestEmail(value.email.trim(), purpose);
+                await authClient.requestEmail(value.email.trim(), purpose, intent);
                 form.reset();
                 cue('success');
                 await router.navigate({

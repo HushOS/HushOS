@@ -4,7 +4,7 @@ import type { CryptoTransport } from './crypto-transport';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
 import type { DeviceKeyStore } from './device-storage';
-import type { SessionUser } from './protocol';
+import type { SessionUser, SignupIntent } from './protocol';
 import type { WorkerRequests, WorkerResults } from './worker';
 
 export function createAuthClient(
@@ -237,8 +237,11 @@ export function createAuthClient(
             broadcastLock();
             await deviceKeys.clear();
         },
-        requestEmail: (email: string, purpose: 'register' | 'recover' = 'register') =>
-            api.requestEmail(purpose, email),
+        requestEmail: (
+            email: string,
+            purpose: 'register' | 'recover' = 'register',
+            intent?: SignupIntent,
+        ) => api.requestEmail(purpose, email, intent),
         verifyEmail: (token: string) => api.verifyEmail(token),
         enrollment: (purpose: 'register' | 'recover' = 'register') => api.enrollment(purpose),
         deleteAccount: (password: string) =>

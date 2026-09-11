@@ -13,6 +13,7 @@ import {
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
 import { authRepository } from '@hushos/db';
+import type { SignupIntent } from '@hushos/db/schema';
 import { sendVerificationEmail } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
 
@@ -153,10 +154,22 @@ async function limitPasswordAttempts(key: string) {
         throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
 }
 
+const INTENT_VALUE = /^[A-Za-z0-9_-]{1,64}$/;
+function normalizeIntent(intent: SignupIntent | undefined) {
+    if (!intent) return undefined;
+    const clean: SignupIntent = {};
+    for (const key of ['plan', 'referral', 'source'] as const) {
+        const value = intent[key];
+        if (typeof value === 'string' && INTENT_VALUE.test(value)) clean[key] = value;
+    }
+    return Object.keys(clean).length ? clean : undefined;
+}
+
 export async function requestRegistrationEmail(
     email: string,
     purpose: 'register' | 'recover' = 'register',
     address = 'unknown',
+    intent?: SignupIntent,
 ) {
     const normalizedEmail = normalizeEmail(email);
     await limitEmailSend(address);
@@ -168,6 +181,7 @@ export async function requestRegistrationEmail(
         normalizedEmail,
         verificationTokenHash: hash(token),
         expiresAt: new Date(Date.now() + ENROLLMENT_SECONDS * 1000),
+        intent: purpose === 'register' ? normalizeIntent(intent) : undefined,
     });
     try {
         // The fragment is never sent in an HTTP request or recorded in access logs.
@@ -694,6 +708,7 @@ export async function startAccountDeletion(request: Request, startLoginRequest: 
 export async function finishAccountDeletion(
     request: Request,
     input: { attemptToken: string; finishLoginRequest: string },
+    beforeDelete?: (userId: string) => Promise<void>,
 ) {
     const user = await getSessionUser(request);
     const token = readToken(request, 'session');
@@ -722,6 +737,9 @@ export async function finishAccountDeletion(
     } catch {
         throw failure();
     }
+    // Anything billed to the account stops before the account goes; an outage there
+    // leaves the account in place rather than a subscription without an owner.
+    await beforeDelete?.(user.id);
     if (
         !(await authRepository.deleteAccount({
             userId: user.id,

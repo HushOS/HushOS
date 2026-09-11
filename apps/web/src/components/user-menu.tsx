@@ -1,6 +1,7 @@
 import { Link, useRouter } from '@tanstack/react-router';
 import {
     ChevronsUpDownIcon,
+    CreditCardIcon,
     KeyRoundIcon,
     LogOutIcon,
     SettingsIcon,
@@ -22,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { authClient } from '@/lib/auth-client';
 import { forgetSession } from '@/lib/session';
+import { useBillingEnabled } from '@/lib/queries';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
 
 export function initials(name: string) {
@@ -64,6 +66,7 @@ export function UserMenu({
 }) {
     const router = useRouter();
     const soundsEnabled = useSoundsEnabled();
+    const billing = useBillingEnabled();
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     async function signOut() {
@@ -120,6 +123,14 @@ export function UserMenu({
                         >
                             <SettingsIcon aria-hidden="true" /> Account settings
                         </DropdownMenuItem>
+                        {billing && (
+                            <DropdownMenuItem
+                                render={<Link to="/app/billing" />}
+                                data-cuelume-hover="tick"
+                            >
+                                <CreditCardIcon aria-hidden="true" /> Billing
+                            </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                             render={<Link to="/app/recovery-key" />}
                             data-cuelume-hover="tick"

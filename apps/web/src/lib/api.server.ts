@@ -6,6 +6,8 @@ import { useRequest } from 'nitro/context';
 import { API_SERVICE } from '@hushos/shared';
 import { Elysia, t, ValidationError, ParseError } from 'elysia';
 import * as auth from '@hushos/auth/server';
+import * as billing from '@hushos/billing/server';
+import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 
 import { useLogger, useRequestId } from '@/lib/logging.server';
 
@@ -36,6 +38,22 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
                 message: 'Authentication is temporarily unavailable. Please try again.',
             });
         }
+        if (new URL(request.url).pathname.startsWith('/api/billing/')) {
+            if (error instanceof billing.BillingError || error instanceof auth.AuthError) {
+                if (error.status >= 500) {
+                    useLogger().set({ billing: { failure: describeFailure(error) } });
+                    useLogger().error(new Error('Billing request failed.'));
+                }
+                return status(error.status, { message: error.message });
+            }
+            if (error instanceof ValidationError || error instanceof ParseError)
+                return status(400, { message: 'Please check your information and try again.' });
+            useLogger().set({ billing: { failure: describeFailure(error) } });
+            useLogger().error(new Error('Billing request failed.'));
+            return status(503, {
+                message: 'Billing is temporarily unavailable. Please try again.',
+            });
+        }
         if (error instanceof Error) useLogger().error(error);
         if (error instanceof EvlogError) {
             const parsed = parseError(error);
@@ -52,7 +70,10 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
 /* What the operator gets to see about a failure: the class and machine code, one cause deep. */
 function describeFailure(error: unknown) {
     const source =
-        error instanceof auth.AuthError && error.cause instanceof Error ? error.cause : error;
+        (error instanceof auth.AuthError || error instanceof billing.BillingError) &&
+        error.cause instanceof Error
+            ? error.cause
+            : error;
     if (!(source instanceof Error)) return sanitizeFailure({ name: 'unknown' });
     const code = (source as Error & { code?: unknown }).code;
     const name = /^[A-Za-z0-9_.:-]{1,64}$/.test(source.name)
@@ -63,6 +84,30 @@ function describeFailure(error: unknown) {
 function requestAddress(request: Request) {
     return auth.clientAddress(request, useRequest().ip);
 }
+
+async function billingUser(request: Request) {
+    const user = await auth.getSessionUser(request);
+    if (!user) throw new auth.AuthError('Sign in to manage billing.', 401);
+    return user;
+}
+
+/* Browser-originated billing changes carry the app's Origin, like auth mutations. */
+async function billingMutation(request: Request) {
+    await auth.guardAuthMutation(request);
+    return billingUser(request);
+}
+
+const intentValue = t.String({ minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' });
+const intentSchema = t.Object({
+    plan: t.Optional(intentValue),
+    referral: t.Optional(intentValue),
+    source: t.Optional(intentValue),
+});
+
+const cancellationSchema = t.Object({
+    reason: t.Optional(t.UnionEnum(CANCELLATION_REASONS)),
+    comment: t.Optional(t.String({ maxLength: 500 })),
+});
 
 const emailSchema = t.String({
     minLength: 3,
@@ -146,8 +191,16 @@ export const apiApp = new Elysia({ prefix: '/api' })
         },
         ({ request, body }) => auth.initializeAccount(request, body),
     )
-    .post('/auth/register/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
-        auth.requestRegistrationEmail(body.email, 'register', requestAddress(request)),
+    .post(
+        '/auth/register/email',
+        { body: t.Object({ email: emailSchema, intent: t.Optional(intentSchema) }) },
+        ({ body, request }) =>
+            auth.requestRegistrationEmail(
+                body.email,
+                'register',
+                requestAddress(request),
+                body.intent,
+            ),
     )
     .post(
         '/auth/register/verify',
@@ -242,7 +295,11 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/auth/delete/finish',
         { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
         async ({ request, body, set }) => {
-            const result = await auth.finishAccountDeletion(request, body);
+            const result = await auth.finishAccountDeletion(
+                request,
+                body,
+                billing.revokeForDeletion,
+            );
             set.headers['set-cookie'] = [
                 auth.authCookie('session', null),
                 auth.authCookie('enrollment', null),
@@ -301,6 +358,33 @@ export const apiApp = new Elysia({ prefix: '/api' })
         set.headers['set-cookie'] = await auth.logout(request);
         return { success: true };
     })
+    .get('/billing/catalogue', ({ set }) => {
+        set.headers['Cache-Control'] = 'public, max-age=60';
+        return billing.listCatalogue();
+    })
+    .get('/billing', async ({ request }) => billing.getSummary(await billingUser(request)))
+    .post(
+        '/billing/checkout',
+        { body: t.Object({ productId: t.String({ minLength: 1, maxLength: 100 }) }) },
+        async ({ request, body }) =>
+            billing.startCheckout(
+                await billingMutation(request),
+                body.productId,
+                requestAddress(request),
+            ),
+    )
+    .post('/billing/portal', { body: t.Object({}) }, async ({ request }) =>
+        billing.createPortalSession(await billingMutation(request)),
+    )
+    .post('/billing/sync', { body: t.Object({}) }, async ({ request }) =>
+        billing.sync(await billingMutation(request)),
+    )
+    .post('/billing/cancel', { body: cancellationSchema }, async ({ request, body }) =>
+        billing.cancelAtPeriodEnd(await billingMutation(request), body),
+    )
+    .post('/billing/resume', { body: t.Object({}) }, async ({ request }) =>
+        billing.resume(await billingMutation(request)),
+    )
     .get('/health', () => ({ status: 'ok' as const, service: API_SERVICE }))
     .get('/ready', async ({ status, log, set }) => {
         set.headers['Cache-Control'] = 'no-store';
@@ -323,7 +407,9 @@ export async function handleApiRequest(request: Request): Promise<Response> {
         );
         return new Response(null, { status: result.status, headers: result.headers });
     }
-    if (!new URL(request.url).pathname.startsWith('/api/auth/')) return apiApp.fetch(request);
+    const pathname = new URL(request.url).pathname;
+    if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
+    if (!pathname.startsWith('/api/auth/')) return apiApp.fetch(request);
     const log = useLogger();
     log.set({ auth: { action: authLogAction(new URL(request.url).pathname) } });
     const headers = {
@@ -402,5 +488,20 @@ export async function handleApiRequest(request: Request): Promise<Response> {
             },
             { status: error instanceof auth.AuthError ? error.status : 503, headers },
         );
+    }
+}
+
+/* Provider deliveries: raw body for the signature, never an Origin check or a rate limit. */
+async function handleBillingWebhook(request: Request): Promise<Response> {
+    const log = useLogger();
+    if (request.method !== 'POST') return new Response(null, { status: 405 });
+    try {
+        const response = await billing.handleWebhook(request);
+        log.set({ billing: { webhook: response.status < 400 ? 'accepted' : 'rejected' } });
+        return response;
+    } catch (error) {
+        log.set({ billing: { webhook: 'failed', failure: describeFailure(error) } });
+        log.error(new Error('Billing webhook failed.'));
+        return Response.json({ message: 'Try again later.' }, { status: 503 });
     }
 }

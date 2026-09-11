@@ -1,33 +1,11 @@
 import type { AuthApi } from '@hushos/auth/api';
-import { treaty } from '@elysia/eden';
-import type { Api } from '@/lib/api.server';
+import { apiClient, unwrap } from '@/lib/api-client';
 
-let client: ReturnType<typeof treaty<Api>> | undefined;
-function api() {
-    client ??= treaty<Api>(window.location.origin, {
-        fetch: { credentials: 'same-origin', cache: 'no-store' },
-        onRequest: () => ({ signal: AbortSignal.timeout(30_000) }),
-    });
-    return client.api.auth;
-}
-
-async function unwrap<R extends { data: unknown; error: unknown }>(pending: Promise<R>) {
-    const { data, error } = await pending;
-    if (error) {
-        const value = (error as { value?: unknown }).value;
-        const message =
-            value &&
-            typeof value === 'object' &&
-            typeof (value as { message?: unknown }).message === 'string'
-                ? (value as { message: string }).message
-                : 'Please try again.';
-        throw new Error(message);
-    }
-    return data as NonNullable<R['data']>;
-}
+const api = () => apiClient().auth;
 
 export const authApi: AuthApi = {
-    requestEmail: (purpose, email) => unwrap(api()[purpose].email.post({ email })),
+    requestEmail: (purpose, email, intent) =>
+        unwrap(api()[purpose].email.post(intent ? { email, intent } : { email })),
     verifyEmail: (token) => unwrap(api().register.verify.post({ token })),
     enrollment: (purpose) => unwrap(api()[purpose].get()),
     registerStart: (input) => unwrap(api().register.start.post(input)),

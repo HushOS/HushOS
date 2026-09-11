@@ -7,7 +7,9 @@
         "./server": "./src/server.ts",
         "./db": "./src/db.ts",
         "./auth": "./src/auth.ts",
-        "./email": "./src/email.ts"
+        "./email": "./src/email.ts",
+        "./billing": "./src/billing.ts",
+        "./app": "./src/app.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit"

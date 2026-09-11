@@ -43,9 +43,11 @@ export function SessionLinks() {
 }
 
 export function SiteHeader() {
+    const { billingEnabled } = useRouteContext({ from: '__root__' });
     return (
         <header className="flex h-11 items-stretch border-b bg-background">
             <Brand className="px-2 sm:px-4" />
+            {billingEnabled && <BarLink to="/pricing">Pricing</BarLink>}
             <SessionLinks />
             <div className="hidden flex-1 sm:block" />
             <ColourStrip className="hidden sm:block" />
@@ -99,6 +101,7 @@ export function SiteFooter() {
                 <FooterLink href="https://github.com/HushOS/HushOS/blob/main/docs/self-hosting.md">
                     Self-host guide
                 </FooterLink>
+                <FooterLink to="/pricing">Pricing</FooterLink>
                 <FooterLink to="/blog">Blog</FooterLink>
                 <FooterLink to="/security">Security</FooterLink>
                 <FooterLink to="/terms">Terms</FooterLink>

@@ -18,6 +18,7 @@ import { ThemeProvider, useTheme } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { billingHint } from '@/lib/billing';
 import { sessionHint } from '@/lib/session';
 import { initSounds } from '@/lib/sounds';
 import { getThemeServerFn } from '@/lib/theme';
@@ -71,7 +72,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     }),
     // Public pages only need to know whether a session cookie exists; no lookup here.
     // The protected layout validates for real when the user goes in.
-    beforeLoad: ({ context }) => ({ hasSession: sessionHint(context.queryClient) }),
+    beforeLoad: async ({ context }) => ({
+        hasSession: sessionHint(context.queryClient),
+        billingEnabled: await billingHint(context.queryClient),
+    }),
     headers: () => ({ 'Cache-Control': 'private, no-store', Vary: 'Cookie' }),
     shellComponent: RootDocument,
     loader: () => getThemeServerFn(),

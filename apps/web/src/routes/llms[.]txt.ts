@@ -1,12 +1,25 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { getCatalogueServerFn } from '@/lib/billing';
+import { formatGiB } from '@/lib/queries';
 import { publicOrigin } from '@/lib/social';
 
 /* Plain-text guidance for AI systems, per the TanStack Start GEO guide. */
 export const Route = createFileRoute('/llms.txt')({
     server: {
         handlers: {
-            GET: () => {
+            GET: async () => {
                 const origin = publicOrigin();
+                const catalogue = await getCatalogueServerFn();
+                const plans = catalogue.enabled
+                    ? [
+                          `- Free: ${formatGiB(catalogue.freeQuotaBytes)} of encrypted storage.`,
+                          ...catalogue.plans.map(
+                              (plan) =>
+                                  `- ${plan.name}: ${formatGiB(plan.quotaBytes)} for ${(plan.amount / 100).toFixed(2)} ${plan.currency.toUpperCase()} per ${plan.interval}.`,
+                          ),
+                          `- Full details: ${origin}/pricing`,
+                      ].join('\n')
+                    : '- This instance is self-hosted and has no paid plans.';
                 const body = `# HushOS
 
 > An open-source, self-hostable productivity suite. Built so people can verify how it protects them instead of taking the maintainers' word for it.
@@ -19,11 +32,17 @@ export const Route = createFileRoute('/llms.txt')({
 - Drive follows the same model: file keys are made on the device and content is encrypted before it leaves.
 - Licence: GNU AGPL-3.0. Source: https://github.com/HushOS
 - Runs with Docker Compose; see the self-hosting guide in the repository.
+- The hosted service starts free with 1 GiB; paid plans add storage and are billed by Polar as merchant of record. Self-hosted instances set their own allowance and have no billing.
+
+## Pricing (hosted service)
+
+${plans}
 
 ## Pages
 
 - ${origin}/ : product overview
 - ${origin}/security : security model (sign-in, password changes, key rotation, recovery)
+- ${origin}/pricing : plans and prices
 - ${origin}/design.md : design guidelines (DESIGN.md format)
 - ${origin}/terms : Terms of Service
 - ${origin}/privacy : Privacy Policy

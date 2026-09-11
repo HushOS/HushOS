@@ -1,6 +1,6 @@
 # HushOS
 
-A foundation for an open-source, self-hostable, end-to-end encrypted productivity suite, starting with HushOS Drive. Email verification, OPAQUE registration/sign-in, remembered device unlock, recovery-key password reset, password changes, master/recovery-key rotation, permanent account deletion, and initial storage allowances are implemented. Account encryption keys are generated and wrapped on the client. Drive file storage, content encryption, sharing, chat, and paid checkout remain future work.
+A foundation for an open-source, self-hostable, end-to-end encrypted productivity suite, starting with HushOS Drive. Email verification, OPAQUE registration/sign-in, remembered device unlock, recovery-key password reset, password changes, master/recovery-key rotation, permanent account deletion, and initial storage allowances are implemented. Account encryption keys are generated and wrapped on the client. Paid storage plans are billed through Polar as merchant of record on the hosted service and are off by default when self-hosting. Drive file storage, content encryption, sharing, and chat remain future work.
 
 ## Stack
 
@@ -87,7 +87,7 @@ Stop the development server before switching to the full self-hosted stack, whic
 
 Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [MailHog](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters. The dedicated `/setup/recovery-key` page then lets you save the 24-word recovery phrase or download its recovery kit. Confirm it is saved and choose “Continue to HushOS” to open the app. The QR code contains that same private phrase.
 
-New accounts receive a personal workspace, its workspace key (random, generated in the browser, and granted to the account by wrapping it under the account key), and **1 GiB** allowance in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid storage entitlements have a separate schema; there is no checkout or billing webhook yet, and uploads are not implemented.
+New accounts receive a personal workspace, its workspace key (random, generated in the browser, and granted to the account by wrapping it under the account key), and **1 GiB** allowance in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid plans grant additional entitlements through the Polar integration described in [the self-hosting guide](docs/self-hosting.md#billing-optional); uploads are not implemented.
 
 A separate background worker (`packages/jobs`, pg-boss on the same Postgres) sweeps expired auth rows and will own Drive's reconciliation jobs; `bun run dev` starts it alongside the app and Compose runs it as the `worker` service from its own small image.
 

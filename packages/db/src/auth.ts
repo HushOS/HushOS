@@ -10,6 +10,7 @@ import {
 } from './schema';
 import {
     accountEnrollments,
+    accountIntents,
     accountRecoveryKeys,
     accountIdentities,
     accountRecoveryAttempts,
@@ -119,6 +120,13 @@ export async function registerAccount(input: {
             .onConflictDoNothing({ target: users.normalizedEmail })
             .returning(userFields);
         if (!user) return { status: 'exists' as const };
+        if (enrollment.intent && (enrollment.intent.plan || enrollment.intent.referral))
+            await tx.insert(accountIntents).values({
+                userId: user.id,
+                planProductId: enrollment.intent.plan ?? null,
+                referralCode: enrollment.intent.referral ?? null,
+                source: enrollment.intent.source ?? null,
+            });
 
         // The client chose the workspace id because its grant is bound to it.
         const [workspace] = await tx

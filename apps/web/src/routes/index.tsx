@@ -20,6 +20,10 @@ const faq = [
         a: 'Your account key and identity keys are generated and wrapped in your browser, so the server only ever holds ciphertext it cannot open. Drive follows the same model: file keys are made on your device and content is encrypted before it leaves.',
     },
     {
+        q: 'How much does it cost?',
+        a: 'The hosted service starts free with 1 GiB. Paid plans add storage and nothing else: every plan is encrypted the same way. Billing runs through Polar, which handles tax as merchant of record. Self-hosting is free.',
+    },
+    {
         q: 'Can I run it myself?',
         a: 'Yes. HushOS is AGPL-3.0 and ships with a Docker Compose setup. Clone the repository, create an environment file, and start the stack. Your instance, your data, your terms.',
     },

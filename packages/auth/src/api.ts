@@ -5,7 +5,7 @@ import type {
     SecurityUpdate,
 } from '@hushos/crypto';
 import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
-import type { AccountKeyEnvelope, AuthUser, SessionUser } from './protocol';
+import type { AccountKeyEnvelope, AuthUser, SessionUser, SignupIntent } from './protocol';
 
 /*
  * What the auth client needs from the server, as a contract the app implements.
@@ -40,7 +40,11 @@ export type StorageAllowance = {
 };
 
 export interface AuthApi {
-    requestEmail(purpose: 'register' | 'recover', email: string): Promise<{ message: string }>;
+    requestEmail(
+        purpose: 'register' | 'recover',
+        email: string,
+        intent?: SignupIntent,
+    ): Promise<{ message: string }>;
     verifyEmail(token: string): Promise<{ enrollment: Enrollment & { purpose: string } }>;
     enrollment(purpose: 'register' | 'recover'): Promise<{ enrollment: Enrollment | null }>;
     registerStart(input: { registrationRequest: string }): Promise<RegistrationChallenge>;

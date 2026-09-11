@@ -16,6 +16,7 @@ import { Route as DesignDotmdRouteImport } from './routes/design[.]md'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LoginRouteRouteImport } from './routes/login/route'
 import { Route as OgDotjpgRouteImport } from './routes/og[.]jpg'
+import { Route as PricingRouteRouteImport } from './routes/pricing/route'
 import { Route as PrivacyRouteRouteImport } from './routes/privacy/route'
 import { Route as RecoverRouteRouteImport } from './routes/recover/route'
 import { Route as RegisterRouteRouteImport } from './routes/register/route'
@@ -35,6 +36,7 @@ import { Route as RegisterCheckEmailRouteImport } from './routes/register/check-
 import { Route as RegisterCompleteRouteImport } from './routes/register/complete'
 import { Route as AuthenticatedAppIndexRouteImport } from './routes/_authenticated/app/index'
 import { Route as AuthenticatedAppAccountRouteImport } from './routes/_authenticated/app/account'
+import { Route as AuthenticatedAppBillingRouteImport } from './routes/_authenticated/app/billing'
 import { Route as AuthenticatedAppRecoveryKeyRouteImport } from './routes/_authenticated/app/recovery-key'
 import { Route as AuthenticatedSetupRecoveryKeyRouteImport } from './routes/_authenticated/setup/recovery-key'
 
@@ -70,6 +72,11 @@ const LoginRouteRoute = LoginRouteRouteImport.update({
 const OgDotjpgRoute = OgDotjpgRouteImport.update({
   id: '/og.jpg',
   path: '/og.jpg',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PricingRouteRoute = PricingRouteRouteImport.update({
+  id: '/pricing',
+  path: '/pricing',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacyRouteRoute = PrivacyRouteRouteImport.update({
@@ -167,6 +174,11 @@ const AuthenticatedAppAccountRoute = AuthenticatedAppAccountRouteImport.update({
   path: '/account',
   getParentRoute: () => AuthenticatedAppRouteRoute,
 } as any)
+const AuthenticatedAppBillingRoute = AuthenticatedAppBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => AuthenticatedAppRouteRoute,
+} as any)
 const AuthenticatedAppRecoveryKeyRoute =
   AuthenticatedAppRecoveryKeyRouteImport.update({
     id: '/recovery-key',
@@ -184,6 +196,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
   '/login': typeof LoginRouteRoute
+  '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
@@ -205,6 +218,7 @@ export interface FileRoutesByFullPath {
   '/recover/': typeof RecoverIndexRoute
   '/register/': typeof RegisterIndexRoute
   '/app/account': typeof AuthenticatedAppAccountRoute
+  '/app/billing': typeof AuthenticatedAppBillingRoute
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/app/': typeof AuthenticatedAppIndexRoute
@@ -213,6 +227,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
   '/login': typeof LoginRouteRoute
+  '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/security': typeof SecurityRouteRoute
   '/terms': typeof TermsRouteRoute
@@ -231,6 +246,7 @@ export interface FileRoutesByTo {
   '/recover': typeof RecoverIndexRoute
   '/register': typeof RegisterIndexRoute
   '/app/account': typeof AuthenticatedAppAccountRoute
+  '/app/billing': typeof AuthenticatedAppBillingRoute
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/app': typeof AuthenticatedAppIndexRoute
@@ -240,6 +256,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
   '/login': typeof LoginRouteRoute
+  '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
@@ -262,6 +279,7 @@ export interface FileRoutesById {
   '/recover/': typeof RecoverIndexRoute
   '/register/': typeof RegisterIndexRoute
   '/_authenticated/app/account': typeof AuthenticatedAppAccountRoute
+  '/_authenticated/app/billing': typeof AuthenticatedAppBillingRoute
   '/_authenticated/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/_authenticated/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/_authenticated/app/': typeof AuthenticatedAppIndexRoute
@@ -272,6 +290,7 @@ export interface FileRouteTypes {
     | '/'
     | '/account-deleted'
     | '/login'
+    | '/pricing'
     | '/privacy'
     | '/recover'
     | '/register'
@@ -293,6 +312,7 @@ export interface FileRouteTypes {
     | '/recover/'
     | '/register/'
     | '/app/account'
+    | '/app/billing'
     | '/app/recovery-key'
     | '/setup/recovery-key'
     | '/app/'
@@ -301,6 +321,7 @@ export interface FileRouteTypes {
     | '/'
     | '/account-deleted'
     | '/login'
+    | '/pricing'
     | '/privacy'
     | '/security'
     | '/terms'
@@ -319,6 +340,7 @@ export interface FileRouteTypes {
     | '/recover'
     | '/register'
     | '/app/account'
+    | '/app/billing'
     | '/app/recovery-key'
     | '/setup/recovery-key'
     | '/app'
@@ -327,6 +349,7 @@ export interface FileRouteTypes {
     | '/'
     | '/account-deleted'
     | '/login'
+    | '/pricing'
     | '/privacy'
     | '/recover'
     | '/register'
@@ -349,6 +372,7 @@ export interface FileRouteTypes {
     | '/recover/'
     | '/register/'
     | '/_authenticated/app/account'
+    | '/_authenticated/app/billing'
     | '/_authenticated/app/recovery-key'
     | '/_authenticated/setup/recovery-key'
     | '/_authenticated/app/'
@@ -358,6 +382,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AccountDeletedRouteRoute: typeof AccountDeletedRouteRoute
   LoginRouteRoute: typeof LoginRouteRoute
+  PricingRouteRoute: typeof PricingRouteRoute
   PrivacyRouteRoute: typeof PrivacyRouteRoute
   RecoverRouteRoute: typeof RecoverRouteRouteWithChildren
   RegisterRouteRoute: typeof RegisterRouteRouteWithChildren
@@ -423,6 +448,13 @@ declare module '@tanstack/react-router' {
       path: '/og.jpg'
       fullPath: '/og.jpg'
       preLoaderRoute: typeof OgDotjpgRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pricing': {
+      id: '/pricing'
+      path: '/pricing'
+      fullPath: '/pricing'
+      preLoaderRoute: typeof PricingRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacy': {
@@ -558,6 +590,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppAccountRouteImport
       parentRoute: typeof AuthenticatedAppRouteRoute
     }
+    '/_authenticated/app/billing': {
+      id: '/_authenticated/app/billing'
+      path: '/billing'
+      fullPath: '/app/billing'
+      preLoaderRoute: typeof AuthenticatedAppBillingRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
     '/_authenticated/app/recovery-key': {
       id: '/_authenticated/app/recovery-key'
       path: '/recovery-key'
@@ -609,12 +648,14 @@ const RegisterRouteRouteWithChildren = RegisterRouteRoute._addFileChildren(
 
 interface AuthenticatedAppRouteRouteChildren {
   AuthenticatedAppAccountRoute: typeof AuthenticatedAppAccountRoute
+  AuthenticatedAppBillingRoute: typeof AuthenticatedAppBillingRoute
   AuthenticatedAppRecoveryKeyRoute: typeof AuthenticatedAppRecoveryKeyRoute
   AuthenticatedAppIndexRoute: typeof AuthenticatedAppIndexRoute
 }
 
 const AuthenticatedAppRouteRouteChildren: AuthenticatedAppRouteRouteChildren = {
   AuthenticatedAppAccountRoute: AuthenticatedAppAccountRoute,
+  AuthenticatedAppBillingRoute: AuthenticatedAppBillingRoute,
   AuthenticatedAppRecoveryKeyRoute: AuthenticatedAppRecoveryKeyRoute,
   AuthenticatedAppIndexRoute: AuthenticatedAppIndexRoute,
 }
@@ -642,6 +683,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AccountDeletedRouteRoute: AccountDeletedRouteRoute,
   LoginRouteRoute: LoginRouteRoute,
+  PricingRouteRoute: PricingRouteRoute,
   PrivacyRouteRoute: PrivacyRouteRoute,
   RecoverRouteRoute: RecoverRouteRouteWithChildren,
   RegisterRouteRoute: RegisterRouteRouteWithChildren,

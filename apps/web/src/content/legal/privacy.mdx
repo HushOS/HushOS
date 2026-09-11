@@ -1,14 +1,17 @@
 ---
 title: Privacy Policy
-updated: 2026-09-08
+updated: 2026-09-11
 summary: HushOS is designed so the Service holds as little about you as it can. This page lists exactly what is stored, what is never stored, and how long it is kept.
 ---
 
+import { OperatorName } from '../../components/legal-layout';
 import { Ledger } from '../../components/mdx';
 
 ## 1. Who is responsible
 
-The operator of this HushOS instance (the “Operator”) is the data controller for the information described here. HushOS is open-source software; the HushOS project does not receive any data from instances it does not run.
+<OperatorName generic="The operator of this HushOS instance" /> (the “Operator”) is the data
+controller for the information described here. HushOS is open-source software; the HushOS project
+does not receive any data from instances it does not run.
 
 ## 2. What the Service stores
 
@@ -24,6 +27,14 @@ The operator of this HushOS instance (the “Operator”) is the data controller
             'Your account key wrapped by your password and by your recovery phrase, plus wrapped identity keys',
         ],
         ['Workspace', 'Your workspace, its storage allowance, and usage counters'],
+        [
+            'Billing',
+            'If you buy a plan: your Polar customer ID, subscription ID, plan, status, and renewal date; a record of each billing notification received',
+        ],
+        [
+            'Sign-up choices',
+            'The plan or referral you chose when creating the account, until it has been used',
+        ],
         ['Sessions', 'Session identifiers with creation and expiry times'],
         ['Server logs', 'Timestamps, request IDs, status codes and IP addresses, kept briefly'],
     ]}
@@ -45,19 +56,26 @@ The Service sets a session cookie so you stay signed in, a preference cookie for
 
 Verification and recovery emails are sent through the email provider the Operator has configured. Those emails contain a one-time link that expires after 30 minutes. The provider may keep delivery logs according to its own policy.
 
-## 6. How long data is kept
+## 6. Paid plans and Polar
+
+If the Operator offers paid plans, purchases are made through Polar Software, Inc. (“Polar”), which sells the plan as merchant of record and is responsible for the payment itself. Polar collects what it needs to take payment and issue invoices: your name, email address, billing address, tax ID where you give one, and your payment method. Your card details go to Polar and its payment processor and never reach the Service. Polar processes this data under its own [privacy policy](https://polar.sh/legal/privacy), in the United States.
+
+The Service sends Polar only your account ID, name, and email address, so that a purchase can be matched to your account. It never sends file names, content, or any encryption key. Polar sends the Service notifications about your subscription, which the Service uses to set your storage allowance. Your invoices and payment method are managed in Polar’s customer portal, reached from Billing.
+
+## 7. How long data is kept
 
 - Account data is kept until you delete your account.
 - Pending email verifications expire after 30 minutes and are then removed.
 - Sessions are removed when they expire or when you sign out. Password changes, password recovery, and key rotation revoke all existing sessions.
 - Server logs are rotated on a short schedule set by the Operator.
+- Billing records are kept while you have an account. Polar keeps invoices and payment records for as long as tax and accounting law requires.
 
-Deleting your account from Account settings removes your profile, workspace, storage records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.
+Deleting your account from Account settings cancels any paid plan, asks Polar to delete your customer record, and removes your profile, workspace, storage and billing records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.
 
-## 7. Your rights
+## 8. Your rights
 
 Depending on where you live, you may have the right to access, correct, export, or delete your personal data, and to object to or restrict certain processing. You can view your account details and delete your account yourself at any time. For anything else, contact the Operator of this instance.
 
-## 8. Changes
+## 9. Changes
 
 When this policy changes in a meaningful way, the date above is updated and, where practical, you are notified by email. The [Terms of Service](/terms) describe the agreement that this policy sits alongside.

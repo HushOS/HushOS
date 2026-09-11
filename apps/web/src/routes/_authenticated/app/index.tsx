@@ -11,7 +11,8 @@ import { CopyValue } from '@/components/copy-value';
 import { Button } from '@/components/ui/button';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
-import { storageQueryOptions } from '@/lib/queries';
+import { billingApi } from '@/lib/billing-api';
+import { billingQueryOptions, storageQueryOptions } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/')({
@@ -27,6 +28,7 @@ function WorkspacePage() {
     const restoring = useStore(authClient.store, (state) => state.restoring);
     const rememberError = useStore(authClient.store, (state) => state.rememberError);
     const [initialized, setInitialized] = useState(false);
+    const [checkingOut, setCheckingOut] = useState(false);
     const [error, setError] = useState('');
     const unlocked = unlockedUser === user.id;
     const opening = !initialized || restoring;
@@ -46,6 +48,26 @@ function WorkspacePage() {
                 if (needsBackup)
                     await router.navigate({ to: '/setup/recovery-key', replace: true });
                 await queryClient.invalidateQueries(storageQueryOptions);
+                // Signed up from the pricing page: straight on to Polar's checkout for
+                // that plan. If the checkout cannot be started, the billing page says why.
+                const billing = await queryClient.fetchQuery(billingQueryOptions).catch(() => null);
+                if (!active || !billing?.intendedPlan) return;
+                setCheckingOut(true);
+                try {
+                    const { url } = await billingApi.checkout(billing.intendedPlan);
+                    if (url) {
+                        window.location.assign(url);
+                        return;
+                    }
+                } catch {
+                    /* Fall through to the billing page, which retries and shows the error. */
+                }
+                if (active)
+                    await router.navigate({
+                        to: '/app/billing',
+                        search: { plan: billing.intendedPlan },
+                        replace: true,
+                    });
             })
             .catch(() => {
                 if (active)
@@ -68,6 +90,18 @@ function WorkspacePage() {
                 setError('Could not remove saved device access. Please try signing out.');
             });
     }
+    if (checkingOut)
+        return (
+            <div className="flex flex-col">
+                <PageHeader
+                    eyebrow="Overview"
+                    title={`Welcome, ${user.name}.`}
+                    description="Your account is ready. Taking you to checkout for the plan you chose…"
+                >
+                    <Spinner className="size-4" />
+                </PageHeader>
+            </div>
+        );
     return (
         <div className="flex flex-col">
             <PageHeader

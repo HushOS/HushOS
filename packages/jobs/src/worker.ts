@@ -1,6 +1,8 @@
+import { billingEnabled } from '@hushos/billing/server';
 import { initProcessLogger, log } from '@hushos/logging';
 import { createBoss, ensureQueues, queues, type JobPayloads } from './client';
 import { cleanupExpired } from './jobs/cleanup-expired';
+import { reconcileBilling } from './jobs/reconcile-billing';
 
 /*
  * The background worker: one process, started with `bun run --cwd packages/jobs start`
@@ -27,6 +29,19 @@ await boss.work<JobPayloads[typeof queues.cleanupExpired]>(
         if (job) await cleanupExpired(job);
     },
 );
+
+// Once a day, and once now: a delivery missed during downtime is caught before its grace ends.
+if (billingEnabled()) {
+    await boss.schedule(queues.reconcileBilling, '15 3 * * *', {}, { tz: 'UTC' });
+    await boss.send(queues.reconcileBilling, {});
+    await boss.work<JobPayloads[typeof queues.reconcileBilling]>(
+        queues.reconcileBilling,
+        { batchSize: 1, pollingIntervalSeconds: 30 },
+        async ([job]) => {
+            if (job) await reconcileBilling(job);
+        },
+    );
+} else await boss.unschedule(queues.reconcileBilling);
 
 let stopping = false;
 async function shutdown(signal: string) {

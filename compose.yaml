@@ -42,6 +42,8 @@ services:
             PORT: 5173
             DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
             APP_ORIGIN: ${APP_ORIGIN:-}
+            OPERATOR_NAME: ${OPERATOR_NAME:-}
+            OPERATOR_JURISDICTION: ${OPERATOR_JURISDICTION:-}
             OPAQUE_SERVER_SETUP: ${OPAQUE_SERVER_SETUP:-}
             OPAQUE_SERVER_SETUP_ID: ${OPAQUE_SERVER_SETUP_ID:-}
             INITIAL_STORAGE_QUOTA_BYTES: ${INITIAL_STORAGE_QUOTA_BYTES:-1073741824}
@@ -58,6 +60,11 @@ services:
             AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
             AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
             AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+            BILLING_PROVIDER: ${BILLING_PROVIDER:-none}
+            POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+            POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
+            POLAR_ENVIRONMENT: ${POLAR_ENVIRONMENT:-production}
+            BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
         depends_on:
             migrate:
                 condition: service_completed_successfully
@@ -83,6 +90,11 @@ services:
         environment:
             NODE_ENV: production
             DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            APP_ORIGIN: ${APP_ORIGIN:-}
+            BILLING_PROVIDER: ${BILLING_PROVIDER:-none}
+            POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+            POLAR_ENVIRONMENT: ${POLAR_ENVIRONMENT:-production}
+            BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
         depends_on:
             migrate:
                 condition: service_completed_successfully

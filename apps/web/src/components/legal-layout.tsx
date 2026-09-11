@@ -1,4 +1,5 @@
-import type { ComponentType, ReactNode } from 'react';
+import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
+import type { Operator } from '@/lib/social';
 import { Mdx } from '@/components/mdx';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { formatDate } from '@/lib/content';
@@ -34,21 +35,39 @@ export function ReadingPage({
     );
 }
 
+const OperatorContext = createContext<Operator>(null);
+
+/* Names the Operator inside the legal documents, or the generic phrase when unset. */
+export function OperatorName({ generic }: { generic: string }) {
+    const operator = useContext(OperatorContext);
+    if (!operator) return <>{generic}</>;
+    return (
+        <>
+            {operator.name}
+            {operator.jurisdiction && `, ${operator.jurisdiction}`}
+        </>
+    );
+}
+
 export function LegalLayout({
     document,
     frontmatter,
+    operator = null,
 }: {
     document: ComponentType;
     frontmatter: Record<string, unknown>;
+    operator?: Operator;
 }) {
     const updated = String(frontmatter.updated);
     return (
-        <ReadingPage
-            eyebrow={`Last updated ${formatDate(updated)}`}
-            title={String(frontmatter.title)}
-            summary={String(frontmatter.summary)}
-        >
-            <Mdx document={document} />
-        </ReadingPage>
+        <OperatorContext.Provider value={operator}>
+            <ReadingPage
+                eyebrow={`Last updated ${formatDate(updated)}`}
+                title={String(frontmatter.title)}
+                summary={String(frontmatter.summary)}
+            >
+                <Mdx document={document} />
+            </ReadingPage>
+        </OperatorContext.Provider>
     );
 }

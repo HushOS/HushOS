@@ -28,7 +28,7 @@ Both editors use four spaces. Per-package `tsconfig.json` files extend the root 
 
 Develop at `http://localhost:5173/app`; API endpoints live under `/api` on the same server (`/api/health`, `/api/ready`, `/api/auth/*`). Nitro hosts both TanStack Start and the mounted Elysia app. Local development needs no custom hostname or certificate.
 
-The browser reaches the API through the `AuthApi` adapter in `apps/web/src/lib/auth-api.ts` (Eden Treaty, typed by the Elysia app). Server code reads the database directly through server functions and `createIsomorphicFn().server(...)` branches; there is no in-process HTTP client.
+The browser reaches the API through the `AuthApi` and `BillingApi` adapters in `apps/web/src/lib/auth-api.ts` and `apps/web/src/lib/billing-api.ts` (one Eden Treaty client, typed by the Elysia app). Server code reads the database directly through server functions and `createIsomorphicFn().server(...)` branches; there is no in-process HTTP client.
 
 Auth mutations require `Origin` to match `APP_ORIGIN`, so signing in from a LAN address or a Tailscale hostname needs `APP_ORIGIN` set to that origin and HTTPS in front of it. The dev server answers LAN addresses and `*.ts.net` hostnames; add others to `allowedHosts` in `apps/web/vite.config.ts`. Production does not enable cross-origin API access.
 
@@ -93,6 +93,10 @@ CI runs `bun run check` (lint, format, and typecheck), `bun run test`, and `bun 
 `bun run setup` is idempotent, preserves existing settings, and adds missing auth/email defaults. `bun run infra:down` preserves data; avoid removing volumes unless you intend to discard that local database. Keep the generated `.env` when reusing the volume: changing only the password variable does not change an existing Postgres role's password.
 
 This is the foundation for HushOS Drive and the later productivity suite. Email verification, OPAQUE authentication, remembered unlock, recovery, password changes, master/recovery-key rotation, identity-key provisioning, quota grants, and permanent deletion are implemented; Drive storage, content encryption, sharing, chat, and billing are future work. HushOS is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
+
+## Billing package
+
+`@hushos/billing/server` wraps the Polar SDK (`@polar-sh/sdk`, the `2026-04` API version) behind a few functions: catalogue, checkout, portal session, cancel and resume, webhook handling, and `reconcileCustomer`. Webhooks are a trigger only: every handler re-reads the customer's state from Polar and rewrites the local subscription mirror and storage entitlements in one transaction. With `BILLING_PROVIDER=none` nothing in the package talks to Polar and the app hides every billing surface. To work on it locally, create a sandbox organisation at sandbox.polar.sh, add products with `hushos_plan` and `quota_bytes` metadata, put a sandbox token and webhook secret in `.env` with `POLAR_ENVIRONMENT=sandbox`, and relay deliveries with `polar listen http://localhost:5173/api/billing/webhook`.
 
 ## Authentication, cryptography, and email packages
 

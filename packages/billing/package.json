@@ -1,0 +1,26 @@
+{
+    "name": "@hushos/billing",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        "./server": "./src/server.ts",
+        "./protocol": "./src/protocol.ts",
+        "./api": "./src/api.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "seed": "bun scripts/seed.ts"
+    },
+    "dependencies": {
+        "@hushos/db": "workspace:*",
+        "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
+        "@polar-sh/sdk": "^1.0.0-alpha.20"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2"
+    }
+}

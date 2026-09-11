@@ -1,10 +1,11 @@
 import { defineRelations } from 'drizzle-orm';
 import * as auth from './auth';
+import * as billing from './billing';
 import * as storage from './storage';
 import { workspaces } from './workspaces';
 import { workspaceKeys } from './workspace-keys';
 
-const schema = { ...auth, ...storage, workspaces, workspaceKeys };
+const schema = { ...auth, ...storage, ...billing, workspaces, workspaceKeys };
 
 export const relations = defineRelations(schema, (r) => ({
     workspaces: {
@@ -48,6 +49,24 @@ export const relations = defineRelations(schema, (r) => ({
     storageEntitlements: {
         workspace: r.one.workspaces({
             from: r.storageEntitlements.workspaceId,
+            to: r.workspaces.id,
+            optional: false,
+        }),
+    },
+    accountIntents: {
+        user: r.one.users({ from: r.accountIntents.userId, to: r.users.id, optional: false }),
+    },
+    billingCustomers: {
+        user: r.one.users({ from: r.billingCustomers.userId, to: r.users.id, optional: false }),
+    },
+    billingSubscriptions: {
+        user: r.one.users({
+            from: r.billingSubscriptions.userId,
+            to: r.users.id,
+            optional: false,
+        }),
+        workspace: r.one.workspaces({
+            from: r.billingSubscriptions.workspaceId,
             to: r.workspaces.id,
             optional: false,
         }),

@@ -2,6 +2,8 @@ import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
 import { ensureSessionUser } from '@/lib/session';
 
 export const Route = createFileRoute('/register')({
+    validateSearch: (search: Record<string, unknown>): { plan?: string } =>
+        typeof search.plan === 'string' ? { plan: search.plan } : {},
     headers: () => ({
         'Cache-Control': 'private, no-store',
         Vary: 'Cookie',

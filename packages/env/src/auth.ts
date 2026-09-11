@@ -1,29 +1,11 @@
 import { createEnv } from '@t3-oss/env-core';
 import { z } from 'zod';
+import { appEnv } from './app';
 
+/* The web app's auth settings, on top of the shared app settings. */
 export const authEnv = createEnv({
+    extends: [appEnv],
     server: {
-        INITIAL_STORAGE_QUOTA_BYTES: z
-            .string()
-            .regex(/^[0-9]{1,16}$/)
-            .default('1073741824')
-            .transform(BigInt),
-        APP_ORIGIN: z
-            .url()
-            .refine((value) => {
-                const url = new URL(value);
-                return (
-                    url.pathname === '/' &&
-                    !url.search &&
-                    !url.hash &&
-                    !url.username &&
-                    !url.password &&
-                    (url.protocol === 'https:' ||
-                        (url.protocol === 'http:' &&
-                            ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
-                );
-            }, 'Use an HTTPS origin or HTTP localhost without a path, query, or credentials.')
-            .transform((value) => new URL(value).origin),
         OPAQUE_SERVER_SETUP: z
             .string()
             .min(100)

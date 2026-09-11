@@ -1,6 +1,6 @@
 # Authentication, account keys, and recovery
 
-Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, authenticated password changes, master/recovery-key rotation, stable account identity keys, the personal workspace key and its grant, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, billing checkout, and cryptographic suite migrations remain future work.
+Status: implemented account foundation. Email enrollment, OPAQUE login, remembered browser unlock, recovery-key password reset, authenticated password changes, master/recovery-key rotation, stable account identity keys, the personal workspace key and its grant, initial quota provisioning, and permanent account deletion are implemented. Drive encryption, file transfers, sharing, chat, and cryptographic suite migrations remain future work.
 
 ## Key hierarchy
 
@@ -171,11 +171,11 @@ Non-exportability prevents ordinary raw-key export; it does not stop malicious s
 
 ## Quota and permanent deletion
 
-New accounts receive a personal workspace and a configurable base allowance (default 1 GiB). `workspace_storage` uses bigint for base quota, used bytes, and reserved bytes. `storage_entitlements` holds separate positive grants with unique source references and optional expiry/revocation. APIs return byte counts as decimal strings. There is no public quota mutation, checkout, or billing webhook.
+New accounts receive a personal workspace and a configurable base allowance (default 1 GiB). `workspace_storage` uses bigint for base quota, used bytes, and reserved bytes. `storage_entitlements` holds separate positive grants with unique source references and optional expiry/revocation. APIs return byte counts as decimal strings. Entitlements are written only by the billing integration (`@hushos/billing`), from the provider's customer state; there is no public quota mutation.
 
 Future uploads must reserve ciphertext bytes transactionally before presigning, reconcile actual object sizes, and count retained versions/trash. Quota records alone do not enforce a file-transfer protocol.
 
-Deletion requires a current session plus a fresh OPAQUE password exchange explicitly tagged `delete` and bound to that session hash. Ordinary login attempts cannot authorize deletion. The delete transaction rechecks session/revision and removes the personal workspace, storage records, account, all key bundles, and all sessions. Client cookies and remembered access are cleared. There are no Drive objects yet; object cleanup and billing cancellation must join the deletion workflow when those features exist. Backups and provider email retention remain operator policies.
+Deletion requires a current session plus a fresh OPAQUE password exchange explicitly tagged `delete` and bound to that session hash. Ordinary login attempts cannot authorize deletion. The delete transaction rechecks session/revision and removes the personal workspace, storage records, account, all key bundles, and all sessions. Client cookies and remembered access are cleared. Before the transaction, any active billing subscription is revoked and the billing customer deleted at the provider; if that fails, the account is kept. There are no Drive objects yet; object cleanup must join the deletion workflow when they exist. Backups and provider email retention remain operator policies.
 
 ## Logs and trust limits
 

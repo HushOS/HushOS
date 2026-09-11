@@ -9,12 +9,14 @@ import { PgBoss } from 'pg-boss';
  */
 export const queues = {
     cleanupExpired: 'auth.cleanup-expired',
+    reconcileBilling: 'billing.reconcile',
 } as const;
 
 export type QueueName = (typeof queues)[keyof typeof queues];
 
 export type JobPayloads = {
     [queues.cleanupExpired]: { batchSize?: number };
+    [queues.reconcileBilling]: Record<string, never>;
 };
 
 export const SCHEMA = 'pgboss';
@@ -43,6 +45,14 @@ export async function ensureQueues(boss: PgBoss) {
         retryDelay: 30,
         retryBackoff: true,
         expireInSeconds: 10 * 60,
+        retentionSeconds: 7 * 24 * 60 * 60,
+    });
+    await boss.createQueue(queues.reconcileBilling, {
+        policy: 'singleton',
+        retryLimit: 2,
+        retryDelay: 5 * 60,
+        retryBackoff: true,
+        expireInSeconds: 30 * 60,
         retentionSeconds: 7 * 24 * 60 * 60,
     });
 }

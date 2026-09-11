@@ -23,6 +23,7 @@
         "@fontsource-variable/geist": "5.3.0",
         "@fontsource-variable/geist-mono": "5.3.0",
         "@hushos/auth": "workspace:*",
+        "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
@@ -85,6 +86,20 @@
         "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
         "zustand": "5.0.15",
+      },
+      "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2",
+      },
+    },
+    "packages/billing": {
+      "name": "@hushos/billing",
+      "dependencies": {
+        "@hushos/db": "workspace:*",
+        "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
+        "@polar-sh/sdk": "^1.0.0-alpha.20",
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
@@ -164,6 +179,7 @@
     "packages/jobs": {
       "name": "@hushos/jobs",
       "dependencies": {
+        "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
@@ -373,6 +389,8 @@
     "@fontsource-variable/geist-mono": ["@fontsource-variable/geist-mono@5.3.0", "", {}, "sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw=="],
 
     "@hushos/auth": ["@hushos/auth@workspace:packages/auth"],
+
+    "@hushos/billing": ["@hushos/billing@workspace:packages/billing"],
 
     "@hushos/config": ["@hushos/config@workspace:packages/config"],
 
@@ -585,6 +603,8 @@
     "@oxlint/binding-win32-ia32-msvc": ["@oxlint/binding-win32-ia32-msvc@1.81.0", "", { "os": "win32", "cpu": "ia32" }, "sha512-ksqPP5jbFXcYreEQ7zdJh06rJQBymCTyGRCdaXjfcf2aG4f8KxUWY5wcgYHmaTK+FJ4bPG5sUAdOX+6trnH1JA=="],
 
     "@oxlint/binding-win32-x64-msvc": ["@oxlint/binding-win32-x64-msvc@1.81.0", "", { "os": "win32", "cpu": "x64" }, "sha512-IZuUCwGw9emG5JtCp+fYGB+Z4OWEoeEcM8R5BA1pYw63/ieYFVdcU2ylxTpHbVHSenZnsYE+ZZ20uHAJszQ4cA=="],
+
+    "@polar-sh/sdk": ["@polar-sh/sdk@1.0.0-alpha.20", "", {}, "sha512-/IX6YFtxDArPdKtF6AgiV4J+p3jb5+8/nyuw1Z+ZH07ykMqjCVox/tw9va208e6KMGlLk4BPHuFl+GE1YWlm5Q=="],
 
     "@react-email/render": ["@react-email/render@2.1.0", "", { "dependencies": { "entities": "^4.5.0", "html-to-text": "^9.0.5", "html5parser": "^3.0.0", "prettier": "^3.5.3" }, "peerDependencies": { "react": "^18.0 || ^19.0 || ^19.0.0-rc", "react-dom": "^18.0 || ^19.0 || ^19.0.0-rc" } }, "sha512-F+zE3O6d6sW6Aj2UjvZAA17R7tJKM7kcq2mgV6k4HCT8jeLLFaVP2txMtH1lgqYFRMZ0Gxsd37q2PRyiXLXXxA=="],
 

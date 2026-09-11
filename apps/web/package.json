@@ -20,6 +20,7 @@
         "@fontsource-variable/geist": "5.3.0",
         "@fontsource-variable/geist-mono": "5.3.0",
         "@hushos/auth": "workspace:*",
+        "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",

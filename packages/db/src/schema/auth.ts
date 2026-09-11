@@ -4,6 +4,7 @@ import {
     customType,
     index,
     integer,
+    jsonb,
     pgTable,
     smallint,
     text,
@@ -15,6 +16,8 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
     dataType: () => 'bytea',
     codec: 'bytea',
 });
+
+export type SignupIntent = { plan?: string; referral?: string; source?: string };
 
 export const users = pgTable(
     'users',
@@ -139,6 +142,8 @@ export const accountEnrollments = pgTable(
         verificationTokenHash: bytea('verification_token_hash').unique(),
         enrollmentTokenHash: bytea('enrollment_token_hash').unique(),
         verifiedAt: timestamp('verified_at', { withTimezone: true }),
+        // What the person came for (a plan, a referral), carried until the account exists.
+        intent: jsonb().$type<SignupIntent>(),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     },

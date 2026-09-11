@@ -10,6 +10,8 @@
                 "HOST",
                 "DATABASE_URL",
                 "APP_ORIGIN",
+                "OPERATOR_NAME",
+                "OPERATOR_JURISDICTION",
                 "OPAQUE_SERVER_SETUP",
                 "OPAQUE_SERVER_SETUP_ID",
                 "INITIAL_STORAGE_QUOTA_BYTES",
@@ -25,7 +27,12 @@
                 "AWS_REGION",
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
-                "AWS_SESSION_TOKEN"
+                "AWS_SESSION_TOKEN",
+                "BILLING_PROVIDER",
+                "POLAR_ACCESS_TOKEN",
+                "POLAR_WEBHOOK_SECRET",
+                "POLAR_ENVIRONMENT",
+                "BILLING_GRACE_DAYS"
             ],
             "dependsOn": ["^build"]
         },
@@ -44,6 +51,8 @@
                 "NODE_ENV",
                 "DATABASE_URL",
                 "APP_ORIGIN",
+                "OPERATOR_NAME",
+                "OPERATOR_JURISDICTION",
                 "OPAQUE_SERVER_SETUP",
                 "OPAQUE_SERVER_SETUP_ID",
                 "INITIAL_STORAGE_QUOTA_BYTES",
@@ -59,7 +68,12 @@
                 "AWS_REGION",
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
-                "AWS_SESSION_TOKEN"
+                "AWS_SESSION_TOKEN",
+                "BILLING_PROVIDER",
+                "POLAR_ACCESS_TOKEN",
+                "POLAR_WEBHOOK_SECRET",
+                "POLAR_ENVIRONMENT",
+                "BILLING_GRACE_DAYS"
             ]
         },
         "typecheck": {
