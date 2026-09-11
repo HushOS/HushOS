@@ -5,6 +5,7 @@ COPY apps/web/package.json ./apps/web/package.json
 COPY packages/crypto/package.json ./packages/crypto/package.json
 COPY packages/env/package.json ./packages/env/package.json
 COPY packages/auth/package.json ./packages/auth/package.json
+COPY packages/billing/package.json ./packages/billing/package.json
 COPY packages/emails/package.json ./packages/emails/package.json
 COPY packages/config/package.json ./packages/config/package.json
 COPY packages/db/package.json ./packages/db/package.json
