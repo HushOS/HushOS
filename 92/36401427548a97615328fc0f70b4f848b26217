@@ -1,0 +1,80 @@
+package.json
+  s_d51d4fab781458::t_19f77303b3ffc7 44-45
+packages/db/package.json
+  s_d51d4fab781458::t_17ae72b5693da7 21,34-35
+packages/billing/vitest.config.ts
+  s_d51d4fab781458::t_17ae72b5693da7 1-5,7-11
+  s_d51d4fab781458::t_0d5c0b9d5bedda 6
+packages/db/test/setup-db.ts
+  s_d51d4fab781458::t_0d5c0b9d5bedda 1-3
+packages/billing/package.json
+  s_d51d4fab781458::t_17ae72b5693da7 13-14,25-26
+packages/db/src/billing.test.ts
+  s_d51d4fab781458::t_a7be0a00c18b74 2-164,170-206,210-214
+  s_d51d4fab781458::t_53514b2a1b34bc 165-169,207-209
+  s_d51d4fab781458::t_17ae72b5693da7 1
+packages/billing/src/server.test.ts
+  s_d51d4fab781458::t_19f77303b3ffc7 10
+  s_d51d4fab781458::t_0d5c0b9d5bedda 1-2,127
+  s_d51d4fab781458::t_0bddb1897ca304 4-9,11-60,72-126,128-144,149-158,166,172-216,222-277,281-282,286-288,293-327
+  s_d51d4fab781458::t_53514b2a1b34bc 3,61-71,145-148,159-165,167-171,217-221,278-280,283-285,289-292
+packages/crypto/package.json
+  s_d51d4fab781458::t_17ae72b5693da7 15-16,26-27
+packages/db/test/helpers.ts
+  s_d51d4fab781458::t_162c735cabd237 1-35
+AGENTS.md
+  s_d51d4fab781458::t_0d5c0b9d5bedda 18-19
+  s_d51d4fab781458::t_d515705a975631 17
+packages/db/vitest.config.ts
+  s_d51d4fab781458::t_0d5c0b9d5bedda 6
+  s_d51d4fab781458::t_17ae72b5693da7 1-5,7-11
+packages/crypto/src/workspace.test.ts
+  s_d51d4fab781458::t_850ed0506d93a3 2-7,9-15,17,24-25,27,33,38-39,41-42,44-49,53-55,58-59,70-75,77-81
+  s_d51d4fab781458::t_17ae72b5693da7 1,8,16,18-23,26,28,32,34-37,40,43,50-52,56-57,60-69,76
+  s_d51d4fab781458::t_53514b2a1b34bc 29-31
+CONTRIBUTING.md
+  s_d51d4fab781458::t_d515705a975631 73,75,77-81
+packages/billing/test/global-setup.ts
+  s_d51d4fab781458::t_0d5c0b9d5bedda 1-3
+turbo.json
+  s_d51d4fab781458::t_17ae72b5693da7 84
+tsconfig.json
+  s_d51d4fab781458::t_53514b2a1b34bc 3
+packages/db/test/setup.ts
+  s_d51d4fab781458::t_17ae72b5693da7 1-5
+packages/crypto/vitest.config.ts
+  s_d51d4fab781458::t_17ae72b5693da7 1-8
+packages/crypto/src/aead.ts
+  s_d51d4fab781458::t_800a7049b44992 2,15-20,28-42
+vitest.config.ts
+  s_d51d4fab781458::t_19f77303b3ffc7 1-8
+packages/db/test/global-setup.ts
+  s_d51d4fab781458::t_54ff2e1c34112a 42,58-59
+  s_d51d4fab781458::t_0d5c0b9d5bedda 25,27,31-41,43-57,60-62
+  s_d51d4fab781458::t_17ae72b5693da7 1-24,26,28-30,63-69
+.vscode/extensions.json
+  s_d51d4fab781458::t_e0b37c86227699 2
+bun.lock
+  s_d51d4fab781458::t_89e92a2cb93216 15,109,130,147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9236401427548a97615328fc0f70b4f848b26217",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
