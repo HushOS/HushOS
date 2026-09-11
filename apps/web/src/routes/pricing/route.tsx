@@ -1,10 +1,13 @@
 import { SiteFooter, SiteHeader } from '@/components/site-header';
+import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
+import { billingApi } from '@/lib/billing-api';
+import { authError } from '@/lib/form';
 import { billingQueryOptions, catalogueQueryOptions, formatGiB, formatMoney } from '@/lib/queries';
 import { publicOrigin } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
 import { useQuery } from '@tanstack/react-query';
-import { createFileRoute, Link, notFound } from '@tanstack/react-router';
+import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
 
@@ -159,6 +162,7 @@ type Interval = 'month' | 'year';
 function PricingPage() {
     const { catalogue } = Route.useLoaderData();
     const { hasSession } = Route.useRouteContext();
+    const navigate = useNavigate();
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
     const free = formatGiB(catalogue.freeQuotaBytes);
@@ -167,6 +171,25 @@ function PricingPage() {
     const live =
         summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
     const onFree = hasSession && summary !== undefined && !live;
+    // Signed in and not yet paying: the button starts Polar's checkout itself, no stop
+    // on the billing page. Paying subscribers go there for the confirmation step.
+    const [starting, setStarting] = useState<string | null>(null);
+    const [checkoutError, setCheckoutError] = useState('');
+    async function startCheckout(plan: Plan) {
+        setStarting(plan.id);
+        setCheckoutError('');
+        try {
+            const { url } = await billingApi.checkout(plan.id);
+            if (url) {
+                window.location.assign(url);
+                return;
+            }
+            void navigate({ to: '/app/billing' });
+        } catch (error) {
+            setCheckoutError(authError(error));
+            setStarting(null);
+        }
+    }
     return (
         <div className="flex min-h-svh flex-col">
             <SiteHeader />
@@ -197,6 +220,14 @@ function PricingPage() {
                             Monthly
                         </IntervalButton>
                     </div>
+                    {checkoutError && (
+                        <p
+                            role="alert"
+                            className="mb-4 bg-destructive/15 px-4 py-3 font-mono text-xs text-foreground"
+                        >
+                            {checkoutError}
+                        </p>
+                    )}
                     <div className="grid gap-4 sm:grid-cols-2 sm:gap-0 sm:border sm:bg-card lg:grid-cols-4 sm:*:border-r lg:[&>*:last-child]:border-r-0 sm:[&>*:nth-child(2n)]:border-r-0 lg:[&>*:nth-child(2n)]:border-r">
                         <PlanColumn
                             name="Free"
@@ -252,32 +283,52 @@ function PricingPage() {
                                               : 'Billed monthly.'
                                     }
                                     action={
-                                        <Button
-                                            render={
-                                                hasSession ? (
-                                                    <Link
-                                                        to="/app/billing"
-                                                        search={{ plan: plan.id }}
-                                                    />
-                                                ) : (
-                                                    <Link
-                                                        to="/register"
-                                                        search={{ plan: plan.id }}
-                                                    />
-                                                )
-                                            }
-                                            nativeButton={false}
-                                            variant={
-                                                tier.recommended && !current ? 'default' : 'outline'
-                                            }
-                                            size="lg"
-                                            className={`w-full justify-between ${tier.recommended && !current ? recommendedButton : ''}`}
-                                            disabled={current}
-                                            data-cuelume-press="pulse"
-                                        >
-                                            {label}
-                                            {!current && <ArrowRightIcon aria-hidden="true" />}
-                                        </Button>
+                                        onFree ? (
+                                            <Button
+                                                variant={tier.recommended ? 'default' : 'outline'}
+                                                size="lg"
+                                                className={`w-full justify-between ${tier.recommended ? recommendedButton : ''}`}
+                                                disabled={starting !== null}
+                                                data-cuelume-press="pulse"
+                                                onClick={() => void startCheckout(plan)}
+                                            >
+                                                <PendingLabel
+                                                    pending={starting === plan.id}
+                                                    idle={label}
+                                                    busy="Opening checkout…"
+                                                />
+                                                <ArrowRightIcon aria-hidden="true" />
+                                            </Button>
+                                        ) : (
+                                            <Button
+                                                render={
+                                                    hasSession ? (
+                                                        <Link
+                                                            to="/app/billing"
+                                                            search={{ plan: plan.id }}
+                                                        />
+                                                    ) : (
+                                                        <Link
+                                                            to="/register"
+                                                            search={{ plan: plan.id }}
+                                                        />
+                                                    )
+                                                }
+                                                nativeButton={false}
+                                                variant={
+                                                    tier.recommended && !current
+                                                        ? 'default'
+                                                        : 'outline'
+                                                }
+                                                size="lg"
+                                                className={`w-full justify-between ${tier.recommended && !current ? recommendedButton : ''}`}
+                                                disabled={current}
+                                                data-cuelume-press="pulse"
+                                            >
+                                                {label}
+                                                {!current && <ArrowRightIcon aria-hidden="true" />}
+                                            </Button>
+                                        )
                                     }
                                 />
                             );
