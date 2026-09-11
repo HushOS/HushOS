@@ -1,0 +1,24 @@
+apps/web/src/routes/pricing/route.tsx
+  s_d51d4fab781458::t_9abb9b34cc8a85 2,4-5,10,165,174-192,223-230,286-331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d52828920e047a6e56a08e15809cdb072471c52d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
