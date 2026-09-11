@@ -1,0 +1,38 @@
+apps/web/src/lib/format.ts
+  s_d51d4fab781458::t_50eb0683c69d68 1-17
+apps/web/src/lib/plans.ts
+  s_d51d4fab781458::t_50eb0683c69d68 1-32
+packages/db/src/auth.test.ts
+  s_d51d4fab781458::t_d9c5542d874f1b 1-73,78-123,131-136,148-149,153-160,165-171,175-184,191-203,208-226,231-246,252-253,259-268,272-287,293-303
+  s_d51d4fab781458::t_e06cb479c6a43d 74-77,124-130,137-147,150-152,161-164,172-174,185-190,204-207,227-230,247-251,254-258,269-271,288-292
+apps/web/src/lib/queries.ts
+  s_d51d4fab781458::t_50eb0683c69d68 13
+apps/web/src/lib/plans.test.ts
+  s_d51d4fab781458::t_e06cb479c6a43d 32-37
+  s_d51d4fab781458::t_39b94f1e374597 1-31,38-58
+apps/web/src/routes/pricing/route.tsx
+  s_d51d4fab781458::t_50eb0683c69d68 9
+apps/web/src/lib/format.test.ts
+  s_d51d4fab781458::t_f55d6e4408a242 1-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "950a448c94988355c667547977e9e56ccd9ae667",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
