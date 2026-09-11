@@ -81,6 +81,7 @@
             "outputs": []
         },
         "test": {
+            "passThroughEnv": ["DATABASE_URL", "TEST_DATABASE_URL"],
             "outputs": []
         },
         "@hushos/emails#build": {

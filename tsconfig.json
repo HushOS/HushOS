@@ -1,6 +1,6 @@
 {
     "extends": "./tsconfig.base.json",
-    "include": ["oxfmt.config.ts", "scripts/**/*.ts"],
+    "include": ["oxfmt.config.ts", "vitest.config.ts", "scripts/**/*.ts"],
     "compilerOptions": {
         "types": ["bun"]
     }

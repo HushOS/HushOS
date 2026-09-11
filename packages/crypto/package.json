@@ -12,7 +12,8 @@
         "./identity": "./src/identity.ts"
     },
     "scripts": {
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@scure/bip39": "2.4.0",
@@ -22,6 +23,7 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.1",
-        "typescript": "7.0.2"
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
     }
 }

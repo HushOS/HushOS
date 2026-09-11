@@ -70,14 +70,15 @@ TanStack Start supplies its default request handling and CSRF middleware. The au
 
 `packages/logging/src/privacy.ts` enables redaction in development and production. Auth events keep only approved operational fields, with an allowlisted action and outcome. Bodies, headers, email addresses, cookies, passwords, OPAQUE payloads, key bundles, recovery phrases, and raw errors are excluded before console output and drains. Never attach raw requests, database/provider errors, or crypto state to a logger. No client logging or external log drain is configured.
 
-## Test tooling
+## Tests
 
-Test infrastructure is ready, with **no test cases included**. Per `AGENTS.md`, agents must only add tests when explicitly requested by the user.
+Tests exist where a mistake costs money or data: the billing entitlement transaction, the billing server against a fake Polar with real webhook signatures, and the crypto envelopes. Add to them whenever you touch those paths, and add a suite when a new package handles keys, quota, or payments. UI and marketing code is checked by hand.
 
-- Shared TypeScript packages: Bun's runner, with `--pass-with-no-tests`.
-- Web: Vitest 5, jsdom, React Testing Library, user-event, and jest-dom. `src/test/setup.ts` installs DOM matchers and cleanup.
-- Future tests should use `*.test.ts` or `*.test.tsx`. Keep route tests outside `src/routes/` so TanStack does not treat them as routes.
-- `bun run test` runs all configured runners via Turbo. Use `bun run --cwd apps/web test:watch` for the web watch mode. Use `bun run test`, not bare `bun test`, at the repo root.
+- Every package uses Vitest (`bun run test` at the root runs them all through Turbo; `bun run --cwd packages/db test` runs one). Tests live beside the code as `*.test.ts`. The root `vitest.config.ts` lists every package as a project, so the Vitest extension in VS Code (recommended in `.vscode/extensions.json`) discovers all of them and runs a single test from the gutter; the database setup runs on its own from `.env`.
+- Database tests run against a throwaway database named after `DATABASE_URL` with `_test` appended, created and migrated by `packages/db/test/global-setup.ts` on each run; set `TEST_DATABASE_URL` to use another. Tables are truncated before every test, so the development database is never touched.
+- `packages/db/test/helpers.ts` creates accounts without the OPAQUE ceremony. Fixtures are fixed values, not generated ones, so a failure reproduces.
+- The Polar SDK is replaced with `vi.mock`; nothing in the tests reaches the network.
+- Web: Vitest with jsdom today. Browser mode with Playwright is the intended replacement, since the auth client depends on Web Crypto, IndexedDB and workers that jsdom does not implement. Keep route tests outside `src/routes/` so TanStack does not treat them as routes.
 
 Before submitting a change, run:
 

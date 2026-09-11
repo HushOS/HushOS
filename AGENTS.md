@@ -14,7 +14,9 @@ Before editing files for a substantial task:
 
 # HushOS development
 
-- Add tests only when the user explicitly requests them. Otherwise validate with the existing lint, formatting, typecheck, and build commands plus focused manual smoke checks.
+- Tests are required for code that handles money, keys, or quota: billing, crypto, and transactional repository functions get Vitest suites beside them (see CONTRIBUTING.md). Elsewhere, validate with the lint, formatting, typecheck, and build commands plus focused manual smoke checks, and add tests only when asked.
+- No tautological tests. Every test must fail on a defect a user, operator, or attacker would notice: boundaries, state transitions, wrong keys, tampered inputs, replays, stale preconditions. Never assert that a mock returned what it was told to return.
+- Be direct and critical. Name a weakness first and specifically (what, where, what it costs), then the fix. Do not soften assessments, lead with praise, or let impatience or a half-finished feature pass without saying so.
 - Use four spaces for indentation. Oxfmt owns formatting; Oxlint owns linting.
 - Keep the structure simple: web pages and layouts use TanStack directory routes (`app/route.tsx`, `app/index.tsx`), reusable UI in `components/`, and shared helpers in `lib/`. Extract modules when reuse or complexity warrants it.
 - Keep Elysia API handlers together in `apps/web/src/lib/api.server.ts`; `apps/web/src/routes/api/$.ts` mounts them at `/api`. Nitro owns the HTTP server and request logging.

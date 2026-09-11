@@ -10,7 +10,8 @@
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "seed": "bun scripts/seed.ts"
+        "seed": "bun scripts/seed.ts",
+        "test": "vitest run"
     },
     "dependencies": {
         "@hushos/db": "workspace:*",
@@ -21,6 +22,7 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.1",
-        "typescript": "7.0.2"
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
     }
 }
