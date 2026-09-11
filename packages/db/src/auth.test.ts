@@ -73,7 +73,7 @@ async function verifiedEnrollment(
     email: string,
     options: {
         intent?: { plan?: string; referral?: string; source?: string };
-        expiresInMs?: number;
+        expired?: boolean;
     } = {},
 ) {
     const verification = randomUUID();
@@ -89,9 +89,20 @@ async function verifiedEnrollment(
     const verified = await auth.verifyEnrollment(
         hash(verification),
         hash(enrollment),
-        new Date(Date.now() + (options.expiresInMs ?? HOUR)),
+        new Date(Date.now() + HOUR),
     );
     if (!verified) throw new Error('Enrollment did not verify.');
+    if (options.expired) {
+        // Age the row rather than verifying with a past expiry, which the
+        // table's expiry-after-creation check rightly refuses.
+        await db
+            .update(accountEnrollments)
+            .set({
+                createdAt: new Date(Date.now() - 2 * HOUR),
+                expiresAt: new Date(Date.now() - HOUR),
+            })
+            .where(eq(accountEnrollments.enrollmentTokenHash, hash(enrollment)));
+    }
     return hash(enrollment);
 }
 
@@ -168,7 +179,7 @@ describe('registerAccount', () => {
     });
 
     test('an expired or unverified enrollment cannot register', async () => {
-        const expired = await verifiedEnrollment('late@hushos.test', { expiresInMs: -1 });
+        const expired = await verifiedEnrollment('late@hushos.test', { expired: true });
         expect(
             await auth.registerAccount({ enrollmentTokenHash: expired, ...registration() }),
         ).toEqual({
