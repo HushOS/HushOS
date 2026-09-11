@@ -1,0 +1,27 @@
+docs/drive-design.md
+  s_d51d4fab781458::t_e4e6a15ad49990 125-126,222,239-254,295
+  s_d51d4fab781458::t_36120b65d6653d 1-4,6-101,104-109,111-124,127-141,143-149,151-159,161-163,165-176,178-203,211-219,221,238,255-257,276-294
+  s_d51d4fab781458::t_05feb4dff20223 164,204-210,258-275
+  s_d51d4fab781458::t_e4f8c7ad99a7e7 5,102-103,110,142,150,160,177,220,223-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a9609d504c23304e3730765364a06562c37e0504",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
