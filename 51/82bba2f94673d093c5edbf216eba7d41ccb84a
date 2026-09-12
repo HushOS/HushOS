@@ -1,0 +1,103 @@
+turbo.json
+  s_d51d4fab781458::t_57e0c5722b788e 14,56
+packages/billing/src/server.ts
+  s_d51d4fab781458::t_7c668a19841362 11,89-92,95-100,106-108,186-197,231,331-332,350-351
+apps/web/src/lib/billing-api.ts
+  s_d51d4fab781458::t_57e0c5722b788e 9
+compose.yaml
+  s_d51d4fab781458::t_57e0c5722b788e 45
+apps/web/src/routes/pricing/route.tsx
+  s_d51d4fab781458::t_7038a355115f66 286-287
+  s_d51d4fab781458::t_f97b71300e7830 56-65
+  s_d51d4fab781458::t_b890863348db79 4-10,12,14-20,23,30-35,41-44,50-53,55,70-71,107,110-112,116-117,126-127,170-171,178-180,189-192,209,236-259,262-270,272-282,289,304,345,348,350
+  s_d51d4fab781458::t_39030be77bc518 113-115,118-125,174-176
+  s_d51d4fab781458::t_c3fc79109fa801 271
+  s_d51d4fab781458::t_2287648bbdca85 45-49,54,186,283-285,288
+  s_d51d4fab781458::t_286737dc3c8462 260-261
+apps/web/src/lib/currency.ts
+  s_d51d4fab781458::t_4f86012b1e13e7 1-9,36-38,81-112,116-120,127-135,138-145,160-168
+  s_d51d4fab781458::t_39030be77bc518 10-35,39-80,113-115
+  s_d51d4fab781458::t_7038a355115f66 121-126,136-137
+  s_d51d4fab781458::t_2287648bbdca85 146-159
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_d51d4fab781458::t_39030be77bc518 502-503
+  s_d51d4fab781458::t_b890863348db79 23,25,31,41,104-106,233,242-250,311,563-565
+apps/web/src/lib/api.server.ts
+  s_d51d4fab781458::t_57e0c5722b788e 375-380
+  s_d51d4fab781458::t_2287648bbdca85 90-94,386-388
+  s_d51d4fab781458::t_f97b71300e7830 11-12
+packages/env/src/app.ts
+  s_d51d4fab781458::t_7c668a19841362 32-38
+apps/web/src/lib/format.test.ts
+  s_d51d4fab781458::t_e05c2549960131 31-36
+packages/db/src/billing.ts
+  s_d51d4fab781458::t_7c668a19841362 21-22,124-125,138-139,226-227
+packages/billing/src/api.ts
+  s_d51d4fab781458::t_7c668a19841362 13,16-17,30-32,51-54
+.env.example
+  s_d51d4fab781458::t_57e0c5722b788e 48-49
+packages/db/src/billing.test.ts
+  s_d51d4fab781458::t_e05c2549960131 20-21
+packages/db/drizzle/20260912144703_billing_currency/snapshot.json
+  s_d51d4fab781458::t_39030be77bc518 1-2846
+packages/billing/src/protocol.ts
+  s_d51d4fab781458::t_7c668a19841362 6-11
+apps/web/src/lib/billing.ts
+  s_d51d4fab781458::t_e05c2549960131 2,9,65-77,79-80,86-89
+  s_d51d4fab781458::t_39030be77bc518 81-83,85
+  s_d51d4fab781458::t_f97b71300e7830 78,84
+  s_d51d4fab781458::t_3c2816a2897701 90-93
+docs/self-hosting.md
+  s_d51d4fab781458::t_e05c2549960131 38,152,184
+packages/db/src/schema/billing.ts
+  s_d51d4fab781458::t_7c668a19841362 34-37
+packages/db/drizzle/20260912144703_billing_currency/migration.sql
+  s_d51d4fab781458::t_39030be77bc518 1-2
+apps/web/src/lib/queries.ts
+  s_d51d4fab781458::t_e05c2549960131 14
+packages/billing/scripts/seed.ts
+  s_d51d4fab781458::t_cc4f99ec9b2e49 32,38,44
+  s_d51d4fab781458::t_23b4b35d155a94 48-53
+  s_d51d4fab781458::t_39030be77bc518 127
+  s_d51d4fab781458::t_4f86012b1e13e7 2-7,12-16,24-25,28-31,33-37,39-43,45,59-77,84-88,99-101,113,120-122,125-126,133,137-138
+  s_d51d4fab781458::t_57e0c5722b788e 26-27,89,96-98,102-103,110,123-124
+apps/web/src/lib/currency.test.ts
+  s_d51d4fab781458::t_39030be77bc518 100,102-104
+  s_d51d4fab781458::t_f97b71300e7830 62,69-79,84,94,101,111
+  s_d51d4fab781458::t_4f86012b1e13e7 1,8-36,53-61,63-68,80-83,85-93,95-99,105-110,112-118
+  s_d51d4fab781458::t_2287648bbdca85 2-7,37-52
+apps/web/src/routes/llms[.]txt.ts
+  s_d51d4fab781458::t_39030be77bc518 18-24
+  s_d51d4fab781458::t_57e0c5722b788e 25
+apps/web/src/lib/plans.ts
+  s_d51d4fab781458::t_57e0c5722b788e 17-37
+packages/billing/src/server.test.ts
+  s_d51d4fab781458::t_39030be77bc518 42-50,52-58
+  s_d51d4fab781458::t_e05c2549960131 28-29,38-41,51,69,84-89,158-159,223,244-245
+apps/web/src/lib/plans.test.ts
+  s_d51d4fab781458::t_e05c2549960131 3,12,19-36
+  s_d51d4fab781458::t_dd3a74c2ea73a6 37
+.env.production.example
+  s_d51d4fab781458::t_57e0c5722b788e 23-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5182bba2f94673d093c5edbf216eba7d41ccb84a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d51d4fab781458": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3a600a6b-710a-48be-925b-a0540aeebe2f",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
