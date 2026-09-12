@@ -1,0 +1,30 @@
+apps/web/src/routes/pricing/route.tsx
+  s_e7f5ad365f948d::t_66e7ed505e2c79 14,206-210
+apps/web/src/routes/_authenticated/app/index.tsx
+  s_e7f5ad365f948d::t_66e7ed505e2c79 4,34-35
+apps/web/src/lib/page-restore.ts
+  s_e7f5ad365f948d::t_66e7ed505e2c79 1-21
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_e7f5ad365f948d::t_66e7ed505e2c79 25,294-301,306-307,313,326,337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4eb17e841c7bd154464ea8f275acf29bb07f2ff6",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_e7f5ad365f948d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97aa7e84-4c42-4d25-8000-d88aa6d2d331",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
