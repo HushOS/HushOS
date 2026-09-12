@@ -24,29 +24,26 @@ import {
     type AccountKeyEnvelope,
 } from '@hushos/crypto';
 
-// Sessions slide: seven days from the last request, never more than thirty from sign-in.
-const SESSION_IDLE_SECONDS = 7 * 24 * 60 * 60;
-const SESSION_MAX_SECONDS = 30 * 24 * 60 * 60;
-const ENROLLMENT_SECONDS = 30 * 60;
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+import {
+    AuthError,
+    ENROLLMENT_SECONDS,
+    SESSION_IDLE_SECONDS,
+    SESSION_MAX_SECONDS,
+    TOKEN_PATTERN,
+} from './tokens';
+
+export { AuthError } from './tokens';
+
+/*
+ * The auth domain. Nothing here reads a request: callers hand in the session or
+ * enrollment token they found (see `http.ts`) and get tokens back to store.
+ */
 export const EMAIL_ADDRESS_PATTERN =
     /^(?=.{1,64}@)[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
-
-export class AuthError extends Error {
-    constructor(
-        message: string,
-        readonly status: 400 | 401 | 403 | 409 | 429 | 503 = 400,
-        options?: { cause?: unknown },
-    ) {
-        super(message, options);
-        this.name = 'AuthError';
-    }
-}
 
 function config() {
     return {
         origin: authEnv.APP_ORIGIN,
-        secure: authEnv.APP_ORIGIN.startsWith('https:'),
         serverSetup: authEnv.OPAQUE_SERVER_SETUP,
         serverSetupId: authEnv.OPAQUE_SERVER_SETUP_ID,
     };
@@ -58,26 +55,6 @@ function hash(value: string) {
 
 function randomToken() {
     return randomBytes(32).toString('base64url');
-}
-
-function cookieName(kind: 'session' | 'enrollment') {
-    return `${config().secure ? '__Host-' : ''}hushos-${kind}`;
-}
-
-function readToken(request: Request, kind: 'session' | 'enrollment') {
-    const name = cookieName(kind);
-    const value = request.headers
-        .get('cookie')
-        ?.split(';')
-        .map((part) => part.trim())
-        .find((part) => part.startsWith(`${name}=`))
-        ?.slice(name.length + 1);
-    return value && TOKEN_PATTERN.test(value) ? value : null;
-}
-
-export function authCookie(kind: 'session' | 'enrollment', token: string | null) {
-    const seconds = token ? (kind === 'session' ? SESSION_MAX_SECONDS : ENROLLMENT_SECONDS) : 0;
-    return `${cookieName(kind)}=${token ?? ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${config().secure ? '; Secure' : ''}`;
 }
 
 export function normalizeEmail(email: string) {
@@ -92,29 +69,6 @@ function normalizeName(value: string) {
     if (Array.from(name).length < 1 || Array.from(name).length > 100)
         throw new AuthError('Use a name between 1 and 100 characters.');
     return name;
-}
-
-/*
- * The address rate limits are keyed on. Behind a reverse proxy, set
- * TRUSTED_PROXY_HEADER so the proxy's header is used; the last value in a
- * comma-separated list is the one the nearest proxy appended. Without it the
- * socket address is used, which behind a proxy is the proxy itself.
- */
-export function clientAddress(request: Request, remoteAddress?: string) {
-    const header = authEnv.TRUSTED_PROXY_HEADER;
-    if (header) {
-        const value = request.headers.get(header);
-        const last = value?.split(',').at(-1)?.trim();
-        if (last && last.length <= 64) return last;
-    }
-    return remoteAddress?.trim() || 'unknown';
-}
-
-export async function guardAuthMutation(request: Request) {
-    if (request.headers.get('origin') !== config().origin)
-        throw new AuthError('This request must come from HushOS.', 403);
-    if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json')
-        throw new AuthError('Expected a JSON request.', 400);
 }
 
 // Per-address first, so one client cannot exhaust everyone's budget; the global
@@ -212,24 +166,40 @@ export async function verifyEmail(token: string) {
     );
     if (!enrollment)
         throw new AuthError('This verification link is invalid or has expired. Request a new one.');
-    return { enrollment, cookie: authCookie('enrollment', enrollmentToken) };
+    return { enrollment, enrollmentToken };
 }
 
+/* The verified enrollment behind a token, if it exists and serves the given purpose. */
 export async function getEnrollment(
-    request: Request,
+    enrollmentToken: string | null,
     purpose: 'register' | 'recover' = 'register',
 ) {
-    const token = readToken(request, 'enrollment');
-    if (!token) return null;
-    const enrollment = await authRepository.getEnrollment(hash(token));
+    if (!enrollmentToken || !TOKEN_PATTERN.test(enrollmentToken)) return null;
+    const enrollment = await authRepository.getEnrollment(hash(enrollmentToken));
     return enrollment?.purpose === purpose
         ? { id: enrollment.id, email: enrollment.email, profileVersion: OPAQUE_PROFILE_VERSION }
         : null;
 }
 
-export async function startRegistration(request: Request, registrationRequest: string) {
-    const enrollment = await getEnrollment(request);
-    if (!enrollment) throw new AuthError('Verify your email before creating an account.', 401);
+async function requireEnrollment(
+    enrollmentToken: string | null,
+    purpose: 'register' | 'recover',
+    message: string,
+) {
+    const enrollment = await getEnrollment(enrollmentToken, purpose);
+    if (!enrollmentToken || !enrollment) throw new AuthError(message, 401);
+    return { enrollment, token: enrollmentToken };
+}
+
+export async function startRegistration(
+    enrollmentToken: string | null,
+    registrationRequest: string,
+) {
+    const { enrollment } = await requireEnrollment(
+        enrollmentToken,
+        'register',
+        'Verify your email before creating an account.',
+    );
     await ready;
     try {
         return {
@@ -260,7 +230,7 @@ function decodeField(value: string, length: number) {
 }
 
 export async function finishRegistration(
-    request: Request,
+    enrollmentToken: string | null,
     input: {
         name: string;
         registrationRecord: string;
@@ -270,10 +240,11 @@ export async function finishRegistration(
         workspace: { id: string; grant: WorkspaceKeyEnvelope };
     },
 ) {
-    const token = readToken(request, 'enrollment');
-    const enrollment = token ? await getEnrollment(request) : null;
-    if (!token || !enrollment)
-        throw new AuthError('Your registration session expired. Verify your email again.', 401);
+    const { enrollment, token } = await requireEnrollment(
+        enrollmentToken,
+        'register',
+        'Your registration session expired. Verify your email again.',
+    );
     const name = normalizeName(input.name);
     if (
         input.envelope.envelopeVersion !== ENVELOPE_VERSION ||
@@ -318,7 +289,7 @@ export async function finishRegistration(
         throw new AuthError('An account already uses this email. Please sign in.', 409);
     if (result.status === 'expired')
         throw new AuthError('Your registration session expired. Verify your email again.', 401);
-    return { user: result.user, cookie: authCookie('enrollment', null) };
+    return { user: result.user };
 }
 
 // Refusing every sign-in, not only stranded accounts, keeps known and unknown emails
@@ -385,10 +356,14 @@ export async function startLogin(
     };
 }
 
+/*
+ * Completes a sign-in and opens a session. `previousSessionToken` is the session the
+ * browser still holds, if any, so the repository can retire it in the same step.
+ */
 export async function finishLogin(
-    request: Request,
     attemptToken: string,
     finishLoginRequest: string,
+    previousSessionToken: string | null = null,
 ) {
     const failure = () => new AuthError('Unable to sign in. Check your email and password.', 401);
     if (!TOKEN_PATTERN.test(attemptToken)) throw failure();
@@ -413,7 +388,10 @@ export async function finishLogin(
     if (!attempt.userId || !attempt.credentialVersion) throw failure();
 
     const token = randomToken();
-    const previousToken = readToken(request, 'session');
+    const previousToken =
+        previousSessionToken && TOKEN_PATTERN.test(previousSessionToken)
+            ? previousSessionToken
+            : null;
     const result = await authRepository.createSession({
         userId: attempt.userId,
         credentialVersion: attempt.credentialVersion,
@@ -433,37 +411,36 @@ export async function finishLogin(
             wrappingNonce: key.wrappingNonce.toString('base64url'),
             encryptedKey: key.encryptedKey.toString('base64url'),
         },
-        cookie: authCookie('session', token),
+        sessionToken: token,
     };
 }
 
-export async function getSessionUser(request: Request) {
-    const token = readToken(request, 'session');
-    return token
-        ? authRepository.getSessionUser(hash(token), {
-              idleSeconds: SESSION_IDLE_SECONDS,
-              maxSeconds: SESSION_MAX_SECONDS,
-          })
-        : null;
+/* The user behind a session token, or null when the token is missing, malformed, or expired. */
+export async function getSessionUser(sessionToken: string | null) {
+    if (!sessionToken || !TOKEN_PATTERN.test(sessionToken)) return null;
+    return authRepository.getSessionUser(hash(sessionToken), {
+        idleSeconds: SESSION_IDLE_SECONDS,
+        maxSeconds: SESSION_MAX_SECONDS,
+    });
 }
 
-/* Cookie presence only: enough to draw a signed-in header, never to trust. */
-export function hasSessionCookie(request: Request) {
-    return readToken(request, 'session') !== null;
+async function requireSession(sessionToken: string | null, message: string) {
+    const user = await getSessionUser(sessionToken);
+    if (!sessionToken || !user) throw new AuthError(message, 401);
+    return { user, token: sessionToken };
 }
 
-export async function updateProfile(request: Request, input: { name: string }) {
-    const user = await getSessionUser(request);
-    if (!user) throw new AuthError('Sign in to update your profile.', 401);
+export async function updateProfile(sessionToken: string | null, input: { name: string }) {
+    const { user } = await requireSession(sessionToken, 'Sign in to update your profile.');
     const updated = await authRepository.updateUserName(user.id, normalizeName(input.name));
     if (!updated) throw new AuthError('Sign in to update your profile.', 401);
     return { user: { ...updated, credentialVersion: user.credentialVersion } };
 }
 
-export async function logout(request: Request) {
-    const token = readToken(request, 'session');
-    if (token) await authRepository.deleteSession(hash(token));
-    return authCookie('session', null);
+/* Ends the session behind the token, if there is one. Clearing the cookie is the caller's job. */
+export async function logout(sessionToken: string | null) {
+    if (sessionToken && TOKEN_PATTERN.test(sessionToken))
+        await authRepository.deleteSession(hash(sessionToken));
 }
 
 function decodeRecovery(input: RecoveryEnvelope, expectedVersion: number, keyVersion = 1) {
@@ -500,23 +477,24 @@ function encodeRecovery(
         publicKey: key.publicKey.toString('base64url'),
     };
 }
-export async function getRecoveryBackup(request: Request) {
-    const user = await getSessionUser(request);
-    if (!user) throw new AuthError('Sign in to view your recovery key.', 401);
+export async function getRecoveryBackup(sessionToken: string | null) {
+    const { user } = await requireSession(sessionToken, 'Sign in to view your recovery key.');
     const key = await authRepository.getRecoveryKey(user.id);
     if (!key) throw new AuthError('This account does not have a recovery key.', 409);
     return { userId: user.id, recovery: encodeRecovery(key), confirmed: key.confirmedAt !== null };
 }
-export async function confirmRecoveryBackup(request: Request, recoveryVersion: number) {
-    const user = await getSessionUser(request);
-    if (!user) throw new AuthError('Sign in to confirm your recovery key.', 401);
+export async function confirmRecoveryBackup(sessionToken: string | null, recoveryVersion: number) {
+    const { user } = await requireSession(sessionToken, 'Sign in to confirm your recovery key.');
     if (!(await authRepository.confirmRecoveryKey(user.id, recoveryVersion)))
         throw new AuthError('Your recovery key changed. Save the current key.');
     return { success: true };
 }
-export async function startRecovery(request: Request, registrationRequest: string) {
-    const enrollment = await getEnrollment(request, 'recover');
-    if (!enrollment) throw new AuthError('Verify your email before recovering your account.', 401);
+export async function startRecovery(enrollmentToken: string | null, registrationRequest: string) {
+    const { enrollment } = await requireEnrollment(
+        enrollmentToken,
+        'recover',
+        'Verify your email before recovering your account.',
+    );
     await limitEmail('recover-start', normalizeEmail(enrollment.email));
     const credential = await authRepository.findCredential(normalizeEmail(enrollment.email));
     const recovery = credential ? await authRepository.getRecoveryKey(credential.userId) : null;
@@ -551,13 +529,14 @@ export async function startRecovery(request: Request, registrationRequest: strin
     };
 }
 export async function finishRecovery(
-    request: Request,
+    enrollmentToken: string | null,
     input: RecoveryReset & { signature: string },
 ) {
-    const token = readToken(request, 'enrollment');
-    const enrollment = token ? await getEnrollment(request, 'recover') : null;
-    if (!token || !enrollment)
-        throw new AuthError('Your recovery session expired. Verify your email again.', 401);
+    const { enrollment, token } = await requireEnrollment(
+        enrollmentToken,
+        'recover',
+        'Your recovery session expired. Verify your email again.',
+    );
     const failure = () =>
         new AuthError('Could not recover your account. Check your recovery phrase and try again.');
     if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();
@@ -624,12 +603,11 @@ export async function finishRecovery(
         ),
     });
     if (!user) throw failure();
-    return { user, cookie: authCookie('enrollment', null) };
+    return { user };
 }
 
-export async function getStorageAllowance(request: Request) {
-    const user = await getSessionUser(request);
-    if (!user) throw new AuthError('Sign in to view your storage allowance.', 401);
+export async function getStorageAllowance(sessionToken: string | null) {
+    const { user } = await requireSession(sessionToken, 'Sign in to view your storage allowance.');
     return { storage: await authRepository.getStorageAllowance(user.id) };
 }
 
@@ -695,10 +673,11 @@ function decodeIdentity(input: IdentityEnvelope, keyVersion = 1) {
     };
 }
 
-export async function startAccountDeletion(request: Request, startLoginRequest: string) {
-    const user = await getSessionUser(request);
-    const token = readToken(request, 'session');
-    if (!user || !token) throw new AuthError('Sign in before deleting your account.', 401);
+export async function startAccountDeletion(sessionToken: string | null, startLoginRequest: string) {
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in before deleting your account.',
+    );
     return startLogin(user.email, startLoginRequest, {
         purpose: 'delete',
         sessionTokenHash: hash(token),
@@ -706,13 +685,14 @@ export async function startAccountDeletion(request: Request, startLoginRequest: 
     });
 }
 export async function finishAccountDeletion(
-    request: Request,
+    sessionToken: string | null,
     input: { attemptToken: string; finishLoginRequest: string },
     beforeDelete?: (userId: string) => Promise<void>,
 ) {
-    const user = await getSessionUser(request);
-    const token = readToken(request, 'session');
-    if (!user || !token) throw new AuthError('Sign in before deleting your account.', 401);
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in before deleting your account.',
+    );
     const failure = () =>
         new AuthError('Could not delete your account. Check your password and try again.');
     if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();
@@ -751,23 +731,20 @@ export async function finishAccountDeletion(
     return { success: true };
 }
 
-export async function getAccountSetup(request: Request) {
-    const user = await getSessionUser(request);
-    if (!user) throw new AuthError('Sign in to finish account setup.', 401);
+export async function getAccountSetup(sessionToken: string | null) {
+    const { user } = await requireSession(sessionToken, 'Sign in to finish account setup.');
     return { missing: await authRepository.getAccountSetup(user.id) };
 }
 
 export async function initializeAccount(
-    request: Request,
+    sessionToken: string | null,
     input: {
         recovery?: RecoveryEnvelope;
         identity?: IdentityEnvelope;
         workspace?: { id: string; grant: WorkspaceKeyEnvelope };
     },
 ) {
-    const user = await getSessionUser(request);
-    const token = readToken(request, 'session');
-    if (!user || !token) throw new AuthError('Sign in to finish account setup.', 401);
+    const { user, token } = await requireSession(sessionToken, 'Sign in to finish account setup.');
     const keyVersion = await authRepository.getAccountKeyVersion(user.id);
     if (!keyVersion) throw new AuthError('Sign in to finish account setup.', 401);
     const initialized = await authRepository.initializeAccount({
@@ -786,16 +763,17 @@ export async function initializeAccount(
 }
 
 export async function startSecurityChange(
-    request: Request,
+    sessionToken: string | null,
     input: {
         action: SecurityAction;
         startLoginRequest: string;
         registrationRequest: string;
     },
 ): Promise<SecurityChallenge> {
-    const user = await getSessionUser(request);
-    const token = readToken(request, 'session');
-    if (!user || !token) throw new AuthError('Sign in before changing account security.', 401);
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in before changing account security.',
+    );
     const bundles = await authRepository.getSecurityBundles(user.id);
     if (!bundles || bundles.envelope.credentialVersion !== user.credentialVersion)
         throw new AuthError('Unlock your account and finish recovery setup first.', 409);
@@ -846,12 +824,13 @@ export async function startSecurityChange(
 }
 
 export async function finishSecurityChange(
-    request: Request,
+    sessionToken: string | null,
     input: SecurityUpdate & { action: SecurityAction; attemptToken: string },
 ) {
-    const user = await getSessionUser(request);
-    const token = readToken(request, 'session');
-    if (!user || !token) throw new AuthError('Sign in before changing account security.', 401);
+    const { user, token } = await requireSession(
+        sessionToken,
+        'Sign in before changing account security.',
+    );
     const failure = () =>
         new AuthError('Account security could not be changed. Sign in again and retry.', 409);
     if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();

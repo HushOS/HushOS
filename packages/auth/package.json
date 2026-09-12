@@ -10,10 +10,12 @@
         "./client": "./src/client.ts",
         "./device-storage": "./src/device-storage.ts",
         "./crypto-transport": "./src/crypto-transport.ts",
-        "./api": "./src/api.ts"
+        "./api": "./src/api.ts",
+        "./http": "./src/http.ts"
     },
     "scripts": {
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@hushos/crypto": "workspace:*",
@@ -25,6 +27,7 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.1",
-        "typescript": "7.0.2"
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
     }
 }

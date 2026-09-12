@@ -6,6 +6,13 @@ import { useRequest } from 'nitro/context';
 import { API_SERVICE } from '@hushos/shared';
 import { Elysia, t, ValidationError, ParseError } from 'elysia';
 import * as auth from '@hushos/auth/server';
+import {
+    authCookie,
+    clientAddress,
+    guardAuthMutation,
+    readEnrollmentToken,
+    readSessionToken,
+} from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 import { appEnv } from '@hushos/env/app';
@@ -21,7 +28,13 @@ function errorStatus(value: number): ErrorCode {
 }
 
 const requestContext = new Elysia({ name: 'hushos-api-context' })
-    .derive(() => ({ log: useLogger(), requestId: useRequestId() }))
+    .derive(({ request }) => ({
+        log: useLogger(),
+        requestId: useRequestId(),
+        // Read once per request; handlers hand the tokens to the auth domain.
+        sessionToken: readSessionToken(request),
+        enrollmentToken: readEnrollmentToken(request),
+    }))
     .error(({ error, status, request }) => {
         if (new URL(request.url).pathname.startsWith('/api/auth/')) {
             if (error instanceof auth.AuthError) {
@@ -84,7 +97,7 @@ function describeFailure(error: unknown) {
     return sanitizeFailure({ name, code });
 }
 function requestAddress(request: Request) {
-    return auth.clientAddress(request, useRequest().ip);
+    return clientAddress(request, useRequest().ip);
 }
 
 function requestCountry(request: Request) {
@@ -92,16 +105,16 @@ function requestCountry(request: Request) {
     return header ? request.headers.get(header) : null;
 }
 
-async function billingUser(request: Request) {
-    const user = await auth.getSessionUser(request);
+async function billingUser(sessionToken: string | null) {
+    const user = await auth.getSessionUser(sessionToken);
     if (!user) throw new auth.AuthError('Sign in to manage billing.', 401);
     return user;
 }
 
 /* Browser-originated billing changes carry the app's Origin, like auth mutations. */
-async function billingMutation(request: Request) {
-    await auth.guardAuthMutation(request);
-    return billingUser(request);
+function billingMutation(request: Request, sessionToken: string | null) {
+    guardAuthMutation(request);
+    return billingUser(sessionToken);
 }
 
 const intentValue = t.String({ minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' });
@@ -186,7 +199,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
         }),
     )
     .use(requestContext)
-    .get('/auth/setup', ({ request }) => auth.getAccountSetup(request))
+    .get('/auth/setup', ({ sessionToken }) => auth.getAccountSetup(sessionToken))
     .post(
         '/auth/setup',
         {
@@ -196,7 +209,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 workspace: t.Optional(workspaceSetupSchema),
             }),
         },
-        ({ request, body }) => auth.initializeAccount(request, body),
+        ({ sessionToken, body }) => auth.initializeAccount(sessionToken, body),
     )
     .post(
         '/auth/register/email',
@@ -213,18 +226,19 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/auth/register/verify',
         { body: t.Object({ token: tokenSchema }) },
         async ({ body, set }) => {
-            const { enrollment, cookie } = await auth.verifyEmail(body.token);
-            set.headers['set-cookie'] = cookie;
+            const { enrollment, enrollmentToken } = await auth.verifyEmail(body.token);
+            set.headers['set-cookie'] = authCookie('enrollment', enrollmentToken);
             return { enrollment };
         },
     )
-    .get('/auth/register', async ({ request }) => ({
-        enrollment: await auth.getEnrollment(request),
+    .get('/auth/register', async ({ enrollmentToken }) => ({
+        enrollment: await auth.getEnrollment(enrollmentToken),
     }))
     .post(
         '/auth/register/start',
         { body: t.Object({ registrationRequest: opaqueMessage }) },
-        ({ request, body }) => auth.startRegistration(request, body.registrationRequest),
+        ({ enrollmentToken, body }) =>
+            auth.startRegistration(enrollmentToken, body.registrationRequest),
     )
     .post(
         '/auth/register/finish',
@@ -238,9 +252,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 workspace: workspaceSetupSchema,
             }),
         },
-        async ({ request, body, set }) => {
-            const { user, cookie } = await auth.finishRegistration(request, body);
-            set.headers['set-cookie'] = cookie;
+        async ({ enrollmentToken, body, set }) => {
+            const { user } = await auth.finishRegistration(enrollmentToken, body);
+            set.headers['set-cookie'] = authCookie('enrollment', null);
             return { user };
         },
     )
@@ -253,26 +267,27 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post(
         '/auth/login/finish',
         { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
-        async ({ request, body, set }) => {
-            const { user, envelope, cookie } = await auth.finishLogin(
-                request,
-                body.attemptToken,
-                body.finishLoginRequest,
-            );
-            set.headers['set-cookie'] = cookie;
+        async ({ sessionToken, body, set }) => {
+            const {
+                user,
+                envelope,
+                sessionToken: token,
+            } = await auth.finishLogin(body.attemptToken, body.finishLoginRequest, sessionToken);
+            set.headers['set-cookie'] = authCookie('session', token);
             return { user, envelope };
         },
     )
     .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
         auth.requestRegistrationEmail(body.email, 'recover', requestAddress(request)),
     )
-    .get('/auth/recover', async ({ request }) => ({
-        enrollment: await auth.getEnrollment(request, 'recover'),
+    .get('/auth/recover', async ({ enrollmentToken }) => ({
+        enrollment: await auth.getEnrollment(enrollmentToken, 'recover'),
     }))
     .post(
         '/auth/recover/start',
         { body: t.Object({ registrationRequest: opaqueMessage }) },
-        ({ request, body }) => auth.startRecovery(request, body.registrationRequest),
+        ({ enrollmentToken, body }) =>
+            auth.startRecovery(enrollmentToken, body.registrationRequest),
     )
     .post(
         '/auth/recover/finish',
@@ -287,29 +302,32 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 signature: t.String({ minLength: 86, maxLength: 86 }),
             }),
         },
-        async ({ request, body, set }) => {
-            const { user, cookie } = await auth.finishRecovery(request, body);
-            set.headers['set-cookie'] = [cookie, auth.authCookie('session', null)];
+        async ({ enrollmentToken, body, set }) => {
+            const { user } = await auth.finishRecovery(enrollmentToken, body);
+            set.headers['set-cookie'] = [
+                authCookie('enrollment', null),
+                authCookie('session', null),
+            ];
             return { user };
         },
     )
     .post(
         '/auth/delete/start',
         { body: t.Object({ startLoginRequest: opaqueMessage }) },
-        ({ request, body }) => auth.startAccountDeletion(request, body.startLoginRequest),
+        ({ sessionToken, body }) => auth.startAccountDeletion(sessionToken, body.startLoginRequest),
     )
     .post(
         '/auth/delete/finish',
         { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
-        async ({ request, body, set }) => {
+        async ({ sessionToken, body, set }) => {
             const result = await auth.finishAccountDeletion(
-                request,
+                sessionToken,
                 body,
                 billing.revokeForDeletion,
             );
             set.headers['set-cookie'] = [
-                auth.authCookie('session', null),
-                auth.authCookie('enrollment', null),
+                authCookie('session', null),
+                authCookie('enrollment', null),
             ];
             return result;
         },
@@ -323,7 +341,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 registrationRequest: opaqueMessage,
             }),
         },
-        ({ request, body }) => auth.startSecurityChange(request, body),
+        ({ sessionToken, body }) => auth.startSecurityChange(sessionToken, body),
     )
     .post(
         '/auth/security/finish',
@@ -339,37 +357,42 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
         },
-        async ({ request, body, set }) => {
-            const result = await auth.finishSecurityChange(request, body);
+        async ({ sessionToken, body, set }) => {
+            const result = await auth.finishSecurityChange(sessionToken, body);
             set.headers['set-cookie'] = [
-                auth.authCookie('session', null),
-                auth.authCookie('enrollment', null),
+                authCookie('session', null),
+                authCookie('enrollment', null),
             ];
             return result;
         },
     )
-    .get('/auth/storage', ({ request }) => auth.getStorageAllowance(request))
-    .get('/auth/recovery-key', ({ request }) => auth.getRecoveryBackup(request))
+    .get('/auth/storage', ({ sessionToken }) => auth.getStorageAllowance(sessionToken))
+    .get('/auth/recovery-key', ({ sessionToken }) => auth.getRecoveryBackup(sessionToken))
     .post(
         '/auth/recovery-key/confirm',
         { body: t.Object({ recoveryVersion: t.Integer({ minimum: 1, maximum: 2147483646 }) }) },
-        ({ request, body }) => auth.confirmRecoveryBackup(request, body.recoveryVersion),
+        ({ sessionToken, body }) => auth.confirmRecoveryBackup(sessionToken, body.recoveryVersion),
     )
-    .get('/auth/session', async ({ request }) => ({ user: await auth.getSessionUser(request) }))
+    .get('/auth/session', async ({ sessionToken }) => ({
+        user: await auth.getSessionUser(sessionToken),
+    }))
     .post(
         '/auth/profile',
         { body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }) },
-        ({ request, body }) => auth.updateProfile(request, body),
+        ({ sessionToken, body }) => auth.updateProfile(sessionToken, body),
     )
-    .post('/auth/logout', { body: t.Object({}) }, async ({ request, set }) => {
-        set.headers['set-cookie'] = await auth.logout(request);
+    .post('/auth/logout', { body: t.Object({}) }, async ({ sessionToken, set }) => {
+        await auth.logout(sessionToken);
+        set.headers['set-cookie'] = authCookie('session', null);
         return { success: true };
     })
     .get('/billing/catalogue', ({ set }) => {
         set.headers['Cache-Control'] = 'public, max-age=60';
         return billing.listCatalogue();
     })
-    .get('/billing', async ({ request }) => billing.getSummary(await billingUser(request)))
+    .get('/billing', async ({ sessionToken }) =>
+        billing.getSummary(await billingUser(sessionToken)),
+    )
     .post(
         '/billing/checkout',
         {
@@ -378,9 +401,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
             }),
         },
-        async ({ request, body }) =>
+        async ({ request, sessionToken, body }) =>
             billing.startCheckout(
-                await billingMutation(request),
+                await billingMutation(request, sessionToken),
                 body.productId,
                 requestAddress(request),
                 // The page's currency is a display choice; Polar is told it only when
@@ -388,17 +411,20 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
             ),
     )
-    .post('/billing/portal', { body: t.Object({}) }, async ({ request }) =>
-        billing.createPortalSession(await billingMutation(request)),
+    .post('/billing/portal', { body: t.Object({}) }, async ({ request, sessionToken }) =>
+        billing.createPortalSession(await billingMutation(request, sessionToken)),
     )
-    .post('/billing/sync', { body: t.Object({}) }, async ({ request }) =>
-        billing.sync(await billingMutation(request)),
+    .post('/billing/sync', { body: t.Object({}) }, async ({ request, sessionToken }) =>
+        billing.sync(await billingMutation(request, sessionToken)),
     )
-    .post('/billing/cancel', { body: cancellationSchema }, async ({ request, body }) =>
-        billing.cancelAtPeriodEnd(await billingMutation(request), body),
+    .post(
+        '/billing/cancel',
+        { body: cancellationSchema },
+        async ({ request, sessionToken, body }) =>
+            billing.cancelAtPeriodEnd(await billingMutation(request, sessionToken), body),
     )
-    .post('/billing/resume', { body: t.Object({}) }, async ({ request }) =>
-        billing.resume(await billingMutation(request)),
+    .post('/billing/resume', { body: t.Object({}) }, async ({ request, sessionToken }) =>
+        billing.resume(await billingMutation(request, sessionToken)),
     )
     .get('/health', () => ({ status: 'ok' as const, service: API_SERVICE }))
     .get('/ready', async ({ status, log, set }) => {
@@ -434,7 +460,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     };
     try {
         if (request.method !== 'GET' && request.method !== 'OPTIONS') {
-            await auth.guardAuthMutation(request);
+            guardAuthMutation(request);
             const reader = request.body?.getReader();
             const chunks: Uint8Array[] = [];
             let length = 0;

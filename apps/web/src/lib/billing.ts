@@ -1,3 +1,4 @@
+import { readSessionToken } from '@hushos/auth/http';
 import { getSessionUser } from '@hushos/auth/server';
 import { appEnv } from '@hushos/env/app';
 import type { BillingSummary } from '@hushos/billing/api';
@@ -28,7 +29,7 @@ const signedOut: BillingSummary = {
 };
 const readBillingSummary = createIsomorphicFn()
     .server(async () => {
-        const user = await getSessionUser(useRequest());
+        const user = await getSessionUser(readSessionToken(useRequest()));
         return user ? getSummary(user) : signedOut;
     })
     .client(() => billingApi.summary());

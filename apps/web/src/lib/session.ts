@@ -1,4 +1,5 @@
-import { hasSessionCookie, getSessionUser } from '@hushos/auth/server';
+import { hasSessionCookie, readSessionToken } from '@hushos/auth/http';
+import { getSessionUser } from '@hushos/auth/server';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { createIsomorphicFn } from '@tanstack/react-start';
 import { useRequest } from 'nitro/context';
@@ -16,7 +17,7 @@ export const sessionKeys = {
 };
 
 const readSessionUser = createIsomorphicFn()
-    .server(() => getSessionUser(useRequest()))
+    .server(() => getSessionUser(readSessionToken(useRequest())))
     .client(async () => (await authClient.session()).user);
 
 export const sessionQueryOptions = queryOptions({
