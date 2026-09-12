@@ -1,0 +1,49 @@
+apps/web/src/lib/auth.ts
+  s_e7f5ad365f948d::t_69a9ff0cc3d452 1,8,12
+packages/auth/package.json
+  s_e7f5ad365f948d::t_69a9ff0cc3d452 13-14,17-18,30-31
+packages/auth/src/tokens.ts
+  s_e7f5ad365f948d::t_b4d394a6558895 1-23
+packages/auth/vitest.config.ts
+  s_e7f5ad365f948d::t_69a9ff0cc3d452 1-8
+packages/auth/src/http.test.ts
+  s_e7f5ad365f948d::t_8682fbc8069468 1-32,36-69,73-97,102-118
+  s_e7f5ad365f948d::t_d2af0b1b1569b0 33-35,70-72,98-101
+CONTRIBUTING.md
+  s_e7f5ad365f948d::t_1c1204c4673ae8 104
+packages/auth/src/http.ts
+  s_e7f5ad365f948d::t_b4d394a6558895 1-78
+packages/auth/src/server.ts
+  s_e7f5ad365f948d::t_c784bd2a4c840f 34-40,169,172,174,177-178,184-193,198-202,233,243-247,292,359-362,366,391-394,414,418-424,427-430,433-434,440-443,480-481,486-487,492-497,532,535-539,606,609-610,676,688,734-735,740,747,766,773-776,827,830-833
+  s_e7f5ad365f948d::t_50b34faaef0cd1 27-33,194-197,677-680,692-695
+apps/web/src/lib/api.server.ts
+  s_e7f5ad365f948d::t_45a5cd173cb58f 9-15,31-37,100,108-109,115-117,202,212,229-230,234-235,240-241,255-257,270,276,283-284,289-290,305-310,322,324,329-330,344,360-361,363-364,369-370,376-378,382,384-386,404,406,414-415,417-418,426-427,463
+  s_e7f5ad365f948d::t_50b34faaef0cd1 271-275,317,374,393-395,420-424
+apps/web/src/lib/session.ts
+  s_e7f5ad365f948d::t_69a9ff0cc3d452 1-2,20
+apps/web/src/lib/billing.ts
+  s_e7f5ad365f948d::t_45a5cd173cb58f 1,32
+bun.lock
+  s_e7f5ad365f948d::t_62576bda019636 95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "125e04454a64b3ad0134db4ec8c47f918dccc61d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_e7f5ad365f948d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97aa7e84-4c42-4d25-8000-d88aa6d2d331",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
