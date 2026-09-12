@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
+import { usePageRestored } from '@/lib/page-restore';
 import { useStore } from 'zustand';
 import { ArrowRightIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
 import { IconSwap, Spinner, TextSwap } from '@/components/motion';
@@ -30,6 +31,8 @@ function WorkspacePage() {
     const [initialized, setInitialized] = useState(false);
     const [checkingOut, setCheckingOut] = useState(false);
     const [error, setError] = useState('');
+    // Back from Polar's checkout: show the app, not "Taking you to checkout…".
+    usePageRestored(() => setCheckingOut(false));
     const unlocked = unlockedUser === user.id;
     const opening = !initialized || restoring;
     // Keyed on identity, not the `user` object, so a name change does not rerun setup.

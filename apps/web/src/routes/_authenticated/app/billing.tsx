@@ -22,6 +22,7 @@ import {
 import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
+import { usePageRestored } from '@/lib/page-restore';
 import { currenciesOf, priceOf } from '@/lib/plans';
 import {
     billingQueryOptions,
@@ -290,19 +291,26 @@ function BillingPage() {
         };
     }, [checkoutId, navigate, settle]);
 
-    async function run(key: string, action: () => Promise<void>) {
+    // Back from Polar restores this page with `busy` still set.
+    usePageRestored(() => setBusy(null));
+
+    /*
+     * An action that redirects says so, and stays busy until the browser has
+     * actually left; clearing it first makes the button flash back to idle.
+     */
+    async function run(key: string, action: () => Promise<void | 'redirected'>) {
         setBusy(key);
         setError('');
         setNotice('');
         try {
-            await action();
+            const outcome = await action();
+            if (outcome !== 'redirected') setBusy(null);
             return true;
         } catch (error) {
             cue('error');
             setError(authError(error));
-            return false;
-        } finally {
             setBusy(null);
+            return false;
         }
     }
 
@@ -315,7 +323,7 @@ function BillingPage() {
                         'Your bank needs to confirm this payment. Taking you to the billing portal to finish it…',
                     );
                 window.location.assign(url);
-                return;
+                return 'redirected';
             }
             settle(await billingApi.summary());
             cue('success');
@@ -326,6 +334,7 @@ function BillingPage() {
         run('portal', async () => {
             const { url } = await billingApi.portal();
             window.location.assign(url);
+            return 'redirected';
         });
 
     const resume = () =>

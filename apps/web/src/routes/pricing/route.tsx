@@ -11,6 +11,7 @@ import {
 import { billingApi } from '@/lib/billing-api';
 import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
+import { usePageRestored } from '@/lib/page-restore';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -202,6 +203,11 @@ function PricingPage() {
     // on the billing page. Paying subscribers go there for the confirmation step.
     const [starting, setStarting] = useState<string | null>(null);
     const [checkoutError, setCheckoutError] = useState('');
+    // Back from Polar's checkout restores this page with `starting` still set.
+    usePageRestored(() => {
+        setStarting(null);
+        setCheckoutError('');
+    });
     async function startCheckout(plan: Plan) {
         setStarting(plan.id);
         setCheckoutError('');
