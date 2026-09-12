@@ -8,6 +8,7 @@ import type { BillingSummary, Catalogue, Plan } from './api';
 import {
     PLAN_METADATA_KEY,
     QUOTA_METADATA_KEY,
+    DEFAULT_CURRENCY,
     RECOMMENDED_METADATA_KEY,
     type CancellationReason,
 } from './protocol';
@@ -85,20 +86,26 @@ function readProduct(product: models.Product): CatalogueProduct | null {
         return null;
     }
     if (quotaBytes <= 0n) return null;
-    const price = product.prices.find(
-        (candidate): candidate is models.ProductPriceFixed =>
+    // One fixed price per currency; the default currency's is the one every plan has.
+    const prices: Record<string, number> = {};
+    for (const candidate of product.prices)
+        if (
             'amount_type' in candidate &&
             candidate.amount_type === 'fixed' &&
-            !candidate.is_archived,
-    );
-    if (!price) return null;
+            !candidate.is_archived &&
+            !(candidate.price_currency in prices)
+        )
+            prices[candidate.price_currency] = candidate.price_amount;
+    const amount = prices[DEFAULT_CURRENCY];
+    if (amount === undefined) return null;
     return {
         id: product.id,
         name: product.name,
         description: product.description,
         interval,
-        amount: price.price_amount,
-        currency: price.price_currency,
+        amount,
+        currency: DEFAULT_CURRENCY,
+        prices,
         quotaBytes: quotaBytes.toString(),
         recommended: [true, 'true', 1, '1'].includes(metadata[RECOMMENDED_METADATA_KEY] as never),
         archived: product.is_archived,
@@ -176,10 +183,18 @@ async function currentSubscription(user: BillingUser) {
  * A new customer goes through Polar's hosted checkout; an existing subscriber is
  * moved to the other plan in place, prorated, and the local state refreshed.
  */
-export async function startCheckout(user: BillingUser, productId: string, address?: string) {
-    const plans = (await listCatalogue()).plans;
-    if (!plans.some((plan) => plan.id === productId))
-        throw new BillingError('That plan is not available.', 404);
+export async function startCheckout(
+    user: BillingUser,
+    productId: string,
+    address?: string,
+    currency?: string,
+) {
+    const plan = (await listCatalogue()).plans.find((candidate) => candidate.id === productId);
+    if (!plan) throw new BillingError('That plan is not available.', 404);
+    // The currency the person saw on the pricing page; Polar would otherwise pick one
+    // from the address, which can differ from what they were shown.
+    if (currency !== undefined && !(currency in plan.prices))
+        throw new BillingError('That plan is not priced in that currency.', 400);
     const current = await currentSubscription(user);
     if (current) {
         if (current.productId === productId && !current.cancelAtPeriodEnd)
@@ -213,6 +228,7 @@ export async function startCheckout(user: BillingUser, productId: string, addres
         products: [productId],
         external_customer_id: user.id,
         customer_ip_address: address && address !== 'unknown' ? address : null,
+        currency: (currency as models.PresentmentCurrency | undefined) ?? null,
         success_url: `${appEnv.APP_ORIGIN}/app/billing?checkout_id={CHECKOUT_ID}`,
         return_url: `${appEnv.APP_ORIGIN}/app/billing`,
         allow_trial: false,
@@ -312,6 +328,8 @@ function snapshot(
         | 'current_period_end'
         | 'cancel_at_period_end'
         | 'product_id'
+        | 'amount'
+        | 'currency'
     > & { ended_at?: string | null },
     products: CatalogueProduct[],
 ): billingRepository.SubscriptionSnapshot | null {
@@ -329,6 +347,8 @@ function snapshot(
         productName: product.name,
         status: subscription.status,
         recurringInterval: subscription.recurring_interval,
+        amount: subscription.amount,
+        currency: subscription.currency,
         quotaBytes: BigInt(product.quotaBytes),
         currentPeriodEnd: new Date(subscription.current_period_end),
         cancelAtPeriodEnd: subscription.cancel_at_period_end,

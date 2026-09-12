@@ -1,10 +1,12 @@
 import { getSessionUser } from '@hushos/auth/server';
+import { appEnv } from '@hushos/env/app';
 import type { BillingSummary } from '@hushos/billing/api';
 import { billingEnabled, getSummary, listCatalogue } from '@hushos/billing/server';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { createIsomorphicFn, createServerFn } from '@tanstack/react-start';
 import { useRequest } from 'nitro/context';
 import { billingApi } from '@/lib/billing-api';
+import type { LocaleHint } from '@/lib/currency';
 
 /* The public plan catalogue, for pages rendered before the browser can ask the API. */
 export const getCatalogueServerFn = createServerFn().handler(() => listCatalogue());
@@ -56,6 +58,35 @@ const readBillingEnabled = createIsomorphicFn()
 const billingEnabledQueryOptions = queryOptions({
     queryKey: ['billing', 'enabled'],
     queryFn: () => readBillingEnabled(),
+    staleTime: Infinity,
+    gcTime: Infinity,
+});
+
+/*
+ * Where the visitor is, as far as the request says: the country a geolocating
+ * proxy reports in the configured header, and the browser's language preference.
+ * Read once on the server, dehydrated with the document, and reused in the browser
+ * so the currency the page opened in does not change under the visitor.
+ */
+const readLocaleHint = createIsomorphicFn()
+    .server((): LocaleHint => {
+        const headers = useRequest().headers;
+        const header = appEnv.TRUSTED_COUNTRY_HEADER;
+        return {
+            country: header ? headers.get(header) : null,
+            acceptLanguage: headers.get('accept-language'),
+            trusted: Boolean(header),
+        };
+    })
+    .client((): LocaleHint => ({
+        country: null,
+        acceptLanguage: navigator.languages?.join(',') || navigator.language || null,
+        trusted: false,
+    }));
+
+export const localeHintQueryOptions = queryOptions({
+    queryKey: ['locale', 'hint'],
+    queryFn: () => readLocaleHint(),
     staleTime: Infinity,
     gcTime: Infinity,
 });

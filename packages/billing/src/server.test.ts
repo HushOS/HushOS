@@ -25,6 +25,8 @@ type FakeSubscription = {
     status: string;
     product_id: string;
     recurring_interval: 'month' | 'year';
+    amount: number;
+    currency: string;
     current_period_end: string;
     cancel_at_period_end: boolean;
     ended_at?: string | null;
@@ -33,9 +35,27 @@ type FakeSubscription = {
 /* The state of the fake Polar organisation, mutated by tests. */
 const polar = {
     products: [
-        product(PRO, 'Pro (monthly)', 'month', 1000, 500n * GIB, { hushos_recommended: 'true' }),
-        product(MAX, 'Max (yearly)', 'year', 15000, 1024n * GIB),
-        product('33333333-aaaa-4aaa-8aaa-333333333333', 'Not a plan', 'month', 100, 0n, {}, false),
+        product(PRO, 'Pro (monthly)', 'month', { usd: 1000, inr: 79900 }, 500n * GIB, {
+            hushos_recommended: 'true',
+        }),
+        product(MAX, 'Max (yearly)', 'year', { usd: 15000 }, 1024n * GIB),
+        product(
+            '33333333-aaaa-4aaa-8aaa-333333333333',
+            'Not a plan',
+            'month',
+            { usd: 100 },
+            0n,
+            {},
+            false,
+        ),
+        // Priced only in a currency that is not the organisation's default: never a plan.
+        product(
+            '44444444-aaaa-4aaa-8aaa-444444444444',
+            'Euro only',
+            'month',
+            { eur: 900 },
+            100n * GIB,
+        ),
     ],
     customers: new Map<string, { id: string; subscriptions: FakeSubscription[] }>(),
     subscriptions: new Map<string, FakeSubscription>(),
@@ -46,7 +66,7 @@ function product(
     id: string,
     name: string,
     interval: 'month' | 'year',
-    amount: number,
+    amounts: Record<string, number>,
     quota: bigint,
     extra: Record<string, string> = {},
     plan = true,
@@ -61,14 +81,12 @@ function product(
         metadata: plan
             ? { hushos_plan: name.toLowerCase(), quota_bytes: quota.toString(), ...extra }
             : {},
-        prices: [
-            {
-                amount_type: 'fixed',
-                price_amount: amount,
-                price_currency: 'usd',
-                is_archived: false,
-            },
-        ],
+        prices: Object.entries(amounts).map(([currency, amount]) => ({
+            amount_type: 'fixed',
+            price_amount: amount,
+            price_currency: currency,
+            is_archived: false,
+        })),
     };
 }
 
@@ -137,6 +155,8 @@ function subscribe(userId: string, subscription: Partial<FakeSubscription> & { i
         status: 'active',
         product_id: PRO,
         recurring_interval: 'month',
+        amount: 1000,
+        currency: 'usd',
         current_period_end: new Date(Date.now() + 30 * DAY).toISOString(),
         cancel_at_period_end: false,
         ended_at: null,
@@ -200,6 +220,7 @@ describe('catalogue', () => {
             interval: 'month',
             amount: 1000,
             currency: 'usd',
+            prices: { usd: 1000, inr: 79900 },
             quotaBytes: (500n * GIB).toString(),
             recommended: true,
         });
@@ -220,6 +241,8 @@ describe('reconcileCustomer', () => {
             email: 'x@hushos.test',
         });
         expect(summary.subscription?.productName).toBe('Pro (monthly)');
+        expect(summary.subscription?.amount).toBe(1000);
+        expect(summary.subscription?.currency).toBe('usd');
         expect(summary.hasCustomer).toBe(true);
     });
 

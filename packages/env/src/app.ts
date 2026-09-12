@@ -29,6 +29,13 @@ export const appEnv = createEnv({
         // policy. Unset, those pages speak of "the organisation or person who hosts it".
         OPERATOR_NAME: z.string().trim().min(1).max(200).optional(),
         OPERATOR_JURISDICTION: z.string().trim().min(1).max(200).optional(),
+        // Behind a proxy that geolocates, the header carrying the visitor's country as an
+        // ISO 3166 code (`cf-ipcountry` on Cloudflare). Unset: the browser's language
+        // decides which currency the pricing page shows first.
+        TRUSTED_COUNTRY_HEADER: z
+            .string()
+            .regex(/^[a-z0-9-]{1,64}$/)
+            .optional(),
     },
     runtimeEnv: process.env,
     emptyStringAsUndefined: true,

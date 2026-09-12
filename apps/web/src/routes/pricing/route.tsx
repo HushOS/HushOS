@@ -1,31 +1,74 @@
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 import { billingApi } from '@/lib/billing-api';
+import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
-import { billingQueryOptions, catalogueQueryOptions, formatGiB, formatMoney } from '@/lib/queries';
+import {
+    billingQueryOptions,
+    catalogueQueryOptions,
+    formatGiB,
+    formatMoney,
+    localeHintQueryOptions,
+} from '@/lib/queries';
 import { publicOrigin } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
-import { tiersOf } from '@/lib/plans';
+import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
 
 export const Route = createFileRoute('/pricing')({
-    loader: async ({ context }) => {
+    validateSearch: (search: Record<string, unknown>): { currency?: string } =>
+        typeof search.currency === 'string' && /^[a-z]{3}$/.test(search.currency)
+            ? { currency: search.currency }
+            : {},
+    loaderDeps: ({ search }) => ({ currency: search.currency }),
+    loader: async ({ context, deps }) => {
         const catalogue = await context.queryClient.ensureQueryData(catalogueQueryOptions);
         if (!catalogue.enabled) throw notFound();
         // With a session cookie, the buttons can say "Current" and "Switch" on first paint.
         if (context.hasSession)
             await context.queryClient.ensureQueryData(billingQueryOptions).catch(() => null);
-        return { origin: publicOrigin(), catalogue };
+        // The currency the visitor chose, else the one their country or language
+        // suggests, out of those every plan is priced in; Polar charges in the same one.
+        const hint = await context.queryClient.ensureQueryData(localeHintQueryOptions);
+        const currencies = currenciesOf(catalogue.plans);
+        const detected = pickCurrency({
+            hint,
+            available: currencies,
+            fallback: currencies[0] ?? 'usd',
+        });
+        const currency = pickCurrency({
+            requested: deps.currency,
+            hint,
+            available: currencies,
+            fallback: detected,
+        });
+        // With a trusted country header the currency is settled and there is nothing to
+        // choose; otherwise the visitor may read the page in another one, and the
+        // checkout still charges by address.
+        return {
+            origin: publicOrigin(),
+            catalogue,
+            currency,
+            currencies: hint.trusted ? [] : currencies,
+            detected,
+        };
     },
     headers: () => ({ 'Cache-Control': 'private, no-store', Vary: 'Cookie' }),
     head: ({ loaderData }) => {
         if (!loaderData) return {};
-        const { origin, catalogue } = loaderData;
-        const description = `Start free with ${formatGiB(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans)} a month, billed by Polar with tax handled at checkout.`;
+        const { origin, catalogue, currency } = loaderData;
+        const description = `Start free with ${formatGiB(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
                 { title: 'Pricing · HushOS' },
@@ -61,24 +104,27 @@ export const Route = createFileRoute('/pricing')({
                                         name: 'Free',
                                         description: `${formatGiB(catalogue.freeQuotaBytes)} of encrypted storage`,
                                         price: '0',
-                                        priceCurrency: 'USD',
+                                        priceCurrency: currency.toUpperCase(),
                                         url: `${origin}/register`,
                                     },
-                                    ...catalogue.plans.map((plan) => ({
-                                        '@type': 'Offer',
-                                        name: plan.name,
-                                        description: `${formatGiB(plan.quotaBytes)} of encrypted storage, billed ${plan.interval === 'year' ? 'yearly' : 'monthly'}`,
-                                        price: (plan.amount / 100).toFixed(2),
-                                        priceCurrency: plan.currency.toUpperCase(),
-                                        url: `${origin}/pricing`,
-                                        priceSpecification: {
-                                            '@type': 'UnitPriceSpecification',
-                                            price: (plan.amount / 100).toFixed(2),
-                                            priceCurrency: plan.currency.toUpperCase(),
-                                            billingDuration: 1,
-                                            unitCode: plan.interval === 'year' ? 'ANN' : 'MON',
-                                        },
-                                    })),
+                                    ...catalogue.plans.map((plan) => {
+                                        const price = priceOf(plan, currency);
+                                        return {
+                                            '@type': 'Offer',
+                                            name: plan.name,
+                                            description: `${formatGiB(plan.quotaBytes)} of encrypted storage, billed ${plan.interval === 'year' ? 'yearly' : 'monthly'}`,
+                                            price: (price.amount / 100).toFixed(2),
+                                            priceCurrency: price.currency.toUpperCase(),
+                                            url: `${origin}/pricing`,
+                                            priceSpecification: {
+                                                '@type': 'UnitPriceSpecification',
+                                                price: (price.amount / 100).toFixed(2),
+                                                priceCurrency: price.currency.toUpperCase(),
+                                                billingDuration: 1,
+                                                unitCode: plan.interval === 'year' ? 'ANN' : 'MON',
+                                            },
+                                        };
+                                    }),
                                 ],
                             },
                             {
@@ -121,21 +167,29 @@ const faq = [
     },
 ];
 
-/* The lowest monthly price, for the description tag. */
-function cheapest(plans: Plan[]) {
+/* The lowest monthly price in the page's currency, for the description tag. */
+function cheapest(plans: Plan[], currency: string) {
     const monthly = plans.filter((plan) => plan.interval === 'month');
     const plan = monthly.length
-        ? monthly.reduce((a, b) => (a.amount <= b.amount ? a : b))
+        ? monthly.reduce((a, b) =>
+              priceOf(a, currency).amount <= priceOf(b, currency).amount ? a : b,
+          )
         : plans[0];
-    return plan ? formatMoney(plan.amount, plan.currency) : '$0';
+    if (!plan) return formatMoney(0, currency);
+    const price = priceOf(plan, currency);
+    return formatMoney(price.amount, price.currency);
 }
 
 type Interval = 'month' | 'year';
 
 function PricingPage() {
-    const { catalogue } = Route.useLoaderData();
+    const { catalogue, currency, currencies, detected } = Route.useLoaderData();
     const { hasSession } = Route.useRouteContext();
     const navigate = useNavigate();
+    const money = (plan: Plan) => {
+        const price = priceOf(plan, currency);
+        return formatMoney(price.amount, price.currency);
+    };
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
     const free = formatGiB(catalogue.freeQuotaBytes);
@@ -152,7 +206,7 @@ function PricingPage() {
         setStarting(plan.id);
         setCheckoutError('');
         try {
-            const { url } = await billingApi.checkout(plan.id);
+            const { url } = await billingApi.checkout(plan.id, currency);
             if (url) {
                 window.location.assign(url);
                 return;
@@ -179,19 +233,60 @@ function PricingPage() {
                     </p>
                 </section>
                 <section aria-label="Plans" className="border-b px-5 py-10 sm:px-10 lg:py-14">
-                    <div aria-label="Billing period" className="mb-6 inline-flex border bg-card">
-                        <IntervalButton
-                            active={interval === 'year'}
-                            onClick={() => setInterval('year')}
-                        >
-                            Yearly · 2 months free
-                        </IntervalButton>
-                        <IntervalButton
-                            active={interval === 'month'}
-                            onClick={() => setInterval('month')}
-                        >
-                            Monthly
-                        </IntervalButton>
+                    <div className="mb-6 flex flex-wrap items-center gap-3">
+                        <div aria-label="Billing period" className="inline-flex border bg-card">
+                            <IntervalButton
+                                active={interval === 'year'}
+                                onClick={() => setInterval('year')}
+                            >
+                                Yearly · 2 months free
+                            </IntervalButton>
+                            <IntervalButton
+                                active={interval === 'month'}
+                                onClick={() => setInterval('month')}
+                            >
+                                Monthly
+                            </IntervalButton>
+                        </div>
+                        {currencies.length > 1 && (
+                            <Select
+                                value={currency}
+                                onValueChange={(value) => {
+                                    if (typeof value === 'string' && value !== currency)
+                                        void navigate({
+                                            to: '/pricing',
+                                            search: { currency: value },
+                                            replace: true,
+                                            // Only the prices change; stay where the reader is.
+                                            resetScroll: false,
+                                        });
+                                }}
+                                items={currencies.map((code) => ({
+                                    value: code,
+                                    label: `${code.toUpperCase()} · ${currencyLabel(code)}`,
+                                }))}
+                            >
+                                <SelectTrigger
+                                    aria-label="Currency"
+                                    className="h-10 w-auto min-w-56 font-mono text-xs uppercase"
+                                >
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {currencies.map((code) => (
+                                        <SelectItem key={code} value={code}>
+                                            {code.toUpperCase()} · {currencyLabel(code)}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        {currency !== detected && (
+                            <p className="font-mono text-xs text-muted-foreground">
+                                Shown in {currency.toUpperCase()}. Checkout charges in the currency
+                                of the country you are in.
+                            </p>
+                        )}
                     </div>
                     {checkoutError && (
                         <p
@@ -206,7 +301,7 @@ function PricingPage() {
                             name="Free"
                             description="Everything, with a starter allowance."
                             storage={free}
-                            price="$0"
+                            price={formatMoney(0, currency)}
                             note="No card needed."
                             action={
                                 <Button
@@ -247,12 +342,12 @@ function PricingPage() {
                                     description={tier.description}
                                     storage={formatGiB(tier.quotaBytes)}
                                     recommended={tier.recommended}
-                                    price={`${formatMoney(plan.amount, plan.currency)} / ${plan.interval}`}
+                                    price={`${money(plan)} / ${plan.interval}`}
                                     note={
                                         plan.interval === 'year'
-                                            ? `Billed ${formatMoney(plan.amount, plan.currency)} once a year.`
+                                            ? `Billed ${money(plan)} once a year.`
                                             : other
-                                              ? `Or ${formatMoney(other.amount, other.currency)} a year.`
+                                              ? `Or ${money(other)} a year.`
                                               : 'Billed monthly.'
                                     }
                                     action={

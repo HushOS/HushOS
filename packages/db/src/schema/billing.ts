@@ -31,6 +31,10 @@ export const billingSubscriptions = pgTable(
         productName: text('product_name').notNull(),
         status: text().notNull(),
         recurringInterval: text('recurring_interval').notNull(),
+        // Minor units and lowercase ISO code, as the provider charges them; null for
+        // rows written before currencies were recorded.
+        amount: bigint('amount', { mode: 'number' }),
+        currency: text(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }).notNull(),
         cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),

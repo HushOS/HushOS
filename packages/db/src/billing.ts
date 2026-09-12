@@ -18,6 +18,8 @@ export type SubscriptionSnapshot = {
     productName: string;
     status: string;
     recurringInterval: string;
+    amount: number | null;
+    currency: string | null;
     quotaBytes: bigint;
     currentPeriodEnd: Date;
     cancelAtPeriodEnd: boolean;
@@ -119,6 +121,8 @@ export async function applyCustomerState(input: {
                     productName: subscription.productName,
                     status: subscription.status,
                     recurringInterval: subscription.recurringInterval,
+                    amount: subscription.amount,
+                    currency: subscription.currency,
                     quotaBytes: subscription.quotaBytes,
                     currentPeriodEnd: subscription.currentPeriodEnd,
                     cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
@@ -131,6 +135,8 @@ export async function applyCustomerState(input: {
                         productName: subscription.productName,
                         status: subscription.status,
                         recurringInterval: subscription.recurringInterval,
+                        amount: subscription.amount,
+                        currency: subscription.currency,
                         quotaBytes: subscription.quotaBytes,
                         currentPeriodEnd: subscription.currentPeriodEnd,
                         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
@@ -217,6 +223,8 @@ export async function getBillingSummary(userId: string) {
                   productName: subscription.productName,
                   status: subscription.status,
                   recurringInterval: subscription.recurringInterval,
+                  amount: subscription.amount,
+                  currency: subscription.currency,
                   quotaBytes: subscription.quotaBytes.toString(),
                   currentPeriodEnd: subscription.currentPeriodEnd.toISOString(),
                   cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,

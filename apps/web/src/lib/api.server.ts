@@ -8,6 +8,8 @@ import { Elysia, t, ValidationError, ParseError } from 'elysia';
 import * as auth from '@hushos/auth/server';
 import * as billing from '@hushos/billing/server';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
+import { appEnv } from '@hushos/env/app';
+import { chargeableCurrency } from '@/lib/currency';
 
 import { useLogger, useRequestId } from '@/lib/logging.server';
 
@@ -83,6 +85,11 @@ function describeFailure(error: unknown) {
 }
 function requestAddress(request: Request) {
     return auth.clientAddress(request, useRequest().ip);
+}
+
+function requestCountry(request: Request) {
+    const header = appEnv.TRUSTED_COUNTRY_HEADER;
+    return header ? request.headers.get(header) : null;
 }
 
 async function billingUser(request: Request) {
@@ -365,12 +372,20 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .get('/billing', async ({ request }) => billing.getSummary(await billingUser(request)))
     .post(
         '/billing/checkout',
-        { body: t.Object({ productId: t.String({ minLength: 1, maxLength: 100 }) }) },
+        {
+            body: t.Object({
+                productId: t.String({ minLength: 1, maxLength: 100 }),
+                currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
+            }),
+        },
         async ({ request, body }) =>
             billing.startCheckout(
                 await billingMutation(request),
                 body.productId,
                 requestAddress(request),
+                // The page's currency is a display choice; Polar is told it only when
+                // the visitor's country pays in it, else Polar decides from the address.
+                chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
             ),
     )
     .post('/billing/portal', { body: t.Object({}) }, async ({ request }) =>

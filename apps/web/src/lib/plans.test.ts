@@ -1,6 +1,6 @@
 import type { Plan } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
-import { tiersOf } from './plans';
+import { currenciesOf, priceOf, tiersOf } from './plans';
 
 function plan(overrides: Partial<Plan> & { id: string }): Plan {
     return {
@@ -9,11 +9,31 @@ function plan(overrides: Partial<Plan> & { id: string }): Plan {
         interval: 'month',
         amount: 1000,
         currency: 'usd',
+        prices: { usd: 1000 },
         quotaBytes: '536870912000',
         recommended: false,
         ...overrides,
     };
 }
+
+describe('priceOf', () => {
+    test('uses the currency when the plan has it and the default otherwise', () => {
+        const pro = plan({ id: 'pro', prices: { usd: 1000, inr: 79900 } });
+        expect(priceOf(pro, 'inr')).toEqual({ amount: 79900, currency: 'inr' });
+        expect(priceOf(pro, 'gbp')).toEqual({ amount: 1000, currency: 'usd' });
+    });
+});
+
+describe('currenciesOf', () => {
+    test('offers only currencies every plan is priced in, default first', () => {
+        const plans = [
+            plan({ id: 'a', prices: { usd: 500, inr: 39900, eur: 500 } }),
+            plan({ id: 'b', prices: { usd: 1000, eur: 1000, gbp: 800 } }),
+        ];
+        expect(currenciesOf(plans)).toEqual(['usd', 'eur']);
+        expect(currenciesOf([])).toEqual([]);
+    });
+});
 
 describe('tiersOf', () => {
     test('joins the monthly and yearly product of one storage size into one tier', () => {

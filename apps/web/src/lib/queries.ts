@@ -11,7 +11,7 @@ export const storageQueryOptions = queryOptions({
 });
 
 export { formatGiB, formatMoney } from '@/lib/format';
-export { billingQueryOptions, catalogueQueryOptions } from '@/lib/billing';
+export { billingQueryOptions, catalogueQueryOptions, localeHintQueryOptions } from '@/lib/billing';
 
 /* Whether this server sells plans; false on self-hosted instances, so billing UI never shows. */
 export function useBillingEnabled() {

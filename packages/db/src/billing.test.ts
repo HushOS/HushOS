@@ -17,6 +17,8 @@ function subscription(overrides: Partial<billing.SubscriptionSnapshot> = {}) {
         productName: 'Pro (monthly)',
         status: 'active',
         recurringInterval: 'month',
+        amount: 1000,
+        currency: 'usd',
         quotaBytes: 500n * GIB,
         currentPeriodEnd: new Date(Date.now() + 30 * DAY),
         cancelAtPeriodEnd: false,

@@ -28,4 +28,10 @@ describe('formatMoney', () => {
     test('accepts the lowercase currency code Polar reports', () => {
         expect(formatMoney(500, 'eur', 'en-US')).toBe('€5');
     });
+
+    test('formats rupees with Indian grouping for an Indian reader', () => {
+        expect(formatMoney(1199000, 'inr', 'en-IN')).toBe('₹11,990');
+        expect(formatMoney(1199000, 'inr', 'en-US')).toBe('₹11,990');
+        expect(formatMoney(39900, 'inr', 'en-IN')).toBe('₹399');
+    });
 });

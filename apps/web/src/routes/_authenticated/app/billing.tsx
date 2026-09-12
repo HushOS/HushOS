@@ -20,12 +20,15 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { billingApi } from '@/lib/billing-api';
+import { pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
+import { currenciesOf, priceOf } from '@/lib/plans';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
     formatGiB,
     formatMoney,
+    localeHintQueryOptions,
     storageQueryOptions,
 } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
@@ -35,6 +38,7 @@ export const Route = createFileRoute('/_authenticated/app/billing')({
         Promise.all([
             context.queryClient.ensureQueryData(catalogueQueryOptions),
             context.queryClient.ensureQueryData(billingQueryOptions),
+            context.queryClient.ensureQueryData(localeHintQueryOptions),
         ]).catch(() => null),
     head: () => ({ meta: [{ title: 'Billing · HushOS' }] }),
     validateSearch: (search: Record<string, unknown>): { checkout_id?: string; plan?: string } => ({
@@ -97,8 +101,9 @@ function formatDay(value: string) {
 
 const intervalLabel = { month: 'month', year: 'year' } as const;
 
-function planPrice(plan: Plan) {
-    return `${formatMoney(plan.amount, plan.currency)} / ${intervalLabel[plan.interval]}`;
+function planPrice(plan: Plan, currency: string) {
+    const price = priceOf(plan, currency);
+    return `${formatMoney(price.amount, price.currency)} / ${intervalLabel[plan.interval]}`;
 }
 
 const reasonItems = [
@@ -225,6 +230,7 @@ function BillingPage() {
     const queryClient = useQueryClient();
     const catalogue = useQuery(catalogueQueryOptions);
     const summary = useQuery(billingQueryOptions);
+    const hint = useQuery(localeHintQueryOptions);
     const [busy, setBusy] = useState<string | null>(null);
     const [cancelling, setCancelling] = useState(false);
 
@@ -233,6 +239,15 @@ function BillingPage() {
     const subscription = summary.data?.subscription;
     const live = subscription && !subscription.endedAt ? subscription : null;
     const activating = Boolean(checkoutId) && !live;
+    // A subscriber sees every plan in the currency they already pay in; anyone else
+    // in the one their country or language suggests, as on the pricing page.
+    const currencies = currenciesOf(catalogue.data?.plans ?? []);
+    const currency = pickCurrency({
+        requested: live?.currency,
+        hint: hint.data,
+        available: currencies,
+        fallback: currencies[0] ?? 'usd',
+    });
 
     const settle = useCallback(
         (next: BillingSummary) => {
@@ -293,7 +308,7 @@ function BillingPage() {
 
     const choose = (plan: Plan) =>
         run(plan.id, async () => {
-            const { url, confirmPayment } = await billingApi.checkout(plan.id);
+            const { url, confirmPayment } = await billingApi.checkout(plan.id, currency);
             if (url) {
                 if (confirmPayment)
                     setNotice(
@@ -484,8 +499,8 @@ function BillingPage() {
                         <div>
                             <FormNote>
                                 Switch to {switching.name}, {formatGiB(switching.quotaBytes)} for{' '}
-                                {planPrice(switching)}? Your plan changes now and the prorated
-                                difference is charged, or credited, to your saved card.
+                                {planPrice(switching, currency)}? Your plan changes now and the
+                                prorated difference is charged, or credited, to your saved card.
                             </FormNote>
                             <FormActions
                                 action={
@@ -545,7 +560,9 @@ function BillingPage() {
                                         )}
                                     </div>
                                     <p className="font-mono text-[13px] tabular-nums sm:text-right">
-                                        {planPrice(plan)}
+                                        {current && live?.amount != null && live.currency
+                                            ? `${formatMoney(live.amount, live.currency)} / ${intervalLabel[plan.interval]}`
+                                            : planPrice(plan, currency)}
                                     </p>
                                     <Button
                                         variant={

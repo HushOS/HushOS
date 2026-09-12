@@ -3,6 +3,12 @@ export const PLAN_METADATA_KEY = 'hushos_plan';
 export const QUOTA_METADATA_KEY = 'quota_bytes';
 export const RECOMMENDED_METADATA_KEY = 'hushos_recommended';
 
+/* The organisation's default payment currency at the provider; every plan has a price in it. */
+export const DEFAULT_CURRENCY = 'usd';
+
+/* ISO 4217, lowercase, as the provider reports it. */
+export const CURRENCY_PATTERN = /^[a-z]{3}$/;
+
 export const CANCELLATION_REASONS = [
     'too_expensive',
     'missing_features',

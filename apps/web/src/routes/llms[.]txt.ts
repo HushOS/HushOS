@@ -15,7 +15,14 @@ export const Route = createFileRoute('/llms.txt')({
                           `- Free: ${formatGiB(catalogue.freeQuotaBytes)} of encrypted storage.`,
                           ...catalogue.plans.map(
                               (plan) =>
-                                  `- ${plan.name}: ${formatGiB(plan.quotaBytes)} for ${(plan.amount / 100).toFixed(2)} ${plan.currency.toUpperCase()} per ${plan.interval}.`,
+                                  `- ${plan.name}: ${formatGiB(plan.quotaBytes)} per ${plan.interval}, ${Object.entries(
+                                      plan.prices,
+                                  )
+                                      .map(
+                                          ([currency, amount]) =>
+                                              `${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`,
+                                      )
+                                      .join(' / ')}.`,
                           ),
                           `- Full details: ${origin}/pricing`,
                       ].join('\n')
