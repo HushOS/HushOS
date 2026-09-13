@@ -1,0 +1,26 @@
+apps/web/src/components/brand.tsx
+  s_3c0a26c37bd9eb::t_4a59ceaa17a439 109
+  s_3c0a26c37bd9eb::t_bd92422f0a31be 3,53,87,93-94,105,111,120,137,194,202,209-214
+  s_3c0a26c37bd9eb::t_2d57e9d677c114 17-18,48,95-104,106-108,110,112-117,131,141,168,208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "97c888bf6671a0b7dd1653c46f5efc03e513f8a1",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
