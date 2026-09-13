@@ -1,0 +1,97 @@
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_1aa52e588267b6 163-213,252,297-303,319-321,360,380-386,415,502-503,545,559,576,592-681,830-831,899,945,1032,1091,1135,1180-1184,1209-1213,1236
+apps/web/src/components/drive/versions-dialog.tsx
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 84,107
+apps/web/src/routeTree.gen.ts
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 42,199-203,257,290,328,366,399,436,677-683,752,764
+packages/db/drizzle/20260913170034_drive_shares/migration.sql
+  s_3c0a26c37bd9eb::t_e563b96d8c666d 1-26
+packages/db/src/drive.shares.test.ts
+  s_3c0a26c37bd9eb::t_b3e8fe0e4097a0 1-203,211-231,235-282,287-290
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 204-210,232-234,283-286
+packages/drive/src/journal.ts
+  s_3c0a26c37bd9eb::t_5854a2981615cf 77,108-110
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 46-47,74-76
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_fd2cd2fcb8580a 3-10,54-66,71-74,80-86,88-89,95,97,128,171,175-206,218,254,275,297,378,380-381,384-460,464,470,488,562-563,584-588
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_25f60afbaf5eea 3
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_1aa52e588267b6 2487-2503
+  s_3c0a26c37bd9eb::t_abced98062d82f 8,306-307,338-342,2396-2429,2432-2486,2504-2656
+  s_3c0a26c37bd9eb::t_e563b96d8c666d 4,14
+  s_3c0a26c37bd9eb::t_c566676ab836e7 2430-2431
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 18,156
+apps/web/src/routes/_authenticated/app/shared.tsx
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 1-109
+packages/crypto/src/shares.ts
+  s_3c0a26c37bd9eb::t_6756fb006e72a8 1-87
+packages/db/src/schema/drive.ts
+  s_3c0a26c37bd9eb::t_abced98062d82f 272-313,315-320
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 314
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_1aa52e588267b6 886-928
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_1aa52e588267b6 109-119
+apps/web/src/lib/drive.ts
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 4,13,17,41-47
+  s_3c0a26c37bd9eb::t_a0afe77e36acb8 48
+e2e/sharing.spec.ts
+  s_3c0a26c37bd9eb::t_3ac6dfdcaef4bc 119
+  s_3c0a26c37bd9eb::t_d8e0ba17dc4c77 1-83,87-118,120
+  s_3c0a26c37bd9eb::t_5872e930f671af 84-86
+packages/db/drizzle/20260913170034_drive_shares/snapshot.json
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 2-5020,5022-5024
+  s_3c0a26c37bd9eb::t_e563b96d8c666d 1,5021
+README.md
+  s_3c0a26c37bd9eb::t_25f60afbaf5eea 3
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_25f60afbaf5eea 21
+apps/web/src/components/drive/folder-view.tsx
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 42,178,189-190,218,238,254,310,662-671,935-939,1024-1028,1087-1090
+  s_3c0a26c37bd9eb::t_06f8fee7786fcc 1091
+packages/drive/src/transfers.ts
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 134-140,315,361,556,620,663,900,915,1094,1126,1128,1133,1194
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_6756fb006e72a8 11,87-109,288-289,697-731
+apps/web/src/lib/contacts.ts
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 77,95,158-202
+packages/crypto/src/shares.test.ts
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 54-57
+  s_3c0a26c37bd9eb::t_6756fb006e72a8 1-49,67-74,76,78-80,82-83,85-92,94-202
+  s_3c0a26c37bd9eb::t_d5d10cc6f34c80 50-53,58-66,75,77,81,84,93
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_1aa52e588267b6 121-142,254-261
+apps/web/src/components/app-sidebar.tsx
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 9,43,64-68
+  s_3c0a26c37bd9eb::t_de3d59df5a18a9 69
+apps/web/src/lib/thumbnails.ts
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 184-195
+apps/web/src/components/drive/share-dialog.tsx
+  s_3c0a26c37bd9eb::t_b097f1071aa92d 65-66
+  s_3c0a26c37bd9eb::t_e7c2912c1f6abc 1-64,67-265
+packages/drive/src/downloads.ts
+  s_3c0a26c37bd9eb::t_e71d0590bd40da 259,274,481-486,488-497
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2ca25ebf773e0633cddc21232b6d6077d4a7806a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
