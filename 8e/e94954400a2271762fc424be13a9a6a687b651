@@ -1,0 +1,118 @@
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_ec6eb9fd283870 413-526
+packages/env/src/storage.ts
+  s_3c0a26c37bd9eb::t_27faabc4ba26aa 30-38
+packages/drive/src/jobs.test.ts
+  s_3c0a26c37bd9eb::t_aab6b86318ac90 1-9,11-64
+  s_3c0a26c37bd9eb::t_4136268c555ba8 10
+apps/web/src/components/drive/shortcuts.ts
+  s_3c0a26c37bd9eb::t_a249e91296077b 12
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_1ec501df065346 21
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_1f744601532526 3,390
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_a0ed62d49feed1 108-120,228-231
+packages/jobs/src/client.ts
+  s_3c0a26c37bd9eb::t_27faabc4ba26aa 18-21,34-37,83-86
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_075b137164cd8e 7,746,751,755,760,1557-1666,1672-1763,1769-1807,1850-1851,2263-2314,2318-2386
+  s_3c0a26c37bd9eb::t_04a847498699fe 757-758,1667-1671,1764-1768,2315-2317
+  s_3c0a26c37bd9eb::t_44073462d6c500 747-750,752-754,756,759,761,1094-1096,1265
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_20bb854ba7ddd2 139-156,265,866-912
+  s_3c0a26c37bd9eb::t_136544246058cc 138,913
+e2e/drive.spec.ts
+  s_3c0a26c37bd9eb::t_8cf7c883e363be 205-206,213,217-218
+  s_3c0a26c37bd9eb::t_92b8fea60a5acf 199
+  s_3c0a26c37bd9eb::t_a879823ba7ecf9 163-198,200-204,207-212,214-216,219-237,241-250,254-261
+  s_3c0a26c37bd9eb::t_3f326dcc503359 238-240,251-253
+e2e/mobile.spec.ts
+  s_3c0a26c37bd9eb::t_a879823ba7ecf9 70,74-82
+  s_3c0a26c37bd9eb::t_7b76a517c4c0f8 71-73
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_1f744601532526 17,216
+  s_3c0a26c37bd9eb::t_58c45d82282841 202-212
+  s_3c0a26c37bd9eb::t_d38ef3d93acd49 217
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_1ec501df065346 24-25
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_ec6eb9fd283870 787-832
+apps/web/src/components/drive/versions-dialog.tsx
+  s_3c0a26c37bd9eb::t_018ec922c4865c 1-93,99-162,166-176,181-215,219-238
+  s_3c0a26c37bd9eb::t_04a847498699fe 94-98,163-165,177-180,216-218
+apps/web/src/routes/_authenticated/app/f.$folderId.tsx
+  s_3c0a26c37bd9eb::t_26afbdc4b8d349 7-12
+apps/web/src/components/drive/move-dialog.tsx
+  s_3c0a26c37bd9eb::t_a249e91296077b 16,26-29,34,40,47,56,61,67,77,82,85-89,101,106-108,110-112,201,203-211
+apps/web/src/routes/_authenticated/app/index.tsx
+  s_3c0a26c37bd9eb::t_26afbdc4b8d349 7-12
+README.md
+  s_3c0a26c37bd9eb::t_1f744601532526 3,92
+apps/web/src/lib/uploads.ts
+  s_3c0a26c37bd9eb::t_925185f1d1ee08 3,11-12,38-59,61-69
+.github/workflows/ci.yml
+  s_3c0a26c37bd9eb::t_1ec501df065346 87-88,90
+packages/db/drizzle/20260913145137_drive_ops/snapshot.json
+  s_3c0a26c37bd9eb::t_04a847498699fe 1-4559
+apps/web/src/lib/drive.ts
+  s_3c0a26c37bd9eb::t_a249e91296077b 57-97
+packages/db/src/schema/drive.ts
+  s_3c0a26c37bd9eb::t_4a54e825d4b5a7 128-129,135-140,262-271
+packages/db/src/drive.copy.test.ts
+  s_3c0a26c37bd9eb::t_304b14c5297478 1-6,14-201,206-215,219-223,227-230,235-251,255,259-315,320-350,364-366,370,374-416
+  s_3c0a26c37bd9eb::t_04a847498699fe 7-13,202-205,216-218,224-226,231-234,252-254,256-258,316-319,351-363,367-369,371-373
+packages/drive/src/storage.ts
+  s_3c0a26c37bd9eb::t_27faabc4ba26aa 4,9,189-203,205-216,218-221
+  s_3c0a26c37bd9eb::t_4136268c555ba8 16,217
+  s_3c0a26c37bd9eb::t_04a847498699fe 204
+  s_3c0a26c37bd9eb::t_5ff50cd06a0385 222
+packages/db/src/drive.ops.test.ts
+  s_3c0a26c37bd9eb::t_04a847498699fe 63-67,115-117,132-135,138-140,148-150
+  s_3c0a26c37bd9eb::t_ff3f6c931fbae5 1-62,68-114,118-131,136-137,141-147,151-214
+packages/drive/src/jobs.ts
+  s_3c0a26c37bd9eb::t_aab6b86318ac90 124-133,135-278
+  s_3c0a26c37bd9eb::t_4136268c555ba8 134
+packages/crypto/src/session.drive.test.ts
+  s_3c0a26c37bd9eb::t_20bb854ba7ddd2 5,218-349
+  s_3c0a26c37bd9eb::t_b2044194499e24 350-351
+apps/web/src/components/drive/command-palette.tsx
+  s_3c0a26c37bd9eb::t_a249e91296077b 6,11,34-35,104-113,116
+  s_3c0a26c37bd9eb::t_04a847498699fe 114-115
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_ec6eb9fd283870 97-108
+apps/web/src/components/drive/folder-view.tsx
+  s_3c0a26c37bd9eb::t_fcb5ea001282a6 42,66,162-166,185-186,207-213,247-248,299-305,492,529-530,539-550,565-569,595,597-601,900-902,916-917,982-984,1000-1001,1048-1059,1071-1075
+  s_3c0a26c37bd9eb::t_acbb69a75de6e3 134-135,139-140,143-158,882-883,971-972
+  s_3c0a26c37bd9eb::t_26afbdc4b8d349 9,18,127-133,136-138,141-142,159-161,251-258,291-297,307-316,322,344,716-729,880-881,884-888,968-970,973-977,1083
+  s_3c0a26c37bd9eb::t_a9c9abfa6076f4 175-176
+packages/jobs/src/jobs/drive.ts
+  s_3c0a26c37bd9eb::t_aab6b86318ac90 2,8-9,12,57-70
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_ec6eb9fd283870 231-327,442-446
+packages/jobs/src/worker.ts
+  s_3c0a26c37bd9eb::t_aab6b86318ac90 8-9,13,16,61-64,78-80,82-88
+packages/db/drizzle/20260913145137_drive_ops/migration.sql
+  s_3c0a26c37bd9eb::t_75cbb808cb32a5 1-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8ee94954400a2271762fc424be13a9a6a687b651",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
