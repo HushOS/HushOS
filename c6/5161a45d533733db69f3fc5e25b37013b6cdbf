@@ -1,0 +1,38 @@
+.github/workflows/ci.yml
+  s_3c0a26c37bd9eb::t_a6bf254c2b8072 90
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_9ae4f2d92dc62f 27-34
+apps/web/package.json
+  s_3c0a26c37bd9eb::t_3be0239debd66f 53
+apps/web/src/lib/thumbnail.worker.ts
+  s_3c0a26c37bd9eb::t_a2064abf6996c2 4-7,12-18,89-117,122-127
+apps/web/src/lib/thumbnails.ts
+  s_3c0a26c37bd9eb::t_a2064abf6996c2 23-26,46,161
+e2e/mobile.spec.ts
+  s_3c0a26c37bd9eb::t_9ae4f2d92dc62f 1-75
+bun.lock
+  s_3c0a26c37bd9eb::t_7f1c2a171150fe 58,1000-1003,1488-1489
+e2e/drive.spec.ts
+  s_3c0a26c37bd9eb::t_54424f94d6af46 61-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c65161a45d533733db69f3fc5e25b37013b6cdbf",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
