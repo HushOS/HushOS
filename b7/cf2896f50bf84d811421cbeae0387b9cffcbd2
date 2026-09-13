@@ -1,0 +1,52 @@
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 787-801
+apps/web/src/lib/transfers.ts
+  s_3c0a26c37bd9eb::t_a1afd9a09eb061 2-6
+  s_3c0a26c37bd9eb::t_73c5a7eba355f3 63-65,68-76
+  s_3c0a26c37bd9eb::t_a0c811fd15ac1d 77
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 108-114,213-214
+packages/drive/src/transfers.ts
+  s_3c0a26c37bd9eb::t_109a9bff762ed5 4,45-46,263,265,758,833,921-928,1139
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 91-94
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 262-269,349-350
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_3c0a26c37bd9eb::t_811451cea30850 1-15,17,19-64,68-152,154-191,193-218,224-230
+  s_3c0a26c37bd9eb::t_a1afd9a09eb061 16,18,65-67,153,192,219-223
+  s_3c0a26c37bd9eb::t_3fa295dbb3aa16 231-233
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_3c0a26c37bd9eb::t_811451cea30850 7,204
+packages/db/src/drive.purge.test.ts
+  s_3c0a26c37bd9eb::t_6e8077adc093bd 397-454
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 1757-1761,1770,1822-1876
+  s_3c0a26c37bd9eb::t_094a8cb4d69bc3 1877-1878
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_abb4aef6046ef4 413-432
+packages/drive/src/transfers.test.ts
+  s_3c0a26c37bd9eb::t_fa869d692798d6 260
+  s_3c0a26c37bd9eb::t_6e8077adc093bd 524-545
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b7cf2896f50bf84d811421cbeae0387b9cffcbd2",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
