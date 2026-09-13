@@ -1,0 +1,35 @@
+.github/workflows/ci.yml
+  s_3c0a26c37bd9eb::t_6c72c295971ca3 86
+  s_3c0a26c37bd9eb::t_3db6af4f01d539 90
+packages/auth/src/client.ts
+  s_3c0a26c37bd9eb::t_d496c4bd779cc8 7,187-200,203,208,226,230,238-239,242,247,250
+apps/web/src/components/drive/drive-shell.tsx
+  s_3c0a26c37bd9eb::t_d496c4bd779cc8 35,78-83,130-148,153-155
+packages/auth/src/store.ts
+  s_3c0a26c37bd9eb::t_d496c4bd779cc8 5-7,11,77
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_d496c4bd779cc8 24-29
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_5ca54fb6d7c5f3 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1f8be069890f7e436e7133eaccfeaa5b27948a5f",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
