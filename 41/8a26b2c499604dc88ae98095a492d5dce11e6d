@@ -1,0 +1,67 @@
+apps/web/src/lib/downloads.ts
+  s_3c0a26c37bd9eb::t_19a8d9f8f3ad89 6,50-52
+apps/web/src/lib/thumbnail.worker.ts
+  s_3c0a26c37bd9eb::t_41b21cbcd821e1 1-8,11-47,49-95
+  s_3c0a26c37bd9eb::t_e6f5e8c0d63be0 9-10,48
+e2e/drive.spec.ts
+  s_3c0a26c37bd9eb::t_9302d69a064edd 70-72,103-104,129-132
+  s_3c0a26c37bd9eb::t_dadaefa34efc25 1-69,73-102,105-128,133-141,144-146,148,150-171,175-181
+  s_3c0a26c37bd9eb::t_6e7e15cc6ac91f 142-143,147,149
+  s_3c0a26c37bd9eb::t_b324892886cc4a 172
+  s_3c0a26c37bd9eb::t_b516ff5c292c0f 173-174
+.github/workflows/ci.yml
+  s_3c0a26c37bd9eb::t_80760c744a154e 68-98
+package.json
+  s_3c0a26c37bd9eb::t_9302d69a064edd 29
+  s_3c0a26c37bd9eb::t_0631aca3a0c0eb 40
+packages/auth/src/client.ts
+  s_3c0a26c37bd9eb::t_935c6d847cc461 6,216,218-230
+packages/drive/src/downloads.ts
+  s_3c0a26c37bd9eb::t_19a8d9f8f3ad89 77-82,541-544,551
+e2e/helpers.ts
+  s_3c0a26c37bd9eb::t_9302d69a064edd 87-90
+  s_3c0a26c37bd9eb::t_7d01ef82036fa9 44,51
+  s_3c0a26c37bd9eb::t_e6f5e8c0d63be0 5
+  s_3c0a26c37bd9eb::t_fea8662eaf35e3 1-4,6-43,53-56,58,60-86,91-141
+  s_3c0a26c37bd9eb::t_71a49227781cf9 45-50,52,57,59
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_80760c744a154e 19-22
+apps/web/src/lib/download-sinks.ts
+  s_3c0a26c37bd9eb::t_19a8d9f8f3ad89 16-21,26-29,49-50,52
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_5e03a28c43b52b 1-33
+  s_3c0a26c37bd9eb::t_e7d9928883da7c 34
+apps/web/src/components/device-control.tsx
+  s_3c0a26c37bd9eb::t_b516ff5c292c0f 46-48
+apps/web/src/lib/thumbnails.ts
+  s_3c0a26c37bd9eb::t_f11e13c6ed7e5b 19-79,101-103,105-109,111-113,147,156-158,160,162-164
+README.md
+  s_3c0a26c37bd9eb::t_a992dfd0d84adb 114-116
+packages/auth/src/device-storage.ts
+  s_3c0a26c37bd9eb::t_935c6d847cc461 3-31,40-49,78-93
+.gitignore
+  s_3c0a26c37bd9eb::t_9302d69a064edd 44-47
+bun.lock
+  s_3c0a26c37bd9eb::t_b11e31fb698628 9,687-688,1655-1658
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "418a26b2c499604dc88ae98095a492d5dce11e6d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
