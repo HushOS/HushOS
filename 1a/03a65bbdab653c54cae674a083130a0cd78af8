@@ -1,0 +1,46 @@
+packages/drive/src/protocol.test.ts
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 1-34
+apps/web/src/lib/api-client.ts
+  s_3c0a26c37bd9eb::t_e7689b0b309ad3 8-10
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 2
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 21
+.github/workflows/ci.yml
+  s_3c0a26c37bd9eb::t_e7689b0b309ad3 157-158
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 87-90,92
+packages/drive/src/protocol.ts
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 62-146
+packages/env/src/storage.ts
+  s_3c0a26c37bd9eb::t_e7689b0b309ad3 39-47
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_da7f6a4948896f 679-683,835-839,902-906
+  s_3c0a26c37bd9eb::t_e7689b0b309ad3 19,144-161,169,518-519,523-524,554,556,678,695,697,794,796,834,864-865,891,893,901,911-912
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 17
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_29167c3020da07 202-213
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_511c6db54f13ba 24-25
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_29167c3020da07 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1a03a65bbdab653c54cae674a083130a0cd78af8",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
