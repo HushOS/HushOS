@@ -1,0 +1,26 @@
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_190cbe553bc693 79-80,90,518
+e2e/links.spec.ts
+  s_3c0a26c37bd9eb::t_66224e56b68297 178-179,182-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1d5290381fb0bce999f9716289f8329e10373efb",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
