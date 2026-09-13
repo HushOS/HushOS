@@ -1,0 +1,108 @@
+apps/web/src/lib/previews.ts
+  s_3c0a26c37bd9eb::t_b11afb31c54e1e 165-172
+  s_3c0a26c37bd9eb::t_c18fbaa54cb32f 1-164,173-204
+apps/web/public/download-sw.js
+  s_3c0a26c37bd9eb::t_b11afb31c54e1e 2-4,6-15,19-20,27-32,81-200,204-221
+apps/web/src/components/drive/pdf-viewer.css
+  s_3c0a26c37bd9eb::t_af1ca9dbe28eb3 1-52
+apps/web/package.json
+  s_3c0a26c37bd9eb::t_f99a0e86d8484e 51
+apps/web/src/lib/downloads.ts
+  s_3c0a26c37bd9eb::t_4deb0f4ff6087b 19-22
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_134bf3f0fd3a8b 96,104
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_4a4cae035288b0 129-134,220,733-745
+  s_3c0a26c37bd9eb::t_efa19269face81 746
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_1c85d77d7e254e 905,907
+  s_3c0a26c37bd9eb::t_245a1b544a53f8 1043-1096,1099-1165,1167-1174,1177-1189,1191-1228,1231-1236,1238-1259
+  s_3c0a26c37bd9eb::t_67b1577dbdf5e4 1260-1262
+apps/web/src/components/drive/pdf-viewer.tsx
+  s_3c0a26c37bd9eb::t_a064eb20e502ea 1,4-15,17-38,40-56,59-75,77-179,181-215
+  s_3c0a26c37bd9eb::t_c1116f4ab76f1f 2,16
+  s_3c0a26c37bd9eb::t_acab5bc259d0e8 3,39,57-58,76,180
+apps/web/public/manifest.json
+  s_3c0a26c37bd9eb::t_2ebfcd8423d032 16-18,46-61,66-71,76-81
+packages/drive/src/transfers.test.ts
+  s_3c0a26c37bd9eb::t_0ebbb1634ca576 505
+  s_3c0a26c37bd9eb::t_5d6e7382a8e507 3
+  s_3c0a26c37bd9eb::t_ceec3e44063bc4 51,131-134,146,196-207,215-226
+  s_3c0a26c37bd9eb::t_66f2e7ed0da741 498-504,506-521
+  s_3c0a26c37bd9eb::t_db6392fb2eed7c 227-228,522
+packages/drive/src/journal.ts
+  s_3c0a26c37bd9eb::t_5c404833a37302 27-28
+packages/drive/src/downloads.ts
+  s_3c0a26c37bd9eb::t_bd23453e073870 464-465,473-474
+  s_3c0a26c37bd9eb::t_3de1242d347776 22,98-101,128-131,142,174,188-192,197-221,281,514-515,579-580,601-613
+  s_3c0a26c37bd9eb::t_4deb0f4ff6087b 277,440-443,447,451,458-463,466-472,475-483,535-536,539
+  s_3c0a26c37bd9eb::t_8b209ebe23df60 2,54-60,224-227,229-230,239-240,242-243,261-276,282-283,293-298,303,306-309,312,318-334,339-340,349,356,365,370-421,484
+  s_3c0a26c37bd9eb::t_4c0805ea4fd14a 222,422,485
+apps/web/src/components/drive/transfers-panel.tsx
+  s_3c0a26c37bd9eb::t_29b09ebf4fedb3 57-60,100-118,144,193-195,226,231-234,243-246
+README.md
+  s_3c0a26c37bd9eb::t_134bf3f0fd3a8b 3
+packages/db/src/drive.uploads.test.ts
+  s_3c0a26c37bd9eb::t_79d0abdf4765aa 259-268,302-305,372-373
+  s_3c0a26c37bd9eb::t_a5b2c8fdba5dd7 252-258,269-301,306-371,374-386
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_4a4cae035288b0 75-76
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_ec8a61ebf755fb 48-49,77,305-314,317-319
+apps/web/src/components/drive/preview.tsx
+  s_3c0a26c37bd9eb::t_acab5bc259d0e8 145
+  s_3c0a26c37bd9eb::t_0cde489c55339e 51-54
+  s_3c0a26c37bd9eb::t_c1116f4ab76f1f 5,120,122-123,125,127-130,133-134
+  s_3c0a26c37bd9eb::t_03cbf763c25b4d 1-4,6-50,62-119,121,124,126,131-132,135-136,144,146-247,250-281,285-351,355-384,386-387,396-399
+  s_3c0a26c37bd9eb::t_a9d5bc3e5ed60a 137-143,248-249,282-284,352-354,389-395
+  s_3c0a26c37bd9eb::t_1b387cc992f2c9 385,388
+  s_3c0a26c37bd9eb::t_ffb31a7958211a 55-61
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_4a4cae035288b0 88-95,140-143
+  s_3c0a26c37bd9eb::t_f9109ec555aac5 144
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_4a4cae035288b0 698-728
+  s_3c0a26c37bd9eb::t_fb32abaac9abdb 697
+packages/drive/src/transfers.ts
+  s_3c0a26c37bd9eb::t_5c404833a37302 132-150,424,524-531,540-562,564,567,574-667,812-818,820,822,829,902-904,948-949,953-956,978-980
+packages/drive/src/downloads.test.ts
+  s_3c0a26c37bd9eb::t_8df31fd1cc7659 200,206-213,225,380-381,402-432
+  s_3c0a26c37bd9eb::t_d317459181b92e 433-459
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_134bf3f0fd3a8b 3
+apps/web/src/components/drive/folder-view.tsx
+  s_3c0a26c37bd9eb::t_a9d5bc3e5ed60a 29,105,122-123,152,664-671,682,784-788
+  s_3c0a26c37bd9eb::t_97b8d220c94a6f 1-5,106-108,241,269,271,329-332,336-412,450-460,631
+  s_3c0a26c37bd9eb::t_c1116f4ab76f1f 156-157
+  s_3c0a26c37bd9eb::t_993d1b10626e27 789
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_4a4cae035288b0 645-647,671-674,695-761,770-771
+  s_3c0a26c37bd9eb::t_e0c83ec35cc82e 762-769
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_134bf3f0fd3a8b 200
+apps/web/src/components/drive/drive-shell.tsx
+  s_3c0a26c37bd9eb::t_172ff8c6f3570d 2-3,10,49-62
+bun.lock
+  s_3c0a26c37bd9eb::t_1f41a47f1ea19c 55,533-556,1589-1590
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c31354f83a4489ccbefdc2b39b14c742a6da8514",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
