@@ -1,0 +1,34 @@
+apps/web/Dockerfile
+  s_3c0a26c37bd9eb::t_d1d83917319d7c 12
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_d1d83917319d7c 3
+apps/web/src/components/drive/trash-view.tsx
+  s_3c0a26c37bd9eb::t_d654c5e3be5536 69
+packages/jobs/Dockerfile
+  s_3c0a26c37bd9eb::t_d1d83917319d7c 12
+README.md
+  s_3c0a26c37bd9eb::t_d1d83917319d7c 3,47,80-81,90,92
+packages/db/Dockerfile
+  s_3c0a26c37bd9eb::t_d1d83917319d7c 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dc88cc30502e3b7e5ae7df093ac7ea34588c8963",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
