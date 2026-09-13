@@ -1,0 +1,24 @@
+packages/db/src/drive.purge.test.ts
+  s_3c0a26c37bd9eb::t_1ea1150d50ce2f 398-433,435-439,441-455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e0de58b38e472afab84d685a244ee830072b231e",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
