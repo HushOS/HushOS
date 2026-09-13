@@ -1,0 +1,99 @@
+packages/drive/package.json
+  s_3c0a26c37bd9eb::t_84520785fa19a8 13-14
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_d8b1d238c4e5eb 9,721-750
+  s_3c0a26c37bd9eb::t_dd4aa82dca3c60 751
+apps/web/src/lib/download-sinks.ts
+  s_3c0a26c37bd9eb::t_a13f9b3e1076b7 1-22,41-162
+  s_3c0a26c37bd9eb::t_0c56f70b059e2a 23-40
+apps/web/src/components/drive/transfers-panel.tsx
+  s_3c0a26c37bd9eb::t_5ac9cb492ca0fa 229
+  s_3c0a26c37bd9eb::t_7f453eff826056 1,5,14,19-22,50-83,88-127,163,165-169,171-188,197-198,234-237,245-247
+  s_3c0a26c37bd9eb::t_19a8c1fb1129dd 84-87
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_7da1f48ef74da7 3,200
+  s_3c0a26c37bd9eb::t_f71977053bff48 201
+README.md
+  s_3c0a26c37bd9eb::t_743f82d8419cd0 3
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_1919996b8038c0 96,104
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_d8b1d238c4e5eb 1146-1194
+apps/web/src/routes/__root.tsx
+  s_3c0a26c37bd9eb::t_743f82d8419cd0 44-48
+packages/drive/src/downloads.ts
+  s_3c0a26c37bd9eb::t_2f337c646e3504 1-73,78-137,140-190,192-194,210-243,255-268,270-271,274-278,282-308,314-330,336-405,412-438,441-462
+  s_3c0a26c37bd9eb::t_c58fa14fa20e5f 74-77,138-139,244-247,269,272-273,280,309-313,331-335,406-411,439-440
+  s_3c0a26c37bd9eb::t_df1086caaa083f 191,195-209,248-254
+  s_3c0a26c37bd9eb::t_8ce13b88cd72e4 279,281
+apps/web/public/download-sw.js
+  s_3c0a26c37bd9eb::t_346c13fe77a85e 1-29,32-64,69-78,82-86
+  s_3c0a26c37bd9eb::t_19a8c1fb1129dd 30-31,65-68,79-81
+apps/web/src/lib/downloads.ts
+  s_3c0a26c37bd9eb::t_45d0de63f7fe69 1-73
+packages/crypto/src/index.ts
+  s_3c0a26c37bd9eb::t_2c74a2861ea311 11-12
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_2c74a2861ea311 23-24,137-153,214-226,233-235,268-285,308,868-975
+apps/web/src/components/device-control.tsx
+  s_3c0a26c37bd9eb::t_d3b7ae369adb45 63-64,80-87
+  s_3c0a26c37bd9eb::t_c14b1bf5dc1a52 28-30,72,74
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_d8b1d238c4e5eb 133-136
+apps/web/src/components/drive/command-palette.tsx
+  s_3c0a26c37bd9eb::t_c14b1bf5dc1a52 6,32,100-103
+  s_3c0a26c37bd9eb::t_9892c9703e8b85 104
+apps/web/src/components/drive/drive-shell.tsx
+  s_3c0a26c37bd9eb::t_cbc11a395dc212 11,52-54
+packages/drive/src/downloads.test.ts
+  s_3c0a26c37bd9eb::t_f8d21e37939926 1-67,70-71,76-157,159-175,180-214,217-268,273-346,352-395
+  s_3c0a26c37bd9eb::t_19a8c1fb1129dd 158,176-179,215-216,269-271,347-351
+  s_3c0a26c37bd9eb::t_536f8884cde8ed 68-69,72-75,272
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_d8b1d238c4e5eb 708-712
+  s_3c0a26c37bd9eb::t_66067a356d159e 707
+apps/web/public/brand/README.txt
+  s_3c0a26c37bd9eb::t_743f82d8419cd0 9
+apps/web/src/components/drive/shortcuts.ts
+  s_3c0a26c37bd9eb::t_c14b1bf5dc1a52 12
+apps/web/src/components/drive/trash-view.tsx
+  s_3c0a26c37bd9eb::t_8a2bbceb650fd8 90-95,97-150,154-163
+  s_3c0a26c37bd9eb::t_19a8c1fb1129dd 151-153
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_d8b1d238c4e5eb 77-78
+apps/web/public/browserconfig.xml
+  s_3c0a26c37bd9eb::t_743f82d8419cd0 6
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_7da1f48ef74da7 3
+apps/web/package.json
+  s_3c0a26c37bd9eb::t_84520785fa19a8 42
+apps/web/public/manifest.json
+  s_3c0a26c37bd9eb::t_976e0f622c7b9d 3,6-17,22-23,28-41,44-55
+apps/web/src/components/drive/folder-view.tsx
+  s_3c0a26c37bd9eb::t_04f29ffed234c7 1,6,50,58,141-145,288,305-319,386-387,397,402,407,412-422,427,432,436-437,636-657,684
+  s_3c0a26c37bd9eb::t_328cd08b841c6c 341-343
+  s_3c0a26c37bd9eb::t_19a8c1fb1129dd 438-441,443-449,451-501,503-531,533-579,581-635
+bun.lock
+  s_3c0a26c37bd9eb::t_61d047c8642729 46,1092-1093
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "347ca2016a09ddfd0e0b2cce54d6e2ffe46192b7",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
