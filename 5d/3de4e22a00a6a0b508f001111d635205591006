@@ -1,0 +1,52 @@
+apps/web/src/components/drive/collision-dialog.tsx
+  s_3c0a26c37bd9eb::t_c12595f4e26356 1,111-113
+  s_3c0a26c37bd9eb::t_e0fece684a9312 2-110,114-121
+e2e/helpers.ts
+  s_3c0a26c37bd9eb::t_8bf5d6d403e370 63-66
+e2e/drive.spec.ts
+  s_3c0a26c37bd9eb::t_8bf5d6d403e370 34-35,53-55,205-207,253
+  s_3c0a26c37bd9eb::t_a0f32cae7d4254 202-204,231-252,254-260
+  s_3c0a26c37bd9eb::t_7f3e440799f311 261-262
+packages/drive/src/journal.ts
+  s_3c0a26c37bd9eb::t_e0fece684a9312 26-27
+playwright.config.ts
+  s_3c0a26c37bd9eb::t_8bf5d6d403e370 42-43
+apps/web/src/lib/uploads.ts
+  s_3c0a26c37bd9eb::t_c12595f4e26356 87
+  s_3c0a26c37bd9eb::t_e0fece684a9312 3-4,7,13-15,63-86,88-107
+apps/web/src/lib/drive.ts
+  s_3c0a26c37bd9eb::t_e0fece684a9312 69-80
+apps/web/src/lib/collisions.ts
+  s_3c0a26c37bd9eb::t_e0fece684a9312 1-63
+apps/web/vite.config.ts
+  s_3c0a26c37bd9eb::t_8bf5d6d403e370 20-33
+packages/drive/src/transfers.ts
+  s_3c0a26c37bd9eb::t_e0fece684a9312 73-74,438,829,1135
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_3c0a26c37bd9eb::t_e0fece684a9312 7,206
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_c12595f4e26356 38-39
+e2e/mobile.spec.ts
+  s_3c0a26c37bd9eb::t_8bf5d6d403e370 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5d3de4e22a00a6a0b508f001111d635205591006",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
