@@ -1,0 +1,111 @@
+packages/crypto/src/identity.ts
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 184-228
+packages/db/src/schema/auth.ts
+  s_3c0a26c37bd9eb::t_6dffaf3546c3ef 30-32,36-39,267-290,292
+  s_3c0a26c37bd9eb::t_f8beae22df925c 291,293
+packages/crypto/src/fingerprint.ts
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 1-15,19-26
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 16-18
+apps/web/src/lib/contacts.ts
+  s_3c0a26c37bd9eb::t_2e18beafa7c6ce 1-2
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 3-157
+CONTRIBUTING.md
+  s_3c0a26c37bd9eb::t_13dc165432f886 21
+apps/web/src/routes/_authenticated/app/contacts.tsx
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 1-295
+packages/auth/src/protocol.ts
+  s_3c0a26c37bd9eb::t_9e383fc7a3b419 5
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 323-325,663-668
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 9-10,78-85,261-263,374-375,636-662,669-670
+packages/db/drizzle/20260913164406_settings_roles/migration.sql
+  s_3c0a26c37bd9eb::t_6dffaf3546c3ef 1-13
+packages/auth/src/server.ts
+  s_3c0a26c37bd9eb::t_9e383fc7a3b419 433-510,543-544
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 15,511-542
+packages/crypto/src/contacts.ts
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 1-7,10-19,21-129
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 8-9,20
+apps/web/src/routeTree.gen.ts
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 40,44,186-191,209-214,249,255,281,287,318,324,355,361,387,393,423,429,651-657,679-685,731,736,742,747
+packages/auth/src/client.ts
+  s_3c0a26c37bd9eb::t_801c2ba68c5dda 3
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 307-311
+  s_3c0a26c37bd9eb::t_2e18beafa7c6ce 2
+package.json
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 28-29
+packages/db/src/admin.ts
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 1-2,4-10,21-23,42-45,50-79
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 3,11-20,24-41,46-49
+apps/web/src/lib/admin.ts
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 1-10
+packages/db/package.json
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 21
+packages/crypto/package.json
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 13
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 14-15
+packages/db/src/auth.ts
+  s_3c0a26c37bd9eb::t_6dffaf3546c3ef 22,26,846-937
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_13dc165432f886 3,316
+apps/web/src/components/app-sidebar.tsx
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 4-12,39-46,66,81-83,126-130
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 189-209
+packages/db/drizzle/20260913164406_settings_roles/snapshot.json
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 2-4687,4689-4691
+  s_3c0a26c37bd9eb::t_6dffaf3546c3ef 1,4688
+packages/crypto/src/contacts.test.ts
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 3,31-34,66-68,90-94
+  s_3c0a26c37bd9eb::t_71d57250253ca4 71
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 1-2,4-30,35-65,69-70,72-89,95-97
+apps/web/src/lib/auth-api.ts
+  s_3c0a26c37bd9eb::t_9e383fc7a3b419 30-33
+packages/crypto/src/index.ts
+  s_3c0a26c37bd9eb::t_801c2ba68c5dda 21
+  s_3c0a26c37bd9eb::t_3a2c5131933b2e 20
+e2e/contacts.spec.ts
+  s_3c0a26c37bd9eb::t_858d8f2841f41e 1-80,83-86
+  s_3c0a26c37bd9eb::t_8d73f4d5328364 81-82
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_13dc165432f886 172-181
+packages/auth/src/tokens.ts
+  s_3c0a26c37bd9eb::t_3e439daa96a6d5 17
+README.md
+  s_3c0a26c37bd9eb::t_13dc165432f886 3
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 939-942
+  s_3c0a26c37bd9eb::t_9e383fc7a3b419 465-489
+packages/db/src/index.ts
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 2
+packages/db/src/auth.settings.test.ts
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 101-104,107-110
+  s_3c0a26c37bd9eb::t_ff786711f1f163 1-100,105-106,111-119
+packages/auth/src/api.ts
+  s_3c0a26c37bd9eb::t_9e383fc7a3b419 7,9,45-52,54-61
+  s_3c0a26c37bd9eb::t_2e18beafa7c6ce 8
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_3c0a26c37bd9eb::t_86ad9ec6c1cd1e 1-179
+packages/db/scripts/admin.ts
+  s_3c0a26c37bd9eb::t_194d0c39fbb489 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1fddde34b7240adafc0f5c5b0e266712d71dd28d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
