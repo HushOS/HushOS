@@ -1,0 +1,42 @@
+docs/drive-design.md
+  s_b8e4c4448c6c73::t_3563172deeecbf 3
+apps/web/src/lib/office.test.ts
+  s_b8e4c4448c6c73::t_524e174e5daeeb 3
+  s_b8e4c4448c6c73::t_3563172deeecbf 69-71,75-82
+  s_b8e4c4448c6c73::t_ec3d7a334856b9 83
+apps/web/src/components/drive/office-viewer.tsx
+  s_b8e4c4448c6c73::t_1cf6ff5ca69e98 9-16
+  s_b8e4c4448c6c73::t_3563172deeecbf 58-63
+e2e/helpers.ts
+  s_b8e4c4448c6c73::t_3563172deeecbf 99
+  s_b8e4c4448c6c73::t_1cf6ff5ca69e98 100-103
+README.md
+  s_b8e4c4448c6c73::t_3563172deeecbf 3
+apps/web/src/lib/office.ts
+  s_b8e4c4448c6c73::t_3563172deeecbf 14,21-22,81-92
+  s_b8e4c4448c6c73::t_30119f8be98c34 93-94
+e2e/office.spec.ts
+  s_b8e4c4448c6c73::t_3563172deeecbf 26-31,34,65-73
+  s_b8e4c4448c6c73::t_65c244a667974d 74-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "935fc5c0f73c0b71fb98597cd8b9c1b5e64822ff",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
