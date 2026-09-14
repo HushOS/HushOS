@@ -1,0 +1,52 @@
+apps/web/src/components/drive/preview.tsx
+  s_b8e4c4448c6c73::t_1154571a58fe0a 89-92,95,101-138
+apps/web/src/components/ui/select.tsx
+  s_b8e4c4448c6c73::t_e061bca100f085 22,34
+  s_b8e4c4448c6c73::t_3c11a96ae0dfc6 77,111
+apps/web/src/components/page-header.tsx
+  s_b8e4c4448c6c73::t_8032d60e0b7fb3 29
+apps/web/src/content/security.mdx
+  s_b8e4c4448c6c73::t_bd8873e81eeb44 241
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_b8e4c4448c6c73::t_4ec3ef96df24a8 168
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  s_b8e4c4448c6c73::t_d93ddd6411b5d2 60
+packages/crypto/src/session.ts
+  s_b8e4c4448c6c73::t_bf867748041cc3 333-338
+  s_b8e4c4448c6c73::t_ad7fa9f5849541 324-332,339,460-464,1805-1820
+apps/web/src/components/drive/info-dialog.tsx
+  s_b8e4c4448c6c73::t_386e19f3b008ee 1-2,4-34,38-50,56-110,116-153,158-164,170-194,199-215,221-232
+  s_b8e4c4448c6c73::t_c449142ea5743b 3,35-37
+  s_b8e4c4448c6c73::t_bf867748041cc3 51-55,111-115,154-157,165-169,195-198,216-220
+packages/drive/src/client.ts
+  s_b8e4c4448c6c73::t_ad7fa9f5849541 904-925,977
+README.md
+  s_b8e4c4448c6c73::t_bf867748041cc3 8
+apps/web/src/components/drive/folder-view.tsx
+  s_b8e4c4448c6c73::t_bf867748041cc3 11,13,21-22,53,205,219,253-256,299,569,886-891,1052,1152,1226-1229
+  s_b8e4c4448c6c73::t_e86368b571beae 1230
+apps/web/src/components/drive/report-dialog.tsx
+  s_b8e4c4448c6c73::t_267e2b603f3536 144
+apps/web/src/routes/s/$token.tsx
+  s_b8e4c4448c6c73::t_267e2b603f3536 443-447
+packages/crypto/src/session.drive.test.ts
+  s_b8e4c4448c6c73::t_708caf0c5493d3 402,467
+  s_b8e4c4448c6c73::t_bf867748041cc3 6,399-401,403-466,468-470
+  s_b8e4c4448c6c73::t_8cb3ee1437ad65 471-472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ce2884ffb5141bd43a3c1f31aa1bf0ccfa8cfd70",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
