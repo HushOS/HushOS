@@ -1,0 +1,49 @@
+apps/web/src/lib/api.server.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 551-558
+apps/web/src/lib/growth-api.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 8
+apps/web/src/routes/go/$slug.tsx
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 3,8,47-55,96-104
+apps/web/src/lib/billing.ts
+  s_b8e4c4448c6c73::t_b962b9814d294d 69-71,73-81,85
+apps/web/src/components/mdx.tsx
+  s_b8e4c4448c6c73::t_ca49fe35011a35 83
+packages/billing/src/server.test.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 408-425
+apps/web/src/routes/index.tsx
+  s_b8e4c4448c6c73::t_ca49fe35011a35 3-4,11-34,43-53,267,465-468,471-477
+  s_b8e4c4448c6c73::t_8957b0dd86d766 35-42
+packages/billing/src/growth.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 137-145
+apps/web/src/components/consent-field.tsx
+  s_b8e4c4448c6c73::t_ca49fe35011a35 33
+packages/billing/src/api.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 115-116
+apps/web/src/routes/_authenticated/app/admin/affiliates.tsx
+  s_b8e4c4448c6c73::t_ca49fe35011a35 304,343
+  s_b8e4c4448c6c73::t_ec6ff5b37be497 12-18,202-207,305,307-308,310,312-326
+apps/web/src/components/drive/preview.tsx
+  s_b8e4c4448c6c73::t_c841cfd0afd500 89
+apps/web/src/components/faq.tsx
+  s_b8e4c4448c6c73::t_02d042da0d03df 21-22
+apps/web/src/components/form-rows.tsx
+  s_b8e4c4448c6c73::t_ca49fe35011a35 41
+packages/db/src/growth.ts
+  s_b8e4c4448c6c73::t_6768f4dbe91bba 463-477
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fcd988a4aec49ba0a3de1b574886bc27fa3f250d",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
