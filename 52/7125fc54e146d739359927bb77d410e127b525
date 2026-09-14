@@ -1,0 +1,27 @@
+.env.production.example
+  s_b8e4c4448c6c73::t_dfb1359fb44392 32-33
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_b8e4c4448c6c73::t_02b12aa91a8c03 95,101
+apps/web/src/lib/compare.ts
+  s_b8e4c4448c6c73::t_24f1e5e1b478d6 33,91,395
+apps/web/src/routes/index.tsx
+  s_b8e4c4448c6c73::t_11e273c56129d3 48,53
+apps/web/src/routes/llms[.]txt.ts
+  s_b8e4c4448c6c73::t_7713df89027fb1 46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "527125fc54e146d739359927bb77d410e127b525",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
