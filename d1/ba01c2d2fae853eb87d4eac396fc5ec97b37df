@@ -1,0 +1,163 @@
+packages/drive/src/server.ts
+  s_3c0a26c37bd9eb::t_c0a1aa91617c2b 1657
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 1910-1939
+  s_3c0a26c37bd9eb::t_3d3af9e159ba19 6,98,142,167-173,242-247,281-283,445-446,1375,1412-1417,1431-1433,2019-2081,2086-2177
+  s_3c0a26c37bd9eb::t_92fb808c1c2d11 2082-2085
+  s_3c0a26c37bd9eb::t_649a8e2d2a6881 49,727,2178-2230
+apps/web/vite.config.ts
+  s_3c0a26c37bd9eb::t_e737979fb6c9d1 32-36
+packages/db/src/index.ts
+  s_3c0a26c37bd9eb::t_f1262a816f1510 7
+apps/web/src/lib/office.test.ts
+  s_3c0a26c37bd9eb::t_a1de2c18ce93e2 1-46,48-72
+  s_3c0a26c37bd9eb::t_4b88dacde85cdb 47
+apps/web/src/components/drive/office-viewer.tsx
+  s_3c0a26c37bd9eb::t_e737979fb6c9d1 1-3,5-20,22-227
+  s_3c0a26c37bd9eb::t_4b88dacde85cdb 4,21
+packages/drive/src/transfers.test.ts
+  s_3c0a26c37bd9eb::t_c0a1aa91617c2b 29
+apps/web/src/lib/drive-api.ts
+  s_3c0a26c37bd9eb::t_36f1286c96b917 217-226
+  s_3c0a26c37bd9eb::t_314ad5d56c4eb7 209-216
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 288-289
+packages/db/src/drive.rotations.test.ts
+  s_3c0a26c37bd9eb::t_e22f1cd9aee5ac 1-458
+packages/db/src/drive.changes.test.ts
+  s_3c0a26c37bd9eb::t_11ebbf5a817053 1-168,171-184,191-213
+  s_3c0a26c37bd9eb::t_b5875c0bae2894 169-170,185-190
+apps/web/src/lib/api.server.ts
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 1115,1375-1407
+  s_3c0a26c37bd9eb::t_92fb808c1c2d11 1082-1085
+  s_3c0a26c37bd9eb::t_3d3af9e159ba19 193-194,952,987,1038-1081,1086-1114
+  s_3c0a26c37bd9eb::t_649a8e2d2a6881 1011-1037
+packages/db/src/schema/drive.ts
+  s_3c0a26c37bd9eb::t_f1262a816f1510 44-46,102,363,569-595
+  s_3c0a26c37bd9eb::t_89d7098f7c0454 596-619
+apps/web/src/lib/rotation.ts
+  s_3c0a26c37bd9eb::t_3ae98cc8f32b30 1-14,20,22-61
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 15-19,21
+packages/db/src/reports.ts
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 329-383
+packages/drive/src/api.ts
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 514-519
+  s_3c0a26c37bd9eb::t_649a8e2d2a6881 67-82,192-193,388-390
+  s_3c0a26c37bd9eb::t_3d3af9e159ba19 35,58-59,62-66,83-110,379-384,391-398
+  s_3c0a26c37bd9eb::t_bca2766a099ab8 111
+packages/db/src/drive.reports.test.ts
+  s_3c0a26c37bd9eb::t_d489874da0d5c3 510-563
+packages/crypto/src/links.ts
+  s_3c0a26c37bd9eb::t_1ad828c9fe3917 42,58-59,62,70-76,97,102-123,147-153,156-158,176,180-184,186,189,203-206,214,217-224
+packages/crypto/src/session.ts
+  s_3c0a26c37bd9eb::t_8d00e41bd3f286 340,342,1304,1319,1322
+  s_3c0a26c37bd9eb::t_c689ce72f78425 640-645,667-678,704-706,1150-1154
+  s_3c0a26c37bd9eb::t_3d3af9e159ba19 371-372,596-617
+  s_3c0a26c37bd9eb::t_15e38b58ebfc7e 18-19,119-121,184-196,341,343-358,360-370,373-375,423-424,484-485,541-542,559-562,568-595,618-639,646-666,679-703,707-732,1035-1049,1064,1066-1073,1083,1129-1130,1138,1155,1157,1159-1171,1174,1196-1213,1301-1303,1305-1318,1320-1321,1323-1325
+packages/drive/src/downloads.test.ts
+  s_3c0a26c37bd9eb::t_c0a1aa91617c2b 34
+README.md
+  s_3c0a26c37bd9eb::t_4f3347f9af9436 3
+packages/db/drizzle/20260913215934_rotations/migration.sql
+  s_3c0a26c37bd9eb::t_f1262a816f1510 1-17
+apps/web/src/routes/_authenticated/app/shared.tsx
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 13,178
+packages/crypto/src/links.test.ts
+  s_3c0a26c37bd9eb::t_15e38b58ebfc7e 72-74,78
+apps/web/package.json
+  s_3c0a26c37bd9eb::t_7605cbad5c6276 50,52-53,57
+  s_b8e4c4448c6c73::t_df7f9e90cbd56f 75
+packages/drive/src/protocol.ts
+  s_3c0a26c37bd9eb::t_3d3af9e159ba19 61
+apps/web/src/lib/feed.ts
+  s_3c0a26c37bd9eb::t_79aa5685d423e4 50-51
+  s_3c0a26c37bd9eb::t_314ad5d56c4eb7 1-49,52-130
+packages/db/src/drive.ts
+  s_3c0a26c37bd9eb::t_89d7098f7c0454 11,105-140,610-616,2738,2749,3029-3146
+  s_3c0a26c37bd9eb::t_f1262a816f1510 10,141-153,155,212,297,581-594,2893-2898
+apps/web/src/lib/office.ts
+  s_3c0a26c37bd9eb::t_a1de2c18ce93e2 1-94,98-108
+  s_3c0a26c37bd9eb::t_7c19131b811e98 95-97
+apps/web/src/routes/_authenticated/app/admin/reports/$reportId.tsx
+  s_3c0a26c37bd9eb::t_ab067478af341c 12
+  s_3c0a26c37bd9eb::t_35e02bcafdd611 394,396-429,509-523,551-553,850
+apps/web/src/components/drive/share-dialog.tsx
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 32,126
+packages/db/drizzle/20260913220954_share_events/snapshot.json
+  s_3c0a26c37bd9eb::t_89d7098f7c0454 1,6866
+  s_3c0a26c37bd9eb::t_abc0983a868047 2-6865,6867-6869
+docs/drive-design.md
+  s_3c0a26c37bd9eb::t_e737979fb6c9d1 3
+packages/db/drizzle/20260913215934_rotations/snapshot.json
+  s_3c0a26c37bd9eb::t_92fb808c1c2d11 2-6779,6781-6783
+  s_3c0a26c37bd9eb::t_f1262a816f1510 1,6780
+packages/drive/src/client.ts
+  s_3c0a26c37bd9eb::t_314ad5d56c4eb7 177,734-748,981-982
+  s_3c0a26c37bd9eb::t_ca57f081dcdfda 606-624,977
+  s_3c0a26c37bd9eb::t_834975cb284435 689
+  s_3c0a26c37bd9eb::t_36f1286c96b917 119-121,489-496,512,625-688,690-733,749-779,823-824,978-980
+  s_3c0a26c37bd9eb::t_9ce221c34de1e9 76
+  s_3c0a26c37bd9eb::t_79aa5685d423e4 800-802
+packages/db/src/rotations.ts
+  s_3c0a26c37bd9eb::t_280b838bfab6a3 20,48-54,60
+  s_3c0a26c37bd9eb::t_f1262a816f1510 1-19,21-47,55-59,61-417
+e2e/sharing.spec.ts
+  s_3c0a26c37bd9eb::t_2651bccf060756 74-75,151
+  s_3c0a26c37bd9eb::t_a51033fda73316 111-114,146-147
+  s_3c0a26c37bd9eb::t_9b28d38c8d1d02 18,69-73,129-131,139-145,148-150,152-169
+apps/web/src/lib/previews.ts
+  s_3c0a26c37bd9eb::t_e737979fb6c9d1 2,17-25,99
+package.json
+  s_b8e4c4448c6c73::t_df7f9e90cbd56f 51
+  s_3c0a26c37bd9eb::t_586a5a0f491d9f 44,50
+packages/crypto/src/session.rotation.test.ts
+  s_3c0a26c37bd9eb::t_8d00e41bd3f286 235
+  s_3c0a26c37bd9eb::t_c689ce72f78425 1-27,29-234,236-355
+  s_3c0a26c37bd9eb::t_e9311498c75d6c 28
+apps/web/src/components/drive/link-row.tsx
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 19,162
+apps/web/src/components/drive/drive-shell.tsx
+  s_3c0a26c37bd9eb::t_314ad5d56c4eb7 11,72
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 12,77-78
+packages/db/drizzle/20260913220954_share_events/migration.sql
+  s_3c0a26c37bd9eb::t_89d7098f7c0454 1-10
+apps/web/src/components/drive/preview.tsx
+  s_3c0a26c37bd9eb::t_4b88dacde85cdb 2
+  s_3c0a26c37bd9eb::t_e737979fb6c9d1 42-44,235-242
+  s_3c0a26c37bd9eb::t_65637081b8d5cb 243-244
+bun.lock
+  s_b8e4c4448c6c73::t_f15b1b64ef6cda 11,18,57,59-60,64,82,1088-1089,1106,1124-1125,1134-1135,1196-1197,1240-1241,1258-1259,1328-1329,1356-1359,1362-1363,1376-1377,1394-1395,1398-1399,1418-1419,1440-1441,1450-1451,1480-1481,1492-1493,1666-1667,1674-1675,1682-1683,1738-1739,1764-1765,1820-1821,1836-1837,1860-1861,1872-1873,1942-1943,1978-1979,1984-1985,1996-1997,2014-2015,2018-2019,2128-2131,2254-2255
+e2e/helpers.ts
+  s_b8e4c4448c6c73::t_ab468692349ecc 7-8,79,97-99,104-152
+e2e/office.spec.ts
+  s_b8e4c4448c6c73::t_a0d145274a2c32 1-69
+e2e/reports.spec.ts
+  s_b8e4c4448c6c73::t_f97e51b48e151d 193-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d1ba01c2d2fae853eb87d4eac396fc5ec97b37df",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
