@@ -1,0 +1,21 @@
+apps/web/src/lib/growth.ts
+  s_b8e4c4448c6c73::t_3cc64c931ab997 31,36
+apps/web/src/components/mdx.tsx
+  s_b8e4c4448c6c73::t_2ca902b449b577 73-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1466e2e6e79e14b9135a757ce000e4d19e6b5fc7",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
