@@ -1,0 +1,119 @@
+apps/web/src/routes/_authenticated/app/referrals.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 56-58,88-90,107-111,114-117
+  s_b8e4c4448c6c73::t_4d6c6046404a51 1-55,59-87,91-106,112-113,118-160
+README.md
+  s_b8e4c4448c6c73::t_718a681a260575 10
+packages/db/src/schema/growth.ts
+  s_b8e4c4448c6c73::t_b2e3dfc81536af 1-140
+apps/web/src/routes/llms[.]txt.ts
+  s_b8e4c4448c6c73::t_53821e0b8acc87 47
+  s_b8e4c4448c6c73::t_718a681a260575 43
+apps/web/src/content/legal/privacy.mdx
+  s_b8e4c4448c6c73::t_718a681a260575 39-41
+  s_b8e4c4448c6c73::t_458ff3a49e1554 38
+packages/env/src/app.ts
+  s_b8e4c4448c6c73::t_6fb076350c4983 34-41
+packages/db/src/growth.test.ts
+  s_b8e4c4448c6c73::t_2d76c25ebe2b29 127-130
+  s_b8e4c4448c6c73::t_7f3bc65a354da6 1-126,131-214
+apps/web/src/routeTree.gen.ts
+  s_b8e4c4448c6c73::t_a54736db6b5d60 32,34,48,53,157-161,167-171,239-244,267-272,311,313,327,332,354,356,370,375,402,404,418,423,450,452,466,471,493,495,509,514,540,542,556,561,587,589,737-743,751-757,849-855,884-890,952,956,968,972,1019,1021
+packages/billing/src/growth.ts
+  s_b8e4c4448c6c73::t_cba8d5f329a4c4 1-93,99-153,159-162,167-219,223-237
+  s_b8e4c4448c6c73::t_764b14e179b5eb 94-98
+  s_b8e4c4448c6c73::t_2d76c25ebe2b29 154-158,163-166,220-222
+packages/db/src/index.ts
+  s_b8e4c4448c6c73::t_eb3560b249b19b 6
+apps/web/src/routes/go/$slug.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 58-61,155-158,162-165,193-195
+  s_b8e4c4448c6c73::t_69b9bbf52b3c3e 1-57,62-154,159-161,166-192,196-213
+apps/web/src/routes/_authenticated/app/admin/affiliates.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 134-136,152-157,222-226
+  s_b8e4c4448c6c73::t_259ba3f01c975a 1-90,92-100,102-133,137-151,158-221,227-234,236-358,360-368
+  s_b8e4c4448c6c73::t_764b14e179b5eb 91,101,235,359
+packages/billing/package.json
+  s_b8e4c4448c6c73::t_6fb076350c4983 9-10
+e2e/referrals.spec.ts
+  s_b8e4c4448c6c73::t_eecaccb65a52f2 1-78
+  s_b8e4c4448c6c73::t_db0b5f6aaa0f96 79
+packages/billing/src/server.test.ts
+  s_b8e4c4448c6c73::t_6c82532a6b6fb8 62-63,127-140,168,226-227,370-445,452-486
+  s_b8e4c4448c6c73::t_2d76c25ebe2b29 446-451
+docs/self-hosting.md
+  s_b8e4c4448c6c73::t_718a681a260575 151,213-215
+  s_b8e4c4448c6c73::t_a53167f14f438c 216
+apps/web/src/lib/growth-api.ts
+  s_b8e4c4448c6c73::t_96ce15ba58c677 1-12
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_b8e4c4448c6c73::t_53821e0b8acc87 95,101
+packages/db/drizzle/20260914161739_growth/snapshot.json
+  s_b8e4c4448c6c73::t_0e7af96f536b9a 1,7750
+  s_b8e4c4448c6c73::t_a54736db6b5d60 2-7749,7751-7753
+packages/billing/src/server.ts
+  s_b8e4c4448c6c73::t_2d76c25ebe2b29 312-314,543-545
+  s_b8e4c4448c6c73::t_ea94f80ef1ae8d 1,235-237,260-311,315-325,542
+apps/web/src/routes/index.tsx
+  s_b8e4c4448c6c73::t_53821e0b8acc87 48,53
+.env.production.example
+  s_b8e4c4448c6c73::t_53821e0b8acc87 32-33
+  s_b8e4c4448c6c73::t_718a681a260575 34-37
+packages/db/src/schema/index.ts
+  s_b8e4c4448c6c73::t_eb3560b249b19b 8
+apps/web/src/lib/api.server.ts
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 564-568
+  s_b8e4c4448c6c73::t_004a1ae3bb27c5 17-18,354-363,545-563,569-607
+packages/billing/src/api.ts
+  s_b8e4c4448c6c73::t_764b14e179b5eb 104
+  s_b8e4c4448c6c73::t_6fb076350c4983 47-103,105-118
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 97,101-105
+  s_b8e4c4448c6c73::t_f68eba82d245d0 106
+packages/db/drizzle/20260914161739_growth/migration.sql
+  s_b8e4c4448c6c73::t_0e7af96f536b9a 1-72
+apps/web/src/routes/r/$code.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 52-53,121-123,126
+  s_b8e4c4448c6c73::t_098ac1474628bc 1-51,54-120,127-147
+  s_b8e4c4448c6c73::t_764b14e179b5eb 124-125
+apps/web/src/lib/growth.ts
+  s_b8e4c4448c6c73::t_e98c576b9c258b 1-57
+compose.yaml
+  s_b8e4c4448c6c73::t_718a681a260575 87-88
+.env.example
+  s_b8e4c4448c6c73::t_718a681a260575 23-26
+apps/web/src/components/app-sidebar.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 8-9,51,53-54,94-99,114-120
+apps/web/src/lib/compare.ts
+  s_b8e4c4448c6c73::t_53821e0b8acc87 33,91,395
+packages/db/src/growth.ts
+  s_b8e4c4448c6c73::t_da1a48d7728d50 1-77,81-84,88-175,177-184,186-236,240-386,390-392
+  s_b8e4c4448c6c73::t_2d76c25ebe2b29 78-80,85-87,237-239,387-389
+  s_b8e4c4448c6c73::t_0e7af96f536b9a 176,185
+  s_b8e4c4448c6c73::t_5cc7ba07d040ea 393-401
+apps/web/src/routes/register/index.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 10,12-21
+apps/web/src/routes/register/route.tsx
+  s_b8e4c4448c6c73::t_15978bfe74f7ba 5-11
+e2e/helpers.ts
+  s_b8e4c4448c6c73::t_1c6f32515a29d7 49,53-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2d92f548cecf49e558b7c1d67f8fedba1581e5bb",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
