@@ -1,0 +1,19 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_b8e4c4448c6c73::t_25f33a6e206978 1093,1121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dca3b56b300707944c9a8d2c41c87beff3f2d5ac",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
