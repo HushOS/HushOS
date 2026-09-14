@@ -1,0 +1,26 @@
+e2e/office.spec.ts
+  s_b8e4c4448c6c73::t_6b4c56132d350a 74-80
+apps/web/src/components/drive/office-viewer.tsx
+  s_b8e4c4448c6c73::t_6b4c56132d350a 5,7,9-10,46-51,74,146,152,155-156,159-160,163,172-191,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0d5334a761a7be9349112cf5c53d65c04d43bfd9",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
