@@ -1,0 +1,57 @@
+apps/web/server/csp.test.ts
+  s_b8e4c4448c6c73::t_2e74315b6cc190 36-41,56-58
+  s_b8e4c4448c6c73::t_e41ee54a4d597f 1-35,42-55,59-62
+apps/web/src/router.tsx
+  s_b8e4c4448c6c73::t_e41ee54a4d597f 4,8-21,26,33,42-47
+packages/env/src/app.ts
+  s_b8e4c4448c6c73::t_e41ee54a4d597f 39-41
+apps/web/nitro.config.ts
+  s_b8e4c4448c6c73::t_5c57911aa7d601 10
+.env.production.example
+  s_b8e4c4448c6c73::t_e4fd96cd8d56b5 90-92
+.env.example
+  s_b8e4c4448c6c73::t_e4fd96cd8d56b5 70-72
+apps/web/server/csp.ts
+  s_b8e4c4448c6c73::t_e41ee54a4d597f 1-72
+apps/web/vitest.config.ts
+  s_b8e4c4448c6c73::t_5522698544934e 10
+apps/web/server/plugins/security-headers.ts
+  s_b8e4c4448c6c73::t_2e74315b6cc190 51-54
+  s_b8e4c4448c6c73::t_e41ee54a4d597f 1-50,55-56
+docs/self-hosting.md
+  s_3c0a26c37bd9eb::t_67968d30c5ce01 178-179
+  s_b8e4c4448c6c73::t_e4fd96cd8d56b5 212-220
+  s_3c0a26c37bd9eb::t_a51033fda73316 176-177
+  s_b8e4c4448c6c73::t_01549f11e314ea 221
+compose.yaml
+  s_b8e4c4448c6c73::t_e4fd96cd8d56b5 79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "71223c1249a4246475e98602c0bfbfca72b6e926",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3c0a26c37bd9eb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c6cda2fa-242f-4516-bf28-575b43ab15d8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
