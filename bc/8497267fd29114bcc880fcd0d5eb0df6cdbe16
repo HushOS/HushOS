@@ -1,0 +1,28 @@
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_b8e4c4448c6c73::t_e9d5cf3c65c01e 3,104,106,108,110,119,127
+apps/web/src/lib/compare.ts
+  s_b8e4c4448c6c73::t_27f540d9e33262 154
+docs/drive-design.md
+  s_b8e4c4448c6c73::t_a8c63167d7107e 404,406,408
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bc8497267fd29114bcc880fcd0d5eb0df6cdbe16",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
