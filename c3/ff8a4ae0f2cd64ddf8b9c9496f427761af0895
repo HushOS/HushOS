@@ -1,0 +1,45 @@
+.env.production.example
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 101-103
+apps/web/src/content/legal/privacy.mdx
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 70
+apps/web/src/routes/__root.tsx
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 16-17,19-21,48,94,161,171
+  s_b8e4c4448c6c73::t_88f77e9d063889 18,95
+  s_b8e4c4448c6c73::t_46b3e29a2e0995 37-43
+  s_b8e4c4448c6c73::t_4bb1828a61273f 44-47
+apps/web/src/lib/analytics.test.ts
+  s_b8e4c4448c6c73::t_4bb1828a61273f 55
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 1-54,56-57
+docs/self-hosting.md
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 221-224
+apps/web/server/plugins/security-headers.ts
+  s_b8e4c4448c6c73::t_b56e218e4ebe6f 24-27,44
+apps/web/server/csp.ts
+  s_b8e4c4448c6c73::t_b56e218e4ebe6f 20-21,32,34-40,45
+apps/web/server/csp.test.ts
+  s_b8e4c4448c6c73::t_b56e218e4ebe6f 31-43
+apps/web/src/lib/analytics.ts
+  s_b8e4c4448c6c73::t_88f77e9d063889 3,27-38
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 15-16,19
+  s_b8e4c4448c6c73::t_b56e218e4ebe6f 1-2,4-14,17-18,20-26,39-53
+packages/env/src/app.ts
+  s_b8e4c4448c6c73::t_b56e218e4ebe6f 59-65
+.env.example
+  s_b8e4c4448c6c73::t_42d9b13dc6a366 81-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c3ff8a4ae0f2cd64ddf8b9c9496f427761af0895",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
