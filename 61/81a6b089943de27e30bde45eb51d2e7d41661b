@@ -1,0 +1,135 @@
+apps/web/src/lib/api.server.ts
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 181-192,783,789,791,857,866,923,1157
+apps/web/src/lib/reports.ts
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 2
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 98
+packages/drive/src/protocol.ts
+  s_b8e4c4448c6c73::t_e1dd8164721af6 10-11,14-15,20-21,40
+packages/crypto/src/index.ts
+  s_b8e4c4448c6c73::t_716f6ff66b1005 8,11-12
+packages/crypto/src/drive.test.ts
+  s_b8e4c4448c6c73::t_44109967d00d1f 248
+  s_b8e4c4448c6c73::t_2bd92d39094b28 347-352
+  s_b8e4c4448c6c73::t_e6592382fa6036 253-255,262-266,304-306,323-325
+  s_b8e4c4448c6c73::t_e1dd8164721af6 19-20,22,24-26,29-30,157-164,176-182,201,211-247,249-252,256-261,267-303,307-322,326-346,353-356
+packages/crypto/src/session.ts
+  s_b8e4c4448c6c73::t_8fc046b181df4f 33,37,39,41,44-45,48,50-54,242-243,257,261-262,281,292-294,299,303-304,320,334,344-354,367-368,381,402-406,458-467,476-477,483,536-538,546,570,575-606,718-719,723-739,742,1416-1435,1483-1503,1510-1511,1519-1520,1524,1527,1529-1536,1541,1543,1547-1549,1554-1563,1570-1584,1586,1594-1602,1616,1631-1647,1665-1668,1670-1688,1695,1699-1700,1704-1707,1724,1728,1736-1743,1745,1836,1839-1841,1843-1844,1846-1847,1850-1854,1932,1949,1951-1958
+  s_b8e4c4448c6c73::t_e6592382fa6036 1564-1569,1610,1612-1615
+packages/db/src/reports.ts
+  s_b8e4c4448c6c73::t_2e394ba1e9b296 494,506
+packages/db/src/drive.reports.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 73
+  s_b8e4c4448c6c73::t_c33c10a1eb8b1b 398
+packages/db/src/drive.shares.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 70
+packages/db/src/rotations.ts
+  s_b8e4c4448c6c73::t_1cc9bfc877e7da 96-103,151-152,197-198
+packages/db/src/drive.ops.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 47
+apps/web/src/components/drive/info-dialog.tsx
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 1,66,85,89-97,107,170-176
+packages/drive/src/journal.ts
+  s_b8e4c4448c6c73::t_f5bcd330b6d3f0 44-53
+packages/crypto/src/drive.ts
+  s_b8e4c4448c6c73::t_afec471af1608c 19-27,34-38,62-69,74,79-84,96-104,171,268,272,275,280,283-288,296-301,307-350,353-357,363-367,375,381-382,388-433,464,472-480,535-589
+  s_b8e4c4448c6c73::t_e6592382fa6036 302-306,351-352,358-362,383-387
+  s_b8e4c4448c6c73::t_876e042b1fd26b 590
+apps/web/src/lib/evidence-packet.ts
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 73
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 2
+packages/db/src/drive.copy.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 91
+  s_b8e4c4448c6c73::t_74f7aa7d43442c 127
+  s_b8e4c4448c6c73::t_c33c10a1eb8b1b 174,202,211-256,368,393,406
+apps/web/src/lib/drive.ts
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 160,163
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 1
+packages/drive/src/downloads.test.ts
+  s_b8e4c4448c6c73::t_3c345e7e5c649f 58,106-108,111-112
+apps/web/src/routes/_authenticated/app/admin/reports/$reportId.tsx
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 277,355
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 2
+apps/web/src/routes/s/$token.tsx
+  s_b8e4c4448c6c73::t_e6592382fa6036 416
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 1
+apps/web/src/lib/save-copy.ts
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 35
+  s_b8e4c4448c6c73::t_08aa1162b33fc0 1
+packages/drive/src/client.ts
+  s_b8e4c4448c6c73::t_83d9b926ad53b8 1-7,438-444,733-736,886-892
+  s_b8e4c4448c6c73::t_7f297057dd1462 19-20
+  s_b8e4c4448c6c73::t_1ef983cc7391cb 45-50,55-72,154,164,355,421-425,427-437,445-446,977
+packages/drive/src/downloads.ts
+  s_b8e4c4448c6c73::t_1cc9bfc877e7da 246-249,282,285,288-289,472,553
+  s_b8e4c4448c6c73::t_e6592382fa6036 4-10
+packages/db/src/drive.links.test.ts
+  s_b8e4c4448c6c73::t_c33c10a1eb8b1b 70
+packages/crypto/src/session.rotation.test.ts
+  s_b8e4c4448c6c73::t_44109967d00d1f 134,136-142,174
+packages/db/src/schema/drive.ts
+  s_b8e4c4448c6c73::t_18a8fcae82dade 123-126,155,172-173,189,490,502
+packages/db/src/drive.purge.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 85,226,296,420
+packages/db/src/drive.rotations.test.ts
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 72
+packages/drive/src/transfers.ts
+  s_b8e4c4448c6c73::t_1cc9bfc877e7da 2,117-119,488-491,498,503,510,512,537-539,638,705,935-941,946,950-951,1264-1269,1291
+  s_b8e4c4448c6c73::t_e6592382fa6036 499
+packages/drive/src/api.ts
+  s_b8e4c4448c6c73::t_3a48dc1241b1df 13,21-22,87-93,254-259,274,276-277
+docs/drive-design.md
+  s_b8e4c4448c6c73::t_38bfd9b1466fb2 301
+  s_b8e4c4448c6c73::t_ce47bbe093dcd9 3,47,50-54,56,61,65,69,74,79,82-88,91,99,143-144,156,247,259,261,267,279,281,438,448-449
+packages/db/src/drive.uploads.test.ts
+  s_b8e4c4448c6c73::t_c33c10a1eb8b1b 431-433,435,437-439,441-453
+  s_b8e4c4448c6c73::t_250ffe176dc9c9 77
+apps/web/src/content/security.mdx
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 159,163,241
+packages/db/src/drive.ts
+  s_b8e4c4448c6c73::t_38bfd9b1466fb2 2151-2153,2168
+  s_b8e4c4448c6c73::t_40ba5f8a8558c8 243-244,835-839,848,879,883,969,973,1029,1092-1095,1101,1523-1525,1567-1569,1775,1797,2022,2028,2040,2042,2172
+apps/web/src/lib/thumbnails.ts
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 1,10-12,15-17,156,202,205-207,214-216,225,244,246
+packages/drive/src/server.ts
+  s_b8e4c4448c6c73::t_f64c2340c46c8f 11,17,23,29,87-88,127,169-177,569-572,577-578,806,808-809,856-865,867-871,884,888,915-922,943-946,950,954,1126,1136,1204-1207,1220-1221,1223,1225,1229,1247,1250,1508-1514,1611,1824,1826,1991-1992
+  s_b8e4c4448c6c73::t_abe84fa96b7bf8 1215-1216,1219
+  s_b8e4c4448c6c73::t_902560e812fc0e 2112-2113
+packages/db/drizzle/20260914182125_thumbnails_in_object/migration.sql
+  s_b8e4c4448c6c73::t_39dbdaebc3518a 1-47
+  s_b8e4c4448c6c73::t_3b6a0f13092f5b 48-62
+  s_b8e4c4448c6c73::t_b17a2ce293c929 63
+packages/db/drizzle/20260914182125_thumbnails_in_object/snapshot.json
+  s_b8e4c4448c6c73::t_3b6a0f13092f5b 1,7611
+  s_b8e4c4448c6c73::t_e6592382fa6036 2-7610,7612-7614
+apps/web/src/components/drive/versions-dialog.tsx
+  s_b8e4c4448c6c73::t_21a6003fb3d96e 151-153
+  s_b8e4c4448c6c73::t_e6592382fa6036 154
+apps/web/src/components/drive/folder-view.tsx
+  s_b8e4c4448c6c73::t_4a06704a761a09 850-860
+packages/crypto/src/session.drive.test.ts
+  s_b8e4c4448c6c73::t_3a48dc1241b1df 541
+  s_b8e4c4448c6c73::t_e6592382fa6036 527-530,578-580
+  s_b8e4c4448c6c73::t_74f7aa7d43442c 538
+  s_b8e4c4448c6c73::t_44109967d00d1f 1,5-13,253,256-257,309,314,316,321,323-328,331,336,354,357-358,420-526,531-537,539-540,542-577,581-615,654-655,657-661,676,681,685-686
+packages/drive/src/transfers.test.ts
+  s_b8e4c4448c6c73::t_7f297057dd1462 40
+  s_b8e4c4448c6c73::t_3c345e7e5c649f 108,112-114
+packages/drive/src/jobs.ts
+  s_b8e4c4448c6c73::t_1ef983cc7391cb 41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6181a6b089943de27e30bde45eb51d2e7d41661b",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
