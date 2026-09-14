@@ -1,0 +1,142 @@
+.env.production.example
+  s_b8e4c4448c6c73::t_07426e270cd4c2 37
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 34-36,38-40
+apps/web/src/routes/s/$token.tsx
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 89,116-163
+  s_b8e4c4448c6c73::t_d7c0539f0b09c6 164-166
+apps/web/src/components/ui/accordion.tsx
+  s_b8e4c4448c6c73::t_0d3c011e8a65c3 1-3,6-12,16-22,25-47,50-66,69
+  s_b8e4c4448c6c73::t_86cb8db8b87b9b 4-5,13-15,23-24,48-49,67-68
+apps/web/src/routes/_authenticated/app/referrals.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-63,66-70,72-83,93-95,99-168
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 64-65,71,84-92,96-98
+apps/web/src/components/drive/preview.tsx
+  s_b8e4c4448c6c73::t_ea662ab95b1501 78,121-122,126
+apps/web/src/components/page-header.tsx
+  s_b8e4c4448c6c73::t_4ad243167b526c 28-32
+apps/web/src/components/app-sidebar.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 8-9,51,53-54,94-99,114-120
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 97,101-105
+  s_b8e4c4448c6c73::t_611f95f9842c3a 106
+packages/env/src/app.ts
+  s_b8e4c4448c6c73::t_66b8c2c790166c 4-10,41-48
+apps/web/src/components/ui/dialog.tsx
+  s_b8e4c4448c6c73::t_ea662ab95b1501 49
+packages/billing/src/growth.ts
+  s_b8e4c4448c6c73::t_012c38e6481ec1 22-24,45,49-59,88,94-105,117
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-21,25-44,46-48,60-87,89-93,106-116,118-258
+e2e/links.spec.ts
+  s_b8e4c4448c6c73::t_230592191d2db5 96,98-103
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  s_b8e4c4448c6c73::t_4ad243167b526c 95-98
+apps/web/src/lib/api.server.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 17-18,354-363,545-607
+apps/web/src/content/legal/privacy.mdx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 39-41
+  s_b8e4c4448c6c73::t_10a3bfd4e5f6e7 38
+apps/web/src/components/faq.tsx
+  s_b8e4c4448c6c73::t_dceaefa9f7f5d0 1-16,18-35
+  s_b8e4c4448c6c73::t_952e5669b02725 17
+docs/self-hosting.md
+  s_b8e4c4448c6c73::t_07426e270cd4c2 213-214
+  s_b8e4c4448c6c73::t_d5979f455c4453 215
+  s_b8e4c4448c6c73::t_db6df4802f5b1d 231-237
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 144-161
+  s_b8e4c4448c6c73::t_f6291c48fedc71 216
+packages/db/drizzle/20260914161739_growth/snapshot.json
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-7753
+packages/db/src/growth.ts
+  s_b8e4c4448c6c73::t_012c38e6481ec1 202-208,227-229,234-240,252-256
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-120,174,178-181,183-191,241-244,246-250,257,264-270,273-462
+  s_b8e4c4448c6c73::t_66b8c2c790166c 121-173,175-177,182,192-201,209-226,230-233,245,251,258-263,271-272
+apps/web/src/routes/index.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 49
+  s_b8e4c4448c6c73::t_0d3c011e8a65c3 5,465
+apps/web/src/content/legal/terms.mdx
+  s_b8e4c4448c6c73::t_02197ab2d733c8 48-51
+apps/web/src/routes/go/$slug.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-213
+compose.yaml
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 88-90
+  s_b8e4c4448c6c73::t_07426e270cd4c2 87
+apps/web/src/lib/compare.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 33
+apps/web/src/routes/r/$code.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-52,56-149
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 53-55
+apps/web/src/components/site-header.tsx
+  s_b8e4c4448c6c73::t_0d3c011e8a65c3 23,53-58
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_b8e4c4448c6c73::t_0d3c011e8a65c3 9,175-199
+  s_b8e4c4448c6c73::t_07426e270cd4c2 96
+packages/db/src/schema/index.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 8
+apps/web/src/routes/register/route.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 5-11
+apps/web/src/routes/_authenticated/app/admin/affiliates.tsx
+  s_b8e4c4448c6c73::t_2948ef4c6a2e33 180,183-188
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-179,181-182,189-372
+apps/web/src/routes/register/index.tsx
+  s_b8e4c4448c6c73::t_07426e270cd4c2 10,12-21
+apps/web/src/routes/llms[.]txt.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 43,47
+apps/web/src/lib/growth-api.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-12
+e2e/helpers.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 49,53-54
+packages/billing/src/server.ts
+  s_b8e4c4448c6c73::t_d5979f455c4453 294-305
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 310-320,565,569-570
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1,235-237,260-293,306-309,321-348,566-568
+e2e/referrals.spec.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-52,59-80,82-83
+  s_b8e4c4448c6c73::t_c10c8175acc2ce 54,56-58
+  s_b8e4c4448c6c73::t_780042e52a35dd 53
+  s_b8e4c4448c6c73::t_b9789f2617c5a7 55
+  s_b8e4c4448c6c73::t_73ff5d03f62dcd 81
+README.md
+  s_b8e4c4448c6c73::t_07426e270cd4c2 10
+apps/web/src/routeTree.gen.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 32,34,48,53,157-161,167-171,239-244,267-272,311,313,327,332,354,356,370,375,402,404,418,423,450,452,466,471,493,495,509,514,540,542,556,561,587,589,737-743,751-757,849-855,884-890,952,956,968,972,1019,1021
+.env.example
+  s_b8e4c4448c6c73::t_07426e270cd4c2 26
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 23-25,27-29
+packages/db/src/growth.test.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-57,59,61-79,81-88,90-92,95-107,109-120,122-123,163-173,175-253
+  s_b8e4c4448c6c73::t_a7e16ca30313db 58,60,80,89,93-94,108,121,124-137,141,145,149-150,154-162,174
+  s_b8e4c4448c6c73::t_012c38e6481ec1 138-140,142-144,146-148,151-153
+packages/billing/src/api.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 47,51-55,60-105,112-125
+  s_b8e4c4448c6c73::t_012c38e6481ec1 48-50,56-59,106-111
+apps/web/src/lib/growth.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-57
+packages/billing/src/server.test.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 62-63,127-140,168,226-227,370-473,498-507
+  s_b8e4c4448c6c73::t_6bb26d01f0e17a 474-497
+packages/billing/package.json
+  s_b8e4c4448c6c73::t_07426e270cd4c2 9-10
+packages/db/drizzle/20260914161739_growth/migration.sql
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-72
+packages/db/src/schema/growth.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 1-108,110-140
+  s_b8e4c4448c6c73::t_6643e9a6f4082f 109
+packages/db/src/index.ts
+  s_b8e4c4448c6c73::t_07426e270cd4c2 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9256fb9d6c317efe08ca0f71b4c945b3b99a5235",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
