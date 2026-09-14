@@ -1,0 +1,3 @@
+ALTER TABLE "opaque_login_attempts" ADD COLUMN "purpose" text DEFAULT 'login' NOT NULL;--> statement-breakpoint
+ALTER TABLE "opaque_login_attempts" ADD COLUMN "session_token_hash" bytea;--> statement-breakpoint
+ALTER TABLE "opaque_login_attempts" ADD CONSTRAINT "opaque_login_attempts_purpose_binding" CHECK (("purpose" = 'login' and "session_token_hash" is null) or ("purpose" = 'delete' and "session_token_hash" is not null and octet_length("session_token_hash") = 32));

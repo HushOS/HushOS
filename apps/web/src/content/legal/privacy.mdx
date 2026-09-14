@@ -1,0 +1,105 @@
+---
+title: Privacy Policy
+updated: 2026-09-14
+summary: HushOS is designed so the Service holds as little about you as it can. This page lists exactly what is stored, what is never stored, and how long it is kept.
+---
+
+import { OperatorContact, OperatorName } from '../../components/legal-layout';
+import { Ledger } from '../../components/mdx';
+
+## 1. Who is responsible
+
+<OperatorName generic="The operator of this HushOS instance" /> (the “Operator”) is the data
+controller for the information described here. HushOS is open-source software; the HushOS project
+does not receive any data from instances it does not run.
+
+## 2. What the Service stores
+
+<Ledger
+    rows={[
+        ['Account', 'Email address, display name, internal account ID'],
+        [
+            'Authentication',
+            'An OPAQUE registration record; verifies a sign-in without learning the password',
+        ],
+        [
+            'Key bundles',
+            'Your account key wrapped by your password and by your recovery phrase, plus wrapped identity keys',
+        ],
+        ['Workspace', 'Your workspace, its storage allowance, and usage counters'],
+        [
+            'Drive',
+            'The shape of your folder tree (ids, parents, sizes, times) and encrypted names and contents the Service cannot read; each upload’s encrypted chunks in object storage',
+        ],
+        [
+            'Sharing',
+            'Which accounts you have shared with and in what role; for links, a hash of the link, its expiry, and a count of uses; not the link secret or password',
+        ],
+        [
+            'Invites',
+            'If you signed up through an invite or a creator’s code: which account or creator it was; for your own invites, how many people joined and the storage you earned',
+        ],
+        [
+            'Reports',
+            'If someone with access reports an item you shared: a snapshot of that item and its encrypted bytes, keys sealed to the operators, the reporter’s account, and the operators’ decisions',
+        ],
+        [
+            'Billing',
+            'If you buy a plan: your Polar customer ID, subscription ID, plan, status, and renewal date; a record of each billing notification received',
+        ],
+        [
+            'Sign-up choices',
+            'The plan or referral you chose when creating the account, until it has been used',
+        ],
+        ['Sessions', 'Session identifiers with creation and expiry times'],
+        ['Server logs', 'Timestamps, request IDs and status codes, kept briefly'],
+    ]}
+/>
+
+Your email is used to verify your identity, deliver recovery links, and send important notices about your account. The Service cannot unwrap your key bundles.
+
+## 3. What the Service never sees
+
+- Your password, in any form. Sign-in uses OPAQUE, which keeps it on your device.
+- Your recovery phrase in plaintext. The server stores an encrypted backup; your unlocked browser can display it again or export a recovery kit.
+- Your unwrapped account key or identity keys.
+- The names or contents of your files or folders, or anything behind a link or share, unless someone you gave access to reports it (section 7).
+
+## 4. Cookies and local storage
+
+The Service sets a session cookie so you stay signed in, a preference cookie for your chosen appearance, and a cookie that remembers whether the sidebar is open. Your browser may also hold a device key that lets your account unlock on this device without re-entering your password, and a setting for interface sounds. None of these are used for tracking or advertising, and the Service does not use third-party analytics. On the public pages (the home page, pricing, the blog and the like) the Operator may run Umami, an open-source analytics tool, on their own server. It counts page views with the referring site, browser, device type and country, sets no cookie, and stores nothing that could name you. It is never loaded once you are signed in, on the sign-in, sign-up or recovery pages, or on a shared link.
+
+## 5. Email
+
+Verification and recovery emails are sent through the email provider the Operator has configured. Those emails contain a one-time link that expires after 30 minutes. The provider may keep delivery logs according to its own policy.
+
+## 6. Paid plans and Polar
+
+If the Operator offers paid plans, purchases are made through Polar Software, Inc. (“Polar”), which sells the plan as merchant of record and is responsible for the payment itself. Polar collects what it needs to take payment and issue invoices: your name, email address, billing address, tax ID where you give one, and your payment method. Your card details go to Polar and its payment processor and never reach the Service. Polar processes this data under its own [privacy policy](https://polar.sh/legal/privacy), in the United States.
+
+The Service sends Polar only your account ID, name, and email address, so that a purchase can be matched to your account. It never sends file names, content, or any encryption key. Polar sends the Service notifications about your subscription, which the Service uses to set your storage allowance. Your invoices and payment method are managed in Polar’s customer portal, reached from Billing.
+
+## 7. Reports
+
+Anyone who can see an item through a share or a link can report it. When they do, their browser seals that item's key to the operators of this instance, so that the operators can look at what was reported and nothing else. The Service keeps a snapshot of the reported item and holds its stored bytes, even if the owner deletes it, until the report is closed; the Operator may also keep a copy in a separate evidence store. Depending on the outcome, the Operator may remove the content, suspend the uploader's account, or pass the material to a relevant authority where the law requires or permits it. The Service does not record the network addresses of people who upload, share, or report.
+
+## 8. How long data is kept
+
+- Account data is kept until you delete your account.
+- Pending email verifications expire after 30 minutes and are then removed.
+- Sessions are removed when they expire or when you sign out. Password changes, password recovery, and key rotation revoke all existing sessions.
+- Server logs are rotated on a short schedule set by the Operator.
+- Files you delete go to the trash and are purged after 30 days, or at once if you delete them forever; a replaced version is kept for 30 days. Encrypted bytes named by an open report are kept until it is closed.
+- Stopped shares and links are removed at once; link use counts go with them.
+- Report records are kept while the report is open or on hold, and after that for as long as the Operator's obligations require; evidence copies follow the retention set on the evidence store.
+- Billing records are kept while you have an account. Polar keeps invoices and payment records for as long as tax and accounting law requires.
+
+Deleting your account from Account settings cancels any paid plan, asks Polar to delete your customer record, and removes your profile, workspace, storage and billing records, key bundles, and sessions immediately. Backups taken before deletion are overwritten on the Operator’s normal backup rotation.
+
+## 9. Your rights
+
+Depending on where you live, you may have the right to access, correct, export, or delete your personal data, and to object to or restrict certain processing. You can view your account details and delete your account yourself at any time. For anything else, contact the Operator of this instance at <OperatorContact generic="the address it publishes" />.
+
+## 10. Changes
+
+When this policy changes in a meaningful way, the date above is updated and, where practical, you are notified by email. The [Terms of Service](/terms) describe the agreement that this policy sits alongside.

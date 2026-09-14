@@ -1,0 +1,107 @@
+import { createStore } from 'zustand/vanilla';
+import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
+import type { RememberedAccount } from '@hushos/crypto';
+
+/* The step a restore is in, so a slow one can say what it is waiting on. */
+export type RestoreStep = 'rehydrate' | 'session' | 'device-key' | 'worker';
+
+type AuthState = {
+    unlockedUserId: string | null;
+    restoring: boolean;
+    restoreStep: RestoreStep | null;
+    rememberError: string;
+    device: RememberedAccount | null;
+    lockRevision: number;
+};
+function isDevice(value: unknown): value is RememberedAccount {
+    if (!value || typeof value !== 'object') return false;
+    const v = value as Record<string, unknown>;
+    return (
+        v.version === 1 &&
+        Number.isSafeInteger(v.keyVersion) &&
+        Number(v.keyVersion) > 0 &&
+        Number.isSafeInteger(v.credentialVersion) &&
+        Number(v.credentialVersion) > 0 &&
+        typeof v.userId === 'string' &&
+        /^[a-f0-9-]{36}$/.test(v.userId) &&
+        typeof v.deviceKeyId === 'string' &&
+        v.deviceKeyId.length <= 100 &&
+        typeof v.nonce === 'string' &&
+        /^[A-Za-z0-9_-]{16}$/.test(v.nonce) &&
+        typeof v.encryptedKey === 'string' &&
+        /^[A-Za-z0-9_-]{64}$/.test(v.encryptedKey)
+    );
+}
+export function createAuthStore() {
+    let available = true;
+    function disablePersistence(name: string) {
+        available = false;
+        // Discard an older bundle if a write failed, rather than restoring stale access.
+        try {
+            localStorage.removeItem(name);
+        } catch {
+            /* Storage may be disabled entirely. In-memory auth must still work. */
+        }
+    }
+    const storage: StateStorage = {
+        getItem(name) {
+            if (!available) return null;
+            try {
+                return localStorage.getItem(name);
+            } catch {
+                disablePersistence(name);
+                return null;
+            }
+        },
+        setItem(name, value) {
+            if (!available) return;
+            try {
+                localStorage.setItem(name, value);
+            } catch {
+                disablePersistence(name);
+            }
+        },
+        removeItem(name) {
+            try {
+                localStorage.removeItem(name);
+            } catch {
+                disablePersistence(name);
+            }
+        },
+    };
+    const store = createStore<AuthState>()(
+        persist(
+            (): AuthState => ({
+                unlockedUserId: null,
+                restoring: false,
+                restoreStep: null,
+                rememberError: '',
+                device: null,
+                lockRevision: 0,
+            }),
+            {
+                name: 'hushos-device-unlock',
+                version: 1,
+                storage: createJSONStorage(() => storage),
+                skipHydration: true,
+                partialize: (state) => ({ device: state.device, lockRevision: state.lockRevision }),
+                merge: (persisted, current) => {
+                    const saved =
+                        persisted && typeof persisted === 'object'
+                            ? (persisted as Record<string, unknown>)
+                            : {};
+                    return {
+                        ...current,
+                        device: isDevice(saved.device) ? saved.device : null,
+                        lockRevision:
+                            typeof saved.lockRevision === 'number' &&
+                            Number.isSafeInteger(saved.lockRevision)
+                                ? saved.lockRevision
+                                : 0,
+                    };
+                },
+            },
+        ),
+    );
+    return { store, canPersist: () => available };
+}

@@ -1,0 +1,1 @@
+import '@hushos/auth/worker';

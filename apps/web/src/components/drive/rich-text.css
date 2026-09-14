@@ -1,0 +1,212 @@
+/*
+ * Viewer text: highlighted code and rendered Markdown. Shiki writes both theme
+ * colours onto every token; light-dark() picks the one the page is showing.
+ */
+
+.rt-code {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.6;
+    tab-size: 4;
+}
+.rt-gutter {
+    margin: 0;
+    padding: 1.25rem 0.75rem 1.25rem 1.25rem;
+    list-style: none;
+    text-align: right;
+    color: var(--muted-foreground);
+    user-select: none;
+    border-right: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+}
+.rt-source {
+    overflow-x: auto;
+    padding: 1.25rem 1.5rem;
+}
+.rt-source pre,
+.rt-plain {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: inherit;
+    line-height: inherit;
+    background: transparent !important;
+    white-space: pre;
+}
+.rt-plain {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.rt-code .rt-plain {
+    white-space: pre;
+}
+.shiki span {
+    color: light-dark(var(--shiki-light), var(--shiki-dark));
+    font-style: light-dark(
+        var(--shiki-light-font-style, inherit),
+        var(--shiki-dark-font-style, inherit)
+    );
+    font-weight: light-dark(
+        var(--shiki-light-font-weight, inherit),
+        var(--shiki-dark-font-weight, inherit)
+    );
+}
+
+/* Markdown at reading width, with the same restraint as the rest of the app. */
+.rt-markdown {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+    font-size: 0.9375rem;
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+}
+.rt-markdown > * + * {
+    margin-top: 1em;
+}
+.rt-markdown h1,
+.rt-markdown h2,
+.rt-markdown h3,
+.rt-markdown h4,
+.rt-markdown h5,
+.rt-markdown h6 {
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin-top: 1.75em;
+}
+.rt-markdown h1 {
+    font-size: 1.75rem;
+}
+.rt-markdown h2 {
+    font-size: 1.375rem;
+}
+.rt-markdown h3 {
+    font-size: 1.125rem;
+}
+.rt-markdown h4,
+.rt-markdown h5,
+.rt-markdown h6 {
+    font-size: 1rem;
+}
+.rt-markdown > :first-child {
+    margin-top: 0;
+}
+.rt-markdown p,
+.rt-markdown li {
+    color: var(--foreground);
+}
+.rt-markdown a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+.rt-link-icon {
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    margin-left: 0.2em;
+    vertical-align: baseline;
+}
+.rt-link-disabled {
+    text-decoration: line-through;
+    color: var(--muted-foreground);
+}
+.rt-markdown ul,
+.rt-markdown ol {
+    padding-left: 1.5rem;
+}
+.rt-markdown ul {
+    list-style: disc;
+}
+.rt-markdown ol {
+    list-style: decimal;
+}
+.rt-markdown li + li {
+    margin-top: 0.25em;
+}
+.rt-markdown li > ul,
+.rt-markdown li > ol {
+    margin-top: 0.25em;
+}
+.rt-markdown li.task-list-item {
+    list-style: none;
+    margin-left: -1.5rem;
+}
+.rt-markdown input[type='checkbox'] {
+    margin-right: 0.5rem;
+    accent-color: var(--primary);
+    pointer-events: none;
+}
+.rt-markdown blockquote {
+    border-left: 2px solid var(--border);
+    padding-left: 1rem;
+    color: var(--muted-foreground);
+}
+.rt-markdown hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 2em 0;
+}
+.rt-markdown code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+}
+.rt-markdown :not(pre) > code {
+    background: var(--muted);
+    padding: 0.1em 0.35em;
+}
+.rt-markdown pre {
+    margin: 0;
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--border);
+    background: var(--muted) !important;
+    overflow-x: auto;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+}
+.rt-markdown table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+.rt-markdown th,
+.rt-markdown td {
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+}
+.rt-markdown th {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    background: var(--muted);
+}
+.rt-markdown del {
+    color: var(--muted-foreground);
+}
+.rt-image {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    border: 1px dashed var(--border);
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+.rt-image svg {
+    width: 0.9rem;
+    height: 0.9rem;
+}
+.rt-image-host {
+    opacity: 0.7;
+}

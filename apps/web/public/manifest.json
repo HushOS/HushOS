@@ -1,0 +1,105 @@
+{
+    "$schema": "https://json.schemastore.org/web-manifest-combined.json",
+    "id": "/",
+    "name": "HushOS",
+    "short_name": "HushOS",
+    "description": "Private storage for your files, personal or work, that is simple to use. Encrypted on your device; open source; self-hostable.",
+    "lang": "en",
+    "dir": "ltr",
+    "scope": "/",
+    "start_url": "/app",
+    "display": "standalone",
+    "orientation": "any",
+    "theme_color": "#000000",
+    "background_color": "#000000",
+    "categories": ["productivity", "utilities"],
+    "launch_handler": {
+        "client_mode": "navigate-existing"
+    },
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "/android-chrome-192x192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/android-chrome-512x512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/maskable-icon-192x192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "/maskable-icon-512x512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "/screenshots/drive-wide.png",
+            "sizes": "2560x1600",
+            "type": "image/png",
+            "form_factor": "wide",
+            "label": "Drive: your files and folders, locked on your device"
+        },
+        {
+            "src": "/screenshots/drive-grid.png",
+            "sizes": "2560x1600",
+            "type": "image/png",
+            "form_factor": "wide",
+            "label": "Photos as a grid, with thumbnails made on your device"
+        },
+        {
+            "src": "/screenshots/preview.png",
+            "sizes": "2560x1600",
+            "type": "image/png",
+            "form_factor": "wide",
+            "label": "Previews open in place, decrypted on your device"
+        },
+        {
+            "src": "/screenshots/drive-narrow.png",
+            "sizes": "780x1688",
+            "type": "image/png",
+            "form_factor": "narrow",
+            "label": "Drive on a phone"
+        },
+        {
+            "src": "/screenshots/phone-grid.png",
+            "sizes": "780x1688",
+            "type": "image/png",
+            "form_factor": "narrow",
+            "label": "Photos on a phone"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "Drive",
+            "url": "/app",
+            "icons": [
+                {
+                    "src": "/android-chrome-192x192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        },
+        {
+            "name": "Trash",
+            "url": "/app/trash",
+            "icons": [
+                {
+                    "src": "/android-chrome-192x192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        }
+    ]
+}

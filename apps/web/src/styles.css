@@ -1,0 +1,198 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+/* Match Geist 5.3.0's average Latin advance and vertical metrics to local Arial. */
+@font-face {
+    font-family: 'Geist Fallback';
+    src: local('Arial');
+    size-adjust: 108.6433%;
+    ascent-override: 92.5045%;
+    descent-override: 27.1531%;
+    line-gap-override: 0%;
+}
+
+@custom-variant dark {
+    &:where(.dark, .dark *) {
+        @slot;
+    }
+    @media (prefers-color-scheme: dark) {
+        &:where(:root:not(.light), :root:not(.light) *) {
+            @slot;
+        }
+    }
+}
+
+@theme inline {
+    --font-sans: 'Geist Variable', 'Geist Fallback', sans-serif;
+    --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-primary: var(--primary);
+    --color-primary-hover: var(--primary-hover);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
+    --color-warning: var(--warning);
+    --color-warning-foreground: var(--warning-foreground);
+    --color-ink: var(--ink);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --radius-xs: 0px;
+    --radius-sm: 0px;
+    --radius-md: 0px;
+    --radius-lg: 0px;
+    --radius-xl: 0px;
+    --radius-2xl: 0px;
+    --shadow-hard: 4px 4px 0 var(--border);
+    --shadow-hard-sm: 2px 2px 0 var(--border);
+    --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+    --ease-in-out-cubic: cubic-bezier(0.645, 0.045, 0.355, 1);
+}
+
+/*
+ * The Ledger palette. Light is paper and ink; dark is a black terminal. Rules
+ * are opaque (ink on paper, graphite on black) so every cell reads as a drawn
+ * line, never a soft edge. One blue does all the pointing; the strip colours
+ * (yellow, teal, coral) are stamps and status. No gradients. See DESIGN.md.
+ */
+:root {
+    color-scheme: light dark;
+    --radius: 0px;
+
+    --ink: light-dark(oklch(0.22 0.004 95), oklch(0.93 0.004 264));
+    --background: light-dark(oklch(0.962 0.006 95), oklch(0 0 0));
+    --foreground: var(--ink);
+
+    --card: light-dark(oklch(0.985 0.004 95), oklch(0.11 0.006 264));
+    --card-foreground: var(--foreground);
+    --popover: light-dark(oklch(1 0 0), oklch(0.15 0.008 264));
+    --popover-foreground: var(--foreground);
+
+    --primary: light-dark(oklch(0.545 0.16 262.7), oklch(0.78 0.11 262.7));
+    --primary-hover: light-dark(oklch(0.49 0.16 262.7), oklch(0.83 0.1 262.7));
+    --primary-foreground: light-dark(oklch(1 0 0), oklch(0 0 0));
+
+    --secondary: var(--ink);
+    --secondary-foreground: var(--background);
+
+    --muted: light-dark(oklch(0.925 0.008 95), oklch(0.17 0.008 264));
+    --muted-foreground: light-dark(oklch(0.48 0.008 95), oklch(0.66 0.01 264));
+
+    --accent: light-dark(oklch(0.93 0.03 262.7), oklch(0.22 0.035 262.7));
+    --accent-foreground: light-dark(oklch(0.3 0.08 262.7), oklch(0.93 0.004 264));
+
+    --success: light-dark(oklch(0.62 0.1 180), oklch(0.78 0.11 175));
+    --success-foreground: light-dark(oklch(0.22 0.004 95), oklch(0 0 0));
+    --warning: light-dark(oklch(0.84 0.13 85), oklch(0.86 0.13 88));
+    --warning-foreground: light-dark(oklch(0.22 0.004 95), oklch(0 0 0));
+    --destructive: light-dark(oklch(0.66 0.17 35), oklch(0.74 0.15 32));
+    --destructive-foreground: light-dark(oklch(0.22 0.004 95), oklch(0 0 0));
+
+    --border: light-dark(oklch(0.22 0.004 95), oklch(0.32 0.01 264));
+    --input: var(--border);
+    --ring: var(--primary);
+
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--muted);
+    --sidebar-accent-foreground: var(--foreground);
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--ring);
+}
+
+:root.light {
+    color-scheme: light;
+}
+
+:root.dark {
+    color-scheme: dark;
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring;
+    }
+    html {
+        text-rendering: optimizeLegibility;
+        -webkit-tap-highlight-color: transparent;
+    }
+    body {
+        @apply m-0 min-h-svh bg-background font-sans text-foreground antialiased;
+        font-feature-settings:
+            'cv11' 1,
+            'ss01' 1;
+    }
+    ::selection {
+        @apply bg-primary text-primary-foreground;
+    }
+    a,
+    button,
+    summary,
+    [role='menuitem'] {
+        @apply focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring;
+    }
+    strong {
+        @apply font-medium text-foreground;
+    }
+    kbd,
+    code {
+        @apply font-mono text-[0.9em];
+    }
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        ::before,
+        ::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
+}
+
+/* Uppercase mono label used for every cell heading, key, nav item and stamp. */
+@utility eyebrow {
+    @apply font-mono text-[11px] leading-none font-medium tracking-[0.12em] uppercase;
+}
+
+/* A horizontal strip of the five system colours: the ledger's one ornament. */
+@utility colour-strip {
+    background-image: linear-gradient(
+        to right,
+        var(--primary) 0 20%,
+        var(--ink) 20% 40%,
+        var(--warning) 40% 60%,
+        var(--success) 60% 80%,
+        var(--destructive) 80% 100%
+    );
+}
+
+@utility text-link {
+    @apply font-mono text-foreground underline decoration-1 underline-offset-4 transition-colors hover:text-primary;
+}

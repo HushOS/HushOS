@@ -1,0 +1,177 @@
+name: hushos
+
+services:
+    db:
+        image: postgres:18-alpine
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-hushos}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run bun run setup first}
+            POSTGRES_DB: ${POSTGRES_DB:-hushos}
+        volumes:
+            - postgres18_data:/var/lib/postgresql
+        healthcheck:
+            test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    minio:
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        restart: unless-stopped
+        command: server /data --console-address ":9001"
+        environment:
+            MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:?Run bun run setup first}
+            # Browsers PUT parts and GET ranges straight from the bucket.
+            MINIO_API_CORS_ALLOW_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+        ports:
+            - '127.0.0.1:${STORAGE_PORT:-9000}:9000'
+        volumes:
+            - minio_data:/data
+        healthcheck:
+            test: [CMD, mc, ready, local]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+
+    # One-shot: creates the bucket (see scripts/minio-init.sh).
+    minio-init:
+        image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+        depends_on:
+            minio:
+                condition: service_healthy
+        restart: 'no'
+        entrypoint: [/bin/sh, /minio-init.sh]
+        volumes:
+            - ./scripts/minio-init.sh:/minio-init.sh:ro
+        environment:
+            MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:?Run bun run setup first}
+            STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
+
+    migrate:
+        build:
+            context: .
+            dockerfile: packages/db/Dockerfile
+            target: migrate
+        environment:
+            DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+        depends_on:
+            db:
+                condition: service_healthy
+        restart: 'no'
+
+    web:
+        ports:
+            - '127.0.0.1:${PORT:-5173}:5173'
+        build:
+            context: .
+            dockerfile: apps/web/Dockerfile
+        restart: unless-stopped
+        environment:
+            NODE_ENV: production
+            HOST: 0.0.0.0
+            PORT: 5173
+            DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            APP_ORIGIN: ${APP_ORIGIN:-}
+            CSP_CONNECT_SRC: ${CSP_CONNECT_SRC:-}
+            TRUSTED_COUNTRY_HEADER: ${TRUSTED_COUNTRY_HEADER:-}
+            OPERATOR_NAME: ${OPERATOR_NAME:-}
+            OPERATOR_JURISDICTION: ${OPERATOR_JURISDICTION:-}
+            OPERATOR_CONTACT: ${OPERATOR_CONTACT:-}
+            OPAQUE_SERVER_SETUP: ${OPAQUE_SERVER_SETUP:-}
+            OPAQUE_SERVER_SETUP_ID: ${OPAQUE_SERVER_SETUP_ID:-}
+            INITIAL_STORAGE_QUOTA_BYTES: ${INITIAL_STORAGE_QUOTA_BYTES:-1073741824}
+            REFERRAL_BONUS_BYTES: ${REFERRAL_BONUS_BYTES:-1073741824}
+            REFERRAL_SIGNUP_CAP_BYTES: ${REFERRAL_SIGNUP_CAP_BYTES:-5368709120}
+            REFERRAL_PAID_BONUS_BYTES: ${REFERRAL_PAID_BONUS_BYTES:-5368709120}
+            REFERRAL_PAID_CAP_BYTES: ${REFERRAL_PAID_CAP_BYTES:-53687091200}
+            EMAIL_ADAPTER: ${EMAIL_ADAPTER:-}
+            EMAIL_FROM: ${EMAIL_FROM:-}
+            SMTP_HOST: ${SMTP_HOST:-}
+            SMTP_PORT: ${SMTP_PORT:-}
+            SMTP_SECURE: ${SMTP_SECURE:-}
+            SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+            SMTP_USER: ${SMTP_USER:-}
+            SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+            RESEND_API_KEY: ${RESEND_API_KEY:-}
+            AWS_REGION: ${AWS_REGION:-}
+            AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+            AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+            AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+            BILLING_PROVIDER: ${BILLING_PROVIDER:-none}
+            POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+            POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
+            POLAR_ENVIRONMENT: ${POLAR_ENVIRONMENT:-production}
+            BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+            STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+            STORAGE_INTERNAL_ENDPOINT: ${STORAGE_INTERNAL_ENDPOINT:-}
+            STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
+            STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
+            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+            STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
+            DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
+        depends_on:
+            migrate:
+                condition: service_completed_successfully
+            minio-init:
+                condition: service_completed_successfully
+        healthcheck:
+            test:
+                [
+                    CMD,
+                    bun,
+                    -e,
+                    "const r = await fetch('http://localhost:5173/api/ready'); process.exit(r.ok ? 0 : 1)",
+                ]
+            interval: 10s
+            timeout: 10s
+            retries: 5
+
+    worker:
+        build:
+            context: .
+            dockerfile: packages/jobs/Dockerfile
+            target: worker
+        restart: unless-stopped
+        stop_grace_period: 45s
+        environment:
+            NODE_ENV: production
+            DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-hushos}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-hushos}}
+            APP_ORIGIN: ${APP_ORIGIN:-}
+            BILLING_PROVIDER: ${BILLING_PROVIDER:-none}
+            POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+            POLAR_ENVIRONMENT: ${POLAR_ENVIRONMENT:-production}
+            BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+            STORAGE_ENDPOINT: ${STORAGE_ENDPOINT:-}
+            STORAGE_INTERNAL_ENDPOINT: ${STORAGE_INTERNAL_ENDPOINT:-}
+            STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
+            STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
+            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
+            STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
+            DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
+            STORAGE_REPLICA_ENDPOINT: ${STORAGE_REPLICA_ENDPOINT:-}
+            STORAGE_REPLICA_REGION: ${STORAGE_REPLICA_REGION:-}
+            STORAGE_REPLICA_BUCKET: ${STORAGE_REPLICA_BUCKET:-}
+            STORAGE_REPLICA_ACCESS_KEY_ID: ${STORAGE_REPLICA_ACCESS_KEY_ID:-}
+            STORAGE_REPLICA_SECRET_ACCESS_KEY: ${STORAGE_REPLICA_SECRET_ACCESS_KEY:-}
+            STORAGE_REPLICA_FORCE_PATH_STYLE: ${STORAGE_REPLICA_FORCE_PATH_STYLE:-false}
+            STORAGE_EVIDENCE_ENDPOINT: ${STORAGE_EVIDENCE_ENDPOINT:-}
+            STORAGE_EVIDENCE_REGION: ${STORAGE_EVIDENCE_REGION:-}
+            STORAGE_EVIDENCE_BUCKET: ${STORAGE_EVIDENCE_BUCKET:-}
+            STORAGE_EVIDENCE_ACCESS_KEY_ID: ${STORAGE_EVIDENCE_ACCESS_KEY_ID:-}
+            STORAGE_EVIDENCE_SECRET_ACCESS_KEY: ${STORAGE_EVIDENCE_SECRET_ACCESS_KEY:-}
+            STORAGE_EVIDENCE_FORCE_PATH_STYLE: ${STORAGE_EVIDENCE_FORCE_PATH_STYLE:-false}
+        depends_on:
+            migrate:
+                condition: service_completed_successfully
+            minio-init:
+                condition: service_completed_successfully
+
+volumes:
+    postgres18_data:
+    minio_data:

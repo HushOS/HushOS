@@ -1,0 +1,17 @@
+{
+    "name": "@hushos/config",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        "./oxlint": "./oxlint.json",
+        "./oxfmt": "./oxfmt.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "oxfmt": "0.66.0",
+        "typescript": "7.0.2"
+    }
+}

@@ -1,0 +1,49 @@
+{
+    "version": "8",
+    "dialect": "postgres",
+    "id": "5a77452d-8998-40b6-b48d-44430568084a",
+    "prevIds": ["00000000-0000-0000-0000-000000000000"],
+    "ddl": [
+        {
+            "isRlsEnabled": false,
+            "name": "workspaces",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "workspaces"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "createdAt",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "workspaces"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
+            "name": "workspaces_pkey",
+            "schema": "public",
+            "table": "workspaces",
+            "entityType": "pks"
+        }
+    ],
+    "renames": []
+}
