@@ -218,34 +218,53 @@ export function TransfersPanel() {
     const rate = state.bytesPerSecond + down.bytesPerSecond;
     const active = state.active + down.active;
     // The batch as a whole: files and bytes done, and the time left once the rate has settled.
+    // Two short lines rather than one long one: a phone's panel is 340px wide, and
+    // the time left is the part worth reading, so it goes first with the file count.
     const summary =
         active > 0
             ? [
-                  batch.files.total > 1
-                      ? `${batch.files.done} of ${batch.files.total} files`
-                      : null,
-                  `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
-                  rate > 0 ? formatRate(rate) : null,
-                  timeLeft !== null ? formatTimeLeft(timeLeft) : null,
-              ]
-                  .filter(Boolean)
-                  .join(' · ')
+                  [
+                      batch.files.total > 1
+                          ? `${batch.files.done} of ${batch.files.total} files`
+                          : null,
+                      timeLeft !== null ? formatTimeLeft(timeLeft) : null,
+                  ]
+                      .filter(Boolean)
+                      .join(' · '),
+                  [
+                      `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
+                      rate > 0 ? formatRate(rate) : null,
+                  ]
+                      .filter(Boolean)
+                      .join(' · '),
+              ].filter(Boolean)
             : null;
+    // Failed items first: the reason the panel is still open is what to look at.
+    const uploadRows = [
+        ...state.uploads.filter((item) => item.status === 'failed'),
+        ...state.uploads.filter((item) => item.status !== 'failed'),
+    ];
+    const retryable = state.uploads.filter((item) => item.status === 'failed' && !item.needsFile);
+    const clearable = [
+        ...state.uploads.filter((item) => settled(item.status) || item.status === 'failed'),
+        ...down.downloads.filter((item) => settled(item.status) || item.status === 'failed'),
+    ].length;
     return (
         <section
             aria-label="Transfers"
             className="fixed right-4 bottom-4 z-40 flex w-[calc(100%-2rem)] max-w-sm flex-col border bg-popover text-popover-foreground shadow-hard sm:right-6 sm:bottom-6"
         >
-            <header className="flex h-11 items-center gap-2 border-b pr-1 pl-3.5">
+            <header className="flex min-h-11 items-center gap-2 border-b py-2.5 pr-1 pl-3.5">
                 <div className="min-w-0 flex-1">
                     <p className="truncate font-mono text-xs">{title}</p>
                     {summary && (
-                        <p
-                            className="eyebrow mt-0.5 truncate text-muted-foreground"
-                            data-batch-progress
-                        >
-                            {summary}
-                        </p>
+                        <div className="mt-1.5 space-y-1 text-muted-foreground" data-batch-progress>
+                            {summary.map((line) => (
+                                <p key={line} className="eyebrow truncate">
+                                    {line}
+                                </p>
+                            ))}
+                        </div>
                     )}
                 </div>
                 {active > 0 ? (
@@ -282,20 +301,60 @@ export function TransfersPanel() {
                 >
                     <ChevronDownIcon className={collapsed ? 'rotate-180' : ''} />
                 </Button>
-                {active === 0 && (
-                    <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Clear finished"
-                        onClick={() => {
-                            transfers.clearFinished();
-                            downloads.clearFinished();
-                        }}
-                    >
-                        <XIcon />
-                    </Button>
-                )}
             </header>
+            {/* One place for the batch's leftovers: retry what failed, clear what is done, or clear the lot. */}
+            {(retryable.length > 0 || (active === 0 && clearable > 0)) && (
+                <div
+                    className="flex flex-wrap items-center gap-1 border-b bg-muted/40 px-2 py-1"
+                    data-batch-actions
+                >
+                    {retryable.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => {
+                                for (const item of retryable) void transfers.retry(item.id);
+                            }}
+                        >
+                            <RotateCcwIcon />
+                            Retry{' '}
+                            {retryable.length === 1
+                                ? 'the failed one'
+                                : `all ${retryable.length} failed`}
+                        </Button>
+                    )}
+                    {finished > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => {
+                                transfers.clearFinished();
+                                downloads.clearFinished();
+                            }}
+                        >
+                            <XIcon />
+                            Clear finished
+                        </Button>
+                    )}
+                    {active === 0 && clearable > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => {
+                                for (const item of state.uploads)
+                                    if (settled(item.status) || item.status === 'failed')
+                                        transfers.remove(item.id);
+                                for (const item of down.downloads)
+                                    if (settled(item.status) || item.status === 'failed')
+                                        downloads.remove(item.id);
+                            }}
+                        >
+                            <XIcon />
+                            Clear all
+                        </Button>
+                    )}
+                </div>
+            )}
             {active > 0 && batch.bytes.total > 0 && (
                 <progress
                     value={batch.bytes.loaded}
@@ -309,7 +368,7 @@ export function TransfersPanel() {
                     {down.downloads.map((item) => (
                         <DownloadRow key={item.id} item={item} />
                     ))}
-                    {state.uploads.map((item) => (
+                    {uploadRows.map((item) => (
                         <li key={item.id} className="border-b last:border-b-0">
                             <div className="flex items-center gap-2 py-2 pr-1 pl-3.5">
                                 <div className="min-w-0 flex-1">
