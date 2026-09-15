@@ -247,6 +247,23 @@ describe('delete forever', () => {
         expect(queued?.published).toBe(false);
     });
 
+    test('a folder deleted forever takes a trashed item inside it along: nothing listed, nothing left', async () => {
+        const top = await folder(rootId, rootEpoch);
+        const inner = await file(top.id, top.keyEpoch, 1n * MiB);
+        // The file goes to the trash first, then its folder; delete forever on the folder.
+        await drive.trashNode({ workspaceId: account.workspaceId, nodeId: inner.node.id });
+        await drive.trashNode({ workspaceId: account.workspaceId, nodeId: top.id });
+        expect(
+            (await drive.purgeNode({ workspaceId: account.workspaceId, nodeId: top.id })).status,
+        ).toBe('ok');
+        // Until the fan-out reaches it the file is a trashed row under a purged folder:
+        // gone to the person, never pending, never a reason to click again.
+        expect((await drive.listTrash({ workspaceId: account.workspaceId })).items).toEqual([]);
+        expect(await drive.emptyTrash(account.workspaceId)).toEqual({ purged: 0, remaining: 0 });
+        expect(await drive.purgeDescendants(1000)).toBe(1);
+        expect(await storage()).toEqual({ used: 0n, reserved: 0n });
+    });
+
     test('empty trash drains in batches and reports what remains', async () => {
         const nodes = [];
         for (let i = 0; i < 5; i++) nodes.push(await file(rootId, rootEpoch, 1n * MiB));

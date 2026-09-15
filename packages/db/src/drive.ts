@@ -762,7 +762,9 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
         const items = [];
         for (const node of ordered) {
             const chain = await walk(tx, node.id);
-            if (!chain) continue;
+            // Under a purged ancestor the row is gone as far as the person is concerned:
+            // the fan-out will purge it, and nothing they do here could reach it.
+            if (!chain || chain.purged) continue;
             const ancestors = await selectNodes(
                 tx,
                 chain.ancestors.map((a) => a.id),
@@ -1858,39 +1860,47 @@ export async function purgeNode(input: { workspaceId: string; nodeId: string }) 
 }
 
 /*
+ * The trash roots a person can still act on: rows with their own `trashed_at`
+ * and no purged ancestor, oldest first. A trashed item inside a folder that was
+ * since deleted forever is not one of them: the fan-out purges it, purgeNode
+ * refuses it, and counting it would leave the trash "not empty" until then.
+ */
+async function liveTrashRoots(workspaceId: string, limit: number) {
+    const result = await db.execute<{ root: string }>(sql`
+        with recursive up as (
+            select n.id as root, n.parent_id, n.trashed_at as root_trashed_at, false as gone
+            from drive_nodes n
+            where n.workspace_id = ${workspaceId}
+              and n.trashed_at is not null and n.purged_at is null
+            union all
+            select u.root, p.parent_id, u.root_trashed_at, p.purged_at is not null
+            from up u join drive_nodes p on p.id = u.parent_id
+            where not u.gone
+        )
+        select root from up
+        group by root, root_trashed_at
+        having not bool_or(gone)
+        order by root_trashed_at asc, root asc
+        limit ${limit}
+    `);
+    return result.rows.map((row) => row.root);
+}
+
+/*
  * Empty trash, in bounded steps: up to `limit` trash roots are purged in their
  * own transactions, and the caller learns how many remain, so a trash holding
  * a hundred thousand roots is drained by repeated requests rather than one.
  */
 export async function emptyTrash(workspaceId: string, limit = 100) {
-    const roots = await db
-        .select({ id: driveNodes.id })
-        .from(driveNodes)
-        .where(
-            and(
-                eq(driveNodes.workspaceId, workspaceId),
-                sql`${driveNodes.trashedAt} is not null`,
-                isNull(driveNodes.purgedAt),
-            ),
-        )
-        .orderBy(asc(driveNodes.trashedAt))
-        .limit(limit + 1);
+    const roots = await liveTrashRoots(workspaceId, limit);
     let purged = 0;
-    for (const root of roots.slice(0, limit)) {
-        const result = await purgeNode({ workspaceId, nodeId: root.id });
+    for (const root of roots) {
+        const result = await purgeNode({ workspaceId, nodeId: root });
         if (result.status === 'ok') purged++;
     }
-    const [remaining] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(driveNodes)
-        .where(
-            and(
-                eq(driveNodes.workspaceId, workspaceId),
-                sql`${driveNodes.trashedAt} is not null`,
-                isNull(driveNodes.purgedAt),
-            ),
-        );
-    return { purged, remaining: remaining?.count ?? 0 };
+    // Bounded like the batch itself: the caller only needs zero or not.
+    const remaining = (await liveTrashRoots(workspaceId, limit + 1)).length;
+    return { purged, remaining };
 }
 
 /*
