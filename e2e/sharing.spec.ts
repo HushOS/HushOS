@@ -207,3 +207,29 @@ test('after the rotation the owner still opens everything, and the link made bef
     });
     await visitor.context().close();
 });
+
+test('a shared file, with no folder to open it from, opens in the viewer on both Shared views', async () => {
+    await row(owner, 'Project').getByRole('link', { name: 'Project' }).click();
+    await expect(row(owner, 'notes.md')).toBeVisible({ timeout: 60_000 });
+    await row(owner, 'notes.md').locator('button').first().click();
+    await owner.getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(dialog(owner)).toContainText('Share “notes.md”');
+    await dialog(owner).getByRole('combobox', { name: 'Contact' }).click();
+    await owner.getByRole('option', { name: /E2E Tester/ }).click();
+    await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
+    await owner.keyboard.press('Escape');
+
+    await guest.goto('/app/shared');
+    const received = guest.locator('[data-shared="notes.md"]');
+    await expect(received).toBeVisible({ timeout: 60_000 });
+    await received.getByRole('button', { name: 'notes.md' }).click();
+    await expect(dialog(guest).locator('.rt-markdown')).toContainText('Notes', { timeout: 60_000 });
+    await guest.keyboard.press('Escape');
+
+    await owner.goto('/app/shared?view=by-me');
+    const sent = owner.locator(`[data-by-me="${guestEmail}"]`).filter({ hasText: 'notes.md' });
+    await expect(sent).toBeVisible({ timeout: 60_000 });
+    await sent.getByRole('button', { name: 'notes.md', exact: true }).click();
+    await expect(dialog(owner).locator('.rt-markdown')).toContainText('Notes', { timeout: 60_000 });
+});

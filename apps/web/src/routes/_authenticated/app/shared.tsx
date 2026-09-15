@@ -4,12 +4,15 @@ import { FileIcon, FolderIcon, LinkIcon, ShieldAlertIcon, Trash2Icon } from 'luc
 import { useState } from 'react';
 import { DriveShell } from '@/components/drive/drive-shell';
 import { LinkRow } from '@/components/drive/link-row';
+import { Preview } from '@/components/drive/preview';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError, driveKeys, formatWhen, sharedQueryOptions } from '@/lib/drive';
+import { downloadNodes } from '@/lib/downloads';
+import type { DriveNode } from '@hushos/drive/client';
 import { rotateAfterRevoke } from '@/lib/rotation';
 import { cue } from '@/lib/sounds';
 
@@ -99,11 +102,28 @@ function Empty({ children }: { children: string }) {
     );
 }
 
+/* A shared file has no folder to open it from: its name opens the same viewer a folder row would. */
+function FileButton({ node, onOpen }: { node: DriveNode; onOpen: (node: DriveNode) => void }) {
+    return (
+        <button
+            type="button"
+            className="text-left text-sm hover:underline"
+            onClick={() => onOpen(node)}
+        >
+            {node.name}
+        </button>
+    );
+}
+
 function WithMe() {
     const shares = useQuery(sharedQueryOptions);
+    const [previewing, setPreviewing] = useState<DriveNode | null>(null);
     if (shares.isPending) return <Loading />;
     if (shares.isError) return <Failed error={shares.error} />;
     if (shares.data.length === 0) return <Empty>Nothing shared with you yet.</Empty>;
+    const files = shares.data.flatMap((share) =>
+        share.node.kind === 'file' && !share.error ? [share.node] : [],
+    );
     return (
         <ul className="divide-y border-b">
             {shares.data.map((share) => (
@@ -132,7 +152,7 @@ function WithMe() {
                                 {share.node.name}
                             </Link>
                         ) : (
-                            <p className="text-sm">{share.node.name}</p>
+                            <FileButton node={share.node} onOpen={setPreviewing} />
                         )}
                         <p className="font-mono text-[11px] text-muted-foreground">
                             {share.granter.name} · {share.granter.email} ·{' '}
@@ -150,6 +170,12 @@ function WithMe() {
                     </div>
                 </li>
             ))}
+            <Preview
+                files={files}
+                current={previewing}
+                onChange={setPreviewing}
+                onDownload={(node) => downloadNodes([node])}
+            />
         </ul>
     );
 }
@@ -162,6 +188,7 @@ function ByMe() {
         staleTime: 15_000,
     });
     const [pending, setPending] = useState<string | null>(null);
+    const [previewing, setPreviewing] = useState<DriveNode | null>(null);
     async function stop(
         kind: 'share' | 'link',
         id: string,
@@ -226,7 +253,7 @@ function ByMe() {
                                                 {share.node.name}
                                             </Link>
                                         ) : (
-                                            <p className="text-sm">{share.node.name}</p>
+                                            <FileButton node={share.node} onOpen={setPreviewing} />
                                         )}
                                         <p className="font-mono text-[11px] text-muted-foreground">
                                             {share.grantee.name} · {share.grantee.email} ·{' '}
@@ -287,7 +314,10 @@ function ByMe() {
                                                     {link.node.name}
                                                 </Link>
                                             ) : (
-                                                link.node.name
+                                                <FileButton
+                                                    node={link.node}
+                                                    onOpen={setPreviewing}
+                                                />
                                             )}
                                         </p>
                                     }
@@ -297,6 +327,18 @@ function ByMe() {
                     </ul>
                 )}
             </section>
+            <Preview
+                files={[
+                    ...mine.data.shares.map((share) => share.node),
+                    ...mine.data.links.map((link) => link.node),
+                ].filter(
+                    (node, index, all) =>
+                        node.kind === 'file' && all.findIndex((n) => n.id === node.id) === index,
+                )}
+                current={previewing}
+                onChange={setPreviewing}
+                onDownload={(node) => downloadNodes([node])}
+            />
         </div>
     );
 }
