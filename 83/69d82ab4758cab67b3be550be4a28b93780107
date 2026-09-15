@@ -1,0 +1,21 @@
+packages/db/src/drive.ts
+  s_3e6b5e360451dc::t_8e01393f3f1c4c 765-767,1862-1888,1895,1897-1898,1901-1903
+packages/db/src/drive.purge.test.ts
+  s_3e6b5e360451dc::t_3bfa7f636cf403 250-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8369d82ab4758cab67b3be550be4a28b93780107",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
