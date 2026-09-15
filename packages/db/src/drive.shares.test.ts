@@ -288,3 +288,53 @@ describe('shares', () => {
         expect(owners.ancestors.map((row) => row.id)).toEqual([rootId, project.id]);
     });
 });
+
+describe('shares and the trash', () => {
+    test('the granter’s listing hides what is in the trash, by itself or by an ancestor, until restored', async () => {
+        const outer = await folder(rootId, rootEpoch);
+        const project = await folder(outer.id, outer.keyEpoch);
+        const shared = await share(project, guest.userId);
+        if (shared.status !== 'ok') throw new Error(shared.status);
+        const mine = async () =>
+            (await drive.listSharesByGranter(owner.userId)).map((row) => row.node.id);
+        expect(await mine()).toEqual([project.id]);
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: project.id });
+        expect(await mine()).toEqual([]);
+        await drive.restoreNode({ workspaceId: owner.workspaceId, nodeId: project.id });
+        expect(await mine()).toEqual([project.id]);
+        // An ancestor in the trash cuts the share off the same way, on both sides.
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: outer.id });
+        expect(await mine()).toEqual([]);
+        expect(await drive.listSharesForGrantee(guest.userId)).toEqual([]);
+        await drive.restoreNode({ workspaceId: owner.workspaceId, nodeId: outer.id });
+        expect(await mine()).toEqual([project.id]);
+        expect((await drive.listSharesForGrantee(guest.userId)).map((row) => row.node.id)).toEqual([
+            project.id,
+        ]);
+    });
+
+    test('delete forever revokes the shares on the node and, through the fan-out, beneath it', async () => {
+        const top = await folder(rootId, rootEpoch);
+        const inner = await folder(top.id, top.keyEpoch);
+        const keep = await folder(rootId, rootEpoch);
+        for (const node of [top, inner, keep]) {
+            const shared = await share(node, guest.userId);
+            if (shared.status !== 'ok') throw new Error(shared.status);
+        }
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: top.id });
+        expect(
+            (await drive.purgeNode({ workspaceId: owner.workspaceId, nodeId: top.id })).status,
+        ).toBe('ok');
+        expect(await drive.listNodeShares(owner.workspaceId, top.id)).toEqual([]);
+        // The share beneath lives until the fan-out reaches its node.
+        expect(await drive.listNodeShares(owner.workspaceId, inner.id)).toHaveLength(1);
+        await drive.purgeDescendants(1000);
+        expect(await drive.listNodeShares(owner.workspaceId, inner.id)).toEqual([]);
+        expect((await drive.listSharesByGranter(owner.userId)).map((row) => row.node.id)).toEqual([
+            keep.id,
+        ]);
+        expect((await drive.listSharesForGrantee(guest.userId)).map((row) => row.node.id)).toEqual([
+            keep.id,
+        ]);
+    });
+});

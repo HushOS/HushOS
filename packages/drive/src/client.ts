@@ -840,9 +840,22 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // Names need the folder chain: open each node's parents by listing them once.
         const named = new Map<string, DriveNode>();
         for (const node of nodes.values()) {
-            if (node.parentId && !openedNodes.has(node.parentId)) await listFolder(node.parentId);
-            const [opened] = await decorate([node]);
-            named.set(node.id, opened!);
+            try {
+                if (node.parentId && !openedNodes.has(node.parentId))
+                    await listFolder(node.parentId);
+                const [opened] = await decorate([node]);
+                named.set(node.id, opened!);
+            } catch (cause) {
+                // One item that cannot be named must not take the whole page with it.
+                named.set(node.id, {
+                    ...node,
+                    metadata: null,
+                    name: node.kind === 'folder' ? 'Shared folder' : 'Shared file',
+                    content: null,
+                    openError:
+                        cause instanceof Error ? cause.message : 'This item could not be opened.',
+                });
+            }
         }
         return {
             shares: mine.shares.map((share) => ({ ...share, node: named.get(share.node.id)! })),

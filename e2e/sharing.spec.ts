@@ -118,6 +118,40 @@ test('the guest sees the share, opens it with the owner’s key pinned on first 
     await expect(rows(owner)).toHaveCount(2);
 });
 
+test('a shared folder in the trash leaves both lists, without breaking either, and returns on restore', async () => {
+    // The owner is looking at the parent folder; Backspace moves the selected folder to the trash.
+    await owner.locator('[data-crumb-id]').first().click();
+    await expect(row(owner, 'Project')).toBeVisible({ timeout: 60_000 });
+    await row(owner, 'Project').locator('button').first().click();
+    await owner.keyboard.press('Backspace');
+    await expect(row(owner, 'Project')).toHaveCount(0);
+
+    await owner.goto('/app/shared?view=by-me');
+    await expect(owner.getByText('You are not sharing anything yet.')).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(owner.getByText('Could not load')).toHaveCount(0);
+    await guest.goto('/app/shared');
+    await expect(guest.getByText('Nothing shared with you yet.')).toBeVisible({ timeout: 60_000 });
+
+    await owner.goto('/app/trash');
+    await owner
+        .getByRole('row')
+        .filter({ hasText: 'Project' })
+        .getByRole('button', { name: /^Restore/ })
+        .click();
+    await expect(owner.getByText('“Project” restored')).toBeVisible();
+    await owner.goto('/app/shared?view=by-me');
+    await expect(owner.locator(`[data-by-me="${guestEmail}"]`)).toContainText('Project', {
+        timeout: 60_000,
+    });
+    await guest.goto('/app/shared');
+    await expect(guest.locator('[data-shared="Project"]')).toBeVisible({ timeout: 60_000 });
+    // Back inside the folder, where the next test expects the guest to be.
+    await guest.locator('[data-shared="Project"]').getByRole('link', { name: 'Project' }).click();
+    await expect(row(guest, 'notes.md')).toBeVisible({ timeout: 60_000 });
+});
+
 test('stopping the share, from the Shared page’s “by me” view, cuts the guest off on the next request', async () => {
     await owner.goto('/app/shared?view=by-me');
     const entry = owner.locator(`[data-by-me="${guestEmail}"]`);

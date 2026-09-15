@@ -257,3 +257,27 @@ describe('updating a link', () => {
         ).toBe('not-found');
     });
 });
+
+describe('links and the trash', () => {
+    test('the owner’s listing hides a link while its node is in the trash; delete forever revokes it', async () => {
+        const doc = await file(rootId, rootEpoch);
+        const made = await link(doc, 'token-trash');
+        if (made.status !== 'ok') throw new Error(made.status);
+        const mine = async () =>
+            (await drive.listLinksByGranter(owner.userId)).map((row) => row.id);
+        expect(await mine()).toEqual([made.link.id]);
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: doc.id });
+        expect(await mine()).toEqual([]);
+        expect(await drive.resolveLink(hash('token-trash'))).toBeNull();
+        await drive.restoreNode({ workspaceId: owner.workspaceId, nodeId: doc.id });
+        expect(await mine()).toEqual([made.link.id]);
+        expect(await drive.resolveLink(hash('token-trash'))).not.toBeNull();
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: doc.id });
+        expect(
+            (await drive.purgeNode({ workspaceId: owner.workspaceId, nodeId: doc.id })).status,
+        ).toBe('ok');
+        expect(await drive.listNodeLinks(owner.workspaceId, doc.id)).toEqual([]);
+        expect(await mine()).toEqual([]);
+        expect(await drive.revokeLink(owner.workspaceId, made.link.id)).toBeNull();
+    });
+});

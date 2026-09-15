@@ -1,4 +1,5 @@
 import { billingEnabled } from '@hushos/billing/server';
+import { LATEST_MIGRATION, missingTablePrivileges, schemaState } from '@hushos/db';
 import { initProcessLogger, log } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import { createBoss, ensureQueues, queues, type JobPayloads } from './client';
@@ -25,6 +26,36 @@ import { reconcileBilling } from './jobs/reconcile-billing';
  * It owns pg-boss maintenance and schedules; the web app only ever sends jobs.
  */
 initProcessLogger('HushOS Worker');
+
+/*
+ * The worker never migrates the application schema: the migrate job or the web
+ * image does, once per release. It waits for the migration this build was made
+ * against, up to ten minutes, and refuses to run without the table privileges
+ * its jobs need, so a role missing a grant fails here once, by name, instead of
+ * failing every job in a loop.
+ */
+function refuse(message: string): never {
+    log.error({ message });
+    process.exit(1);
+}
+const deadline = Date.now() + 10 * 60_000;
+for (;;) {
+    const state = await schemaState();
+    if (state === 'current') break;
+    if (state === 'unreadable')
+        refuse(
+            'The worker cannot read the migrations ledger: grant USAGE on schema drizzle and SELECT on drizzle.__drizzle_migrations to its role.',
+        );
+    if (Date.now() >= deadline)
+        refuse(`The database is behind this build: migration ${LATEST_MIGRATION} is not applied.`);
+    log.warn({ message: 'Waiting for the database to be migrated', migration: LATEST_MIGRATION });
+    await Bun.sleep(5_000);
+}
+const missing = await missingTablePrivileges();
+if (missing.length)
+    refuse(
+        `The worker's role lacks SELECT, INSERT, UPDATE or DELETE on: ${missing.join(', ')}. See docs/self-hosting.md.`,
+    );
 
 const boss = createBoss('worker');
 boss.on('error', (error) => log.error(error));

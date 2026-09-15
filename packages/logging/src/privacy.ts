@@ -100,9 +100,12 @@ const authActions = new Set([
     'delete/finish',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
-// Only an error's class name and machine code survive: enough to tell an SMTP refusal
-// from a database outage, never a message or stack that could carry an address.
-export function sanitizeFailure(value: unknown) {
+export type Failure = { kind: string; code?: string; cause?: Failure };
+// Only an error's class name and machine code survive, and the same for what caused
+// it (a query wrapper's Postgres error, say): enough to tell an SMTP refusal from a
+// database outage or a missing grant, never a message or stack that could carry an
+// address.
+export function sanitizeFailure(value: unknown, depth = 3): Failure | undefined {
     if (!value || typeof value !== 'object') return undefined;
     const input = value as Record<string, unknown>;
     // `kind`, not `name`: bare `name` is a redacted leaf everywhere else in the event.
@@ -110,7 +113,9 @@ export function sanitizeFailure(value: unknown) {
         typeof input.name === 'string' && FAILURE_TOKEN.test(input.name) ? input.name : 'unknown';
     const code =
         typeof input.code === 'string' && FAILURE_TOKEN.test(input.code) ? input.code : undefined;
-    return code ? { kind, code } : { kind };
+    const cause =
+        depth > 1 && input.cause !== value ? sanitizeFailure(input.cause, depth - 1) : undefined;
+    return { kind, ...(code ? { code } : {}), ...(cause ? { cause } : {}) };
 }
 export function authLogAction(pathname: string) {
     const action = pathname.slice('/api/auth/'.length);

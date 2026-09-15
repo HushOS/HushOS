@@ -1,5 +1,5 @@
 import { authRepository } from '@hushos/db';
-import { createLogger } from '@hushos/logging';
+import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import type { JobPayloads, queues } from '../client';
 
@@ -21,6 +21,7 @@ export async function cleanupExpired(job: Job<JobPayloads[typeof queues.cleanupE
         return counts;
     } catch (error) {
         if (error instanceof Error) event.error(error);
+        event.set({ failure: sanitizeFailure(error) });
         throw error;
     } finally {
         event.emit();

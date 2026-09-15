@@ -6,5 +6,6 @@ export {
     redactAuthenticationEvent,
     authLogAction,
     sanitizeFailure,
+    type Failure,
     initProcessLogger,
 } from './privacy';

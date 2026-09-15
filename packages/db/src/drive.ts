@@ -1794,9 +1794,10 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
 
 /*
  * Purges one node under the workspace lock the caller took: every version goes,
- * the envelopes are cleared and the row
- * stays as a tombstone with the next change sequence. Descendants are left to
- * the fan-out; until it reaches them they are unreachable through this node.
+ * the envelopes are cleared, every live share and link on the node is revoked
+ * (nothing comes back from a purge), and the row stays as a tombstone with the
+ * next change sequence. Descendants are left to the fan-out; until it reaches
+ * them they are unreachable through this node.
  */
 async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: number) {
     const [node] = await tx
@@ -1816,16 +1817,25 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(eq(fileVersions.nodeId, nodeId))) as PurgedVersion[];
     for (const version of versions) await purgeVersion(tx, workspaceId, version);
+    const now = new Date();
     await tx
         .update(driveNodes)
         .set({
-            purgedAt: new Date(),
+            purgedAt: now,
             keyEnvelope: null,
             metadataEnvelope: null,
             changeSeq,
-            updatedAt: new Date(),
+            updatedAt: now,
         })
         .where(eq(driveNodes.id, nodeId));
+    await tx
+        .update(driveShares)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(driveShares.nodeId, nodeId), isNull(driveShares.revokedAt)));
+    await tx
+        .update(driveLinks)
+        .set({ revokedAt: now })
+        .where(and(eq(driveLinks.nodeId, nodeId), isNull(driveLinks.revokedAt)));
     return true;
 }
 
@@ -2554,6 +2564,20 @@ export async function listSharesForGrantee(userId: string) {
     });
 }
 
+/*
+ * The nodes among `ids` anyone can still reach: not purged, and not in the trash
+ * by themselves or by an ancestor. A share or link on anything else is hidden
+ * from its owner's list exactly as it is from the other side, until a restore.
+ */
+async function reachableNodes(tx: Tx, ids: string[]) {
+    const out = new Map<string, NodeRow & { currentVersion: VersionRow | null }>();
+    for (const node of await selectNodes(tx, ids)) {
+        const chain = await walk(tx, node.id);
+        if (chain && !chain.purged && !chain.trashed) out.set(node.id, node);
+    }
+    return out;
+}
+
 /* Everything the caller has shared with accounts, with the nodes, for managing in one place. */
 export async function listSharesByGranter(userId: string) {
     return db.transaction(async (tx) => {
@@ -2571,9 +2595,9 @@ export async function listSharesByGranter(userId: string) {
             .innerJoin(users, eq(users.id, driveShares.granteeUserId))
             .where(and(eq(driveShares.granterUserId, userId), isNull(driveShares.revokedAt)))
             .orderBy(desc(driveShares.createdAt));
-        const nodes = await selectNodes(tx, [...new Set(rows.map((row) => row.nodeId))]);
+        const nodes = await reachableNodes(tx, [...new Set(rows.map((row) => row.nodeId))]);
         return rows.flatMap((row) => {
-            const node = nodes.find((entry) => entry.id === row.nodeId);
+            const node = nodes.get(row.nodeId);
             return node ? [{ ...row, node }] : [];
         });
     });
@@ -2663,9 +2687,9 @@ export async function listLinksByGranter(userId: string) {
             .from(driveLinks)
             .where(and(eq(driveLinks.granterUserId, userId), isNull(driveLinks.revokedAt)))
             .orderBy(desc(driveLinks.createdAt));
-        const nodes = await selectNodes(tx, [...new Set(rows.map((row) => row.nodeId))]);
+        const nodes = await reachableNodes(tx, [...new Set(rows.map((row) => row.nodeId))]);
         return rows.flatMap((row) => {
-            const node = nodes.find((entry) => entry.id === row.nodeId);
+            const node = nodes.get(row.nodeId);
             return node ? [{ ...row, node }] : [];
         });
     });

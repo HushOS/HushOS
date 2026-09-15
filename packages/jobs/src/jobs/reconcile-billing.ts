@@ -1,6 +1,6 @@
 import { reconcileCustomer } from '@hushos/billing/server';
 import { billingRepository } from '@hushos/db';
-import { createLogger } from '@hushos/logging';
+import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 import type { JobPayloads, queues } from '../client';
 
@@ -26,6 +26,11 @@ export async function reconcileBilling(job: Job<JobPayloads[typeof queues.reconc
         }
         event.set({ reconciled, failed, durationMs: Math.round(performance.now() - started) });
         if (failed) throw new Error('Some customers could not be reconciled.');
+    } catch (error) {
+        // Listing the customers can fail too; that run must not read as a quiet success.
+        if (error instanceof Error) event.error(error);
+        event.set({ failure: sanitizeFailure(error) });
+        throw error;
     } finally {
         event.emit();
     }

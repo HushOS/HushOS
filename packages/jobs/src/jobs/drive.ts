@@ -12,7 +12,7 @@ import {
 } from '@hushos/drive/jobs';
 import { evidenceStore, primaryStore, replicaStore } from '@hushos/drive/storage';
 import { storageEnv } from '@hushos/env/storage';
-import { createLogger } from '@hushos/logging';
+import { createLogger, sanitizeFailure } from '@hushos/logging';
 import type { Job } from 'pg-boss';
 
 /*
@@ -33,7 +33,9 @@ async function run<T extends Record<string, unknown>>(job: Job<unknown>, work: (
         event.set({ ...result, durationMs: Math.round(performance.now() - started) });
         return result;
     } catch (error) {
+        // The event redacts the error's name and cause; the failure keeps their classes and codes.
         if (error instanceof Error) event.error(error);
+        event.set({ failure: sanitizeFailure(error) });
         throw error;
     } finally {
         event.emit();
