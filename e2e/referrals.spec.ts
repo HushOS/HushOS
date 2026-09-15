@@ -70,6 +70,27 @@ test('someone who joins through the link gives both sides the bonus', async ({ b
     expect(await quotaOf(inviter)).toBe(baseGiB + 1);
 });
 
+test('someone who types the code at sign-up gets the bonus the same way', async ({ browser }) => {
+    test.setTimeout(300_000);
+    const typer = await (await browser.newContext()).newPage();
+    await typer.goto('/register', { waitUntil: 'networkidle' });
+    // A code nobody issued is refused before any email goes out.
+    await typer.getByLabel('Code', { exact: true }).fill('nobody-has-this');
+    await typer.getByRole('textbox', { name: /^email/i }).fill('typo@hushos.local');
+    await typer.getByRole('checkbox').click();
+    await typer.locator('form button[type=submit]').click();
+    await expect(typer.getByText(/not one we know/)).toBeVisible();
+    // The helper ticks the consent box itself; hand it the form as it found it.
+    await typer.getByRole('checkbox').click();
+    await typer.getByLabel('Code', { exact: true }).fill(code);
+    await registerAccount(typer, 'Ty Typer', undefined, { viaCurrentPage: true });
+    await expect(storageMeter(typer).first()).toBeVisible({ timeout: 60_000 });
+    expect(await quotaOf(typer)).toBe(baseGiB + 1);
+    await typer.context().close();
+    await inviter.goto('/app/referrals', { waitUntil: 'networkidle' });
+    await expect(inviter.getByText('Joined through you').locator('..')).toContainText('2');
+});
+
 test('an invite link that resolves to nobody says so and still offers sign-up', async ({
     browser,
 }) => {

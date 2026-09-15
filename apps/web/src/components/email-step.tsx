@@ -12,6 +12,7 @@ import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
+import { getOfferLandingServerFn, getReferralLandingServerFn } from '@/lib/growth';
 import { cue } from '@/lib/sounds';
 
 export function EmailStep({
@@ -24,20 +25,42 @@ export function EmailStep({
     const router = useRouter();
     const [error, setError] = useState('');
     const [pending, setPending] = useState(false);
+    const codeValue = z
+        .string()
+        .trim()
+        .regex(/^[A-Za-z0-9_-]{0,64}$/, 'A code is letters, digits, dashes and underscores.');
     const form = useForm({
-        defaultValues: { email: '', agree: false },
+        // A code from an invite link or a creator's page is filled in; anyone can type one.
+        defaultValues: { email: '', agree: false, code: intent?.referral ?? '' },
         validationLogic: revalidateLogic(),
         validators: {
             onDynamic:
                 purpose === 'register'
-                    ? z.object({ email: emailValue, agree: agreeValue })
-                    : z.object({ email: emailValue, agree: z.boolean() }),
+                    ? z.object({ email: emailValue, agree: agreeValue, code: codeValue })
+                    : z.object({ email: emailValue, agree: z.boolean(), code: codeValue }),
         },
         onSubmit: async ({ value }) => {
             setError('');
             setPending(true);
             try {
-                await authClient.requestEmail(value.email.trim(), purpose, intent);
+                const code = value.code.trim();
+                let signup = intent;
+                if (purpose === 'register' && code) {
+                    // Checked before the email goes out, so a typo is caught here and not
+                    // discovered as missing space after the account exists.
+                    const [referral, offer] = await Promise.all([
+                        getReferralLandingServerFn({ data: { code } }),
+                        getOfferLandingServerFn({ data: { slug: code } }),
+                    ]);
+                    if (!referral && !offer) {
+                        setError(
+                            'That code is not one we know. Check it with whoever gave it to you, or leave it out.',
+                        );
+                        return;
+                    }
+                    signup = { ...intent, referral: code, source: 'referral' };
+                }
+                await authClient.requestEmail(value.email.trim(), purpose, signup);
                 form.reset();
                 cue('success');
                 await router.navigate({
@@ -96,6 +119,31 @@ export function EmailStep({
                             />
                         )}
                     </form.Field>
+                    {purpose === 'register' && (
+                        <form.Field name="code">
+                            {(field) => (
+                                <AuthInput
+                                    label="Code"
+                                    hint="Optional. An invite from a friend, or an offer from a creator’s page."
+                                    id="code"
+                                    name={field.name}
+                                    type="text"
+                                    autoComplete="off"
+                                    autoCapitalize="none"
+                                    spellCheck={false}
+                                    placeholder="e.g. k7m2p4qz"
+                                    value={field.state.value}
+                                    onChange={(event) => field.handleChange(event.target.value)}
+                                    onBlur={field.handleBlur}
+                                    errors={field.state.meta.errors}
+                                    disabled={pending}
+                                    maxLength={64}
+                                    data-1p-ignore
+                                    data-lpignore="true"
+                                />
+                            )}
+                        </form.Field>
+                    )}
                     {purpose === 'register' && (
                         <form.Field name="agree">
                             {(field) => (
