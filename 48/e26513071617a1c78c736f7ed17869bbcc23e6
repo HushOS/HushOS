@@ -1,0 +1,20 @@
+apps/web/src/components/drive/transfers-panel.tsx
+  s_3e6b5e360451dc::t_d7d43cc58db935 221-222,226-240,242-251,262-267,305-357,371
+  s_3e6b5e360451dc::t_4bd1ca80ffa44b 257,261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "48e26513071617a1c78c736f7ed17869bbcc23e6",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
