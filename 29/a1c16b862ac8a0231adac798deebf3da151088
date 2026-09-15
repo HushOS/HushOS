@@ -1,0 +1,30 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_3e6b5e360451dc::t_c758a4116402a4 668-702
+  s_3e6b5e360451dc::t_9e3449a00037e7 903,1091,1093-1094,1096-1110
+  s_3e6b5e360451dc::t_399de9c1606542 168,171,179-180,189
+  s_3e6b5e360451dc::t_4bd1ca80ffa44b 84,154,160-161,173-175,184-185,1092,1095
+  s_3e6b5e360451dc::t_7e5a7cf85e706d 167,1156,1272
+  s_3e6b5e360451dc::t_475d64498e8d51 169-170,172,176-178,181
+  s_3e6b5e360451dc::t_d7d43cc58db935 82-83,146-153,155-159,162-166,182-183,186-188,190-192,448-460,897-902,904-910,1152-1155,1157-1165,1262,1268-1271,1273-1275
+  s_3e6b5e360451dc::t_fc397715373786 62,354
+  s_3e6b5e360451dc::t_a2ee35a26d6274 145
+e2e/mobile.spec.ts
+  s_3e6b5e360451dc::t_d7d43cc58db935 76-78,80-82,85,87-89
+  s_3e6b5e360451dc::t_87556b14c7f90c 83-84,86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "29a1c16b862ac8a0231adac798deebf3da151088",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
