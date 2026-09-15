@@ -1,0 +1,16 @@
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  h_f7ba60a6997566 19-22,177,187
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  h_f7ba60a6997566 6-7,173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a70c928cfa9df5cf6aa95e4ee08658804ed9b902",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
