@@ -956,10 +956,15 @@ export function createTransferManager(options: TransferManagerOptions) {
      * upload the server holds as conflicted has all its bytes and wants attaching;
      * one that is gone or expired must start over.
      */
-    async function reconcile(u: Internal): Promise<'ok' | 'conflicted' | 'restart'> {
+    type Reconciled = 'ok' | 'conflicted' | 'completed' | 'completing' | 'restart';
+    async function reconcile(u: Internal): Promise<Reconciled> {
         if (!u.uploadId) return 'restart';
         const state = await api.uploadState(workspaceOf(u), u.uploadId);
         if (state.upload.status === 'conflicted') return 'conflicted';
+        // The complete request got through as the page went away: the server holds
+        // the file finished, and sending it again would make a second copy.
+        if (state.upload.status === 'completed') return 'completed';
+        if (state.upload.status === 'completing') return 'completing';
         if (state.upload.status !== 'open' || new Date(state.upload.expiresAt).getTime() <= now())
             return 'restart';
         const stored = new Map(state.parts.map((part) => [part.partNumber, part]));
@@ -969,6 +974,33 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
         u.completedBytes = [...u.parts.values()].reduce((sum, part) => sum + part.bytes, 0);
         return 'ok';
+    }
+
+    /*
+     * What a reconciled upload does when it cannot simply carry on. Returns false
+     * for `ok`, when the caller continues sending parts.
+     */
+    async function settleReconciled(u: Internal, state: Reconciled) {
+        switch (state) {
+            case 'restart':
+                await startOver(u);
+                return true;
+            case 'conflicted':
+                await finishConflicted(u);
+                return true;
+            case 'completed':
+                // Published while this device was away: nothing to send, nothing to abort.
+                await published(u, { node: null });
+                void schedule();
+                return true;
+            case 'completing':
+                // The server is still finishing it; a retry reconciles again. Starting
+                // over here would upload a duplicate beside the one about to appear.
+                fail(u, 'This upload is still being finished on the server. Retry in a moment.');
+                return true;
+            default:
+                return false;
+        }
     }
 
     /* Throws everything away and begins again with a fresh object, key and nonce. */
@@ -1062,9 +1094,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (!u.prepared) {
             try {
                 await reopen(u);
-                const state = await reconcile(u);
-                if (state === 'restart') return startOver(u);
-                if (state === 'conflicted') return finishConflicted(u);
+                if (await settleReconciled(u, await reconcile(u))) return;
             } catch (error) {
                 if (isLockError(error)) return locked();
                 fail(u, error instanceof Error ? error.message : 'The upload could not resume.');
@@ -1114,8 +1144,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                 await startOver(u);
                 return { ok: true as const, resumed: false as const };
             }
-            if (state === 'conflicted') {
-                void finishConflicted(u);
+            if (state !== 'ok') {
+                void settleReconciled(u, state);
                 return { ok: true as const, resumed: true as const };
             }
         } catch (error) {
@@ -1184,17 +1214,15 @@ export function createTransferManager(options: TransferManagerOptions) {
             try {
                 if (!u.prepared) await reopen(u);
                 const state = await reconcile(u);
-                if (state === 'conflicted') return finishConflicted(u);
-                if (state === 'ok') {
-                    set(u, {
-                        status: 'uploading',
-                        error: null,
-                        partsDone: u.parts.size,
-                        loaded: loadedOf(u),
-                    });
-                    void schedule();
-                    return;
-                }
+                if (state !== 'ok') return void (await settleReconciled(u, state));
+                set(u, {
+                    status: 'uploading',
+                    error: null,
+                    partsDone: u.parts.size,
+                    loaded: loadedOf(u),
+                });
+                void schedule();
+                return;
             } catch {
                 /* Fall through: start over with a fresh object. */
             }

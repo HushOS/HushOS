@@ -462,6 +462,39 @@ describe('journal and restore', () => {
         expect(second.journal.entries.size).toBe(0);
     });
 
+    test('an upload the server finished while the page was away is published, never sent or begun again', async () => {
+        const { id, second } = await interrupted();
+        // The complete request got through after the page went: the server holds it finished.
+        second.server.uploads.get('up-1')!.status = 'completed';
+        await second.manager.restore('ws');
+        const result = await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'movie.mp4'));
+        expect(result).toEqual({ ok: true, resumed: true });
+        await settle(500);
+        expect(second.item(id).status).toBe('done');
+        expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(0);
+        expect(second.server.aborted).toEqual([]);
+        expect(second.server.uploads.size).toBe(1);
+        expect(second.journal.entries.size).toBe(0);
+    });
+
+    test('an upload the server is still finishing fails with a retry, instead of a duplicate', async () => {
+        const { id, second } = await interrupted();
+        second.server.uploads.get('up-1')!.status = 'completing';
+        await second.manager.restore('ws');
+        await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'movie.mp4'));
+        await settle(500);
+        expect(second.item(id).status).toBe('failed');
+        expect(second.server.uploads.size).toBe(1);
+        expect(second.journal.entries.size).toBe(1);
+        // Once the server is done, retry publishes it without a byte sent.
+        second.server.uploads.get('up-1')!.status = 'completed';
+        await second.manager.retry(id);
+        await settle(500);
+        expect(second.item(id).status).toBe('done');
+        expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(0);
+        expect(second.server.uploads.size).toBe(1);
+    });
+
     test('a different file starts over with a fresh object instead of continuing', async () => {
         const { id, second } = await interrupted();
         await second.manager.restore('ws');
