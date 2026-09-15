@@ -1,0 +1,27 @@
+apps/web/src/components/drive/transfers-panel.tsx
+  s_3e6b5e360451dc::t_300165295eb33c 220-233,242-248,299-306
+  s_3e6b5e360451dc::t_be0bc9ead57f67 17-18
+  s_3e6b5e360451dc::t_2b995f049d11be 193
+apps/web/src/lib/progress.test.ts
+  s_3e6b5e360451dc::t_300165295eb33c 1-98
+apps/web/src/lib/progress.ts
+  s_3e6b5e360451dc::t_300165295eb33c 1-89
+apps/web/src/lib/batch-progress.ts
+  s_3e6b5e360451dc::t_be0bc9ead57f67 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b8a1cc2f209ef9186339c2f14145261d6079b8a8",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
