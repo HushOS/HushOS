@@ -1,0 +1,57 @@
+packages/db/src/readiness.test.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 1-29,33-45
+  s_b8e4c4448c6c73::t_dd1d550cd64f90 30-32
+packages/db/src/drive.shares.test.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 291-310,314-332,339-340
+  s_b8e4c4448c6c73::t_dd1d550cd64f90 311-313,333-338
+packages/logging/src/privacy.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 103-108,118
+  s_b8e4c4448c6c73::t_dd1d550cd64f90 116-117
+packages/drive/src/client.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 843-858
+packages/jobs/src/jobs/cleanup-expired.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 2,24
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 3,29-33
+packages/jobs/src/jobs/drive.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 15,36,38
+e2e/sharing.spec.ts
+  s_b8e4c4448c6c73::t_ac1febee2c014c 121-138,142,144-154
+  s_b8e4c4448c6c73::t_8f290b4d8ab7ed 139-141
+  s_b8e4c4448c6c73::t_a1d0c132791d4c 143
+packages/db/src/drive.links.test.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 260-283
+packages/logging/src/index.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 9
+packages/jobs/src/worker.ts
+  s_b8e4c4448c6c73::t_6a96370b227712 2,30-58
+  s_b8e4c4448c6c73::t_b082d8e30f0790 59
+packages/db/src/readiness.ts
+  s_b8e4c4448c6c73::t_533f82a7c393bd 39-43,47-51
+  s_b8e4c4448c6c73::t_dd1d550cd64f90 60-64
+  s_b8e4c4448c6c73::t_b39d763d1f28de 18,52
+  s_b8e4c4448c6c73::t_1da13a37e27417 1-17,19-38,44-46,53-59,65-70
+packages/db/src/drive.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 1797-1800,1820,1824,1828,1831-1838,2567-2580,2598,2600,2690,2692
+docs/self-hosting.md
+  s_b8e4c4448c6c73::t_6a96370b227712 18,94-105
+  s_b8e4c4448c6c73::t_80bede57a3763c 106
+packages/db/src/index.ts
+  s_b8e4c4448c6c73::t_1da13a37e27417 10-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7f9d59072fd31d129acf2926f56c8860d7a8ae4f",
+  "prompts": {},
+  "sessions": {
+    "s_b8e4c4448c6c73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a38ceb8d-b804-457e-a9e3-184c630b776f",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
