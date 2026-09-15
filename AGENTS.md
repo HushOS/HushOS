@@ -18,6 +18,7 @@ Before editing files for a substantial task:
 - No tautological tests. Every test must fail on a defect a user, operator, or attacker would notice: boundaries, state transitions, wrong keys, tampered inputs, replays, stale preconditions. Never assert that a mock returned what it was told to return.
 - Never commit or push unless the user says so in the current request. Finish the work, report it, and leave it in the working tree.
 - Before committing, run `bun run format`, `bun run lint`, `bun run typecheck` and `bun run test`, and fix what they report. A commit that fails any of them is not ready.
+- Commit messages follow Conventional Commits: `type(scope): summary`, the summary in the imperative, lowercase, without a trailing period. Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`; the scope is the package or area (`web`, `drive`, `crypto`, `db`, `worker`, `e2e`). One change per commit; the body says why, not what.
 - Be direct and critical. Name a weakness first and specifically (what, where, what it costs), then the fix. Do not soften assessments, lead with praise, or let impatience or a half-finished feature pass without saying so.
 - Use four spaces for indentation. Oxfmt owns formatting; Oxlint owns linting.
 - Keep the structure simple: web pages and layouts use TanStack directory routes (`app/route.tsx`, `app/index.tsx`), reusable UI in `components/`, and shared helpers in `lib/`. Extract modules when reuse or complexity warrants it.
