@@ -1,0 +1,30 @@
+apps/web/src/lib/previews.ts
+  s_d510e9fe2caa17::t_6352e2dd657355 30-31,257-259,263-264
+apps/web/src/components/drive/preview.tsx
+  s_d510e9fe2caa17::t_6352e2dd657355 224-238,251,258-259
+apps/web/src/components/drive/pdf-viewer.tsx
+  s_d510e9fe2caa17::t_6352e2dd657355 7,11-16,33-40,53-68,71-72,78-86,108
+apps/web/src/components/drive/office-viewer.tsx
+  s_d510e9fe2caa17::t_6352e2dd657355 11,93-94,98-100,108-122,135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "575751e73017177d68df5be9f328693a8180c1db",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
