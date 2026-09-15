@@ -228,6 +228,7 @@ export async function openMetadata(
     nodeKey: Uint8Array,
     ctx: MetadataContext,
 ): Promise<NodeMetadata> {
+    await sodium.ready;
     const { nonce, body } = split(envelope);
     if (body.length > METADATA_MAX_BYTES + CHUNK_TAG_BYTES)
         throw new CryptoError('This encrypted envelope is damaged.');
@@ -242,7 +243,9 @@ export async function openMetadata(
                 nodeKey,
             ),
         );
-    } catch {
+    } catch (error) {
+        // A bad context is reported as such; only a failed decrypt reads as damage.
+        if (error instanceof CryptoError) throw error;
         throw new CryptoError('This item could not be opened. It may be damaged.');
     }
     let parsed: unknown;
