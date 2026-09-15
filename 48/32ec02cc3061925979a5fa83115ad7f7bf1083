@@ -1,0 +1,23 @@
+apps/web/src/router.tsx
+  s_3e6b5e360451dc::t_63b7b2eafb3a50 1
+apps/web/src/lib/zod-config.ts
+  s_3e6b5e360451dc::t_63b7b2eafb3a50 1-11
+e2e/csp.spec.ts
+  s_3e6b5e360451dc::t_9a73aae099693e 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4832ec02cc3061925979a5fa83115ad7f7bf1083",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
