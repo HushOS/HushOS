@@ -1,0 +1,33 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_d510e9fe2caa17::t_9e2eb72c12b936 1155
+  s_879cbccc6f6a3e::t_b2bafe8522c511 3,327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "80b51fd9181d72df21d5cecee1897cfccad44b3d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_879cbccc6f6a3e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a1d3-f0b0-79a0-a5ec-5770800c9af3",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
