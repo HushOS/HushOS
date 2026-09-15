@@ -1,0 +1,45 @@
+apps/web/package.json
+  s_3e6b5e360451dc::t_6a06352bc9224d 7-8
+apps/web/Dockerfile
+  s_3e6b5e360451dc::t_6a06352bc9224d 21
+docs/self-hosting.md
+  s_3e6b5e360451dc::t_3a87b0fb470b84 58
+  s_3e6b5e360451dc::t_6a06352bc9224d 59
+apps/web/tsconfig.json
+  s_3e6b5e360451dc::t_5a7e13c54df9bf 6
+CONTRIBUTING.md
+  s_3e6b5e360451dc::t_28b0c4f7575d1f 3
+README.md
+  s_3e6b5e360451dc::t_3a87b0fb470b84 18
+  s_3e6b5e360451dc::t_28b0c4f7575d1f 59
+package.json
+  s_3e6b5e360451dc::t_6a06352bc9224d 54
+  s_3e6b5e360451dc::t_28b0c4f7575d1f 31
+packages/db/Dockerfile
+  s_3e6b5e360451dc::t_6a06352bc9224d 21,31
+packages/db/package.json
+  s_3e6b5e360451dc::t_6a06352bc9224d 18-20
+bun.lock
+  s_3e6b5e360451dc::t_0b4e116bfee329 1029,1931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ec003da1058face18a8bd7aecb10d6debcf4e97a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
