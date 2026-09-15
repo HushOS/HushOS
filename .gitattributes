@@ -1,0 +1,3 @@
+# Text files check out with the platform default; scripts run inside Linux containers stay LF everywhere.
+* text=auto
+*.sh text eol=lf
