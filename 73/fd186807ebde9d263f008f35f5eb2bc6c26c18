@@ -1,0 +1,23 @@
+apps/web/package.json
+  s_e3193bb21f0805::t_b4a9c6d78125f9 10
+README.md
+  s_e3193bb21f0805::t_c7ac6c126c95cc 140
+.github/workflows/ci.yml
+  s_e3193bb21f0805::t_b4a9c6d78125f9 67-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "73fd186807ebde9d263f008f35f5eb2bc6c26c18",
+  "prompts": {},
+  "sessions": {
+    "s_e3193bb21f0805": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6959915e-199b-4469-9055-5a0516e97bef",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
