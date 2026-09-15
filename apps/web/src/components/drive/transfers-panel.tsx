@@ -14,6 +14,8 @@ import { Button } from '@/components/ui/button';
 import { downloads, useDownloads } from '@/lib/downloads';
 import { formatBytes } from '@/lib/drive';
 import { transfers, useTransfers } from '@/lib/transfers';
+import { useBatchProgress } from '@/lib/batch-progress';
+import { formatTimeLeft } from '@/lib/progress';
 
 /*
  * The one panel that follows the person around the app while transfers run: a
@@ -188,6 +190,7 @@ export function TransfersPanel() {
     const state = useTransfers();
     const down = useDownloads();
     const [collapsed, setCollapsed] = useState(false);
+    const { batch, timeLeft } = useBatchProgress();
     if (!state.uploads.length && !down.downloads.length) return null;
     const settled = (status: string) => status === 'done' || status === 'cancelled';
     const finished =
@@ -214,6 +217,20 @@ export function TransfersPanel() {
                     : `${plural(finished, 'transfer')} finished`;
     const rate = state.bytesPerSecond + down.bytesPerSecond;
     const active = state.active + down.active;
+    // The batch as a whole: files and bytes done, and the time left once the rate has settled.
+    const summary =
+        active > 0
+            ? [
+                  batch.files.total > 1
+                      ? `${batch.files.done} of ${batch.files.total} files`
+                      : null,
+                  `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
+                  rate > 0 ? formatRate(rate) : null,
+                  timeLeft !== null ? formatTimeLeft(timeLeft) : null,
+              ]
+                  .filter(Boolean)
+                  .join(' · ')
+            : null;
     return (
         <section
             aria-label="Transfers"
@@ -222,8 +239,13 @@ export function TransfersPanel() {
             <header className="flex h-11 items-center gap-2 border-b pr-1 pl-3.5">
                 <div className="min-w-0 flex-1">
                     <p className="truncate font-mono text-xs">{title}</p>
-                    {active > 0 && rate > 0 && (
-                        <p className="eyebrow mt-0.5 text-muted-foreground">{formatRate(rate)}</p>
+                    {summary && (
+                        <p
+                            className="eyebrow mt-0.5 truncate text-muted-foreground"
+                            data-batch-progress
+                        >
+                            {summary}
+                        </p>
                     )}
                 </div>
                 {active > 0 ? (
@@ -274,6 +296,14 @@ export function TransfersPanel() {
                     </Button>
                 )}
             </header>
+            {active > 0 && batch.bytes.total > 0 && (
+                <progress
+                    value={batch.bytes.loaded}
+                    max={batch.bytes.total}
+                    aria-label="All transfers progress"
+                    className="block h-0.5 w-full appearance-none overflow-hidden border-0 bg-muted [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-300"
+                />
+            )}
             {!collapsed && (
                 <ul className="max-h-72 overflow-y-auto">
                     {down.downloads.map((item) => (
