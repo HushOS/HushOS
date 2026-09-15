@@ -526,7 +526,13 @@ describe('the thumbnail trailer', () => {
             nodeId: B,
             versions: [
                 envelope,
-                { ...envelope, contentKeyEnvelope: prepared.contentKeyEnvelope.replace(/.$/, 'A') },
+                // One byte of the tag changed, whatever the last character happens to be.
+                {
+                    ...envelope,
+                    contentKeyEnvelope: prepared.contentKeyEnvelope.replace(/.$/, (c) =>
+                        c === 'A' ? 'B' : 'A',
+                    ),
+                },
             ],
         })) as { versions: { id: string; plaintextSize?: number; error?: string }[] };
         expect(versions.versions[0]).toEqual({ id: C, plaintextSize: size, thumbnailBytes: 1234 });
