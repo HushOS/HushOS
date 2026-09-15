@@ -1,10 +1,10 @@
-import { createFileRoute, Link, redirect } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { adminOverviewQueryOptions } from '@/lib/admin';
 import { formatBytes, formatWhen } from '@/lib/drive';
+import { useQuery } from '@tanstack/react-query';
+import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 
 /*
  * The management area's first page: what the instance holds and what the
@@ -170,7 +170,7 @@ function AdminPage() {
                                                 <td className={cell}>
                                                     {row.auditedAt
                                                         ? formatWhen(row.auditedAt)
-                                                        : '—'}
+                                                        : '-'}
                                                 </td>
                                             </tr>
                                         ))}

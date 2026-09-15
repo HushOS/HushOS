@@ -1,7 +1,3 @@
-import type { ReportCategory, ReportStatus } from '@hushos/drive/api';
-import { REPORT_CATEGORIES } from '@hushos/drive/api';
-import { createFileRoute, Link, redirect } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -20,6 +16,10 @@ import {
     reportsQueryOptions,
     STATUS_LABELS,
 } from '@/lib/reports';
+import type { ReportCategory, ReportStatus } from '@hushos/drive/api';
+import { REPORT_CATEGORIES } from '@hushos/drive/api';
+import { useQuery } from '@tanstack/react-query';
+import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 
 /*
  * The reports queue: what people reported, oldest first, with the clock each
@@ -174,7 +174,7 @@ function ReportsPage() {
                                                 <td
                                                     className={`${cell} ${due?.overdue ? 'text-destructive' : ''}`}
                                                 >
-                                                    {due?.label ?? '—'}
+                                                    {due?.label ?? '-'}
                                                 </td>
                                                 <td className={cell}>
                                                     {report.nodeKind === 'folder'
@@ -184,7 +184,7 @@ function ReportsPage() {
                                                     via {report.via}
                                                 </td>
                                                 <td className={cell}>
-                                                    {report.uploader.email ?? '—'}
+                                                    {report.uploader.email ?? '-'}
                                                 </td>
                                                 <td className={cell}>{report.evidenceStatus}</td>
                                                 <td className={cell}>
