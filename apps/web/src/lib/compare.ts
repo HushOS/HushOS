@@ -27,7 +27,7 @@ const HUSHOS = {
     locked: 'No, never. Every file and its name is locked on your device before upload. We cannot read either.',
     password: 'Never sent to us. Checked on your device with OPAQUE.',
     sharing:
-        'With people, by wrapping the folder key for them on your device, or by a link with an optional password and expiry. Stopping a share changes the keys.',
+        'With people, by wrapping the folder key for them on your device under X25519 and ML-KEM-768 together, so it stays shut to a quantum computer later; or by a link with an optional password and expiry. Stopping a share changes the keys.',
     open: 'Yes, all of it: the app and the server, under the AGPL. You can read it or run it.',
     selfHost: 'Yes, for free, with a Docker Compose guide.',
     free: '2 GiB, and more for every friend you invite.',
@@ -155,7 +155,7 @@ export const comparisons: Comparison[] = [
         ],
         ours: [
             'The server is open too, not just the apps. You can run a complete HushOS for your family or team on a machine you own, for free.',
-            'Sharing with people is sealed to a key you pinned and can check by fingerprint, so a swapped key is caught.',
+            'Sharing with people is sealed to a key you pinned and can check by fingerprint, so a swapped key is caught, and it is post-quantum: a copy of our database taken today stays shut to a quantum computer later.',
             'There is nothing to learn. One phrase to keep safe at sign-up, and then it is just a drive.',
         ],
         switching:
@@ -398,6 +398,7 @@ export const comparisons: Comparison[] = [
         ours: [
             'The whole thing is open, server included, and you can run it yourself.',
             'Stopping a share rotates the keys beneath it, so a former recipient holds nothing that still works.',
+            'Shares are sealed with a post-quantum key beside the classical one, and the security page says exactly how.',
             'A design written down and tested before it was built, with the security page explaining every claim.',
         ],
         switching:

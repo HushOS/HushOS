@@ -1,13 +1,3 @@
-import type { BillingSummary, Plan } from '@hushos/billing/api';
-import {
-    CANCELLATION_REASONS,
-    cancellationReasonLabels,
-    type CancellationReason,
-} from '@hushos/billing/protocol';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { ArrowRightIcon, ExternalLinkIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { FormActions, FormNote, FormRow, FormTable } from '@/components/form-rows';
 import { Collapse, PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
@@ -33,6 +23,16 @@ import {
     storageQueryOptions,
 } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
+import type { BillingSummary, Plan } from '@hushos/billing/api';
+import {
+    CANCELLATION_REASONS,
+    cancellationReasonLabels,
+    type CancellationReason,
+} from '@hushos/billing/protocol';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { ArrowRightIcon, ExternalLinkIcon } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export const Route = createFileRoute('/_authenticated/app/billing')({
     loader: ({ context }) =>
@@ -406,18 +406,18 @@ function BillingPage() {
                 <dl>
                     <Row
                         label="Plan"
-                        value={summary.isPending ? '—' : live ? live.productName : 'Free'}
+                        value={summary.isPending ? '-' : live ? live.productName : 'Free'}
                     />
                     <Row
                         label="Storage"
                         value={
                             summary.isPending
-                                ? '—'
+                                ? '-'
                                 : live
                                   ? formatGiB(live.quotaBytes)
                                   : catalogue.data
                                     ? formatGiB(catalogue.data.freeQuotaBytes)
-                                    : '—'
+                                    : '-'
                         }
                     />
                     {live && (

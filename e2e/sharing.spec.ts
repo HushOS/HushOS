@@ -40,6 +40,8 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await owner.getByLabel('Email').fill(guestEmail);
     await owner.getByRole('button', { name: 'Look up' }).click();
     await expect(owner.locator('[data-fingerprint]')).toBeVisible({ timeout: 60_000 });
+    // The guest's post-quantum key is served with a binding their identity signed.
+    await expect(owner.locator('[data-kem]')).toHaveAttribute('data-kem', 'signed');
     await owner.getByRole('button', { name: 'Pin contact' }).click();
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 
@@ -66,6 +68,10 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('can edit');
+    // Sealed hybrid: X25519 and ML-KEM-768 together, which the dialog says.
+    await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText(
+        'post-quantum',
+    );
     // A link too, with a password: it has to survive the rotation that follows the revocation.
     await dialog(owner).getByLabel('Password').fill('open sesame');
     await dialog(owner).getByRole('button', { name: 'Create link' }).click();

@@ -27,7 +27,7 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
-import { settingsQueryOptions } from '@/lib/contacts';
+import { granteeKeys, settingsQueryOptions } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, formatWhen } from '@/lib/drive';
 import { rotateAfterRevoke } from '@/lib/rotation';
 import { cue } from '@/lib/sounds';
@@ -89,7 +89,7 @@ function ShareForm({
         setPending('share');
         setError('');
         try {
-            await driveClient.share(node, contact, role);
+            await driveClient.share(node, await granteeKeys(userId, contact), role);
             await queryClient.invalidateQueries({
                 queryKey: [...driveKeys.all, 'shares', node.id],
             });
@@ -251,7 +251,8 @@ function ShareForm({
                                         <p className="font-mono text-[11px] text-muted-foreground">
                                             {share.grantee.email} ·{' '}
                                             {share.role === 'editor' ? 'can edit' : 'can view'} ·
-                                            since {formatWhen(share.createdAt)}
+                                            since {formatWhen(share.createdAt)} ·{' '}
+                                            {share.suite === 2 ? 'post-quantum' : 'X25519 only'}
                                         </p>
                                     </div>
                                     <Button

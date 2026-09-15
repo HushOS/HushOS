@@ -146,6 +146,7 @@ describe('rotation', () => {
                             id: 'share-1',
                             granteeUserId: GUEST,
                             granteePublicKey: guestIdentity.encryptionPublicKey,
+                            granteeKemPublicKey: guestIdentity.kem!.publicKey,
                         },
                     ],
                     links: [{ id: LINK, hasPassword: true, secretEnvelope: link.secretEnvelope }],

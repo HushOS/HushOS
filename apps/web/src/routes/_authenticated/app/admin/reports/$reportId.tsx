@@ -1,18 +1,3 @@
-import type { ReportEventView, ReportView } from '@hushos/drive/api';
-import { contentSize, type DriveNode } from '@hushos/drive/client';
-import { createFileRoute, Link, redirect } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-    ArchiveIcon,
-    DatabaseIcon,
-    DownloadIcon,
-    FileIcon,
-    FlagIcon,
-    FolderIcon,
-    KeyRoundIcon,
-    LockOpenIcon,
-} from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
 import { DriveShell, useDrive } from '@/components/drive/drive-shell';
 import { Preview } from '@/components/drive/preview';
 import { PendingLabel, Spinner } from '@/components/motion';
@@ -23,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
+import { GUIDANCE } from '@/lib/authorities';
 import { openIdentity } from '@/lib/contacts';
 import { downloadNodes } from '@/lib/downloads';
 import {
@@ -35,7 +21,6 @@ import {
 } from '@/lib/drive';
 import { reportApi, setActiveReport, setEvidenceUrls } from '@/lib/drive-api';
 import { buildEvidencePacket, saveEvidencePacket } from '@/lib/evidence-packet';
-import { GUIDANCE } from '@/lib/authorities';
 import {
     categoryLabel,
     describeDue,
@@ -45,6 +30,21 @@ import {
     STATUS_LABELS,
 } from '@/lib/reports';
 import { cue } from '@/lib/sounds';
+import type { ReportEventView, ReportView } from '@hushos/drive/api';
+import { contentSize, type DriveNode } from '@hushos/drive/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { createFileRoute, Link, redirect } from '@tanstack/react-router';
+import {
+    ArchiveIcon,
+    DatabaseIcon,
+    DownloadIcon,
+    FileIcon,
+    FlagIcon,
+    FolderIcon,
+    KeyRoundIcon,
+    LockOpenIcon,
+} from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
 
 /*
  * One report: what was said, who said it and about whose files, the record of
@@ -351,7 +351,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                                         <span className="truncate">{node.name}</span>
                                         <span className="ml-auto font-mono text-xs text-muted-foreground tabular-nums">
                                             {node.kind === 'folder'
-                                                ? '—'
+                                                ? '-'
                                                 : formatBytes(contentSize(node) ?? 0)}
                                         </span>
                                     </button>

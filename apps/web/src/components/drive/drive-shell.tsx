@@ -75,6 +75,8 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
         void restoreTransfers(workspaceId);
         prepareDownloads();
         resumePendingRotation(queryClient);
+        // Shares sealed before a contact had a post-quantum key are re-sealed once they do.
+        void driveClient.upgradeShares().catch(() => {});
     }, [workspaceId, queryClient]);
 
     if (!unlocked) {

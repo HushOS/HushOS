@@ -100,6 +100,7 @@ const facts = [
     ['Your password', 'Never sent to us'],
     ['If you forget it', '24-word recovery phrase'],
     ['Sharing', 'With people, or by link'],
+    ['Against quantum computers', 'Files always were; shares now too'],
     ['Where it runs', 'Our cloud, or yours'],
 ] as const;
 
@@ -164,7 +165,7 @@ const protection = [
     ],
     [
         'When you share',
-        'The key to a folder is wrapped up for the person you chose, on your device. We pass the parcel; we cannot open it.',
+        'The key to a folder is wrapped up for the person you chose, on your device, with a classical key and a post-quantum one together. We pass the parcel; we cannot open it, and neither could a quantum computer later.',
     ],
     [
         'If you lose your password',

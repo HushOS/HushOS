@@ -166,6 +166,13 @@ export function decodeEnvelope(value: string, exact?: number, max?: number) {
     return bytes;
 }
 const keyEnvelope = (value: string) => decodeEnvelope(value, KEY_ENVELOPE_BYTES);
+/* A share envelope of either suite: 72 bytes under X25519 alone, 1160 hybrid. */
+function shareEnvelope(value: string) {
+    const bytes = decodeEnvelope(value, undefined, 1160);
+    if (bytes.length !== 72 && bytes.length !== 1160)
+        throw new DriveError('invalid', 'Invalid envelope.');
+    return bytes;
+}
 /* A version envelope for an upload of the current suite: the key sealed with the sizes. */
 const versionEnvelope = (value: string) => decodeEnvelope(value, VERSION_ENVELOPE_BYTES);
 /* A version envelope for an object of either suite; the repository holds it to the object's. */
@@ -659,6 +666,7 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
+        suite: (row.suite === 1 ? 1 : 2) as 1 | 2,
         grantee: row.grantee,
     };
 }
@@ -683,7 +691,7 @@ export async function shareNode(
         granteeUserId: input.granteeUserId,
         role: input.role,
         keyEpoch: input.keyEpoch,
-        shareEnvelope: decodeEnvelope(input.shareEnvelope, 72),
+        shareEnvelope: shareEnvelope(input.shareEnvelope),
     });
     switch (result.status) {
         case 'not-found':
@@ -708,6 +716,27 @@ export async function listNodeShares(userId: string, workspaceId: string, nodeId
     return { shares: (await driveRepository.listNodeShares(workspaceId, nodeId)).map(shareView) };
 }
 
+/* The granter re-seals a live share at the current epoch, typically from suite 1 to hybrid. */
+export async function resealShare(
+    userId: string,
+    workspaceId: string,
+    shareId: string,
+    input: { keyEpoch: number; shareEnvelope: string },
+) {
+    await requireMember(userId, workspaceId);
+    const result = await driveRepository.resealShare({
+        workspaceId,
+        shareId,
+        granterUserId: userId,
+        keyEpoch: input.keyEpoch,
+        shareEnvelope: shareEnvelope(input.shareEnvelope),
+    });
+    if (result.status === 'not-found')
+        throw new DriveError('not-found', 'This share no longer exists.', 404);
+    if (result.status === 'stale') throw stale();
+    return { resealed: true as const };
+}
+
 export async function revokeShare(userId: string, workspaceId: string, shareId: string) {
     await requireMember(userId, workspaceId);
     const revoked = await driveRepository.revokeShare(workspaceId, shareId);
@@ -722,7 +751,21 @@ export async function listSharedByMe(userId: string) {
         driveRepository.listLinksByGranter(userId),
     ]);
     return {
-        shares: shares.map((row) => ({ ...shareView(row), node: nodeView(row.node) })),
+        shares: shares.map((row) => ({
+            ...shareView(row),
+            node: nodeView(row.node),
+            granteeIdentity: {
+                encryptionPublicKey: b64(row.granteeIdentity.encryptionPublicKey),
+                signingPublicKey: b64(row.granteeIdentity.signingPublicKey),
+                kem:
+                    row.granteeIdentity.kemPublicKey && row.granteeIdentity.kemSignature
+                        ? {
+                              publicKey: b64(row.granteeIdentity.kemPublicKey),
+                              signature: b64(row.granteeIdentity.kemSignature),
+                          }
+                        : null,
+            },
+        })),
         links: links.map((row) => ({ ...linkView(row), node: nodeView(row.node) })),
     };
 }
@@ -1994,7 +2037,17 @@ function rotationWorkView(row: RotationWorkRow) {
         shares: row.shares.map((share) => ({
             id: share.id,
             granteeUserId: share.granteeUserId,
-            granteePublicKey: b64(share.granteePublicKey),
+            grantee: {
+                encryptionPublicKey: b64(share.granteePublicKey),
+                signingPublicKey: b64(share.granteeSigningPublicKey),
+                kem:
+                    share.granteeKemPublicKey && share.granteeKemSignature
+                        ? {
+                              publicKey: b64(share.granteeKemPublicKey),
+                              signature: b64(share.granteeKemSignature),
+                          }
+                        : null,
+            },
         })),
         links: row.links.map((link) => ({
             id: link.id,
@@ -2114,7 +2167,7 @@ export async function rotateNodes(
                       })),
                       shares: node.rotated.shares.map((share) => ({
                           id: share.id,
-                          shareEnvelope: decodeEnvelope(share.shareEnvelope, 72),
+                          shareEnvelope: shareEnvelope(share.shareEnvelope),
                       })),
                       links: node.rotated.links.map((link) => ({
                           id: link.id,

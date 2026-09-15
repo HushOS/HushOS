@@ -1,6 +1,6 @@
 ---
 title: Security model
-updated: 2026-09-14
+updated: 2026-09-15
 summary: How HushOS authenticates you, derives your keys, encrypts your files, shares them, and handles reports, written so you can check each claim against the code.
 ---
 
@@ -43,7 +43,24 @@ Every envelope carries associated data that names its purpose, version, and owne
 
 ## Identity keys
 
-At signup the browser also generates an X25519 key pair for encryption and an Ed25519 key pair for signatures. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. The encryption identity is what a share is sealed to, and what a report's keys are escrowed to; both are described below.
+At signup the browser also generates an X25519 key pair for encryption, an Ed25519 key pair for signatures, and an ML-KEM-768 key pair, the post-quantum key exchange NIST standardised as FIPS 203. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. The X25519 and ML-KEM keys together are what a share is sealed to; the X25519 key alone is what a report's keys are escrowed to. Both are described below.
+
+The ML-KEM public key is signed by the identity's Ed25519 key, and the server refuses to store one without that signature. An account made before this key existed mints one on its next sign-in; its X25519 key, and so its fingerprint, do not change.
+
+<Ledger
+    rows={[
+        ['Encryption', 'X25519, libsodium'],
+        [
+            'Post-quantum',
+            'ML-KEM-768 (FIPS 203), expanded from a 64-byte seed wrapped under the account key',
+        ],
+        ['Signatures', 'Ed25519, from a 32-byte seed wrapped under the account key'],
+        [
+            'Binding',
+            'The Ed25519 key signs the ML-KEM key together with the X25519 key and your account ID',
+        ],
+    ]}
+/>
 
 ## The workspace key
 
@@ -169,11 +186,17 @@ Independent chunks are what make ranged previews and resumed uploads plain arith
 
 ## Sharing with people
 
-Sharing a folder or file with another HushOS account seals that node's key to their identity encryption key, on your device. The server stores the sealed box and never holds the key. The recipient opens it with their private identity key, which only their devices hold, and mounts the shared item as a root of its own under "Shared with me".
+Sharing a folder or file with another HushOS account seals that node's key to their identity keys, on your device. The server stores the sealed box and never holds the key. The recipient opens it with their private identity keys, which only their devices hold, and mounts the shared item as a root of its own under "Shared with me".
+
+The seal is hybrid: an X25519 agreement between your identity key and theirs, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves, so a copy of the database taken today stays shut even if a quantum computer later breaks X25519. A share to someone whose account has not yet minted its post-quantum key is sealed under X25519 alone and re-sealed hybrid by your device the next time you open Drive after they have one.
 
 <Ledger
     rows={[
-        ['Seal', "X25519 sealed box (crypto_box_seal) to the recipient's identity key"],
+        [
+            'Seal',
+            'X25519 agreement plus ML-KEM-768 encapsulation, HKDF-SHA-256 over both secrets, then XChaCha20-Poly1305 over the node key',
+        ],
+        ['Envelope', '1160 bytes: nonce, the 1088-byte ML-KEM ciphertext, and the sealed node key'],
         ['Whose key', 'A contact key you pinned, with a fingerprint you can compare in person'],
         ['Roles', "Viewer, or editor; an editor's uploads land in your storage"],
         [
@@ -184,7 +207,7 @@ Sharing a folder or file with another HushOS account seals that node's key to th
     ]}
 />
 
-Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: the first time you use someone's key it is recorded in your encrypted settings, both of you can compare a fingerprint, and a later change is shown as a warning that you must accept, never applied silently.
+Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: the first time you use someone's key it is recorded in your encrypted settings, both of you can compare a fingerprint, and a later change is shown as a warning that you must accept, never applied silently. The fingerprint covers the X25519 key; the post-quantum key is vouched for by the contact's signing key, checked on your device before it is used, and its digest joins the pin. A different post-quantum key served later is refused like any changed key, and one that goes missing is refused as a downgrade. Every path that seals to a contact goes through the pin, including the re-keying that follows a revocation, so nothing is ever sealed to a key you did not vouch for.
 
 ## Links for anyone
 
@@ -202,7 +225,7 @@ A link is a share without a recipient. Your browser makes a 32-byte secret and p
 
 ## When sharing stops
 
-Stopping a share or a link does two things. The server refuses that person on the next request, on every route. Then your browser rotates: the shared item and everything beneath it get fresh keys under a new epoch, every remaining share and link is re-sealed under the new keys, and the old keys are gone. Whoever was cut off holds nothing that still opens anything. Content is not re-encrypted; the guarantee is about keys and authorization, and download links already issued expire within 15 minutes.
+Stopping a share or a link does two things. The server refuses that person on the next request, on every route. Then your browser rotates: the shared item and everything beneath it get fresh keys under a new epoch, every remaining share and link is re-sealed under the new keys, to the pinned keys of each remaining person, and the old keys are gone. Whoever was cut off holds nothing that still opens anything. Content is not re-encrypted; the guarantee is about keys and authorization, and download links already issued expire within 15 minutes.
 
 <Note title="What revocation cannot do">
     A person who downloaded a file while they had access has that file. Rotation stops future
@@ -236,6 +259,10 @@ Nothing you do not share can be reported, because nobody but you can see it.
 <Ledger
     rows={[
         ['Never', 'File names, contents, thumbnails, folder names, or any key'],
+        [
+            'Later, with a quantum computer',
+            'Still nothing shared between accounts: those envelopes need a lattice key it never held. Reports are sealed under X25519 alone.',
+        ],
         [
             'Always',
             'Your email, the shape of your tree (ids and parents), the size of each encrypted object, times, and how much you store',

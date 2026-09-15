@@ -6,7 +6,7 @@ import type {
 } from '@hushos/crypto';
 import type { SettingsEnvelope } from '@hushos/crypto/contacts';
 export type { ContactPin, Settings, SettingsEnvelope } from '@hushos/crypto/contacts';
-import type { IdentityEnvelope } from '@hushos/crypto/identity';
+import type { IdentityEnvelope, IdentityKem } from '@hushos/crypto/identity';
 import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
 import type { AccountKeyEnvelope, AuthUser, SessionUser, SignupIntent } from './protocol';
 
@@ -48,10 +48,14 @@ export type ContactIdentity = {
     email: string;
     encryptionPublicKey: string;
     signingPublicKey: string;
+    /* The ML-KEM key and the signing key's binding of it; null until the person unlocks on the new code. */
+    kem: { publicKey: string; signature: string } | null;
 };
 
 export interface AuthApi {
     identity(): Promise<{ identity: IdentityEnvelope }>;
+    /* Gives an identity made before hybrid sharing its KEM key, once; 409 when it already has one. */
+    addIdentityKem(kem: IdentityKem): Promise<{ ok: true }>;
     lookupContact(email: string): Promise<{ contact: ContactIdentity }>;
     settings(): Promise<{ settings: SettingsEnvelope | null }>;
     saveSettings(input: {

@@ -1,7 +1,7 @@
 import { contentSize, createDriveClient, type DriveNode } from '@hushos/drive/client';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
-import { trustGranter } from '@/lib/contacts';
+import { trustGrantee, trustGranter } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 
 /*
@@ -12,6 +12,11 @@ import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 
 export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     trustGranter,
+    trustGrantee: (granteeUserId, served) => {
+        const userId = authClient.store.getState().unlockedUserId;
+        if (!userId) throw new Error('Unlock your account first.');
+        return trustGrantee(userId, granteeUserId, served);
+    },
     linkApi,
     reportApi,
 });

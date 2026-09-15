@@ -86,7 +86,15 @@ describe('identity lookup', () => {
         expect(found?.userId).toBe(userId);
         expect(found?.encryptionPublicKey.equals(identity.encryptionPublicKey)).toBe(true);
         expect(Object.keys(found!).sort()).toEqual(
-            ['email', 'encryptionPublicKey', 'name', 'signingPublicKey', 'userId'].sort(),
+            [
+                'email',
+                'encryptionPublicKey',
+                'kemPublicKey',
+                'kemSignature',
+                'name',
+                'signingPublicKey',
+                'userId',
+            ].sort(),
         );
         // An account that has not finished setup has no identity to share to.
         const { email: bare } = await createTestAccount();

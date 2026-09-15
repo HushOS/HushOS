@@ -316,7 +316,7 @@ export const driveShares = pgTable(
         check('drive_shares_not_self', sql`${table.granterUserId} <> ${table.granteeUserId}`),
         check(
             'drive_shares_envelopes_valid',
-            sql`${table.keyEpoch} >= 1 and octet_length(${table.shareEnvelope}) = 72 and (${table.prevShareEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevShareEnvelope} is null or octet_length(${table.prevShareEnvelope}) = 72)`,
+            sql`${table.keyEpoch} >= 1 and octet_length(${table.shareEnvelope}) in (72, 1160) and (${table.prevShareEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevShareEnvelope} is null or octet_length(${table.prevShareEnvelope}) in (72, 1160))`,
         ),
     ],
 );

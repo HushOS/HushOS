@@ -1,0 +1,46 @@
+---
+title: Sharing that outlasts X25519
+description: Shares between accounts are now sealed with ML-KEM-768 beside X25519, existing shares were re-sealed without anyone noticing, and pins cover the new key.
+date: 2026-09-15
+author: HushOS
+---
+
+import { Cta, Ledger, Note } from '../../components/mdx';
+
+Every file in HushOS is encrypted with a symmetric cipher, and symmetric ciphers with 256-bit keys are not what a quantum computer breaks. The place a quantum computer would have hurt us is sharing: when you share a folder with someone, your device seals that folder's key to their public key, and that seal used X25519 alone. A copy of our database taken today, plus a large enough quantum computer some years from now, would have opened every share ever made.
+
+As of today it would not. Shares between accounts are sealed with two key exchanges at once: the same X25519 agreement as before, and an ML-KEM-768 encapsulation to a new post-quantum key each identity now carries. The two secrets are combined into one key, so the envelope opens only for someone who holds both private halves, and it stays shut unless both problems fall.
+
+<Ledger
+    rows={[
+        ['Before', 'X25519 alone, 72-byte envelope'],
+        ['Now', 'X25519 and ML-KEM-768 (FIPS 203), 1160-byte envelope'],
+        ['Your files', 'Unchanged: XChaCha20-Poly1305 was never the weak point'],
+        [
+            'Your fingerprint',
+            'Unchanged: the new key is signed by your identity, not folded into the fingerprint',
+        ],
+        ['Existing shares', 'Re-sealed hybrid by the owner’s device, in the background'],
+    ]}
+/>
+
+## What changed for you
+
+Nothing you have to do. Your account minted its post-quantum key the first time you signed in after this release, signed it with the identity key you already had, and stored it with the server. Anyone who had pinned you sees the same fingerprint as before. The first time their device opened Drive after that, it found the shares it had sealed to you under X25519 alone and re-sealed them hybrid, at the same key epoch, without a prompt.
+
+Shares to someone who has not signed in since the release are still sealed under X25519 alone, because their post-quantum key does not exist yet. The share dialog says which is which, and those shares are upgraded the same way once the person signs in.
+
+## Pins cover the new key
+
+The server serves public keys, and a dishonest server could serve its own. Pins have always caught that for the X25519 key, with a fingerprint two people compare. Rather than change every fingerprint, the post-quantum key is vouched for by the identity's signing key: the server refuses to store one without that signature, your device verifies it before using it, and a digest of it joins the pin. A different key served later is refused like any changed key. A key that goes missing is refused too, so a server cannot quietly turn hybrid shares back into X25519 ones.
+
+We also closed a gap the review turned up. When you stop sharing with someone, your device re-keys the folder and re-seals it to whoever remains. That re-sealing used to take the remaining people's keys from the server directly. It now goes through your pins like everything else, and a share to someone whose served key the pin refuses is left closed rather than sealed to a key you never vouched for.
+
+<Note title="What this does not cover">
+    Reports are still sealed to operators under X25519 alone, and sign-in still rests on OPAQUE,
+    which has no post-quantum standard. Both are on the security page, with what they mean.
+</Note>
+
+The full construction is on the [security page](/security), and `docs/drive-design.md` in the repository fixes the byte layout.
+
+<Cta title="Share something">It is sealed to the person you pick, twice over, on your device.</Cta>

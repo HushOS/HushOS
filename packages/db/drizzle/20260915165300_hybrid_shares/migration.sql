@@ -1,0 +1,6 @@
+ALTER TABLE "account_identities" ADD COLUMN "kem_public_key" bytea;--> statement-breakpoint
+ALTER TABLE "account_identities" ADD COLUMN "kem_seed_nonce" bytea;--> statement-breakpoint
+ALTER TABLE "account_identities" ADD COLUMN "encrypted_kem_seed" bytea;--> statement-breakpoint
+ALTER TABLE "account_identities" ADD COLUMN "kem_signature" bytea;--> statement-breakpoint
+ALTER TABLE "account_identities" ADD CONSTRAINT "account_identities_kem_valid" CHECK (("kem_public_key" is null and "kem_seed_nonce" is null and "encrypted_kem_seed" is null and "kem_signature" is null) or ("kem_public_key" is not null and "kem_seed_nonce" is not null and "encrypted_kem_seed" is not null and "kem_signature" is not null and octet_length("kem_public_key") = 1184 and octet_length("kem_seed_nonce") = 24 and octet_length("encrypted_kem_seed") = 80 and octet_length("kem_signature") = 64));--> statement-breakpoint
+ALTER TABLE "drive_shares" DROP CONSTRAINT "drive_shares_envelopes_valid", ADD CONSTRAINT "drive_shares_envelopes_valid" CHECK ("key_epoch" >= 1 and octet_length("share_envelope") in (72, 1160) and ("prev_share_envelope" is null) = ("prev_key_epoch" is null) and ("prev_share_envelope" is null or octet_length("prev_share_envelope") in (72, 1160)));

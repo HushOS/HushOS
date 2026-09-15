@@ -1,9 +1,3 @@
-import { contentSize, type DriveNode } from '@hushos/drive/client';
-import { createFileRoute, Link, useRouteContext } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useStore } from 'zustand';
-import { DownloadIcon, FileIcon, FlagIcon, FolderIcon, LockIcon, SaveIcon } from 'lucide-react';
-import { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import { Preview } from '@/components/drive/preview';
 import { ReportDialog } from '@/components/drive/report-dialog';
 import { FormActions, FormNote, FormRow, FormTable } from '@/components/form-rows';
@@ -23,8 +17,6 @@ import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
 import { downloadNodes } from '@/lib/downloads';
-import { saveCopy } from '@/lib/save-copy';
-import { sessionQueryOptions } from '@/lib/session';
 import {
     driveClient,
     driveError,
@@ -34,6 +26,14 @@ import {
     sortNodes,
 } from '@/lib/drive';
 import { linkApi, setActiveLink } from '@/lib/drive-api';
+import { saveCopy } from '@/lib/save-copy';
+import { sessionQueryOptions } from '@/lib/session';
+import { contentSize, type DriveNode } from '@hushos/drive/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { createFileRoute, Link, useRouteContext } from '@tanstack/react-router';
+import { DownloadIcon, FileIcon, FlagIcon, FolderIcon, LockIcon, SaveIcon } from 'lucide-react';
+import { useEffect, useId, useState, useSyncExternalStore } from 'react';
+import { useStore } from 'zustand';
 
 /*
  * A link opened by anyone: the path token names the share, the fragment
@@ -412,7 +412,7 @@ function LinkContents({ opened }: { opened: Opened }) {
                                         </td>
                                         <td className="py-2.5 pr-5 text-right font-mono text-xs text-muted-foreground tabular-nums sm:pr-8">
                                             {node.kind === 'folder'
-                                                ? '—'
+                                                ? '-'
                                                 : formatBytes(contentSize(node) ?? 0)}
                                         </td>
                                     </tr>

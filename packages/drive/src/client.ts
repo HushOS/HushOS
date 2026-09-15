@@ -14,6 +14,7 @@ import {
     type NodeView,
     type ReportApi,
     type ReportCategory,
+    type ServedIdentity,
     type SharedWithMeView,
     type ShareRole,
     type VersionListView,
@@ -99,6 +100,16 @@ export type DriveClientOptions = {
      * since it was pinned). Without it, shares received cannot be opened.
      */
     trustGranter?: (granter: Granter) => Promise<string>;
+    /*
+     * Decides which keys a share is sealed to when the server, not the person,
+     * names the grantee: on rotation and when re-sealing older shares. Returns
+     * the pinned X25519 key and the KEM key the pin vouches for, or null for
+     * none; throws to refuse a served key that differs from the pin.
+     */
+    trustGrantee?: (
+        granteeUserId: string,
+        served: ServedIdentity,
+    ) => Promise<{ encryptionPublicKey: string; kemPublicKey: string | null }>;
 };
 
 export type ShareMount = SharedWithMeView & { node: DriveNode; error: string | null };
@@ -460,7 +471,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      */
     async function share(
         node: DriveNode,
-        contact: { userId: string; encryptionPublicKey: string },
+        contact: { userId: string; encryptionPublicKey: string; kemPublicKey: string | null },
         role: ShareRole,
     ) {
         if (!currentUserId) throw new Error('Open Drive first.');
@@ -472,6 +483,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             granterUserId: currentUserId,
             granteeUserId: contact.userId,
             granteePublicKey: contact.encryptionPublicKey,
+            granteeKemPublicKey: contact.kemPublicKey,
         });
         return (
             await api.share(ws, node.id, {
@@ -484,6 +496,47 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     }
     async function nodeShares(node: DriveNode) {
         return (await api.nodeShares(node.workspaceId, node.id)).shares;
+    }
+    /*
+     * Re-seals every share still under X25519 alone whose grantee now has a KEM
+     * key the pin vouches for. Runs in the background after Drive opens; a
+     * grantee whose served key the pin refuses is skipped and counted, never
+     * sealed to. Returns how many were re-sealed and how many were refused.
+     */
+    async function upgradeShares() {
+        if (!currentUserId || !options.trustGrantee) return { resealed: 0, refused: 0 };
+        const mine = await api.sharedByMe();
+        let resealed = 0;
+        let refused = 0;
+        for (const share of mine.shares) {
+            if (share.suite !== 1 || !share.granteeIdentity.kem) continue;
+            let keys: { encryptionPublicKey: string; kemPublicKey: string | null };
+            try {
+                keys = await options.trustGrantee(share.grantee.id, share.granteeIdentity);
+            } catch {
+                refused++;
+                continue;
+            }
+            if (!keys.kemPublicKey) continue;
+            const node = share.node;
+            if (node.parentId && !openedNodes.has(node.parentId)) await listFolder(node.parentId);
+            await decorate([node]);
+            const { shareEnvelope } = await rpc('driveSealShare', {
+                workspaceId: node.workspaceId,
+                nodeId: node.id,
+                keyEpoch: node.keyEpoch,
+                granterUserId: currentUserId,
+                granteeUserId: share.grantee.id,
+                granteePublicKey: keys.encryptionPublicKey,
+                granteeKemPublicKey: keys.kemPublicKey,
+            });
+            await api.resealShare(node.workspaceId, share.id, {
+                keyEpoch: node.keyEpoch,
+                shareEnvelope,
+            });
+            resealed++;
+        }
+        return { resealed, refused };
     }
     async function revokeShare(node: DriveNode, shareId: string) {
         await api.revokeShare(node.workspaceId, shareId);
@@ -721,22 +774,59 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 workspaceId: ws,
                 targetEpoch,
                 granterUserId: currentUserId,
-                nodes: work.nodes.map((n) => ({
-                    id: n.id,
-                    parentId: parentRef(n),
-                    parentKeyEpoch: n.id === rootId ? n.parentKeyEpoch : targetEpoch,
-                    keyEpoch: n.keyEpoch,
-                    wrappedParentKeyEpoch: n.parentKeyEpoch,
-                    keyEnvelope: n.keyEnvelope,
-                    metadataVersion: n.metadataVersion,
-                    metadataEnvelope: n.metadataEnvelope,
-                    versions: n.versions.map((v) => ({
-                        ...v,
-                        plaintextSize: v.plaintextSize === null ? null : Number(v.plaintextSize),
+                nodes: await Promise.all(
+                    work.nodes.map(async (n) => ({
+                        id: n.id,
+                        parentId: parentRef(n),
+                        parentKeyEpoch: n.id === rootId ? n.parentKeyEpoch : targetEpoch,
+                        keyEpoch: n.keyEpoch,
+                        wrappedParentKeyEpoch: n.parentKeyEpoch,
+                        keyEnvelope: n.keyEnvelope,
+                        metadataVersion: n.metadataVersion,
+                        metadataEnvelope: n.metadataEnvelope,
+                        versions: n.versions.map((v) => ({
+                            ...v,
+                            plaintextSize:
+                                v.plaintextSize === null ? null : Number(v.plaintextSize),
+                        })),
+                        shares: (
+                            await Promise.all(
+                                n.shares.map(async (share) => {
+                                    // The server names the grantee; the pin decides which keys are
+                                    // sealed to. A share the pin refuses keeps its old envelope, which
+                                    // the rotation leaves unopenable: closed, never re-sealed to a
+                                    // key the person did not vouch for.
+                                    let keys: {
+                                        encryptionPublicKey: string;
+                                        kemPublicKey: string | null;
+                                    };
+                                    try {
+                                        keys = options.trustGrantee
+                                            ? await options.trustGrantee(
+                                                  share.granteeUserId,
+                                                  share.grantee,
+                                              )
+                                            : {
+                                                  encryptionPublicKey:
+                                                      share.grantee.encryptionPublicKey,
+                                                  kemPublicKey:
+                                                      share.grantee.kem?.publicKey ?? null,
+                                              };
+                                    } catch {
+                                        return null;
+                                    }
+                                    return {
+                                        id: share.id,
+                                        granteeUserId: share.granteeUserId,
+                                        granteePublicKey: keys.encryptionPublicKey,
+                                        granteeKemPublicKey: keys.kemPublicKey,
+                                    };
+                                }),
+                            )
+                        ).filter((share) => share !== null),
+                        links: n.links,
                     })),
-                    shares: n.shares,
-                    links: n.links,
-                })),
+                ),
             });
             const batch = [];
             for (const [index, result] of sealed.nodes.entries()) {
@@ -1055,6 +1145,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         discardVersion,
         share,
         nodeShares,
+        upgradeShares,
         revokeShare,
         mountShares,
         mySharing,

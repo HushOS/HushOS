@@ -35,6 +35,12 @@ export type ContactPin = {
     signingPublicKey: string;
     fingerprint: string;
     pinnedAt: string;
+    /*
+     * SHA-256 of the contact's ML-KEM public key, recorded when it was first
+     * seen vouched for by their signing key; a different key served later is a
+     * swap, and none at all is a downgrade. Absent until they have one.
+     */
+    kemPublicKeyHash?: string | null;
 };
 
 export type Settings = {

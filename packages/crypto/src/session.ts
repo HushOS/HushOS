@@ -6,7 +6,15 @@ import {
     type SecurityChallenge,
     type SecurityUpdate,
 } from './security';
-import { createIdentity, openIdentityEncryptionKey, type IdentityEnvelope } from './identity';
+import {
+    addIdentityKem,
+    createIdentity,
+    openIdentityEncryptionKey,
+    openIdentityKemKey,
+    verifyKemBinding,
+    type IdentityEnvelope,
+    type IdentityKem,
+} from './identity';
 import { openSettings, sealSettings, type Settings, type SettingsEnvelope } from './contacts';
 import { openShareKey, sealShareKey } from './shares';
 import { openReportKey, sealReportKey } from './reports';
@@ -100,7 +108,17 @@ export type CryptoRequests = {
      * it for the session (it dies with a lock). Settings are sealed under a key
      * derived from it, so every device that unlocks reads the same pins.
      */
-    identityOpen: { userId: string; identity: IdentityEnvelope };
+    /* `refresh` re-reads an envelope already open, after the KEM key was added on the server. */
+    identityOpen: { userId: string; identity: IdentityEnvelope; refresh?: boolean };
+    /* An identity made before hybrid sharing gets its KEM key: minted, wrapped and signed; installed by the next open. */
+    identityMintKem: { userId: string; identity: IdentityEnvelope };
+    /* Whether a contact's served KEM key is vouched for by their signing key; pure, needs no unlock. */
+    identityVerifyKem: {
+        userId: string;
+        encryptionPublicKey: string;
+        signingPublicKey: string;
+        kem: { publicKey: string; signature: string };
+    };
     settingsOpen: { userId: string; envelope: SettingsEnvelope };
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
     /*
@@ -116,6 +134,8 @@ export type CryptoRequests = {
         granterUserId: string;
         granteeUserId: string;
         granteePublicKey: string;
+        /* The grantee's KEM key, checked against their pin by the caller; null seals suite 1. */
+        granteeKemPublicKey?: string | null;
     };
     driveOpenShare: {
         workspaceId: string;
@@ -379,7 +399,12 @@ export type RotateNodeInput = {
     metadataVersion: number;
     metadataEnvelope: string;
     versions: DriveVersionEnvelope[];
-    shares: { id: string; granteeUserId: string; granteePublicKey: string }[];
+    shares: {
+        id: string;
+        granteeUserId: string;
+        granteePublicKey: string;
+        granteeKemPublicKey: string | null;
+    }[];
     links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
 };
 export type RotatedNode =
@@ -432,7 +457,9 @@ export type CryptoResults = {
     loginStart: { startLoginRequest: string };
     loginFinish: { finishLoginRequest: string };
     unlock: { userId: string };
-    identityOpen: { encryptionPublicKey: string };
+    identityOpen: { encryptionPublicKey: string; kemPublicKey: string | null };
+    identityMintKem: { kem: IdentityKem };
+    identityVerifyKem: { valid: boolean };
     settingsOpen: { settings: Settings };
     settingsSeal: { envelope: SettingsEnvelope };
     driveSealShare: { shareEnvelope: string };
@@ -525,8 +552,18 @@ export function createCryptoSession() {
     /* Previous node keys while a rotation runs: what children not yet rotated are still wrapped under. */
     const prevNodeKeys = new Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number }>();
     let identityKey:
-        | { userId: string; key: Uint8Array<ArrayBuffer>; publicKey: string }
+        | {
+              userId: string;
+              key: Uint8Array<ArrayBuffer>;
+              publicKey: string;
+              kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
+          }
         | undefined;
+    function forgetIdentity() {
+        identityKey?.key.fill(0);
+        identityKey?.kem?.secretKey.fill(0);
+        identityKey = undefined;
+    }
     type Upload = {
         workspaceId: string;
         contentKey: Uint8Array<ArrayBuffer>;
@@ -612,8 +649,7 @@ export function createCryptoSession() {
         return new Uint8Array(await file.slice(start, end).arrayBuffer());
     }
     function forgetDriveKeys() {
-        identityKey?.key.fill(0);
-        identityKey = undefined;
+        forgetIdentity();
         for (const entry of workspaceKeys.values()) entry.key.fill(0);
         for (const entry of nodeKeys.values()) entry.key.fill(0);
         for (const entry of prevNodeKeys.values()) entry.key.fill(0);
@@ -751,7 +787,12 @@ export function createCryptoSession() {
                     shareEnvelope: encode(
                         await sealShareKey(
                             fresh,
-                            decode(share.granteePublicKey, 32),
+                            {
+                                encryptionPublicKey: decode(share.granteePublicKey, 32),
+                                kemPublicKey: share.granteeKemPublicKey
+                                    ? decode(share.granteeKemPublicKey, 1184)
+                                    : null,
+                            },
                             identityKey.key,
                             {
                                 workspaceId,
@@ -1053,17 +1094,46 @@ export function createCryptoSession() {
                 const { userId, identity } = message.input;
                 if (!accountKey || unlockedUserId !== userId)
                     throw new CryptoError('Unlock your account first.');
-                if (identityKey && identityKey.userId === userId)
-                    return { encryptionPublicKey: identityKey.publicKey };
+                if (identityKey && identityKey.userId === userId && !message.input.refresh)
+                    return {
+                        encryptionPublicKey: identityKey.publicKey,
+                        kemPublicKey: identityKey.kem?.publicKey ?? null,
+                    };
                 const root = accountKey.slice();
                 try {
                     const key = await openIdentityEncryptionKey(root, userId, identity);
-                    identityKey?.key.fill(0);
-                    identityKey = { userId, key, publicKey: identity.encryptionPublicKey };
-                    return { encryptionPublicKey: identity.encryptionPublicKey };
+                    const kem = await openIdentityKemKey(root, userId, identity);
+                    forgetIdentity();
+                    identityKey = { userId, key, publicKey: identity.encryptionPublicKey, kem };
+                    return {
+                        encryptionPublicKey: identity.encryptionPublicKey,
+                        kemPublicKey: kem?.publicKey ?? null,
+                    };
                 } finally {
                     root.fill(0);
                 }
+            }
+            case 'identityMintKem': {
+                const { userId, identity } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                const root = accountKey.slice();
+                try {
+                    return { kem: await addIdentityKem(root, userId, identity) };
+                } finally {
+                    root.fill(0);
+                }
+            }
+            case 'identityVerifyKem': {
+                const { userId, encryptionPublicKey, signingPublicKey, kem } = message.input;
+                return {
+                    valid: await verifyKemBinding(
+                        userId,
+                        encryptionPublicKey,
+                        signingPublicKey,
+                        kem,
+                    ),
+                };
             }
             case 'settingsOpen': {
                 const { userId, envelope } = message.input;
@@ -1097,7 +1167,12 @@ export function createCryptoSession() {
                     );
                 const envelope = await sealShareKey(
                     node.key,
-                    decode(message.input.granteePublicKey, 32),
+                    {
+                        encryptionPublicKey: decode(message.input.granteePublicKey, 32),
+                        kemPublicKey: message.input.granteeKemPublicKey
+                            ? decode(message.input.granteeKemPublicKey, 1184)
+                            : null,
+                    },
                     identityKey.key,
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
@@ -1110,18 +1185,22 @@ export function createCryptoSession() {
                     throw new CryptoError('Open your identity first.');
                 const cached = nodeKeys.get(nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
+                const secrets = {
+                    privateKey: identityKey.key,
+                    kemSecretKey: identityKey.kem?.secretKey ?? null,
+                };
                 const key = await openShareKey(
-                    decode(message.input.shareEnvelope, 72),
+                    decode(message.input.shareEnvelope),
                     decode(message.input.granterPublicKey, 32),
-                    identityKey.key,
+                    secrets,
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
                 rememberNodeKey(nodeId, key, keyEpoch);
                 if (message.input.prevShareEnvelope && message.input.prevKeyEpoch) {
                     const previous = await openShareKey(
-                        decode(message.input.prevShareEnvelope, 72),
+                        decode(message.input.prevShareEnvelope),
                         decode(message.input.granterPublicKey, 32),
-                        identityKey.key,
+                        secrets,
                         {
                             workspaceId,
                             nodeId,

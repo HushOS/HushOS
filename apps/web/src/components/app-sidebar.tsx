@@ -1,20 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link, useLocation, useRouter } from '@tanstack/react-router';
-import { useEffect } from 'react';
-import {
-    CreditCardIcon,
-    FlagIcon,
-    FolderIcon,
-    GiftIcon,
-    PercentIcon,
-    KeyRoundIcon,
-    SettingsIcon,
-    Share2Icon,
-    ShieldCheckIcon,
-    Trash2Icon,
-    UsersIcon,
-} from 'lucide-react';
 import { Brand } from '@/components/brand';
+import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress';
 import {
     Sidebar,
     SidebarContent,
@@ -29,7 +14,6 @@ import {
     SidebarRail,
     useSidebar,
 } from '@/components/ui/sidebar';
-import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress';
 import { ProfileTrigger, UserMenu } from '@/components/user-menu';
 import {
     billingQueryOptions,
@@ -38,6 +22,22 @@ import {
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
+import { useQuery } from '@tanstack/react-query';
+import { Link, useLocation, useRouter } from '@tanstack/react-router';
+import {
+    CreditCardIcon,
+    FlagIcon,
+    FolderIcon,
+    GiftIcon,
+    KeyRoundIcon,
+    PercentIcon,
+    SettingsIcon,
+    Share2Icon,
+    ShieldCheckIcon,
+    Trash2Icon,
+    UsersIcon,
+} from 'lucide-react';
+import { useEffect } from 'react';
 
 type NavItem = {
     to:
@@ -141,7 +141,7 @@ function StorageMeter() {
                     {() =>
                         storage
                             ? `${formatGiB(storage.usedBytes)} / ${formatGiB(storage.quotaBytes)}`
-                            : '—'
+                            : '-'
                     }
                 </ProgressValue>
             </Progress>

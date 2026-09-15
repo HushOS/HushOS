@@ -180,6 +180,12 @@ export const driveApi: DriveApi = {
         unwrapDrive(api().nodes({ id: nodeId }).shares.get({ query: { workspaceId } })),
     revokeShare: (workspaceId, shareId) =>
         unwrapDrive(api().shares({ id: shareId }).delete({ workspaceId })),
+    resealShare: (workspaceId, shareId, input) =>
+        unwrapDrive(
+            api()
+                .shares({ id: shareId })
+                .envelope.put({ workspaceId, ...input }),
+        ),
     sharedWithMe: () => unwrapDrive(api().shares.get()),
     sharedByMe: () => unwrapDrive(api().shares.mine.get()),
     createLink: (workspaceId, nodeId, input) =>

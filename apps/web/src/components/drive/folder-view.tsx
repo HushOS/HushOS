@@ -1,3 +1,58 @@
+import { CommandPalette } from '@/components/drive/command-palette';
+import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
+import { useDrive } from '@/components/drive/drive-shell';
+import { HotkeyHints, Kbd } from '@/components/drive/hotkey-hints';
+import { InfoDialog } from '@/components/drive/info-dialog';
+import { MoveDialog } from '@/components/drive/move-dialog';
+import { Preview } from '@/components/drive/preview';
+import { RenameDialog } from '@/components/drive/rename-dialog';
+import { ReportDialog } from '@/components/drive/report-dialog';
+import { ShareDialog } from '@/components/drive/share-dialog';
+import { keyLabel } from '@/components/drive/shortcuts';
+import { UploadMenu, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
+import { VersionsDialog } from '@/components/drive/versions-dialog';
+import { Spinner } from '@/components/motion';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+import { Button } from '@/components/ui/button';
+import {
+    ContextMenu,
+    ContextMenuContent,
+    ContextMenuItem,
+    ContextMenuSeparator,
+    ContextMenuShortcut,
+    ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { toast } from '@/components/ui/toast';
+import { downloadNodes } from '@/lib/downloads';
+import {
+    copyInto,
+    driveClient,
+    driveError,
+    driveKeys,
+    folderQueryOptions,
+    formatBytes,
+    formatWhen,
+    invalidateFolders,
+    nodeSize,
+    sortNodes,
+} from '@/lib/drive';
+import { saveCopy } from '@/lib/save-copy';
+import { cue } from '@/lib/sounds';
+import { useThumbnail } from '@/lib/thumbnails';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import {
     draggable,
@@ -37,61 +92,6 @@ import {
     useSyncExternalStore,
     type MouseEvent,
 } from 'react';
-import { CommandPalette } from '@/components/drive/command-palette';
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
-import { useDrive } from '@/components/drive/drive-shell';
-import { HotkeyHints, Kbd } from '@/components/drive/hotkey-hints';
-import { MoveDialog } from '@/components/drive/move-dialog';
-import { Preview } from '@/components/drive/preview';
-import { RenameDialog } from '@/components/drive/rename-dialog';
-import { InfoDialog } from '@/components/drive/info-dialog';
-import { ReportDialog } from '@/components/drive/report-dialog';
-import { ShareDialog } from '@/components/drive/share-dialog';
-import { VersionsDialog } from '@/components/drive/versions-dialog';
-import { UploadMenu, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
-import { keyLabel } from '@/components/drive/shortcuts';
-import { Spinner } from '@/components/motion';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import {
-    Breadcrumb,
-    BreadcrumbItem,
-    BreadcrumbLink,
-    BreadcrumbList,
-    BreadcrumbPage,
-    BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
-import { Button } from '@/components/ui/button';
-import {
-    ContextMenu,
-    ContextMenuContent,
-    ContextMenuItem,
-    ContextMenuSeparator,
-    ContextMenuShortcut,
-    ContextMenuTrigger,
-} from '@/components/ui/context-menu';
-import { toast } from '@/components/ui/toast';
-import {
-    copyInto,
-    driveClient,
-    driveError,
-    driveKeys,
-    folderQueryOptions,
-    formatBytes,
-    formatWhen,
-    invalidateFolders,
-    nodeSize,
-    sortNodes,
-} from '@/lib/drive';
-import { downloadNodes } from '@/lib/downloads';
-import { saveCopy } from '@/lib/save-copy';
-import { useThumbnail } from '@/lib/thumbnails';
-import { cue } from '@/lib/sounds';
 
 /*
  * One folder at a time: a path, the rows, and the actions. Selection follows
@@ -1041,7 +1041,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     </td>
                                                     <td className="py-2.5 pr-5 text-right font-mono text-xs text-muted-foreground tabular-nums sm:pr-8">
                                                         {node.kind === 'folder'
-                                                            ? '—'
+                                                            ? '-'
                                                             : unavailable(node)
                                                               ? 'Unavailable'
                                                               : formatBytes(size)}
@@ -1118,7 +1118,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     onClick={(event) => select(node, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >
-                                                    <div className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden border-b bg-muted/40 sm:aspect-square">
+                                                    <div className="flex aspect-4/3 w-full items-center justify-center overflow-hidden border-b bg-muted/40 sm:aspect-square">
                                                         <NodeThumb
                                                             node={node}
                                                             className="h-full w-full"

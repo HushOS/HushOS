@@ -2503,6 +2503,8 @@ export async function listNodeShares(workspaceId: string, nodeId: string) {
             role: driveShares.role,
             keyEpoch: driveShares.keyEpoch,
             createdAt: driveShares.createdAt,
+            /* 1 for X25519 alone (72 bytes), 2 for the hybrid envelope (1160). */
+            suite: sql<number>`case when octet_length(${driveShares.shareEnvelope}) = 72 then 1 else 2 end`,
             grantee: { id: users.id, name: users.name, email: users.email },
         })
         .from(driveShares)
@@ -2589,10 +2591,20 @@ export async function listSharesByGranter(userId: string) {
                 role: driveShares.role,
                 keyEpoch: driveShares.keyEpoch,
                 createdAt: driveShares.createdAt,
+                suite: sql<number>`case when octet_length(${driveShares.shareEnvelope}) = 72 then 1 else 2 end`,
                 grantee: { id: users.id, name: users.name, email: users.email },
+                // The grantee's served identity, for the owner to check against the pin
+                // and re-seal a suite 1 share to a KEM key that appeared since.
+                granteeIdentity: {
+                    encryptionPublicKey: accountIdentities.encryptionPublicKey,
+                    signingPublicKey: accountIdentities.signingPublicKey,
+                    kemPublicKey: accountIdentities.kemPublicKey,
+                    kemSignature: accountIdentities.kemSignature,
+                },
             })
             .from(driveShares)
             .innerJoin(users, eq(users.id, driveShares.granteeUserId))
+            .innerJoin(accountIdentities, eq(accountIdentities.userId, driveShares.granteeUserId))
             .where(and(eq(driveShares.granterUserId, userId), isNull(driveShares.revokedAt)))
             .orderBy(desc(driveShares.createdAt));
         const nodes = await reachableNodes(tx, [...new Set(rows.map((row) => row.nodeId))]);
@@ -2600,6 +2612,52 @@ export async function listSharesByGranter(userId: string) {
             const node = nodes.get(row.nodeId);
             return node ? [{ ...row, node }] : [];
         });
+    });
+}
+
+/*
+ * Replaces a live share's envelope under the node's current key epoch: how a
+ * share sealed before the grantee had a KEM key is re-sealed hybrid. Only the
+ * granter, only the current epoch (a rotation in flight re-seals on its own),
+ * and never a share that is revoked or on a purged node.
+ */
+export async function resealShare(input: {
+    workspaceId: string;
+    shareId: string;
+    granterUserId: string;
+    keyEpoch: number;
+    shareEnvelope: Buffer;
+}) {
+    return db.transaction(async (tx) => {
+        const [share] = await tx
+            .select({
+                id: driveShares.id,
+                nodeId: driveShares.nodeId,
+                granterUserId: driveShares.granterUserId,
+            })
+            .from(driveShares)
+            .where(
+                and(
+                    eq(driveShares.id, input.shareId),
+                    eq(driveShares.workspaceId, input.workspaceId),
+                    isNull(driveShares.revokedAt),
+                ),
+            )
+            .for('update');
+        if (!share || share.granterUserId !== input.granterUserId)
+            return { status: 'not-found' as const };
+        const chain = await walk(tx, share.nodeId);
+        if (!chain || chain.purged) return { status: 'not-found' as const };
+        if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
+        await tx
+            .update(driveShares)
+            .set({
+                shareEnvelope: input.shareEnvelope,
+                keyEpoch: input.keyEpoch,
+                updatedAt: new Date(),
+            })
+            .where(eq(driveShares.id, share.id));
+        return { status: 'ok' as const };
     });
 }
 

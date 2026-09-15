@@ -1,6 +1,7 @@
 import type { SecurityAction } from '@hushos/crypto';
 /* Shown on the contacts page; re-exported so the app needs no direct crypto dependency. */
-export { fingerprint, publicKeyBytes } from '@hushos/crypto';
+export { fingerprint, keyDigest, publicKeyBytes } from '@hushos/crypto';
+import type { IdentityKem } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
 import { createAuthStore } from './store';
@@ -307,6 +308,7 @@ export function createAuthClient(
             api.confirmRecoveryBackup(recoveryVersion),
         storage: () => api.storage(),
         identity: () => api.identity(),
+        addIdentityKem: (kem: IdentityKem) => api.addIdentityKem(kem),
         lookupContact: (email: string) => api.lookupContact(email),
         settings: () => api.settings(),
         saveSettings: (input: { expectedVersion: number; nonce: string; ciphertext: string }) =>

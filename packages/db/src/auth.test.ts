@@ -6,6 +6,7 @@ import * as auth from './auth';
 import { db } from './client';
 import {
     accountEnrollments,
+    accountIdentities,
     accountIntents,
     billingCustomers,
     opaqueCredentials,
@@ -359,5 +360,106 @@ describe('server secrets', () => {
         expect(values[0]).toMatch(/^candidate-\d$/);
         // Names are separate secrets.
         expect(await auth.ensureServerSecret('other', () => 'other-value')).toBe('other-value');
+    });
+});
+
+describe('the identity’s KEM key', () => {
+    const kem = () => ({
+        kemPublicKey: bytes(1184),
+        kemSeedNonce: bytes(24),
+        encryptedKemSeed: bytes(80),
+        kemSignature: bytes(64),
+    });
+
+    test('is absent at first, added exactly once, and served on lookup', async () => {
+        const user = await registered('kem@hushos.test');
+        expect((await auth.lookupIdentity('kem@hushos.test'))?.kemPublicKey).toBeNull();
+        const first = kem();
+        expect(await auth.addIdentityKem({ userId: user.id, ...first })).toBe(true);
+        // A second device that raced to mint one is refused; the first key stands.
+        expect(await auth.addIdentityKem({ userId: user.id, ...kem() })).toBe(false);
+        const served = await auth.lookupIdentity('kem@hushos.test');
+        expect(served?.kemPublicKey?.equals(first.kemPublicKey)).toBe(true);
+        expect(served?.kemSignature?.equals(first.kemSignature)).toBe(true);
+        // Half a key is refused by the table itself.
+        await expect(
+            db
+                .update(accountIdentities)
+                .set({ kemSignature: null })
+                .where(eq(accountIdentities.userId, user.id)),
+        ).rejects.toThrow();
+    });
+
+    test('survives a master-key rotation unchanged and cannot be swapped by one', async () => {
+        const email = 'rotate@hushos.test';
+        const workspaceId = randomUUID();
+        const created = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment(email),
+            ...registration(workspaceId),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        const user = created.user;
+        const minted = kem();
+        await auth.addIdentityKem({ userId: user.id, ...minted });
+        const sessionTokenHash = await signedIn(user.id);
+        const stored = (await auth.getIdentity(user.id))!;
+        const change = (kemPublicKey: Buffer | null) =>
+            auth.changeAccountSecurity({
+                userId: user.id,
+                action: 'master-key',
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery: {
+                    keyVersion: 2,
+                    recoveryVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                    backupNonce: bytes(24),
+                    encryptedRecoveryKey: bytes(48),
+                    publicKey: bytes(32),
+                },
+                identity: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    encryptionPublicKey: stored.encryptionPublicKey,
+                    encryptionPrivateKeyNonce: bytes(24),
+                    encryptedEncryptionPrivateKey: bytes(48),
+                    signingPublicKey: stored.signingPublicKey,
+                    signingSeedNonce: bytes(24),
+                    encryptedSigningSeed: bytes(48),
+                    kemPublicKey,
+                    kemSeedNonce: kemPublicKey ? bytes(24) : null,
+                    encryptedKemSeed: kemPublicKey ? bytes(80) : null,
+                    kemSignature: kemPublicKey ? stored.kemSignature : null,
+                },
+                workspaces: [
+                    {
+                        id: workspaceId,
+                        grant: {
+                            keyVersion: 2,
+                            workspaceKeyVersion: 1,
+                            wrappingSalt: bytes(32),
+                            wrappingNonce: bytes(24),
+                            encryptedKey: bytes(48),
+                        },
+                    },
+                ],
+            });
+        // A different KEM key in the rewrapped bundle is a swap, and dropping it is a downgrade.
+        expect(await change(bytes(1184))).toBe(false);
+        expect(await change(null)).toBe(false);
+        // The same key, rewrapped under the new root, goes through.
+        expect(await change(minted.kemPublicKey)).toBe(true);
+        expect((await auth.getIdentity(user.id))?.kemPublicKey?.equals(minted.kemPublicKey)).toBe(
+            true,
+        );
     });
 });

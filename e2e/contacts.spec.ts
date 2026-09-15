@@ -46,6 +46,7 @@ test('a lookup shows the other person’s fingerprint, and a pin survives a relo
     await alice.getByLabel('Email').fill(bobEmail);
     await alice.getByRole('button', { name: 'Look up' }).click();
     await expect(alice.locator('[data-fingerprint]')).toHaveText(bobFingerprint);
+    await expect(alice.locator('[data-kem]')).toHaveAttribute('data-kem', 'signed');
     await alice.getByRole('button', { name: 'Pin contact' }).click();
     await expect(alice.getByText(/pinned$/)).toBeVisible();
     const row = alice.locator(`[data-contact="${bobEmail}"]`);

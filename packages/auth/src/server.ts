@@ -4,14 +4,14 @@ import type {
     SecurityUpdate,
     WorkspaceKeyEnvelope,
 } from '@hushos/crypto';
-import type { IdentityEnvelope } from '@hushos/crypto/identity';
+import { kemBinding, type IdentityEnvelope, type IdentityKem } from '@hushos/crypto/identity';
 import {
     verifyRecoveryReset,
     type RecoveryEnvelope,
     type RecoveryReset,
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, verify } from 'node:crypto';
 import { adminRepository, authRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import { sendShareEmail, sendVerificationEmail } from '@hushos/emails/server';
@@ -457,24 +457,57 @@ async function requireSession(sessionToken: string | null, message: string) {
 /* Identity, contacts, settings                                               */
 /* ------------------------------------------------------------------------- */
 
+type IdentityRow = NonNullable<Awaited<ReturnType<typeof authRepository.getIdentity>>>;
+function encodeIdentity(i: IdentityRow): IdentityEnvelope {
+    return {
+        version: 1,
+        keyVersion: i.keyVersion,
+        wrappingSalt: i.wrappingSalt.toString('base64url'),
+        encryptionPublicKey: i.encryptionPublicKey.toString('base64url'),
+        encryptionPrivateKeyNonce: i.encryptionPrivateKeyNonce.toString('base64url'),
+        encryptedEncryptionPrivateKey: i.encryptedEncryptionPrivateKey.toString('base64url'),
+        signingPublicKey: i.signingPublicKey.toString('base64url'),
+        signingSeedNonce: i.signingSeedNonce.toString('base64url'),
+        encryptedSigningSeed: i.encryptedSigningSeed.toString('base64url'),
+        kem:
+            i.kemPublicKey && i.kemSeedNonce && i.encryptedKemSeed && i.kemSignature
+                ? {
+                      publicKey: i.kemPublicKey.toString('base64url'),
+                      seedNonce: i.kemSeedNonce.toString('base64url'),
+                      encryptedSeed: i.encryptedKemSeed.toString('base64url'),
+                      signature: i.kemSignature.toString('base64url'),
+                  }
+                : null,
+    };
+}
+
 /* The person's own identity envelope, for the worker to open the private keys. */
 export async function getIdentityEnvelope(sessionToken: string | null) {
     const { user } = await requireSession(sessionToken, 'Sign in to open your identity.');
     const i = await authRepository.getIdentity(user.id);
     if (!i) throw new AuthError('Finish account setup first.', 409);
-    return {
-        identity: {
-            version: 1 as const,
-            keyVersion: i.keyVersion,
-            wrappingSalt: i.wrappingSalt.toString('base64url'),
-            encryptionPublicKey: i.encryptionPublicKey.toString('base64url'),
-            encryptionPrivateKeyNonce: i.encryptionPrivateKeyNonce.toString('base64url'),
-            encryptedEncryptionPrivateKey: i.encryptedEncryptionPrivateKey.toString('base64url'),
-            signingPublicKey: i.signingPublicKey.toString('base64url'),
-            signingSeedNonce: i.signingSeedNonce.toString('base64url'),
-            encryptedSigningSeed: i.encryptedSigningSeed.toString('base64url'),
-        },
-    };
+    return { identity: encodeIdentity(i) };
+}
+
+/*
+ * An identity made before hybrid sharing gets its KEM key: minted and signed on
+ * the person's device, checked here against the signing key on record, and
+ * stored once. A second device that raced is told so and re-reads.
+ */
+export async function addIdentityKem(sessionToken: string | null, kem: IdentityKem) {
+    const { user } = await requireSession(sessionToken, 'Sign in to finish account setup.');
+    const i = await authRepository.getIdentity(user.id);
+    if (!i) throw new AuthError('Finish account setup first.', 409);
+    if (i.kemPublicKey) throw new AuthError('This account already has a post-quantum key.', 409);
+    const decoded = decodeKem(
+        user.id,
+        i.encryptionPublicKey.toString('base64url'),
+        i.signingPublicKey,
+        kem,
+    );
+    if (!(await authRepository.addIdentityKem({ userId: user.id, ...decoded })))
+        throw new AuthError('This account already has a post-quantum key.', 409);
+    return { ok: true as const };
 }
 
 /*
@@ -495,6 +528,13 @@ export async function lookupContact(sessionToken: string | null, email: string) 
             email: found.email,
             encryptionPublicKey: found.encryptionPublicKey.toString('base64url'),
             signingPublicKey: found.signingPublicKey.toString('base64url'),
+            kem:
+                found.kemPublicKey && found.kemSignature
+                    ? {
+                          publicKey: found.kemPublicKey.toString('base64url'),
+                          signature: found.kemSignature.toString('base64url'),
+                      }
+                    : null,
         },
     };
 }
@@ -815,9 +855,63 @@ function encodeWorkspaceGrant(
         encryptedKey: grant.encryptedKey.toString('base64url'),
     };
 }
-function decodeIdentity(input: IdentityEnvelope, keyVersion = 1) {
+/* Ed25519 raw public keys, as Node wants them: the SubjectPublicKeyInfo prefix in front. */
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+/*
+ * The KEM half of an identity, with its binding checked against the signing
+ * key: the server never mints or replaces a KEM key, but it refuses to store one
+ * the identity did not sign, so a stored key is always one a contact can verify.
+ */
+function decodeKem(
+    userId: string,
+    encryptionPublicKey: string,
+    signingPublicKey: Buffer,
+    kem: IdentityKem,
+) {
+    const decoded = {
+        kemPublicKey: decodeField(kem.publicKey, 1184),
+        kemSeedNonce: decodeField(kem.seedNonce, 24),
+        encryptedKemSeed: decodeField(kem.encryptedSeed, 80),
+        kemSignature: decodeField(kem.signature, 64),
+    };
+    let valid = false;
+    try {
+        valid = verify(
+            null,
+            Buffer.from(kemBinding(userId, encryptionPublicKey, kem.publicKey)),
+            {
+                key: Buffer.concat([ED25519_SPKI_PREFIX, signingPublicKey]),
+                format: 'der',
+                type: 'spki',
+            },
+            decoded.kemSignature,
+        );
+    } catch {
+        valid = false;
+    }
+    if (!valid) throw new AuthError('The post-quantum key is not signed by this identity.');
+    return decoded;
+}
+function decodeIdentity(input: IdentityEnvelope, keyVersion = 1, userId?: string) {
     if (input.version !== 1 || input.keyVersion !== keyVersion)
         throw new AuthError('Unsupported identity key version.');
+    const signingPublicKey = decodeField(input.signingPublicKey, 32);
+    const kem =
+        input.kem && userId
+            ? decodeKem(userId, input.encryptionPublicKey, signingPublicKey, input.kem)
+            : input.kem
+              ? {
+                    kemPublicKey: decodeField(input.kem.publicKey, 1184),
+                    kemSeedNonce: decodeField(input.kem.seedNonce, 24),
+                    encryptedKemSeed: decodeField(input.kem.encryptedSeed, 80),
+                    kemSignature: decodeField(input.kem.signature, 64),
+                }
+              : {
+                    kemPublicKey: null,
+                    kemSeedNonce: null,
+                    encryptedKemSeed: null,
+                    kemSignature: null,
+                };
     return {
         version: 1,
         keyVersion,
@@ -825,9 +919,10 @@ function decodeIdentity(input: IdentityEnvelope, keyVersion = 1) {
         encryptionPublicKey: decodeField(input.encryptionPublicKey, 32),
         encryptionPrivateKeyNonce: decodeField(input.encryptionPrivateKeyNonce, 24),
         encryptedEncryptionPrivateKey: decodeField(input.encryptedEncryptionPrivateKey, 48),
-        signingPublicKey: decodeField(input.signingPublicKey, 32),
+        signingPublicKey,
         signingSeedNonce: decodeField(input.signingSeedNonce, 24),
         encryptedSigningSeed: decodeField(input.encryptedSigningSeed, 48),
+        ...kem,
     };
 }
 
@@ -911,7 +1006,7 @@ export async function initializeAccount(
         sessionTokenHash: hash(token),
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
         recovery: input.recovery ? decodeRecovery(input.recovery, 1, keyVersion) : undefined,
-        identity: input.identity ? decodeIdentity(input.identity, keyVersion) : undefined,
+        identity: input.identity ? decodeIdentity(input.identity, keyVersion, user.id) : undefined,
         workspace: input.workspace
             ? decodeWorkspaceGrant(input.workspace, undefined, keyVersion)
             : undefined,
@@ -967,17 +1062,7 @@ export async function startSecurityChange(
         },
         recovery: encodeRecovery(bundles.recovery),
         workspaces: bundles.workspaces.map(encodeWorkspaceGrant),
-        identity: {
-            version: 1,
-            keyVersion: i.keyVersion,
-            wrappingSalt: i.wrappingSalt.toString('base64url'),
-            encryptionPublicKey: i.encryptionPublicKey.toString('base64url'),
-            encryptionPrivateKeyNonce: i.encryptionPrivateKeyNonce.toString('base64url'),
-            encryptedEncryptionPrivateKey: i.encryptedEncryptionPrivateKey.toString('base64url'),
-            signingPublicKey: i.signingPublicKey.toString('base64url'),
-            signingSeedNonce: i.signingSeedNonce.toString('base64url'),
-            encryptedSigningSeed: i.encryptedSigningSeed.toString('base64url'),
-        },
+        identity: encodeIdentity(i),
     };
 }
 
@@ -1048,7 +1133,7 @@ export async function finishSecurityChange(
         recovery: input.recovery
             ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
             : undefined,
-        identity: input.identity ? decodeIdentity(input.identity, keyVersion) : undefined,
+        identity: input.identity ? decodeIdentity(input.identity, keyVersion, user.id) : undefined,
         workspaces: input.workspaces?.map((grant) =>
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),

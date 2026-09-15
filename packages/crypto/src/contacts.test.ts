@@ -95,3 +95,83 @@ describe('settings', () => {
         await expect(sealSettings(key, USER, 1, big)).rejects.toThrow(/too large/);
     });
 });
+
+describe('the identity’s KEM key', () => {
+    test('is minted at creation, opens under the root, and is refused when swapped', async () => {
+        const { openIdentityKemKey } = await import('./identity');
+        const { kemKeypair } = await import('./pq');
+        const { root, envelope } = await identityWithKey();
+        const opened = await openIdentityKemKey(root, USER, envelope);
+        expect(opened?.publicKey).toBe(envelope.kem!.publicKey);
+        expect(opened?.secretKey).toHaveLength(2400);
+        const other = (await identityWithKey()).envelope.kem!;
+        await expect(
+            openIdentityKemKey(root, USER, {
+                ...envelope,
+                kem: { ...envelope.kem!, publicKey: other.publicKey },
+            }),
+        ).rejects.toThrow();
+        await expect(openIdentityKemKey(root, OTHER, envelope)).rejects.toThrow();
+        expect(await openIdentityKemKey(root, USER, { ...envelope, kem: null })).toBeNull();
+        // The seed alone reproduces the pair: what a device expands, nothing else is stored.
+        expect(kemKeypair(new Uint8Array(64)).publicKey).toHaveLength(1184);
+    });
+
+    test('the binding is signed by the identity and fails for another identity, user or key', async () => {
+        const { verifyKemBinding } = await import('./identity');
+        const a = await identityWithKey();
+        const b = await identityWithKey(OTHER);
+        const ok = (envelope: typeof a.envelope, userId = USER) =>
+            verifyKemBinding(
+                userId,
+                envelope.encryptionPublicKey,
+                envelope.signingPublicKey,
+                envelope.kem!,
+            );
+        expect(await ok(a.envelope)).toBe(true);
+        expect(await ok(b.envelope, OTHER)).toBe(true);
+        expect(await ok(a.envelope, OTHER)).toBe(false);
+        // A server that swaps in its own KEM key cannot sign for it.
+        expect(
+            await ok({
+                ...a.envelope,
+                kem: { ...a.envelope.kem!, publicKey: b.envelope.kem!.publicKey },
+            }),
+        ).toBe(false);
+        expect(await ok({ ...a.envelope, signingPublicKey: b.envelope.signingPublicKey })).toBe(
+            false,
+        );
+        expect(
+            await ok({ ...a.envelope, encryptionPublicKey: b.envelope.encryptionPublicKey }),
+        ).toBe(false);
+    });
+
+    test('an identity from before hybrid sharing gets a key that opens, verifies, and survives a rewrap', async () => {
+        const { addIdentityKem, openIdentityKemKey, rewrapIdentity, verifyKemBinding } =
+            await import('./identity');
+        const { root, envelope } = await identityWithKey();
+        const legacy = { ...envelope, kem: undefined };
+        const kem = await addIdentityKem(root, USER, legacy);
+        const upgraded = { ...legacy, kem };
+        expect(
+            await verifyKemBinding(
+                USER,
+                upgraded.encryptionPublicKey,
+                upgraded.signingPublicKey,
+                kem,
+            ),
+        ).toBe(true);
+        expect((await openIdentityKemKey(root, USER, upgraded))?.publicKey).toBe(kem.publicKey);
+        await expect(addIdentityKem(root, USER, upgraded)).rejects.toThrow();
+        // Master-key rotation rewraps the seed under the new root; the public key and signature stay.
+        const nextRoot = crypto.getRandomValues(new Uint8Array(32));
+        const rewrapped = await rewrapIdentity(root, nextRoot, USER, upgraded, 2);
+        expect(rewrapped.kem?.publicKey).toBe(kem.publicKey);
+        expect(rewrapped.kem?.signature).toBe(kem.signature);
+        expect(rewrapped.kem?.encryptedSeed).not.toBe(kem.encryptedSeed);
+        expect((await openIdentityKemKey(nextRoot, USER, rewrapped))?.publicKey).toBe(
+            kem.publicKey,
+        );
+        await expect(openIdentityKemKey(root, USER, rewrapped)).rejects.toThrow();
+    });
+});

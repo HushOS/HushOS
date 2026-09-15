@@ -91,7 +91,8 @@ export type RotationWorkNode = NodeView & {
         contentSuite: number;
         plaintextSize: string | null;
     }[];
-    shares: { id: string; granteeUserId: string; granteePublicKey: string }[];
+    /* Each live share with the grantee's served identity, for the owner's pin check before re-sealing. */
+    shares: { id: string; granteeUserId: string; grantee: ServedIdentity }[];
     links: { id: string; hasPassword: boolean; secretEnvelope: string | null }[];
 };
 export type RotationWork = {
@@ -183,7 +184,15 @@ export type ShareView = {
     role: ShareRole;
     keyEpoch: number;
     createdAt: string;
+    /* 1: sealed under X25519 alone; 2: hybrid, with ML-KEM-768 beside it. */
+    suite: 1 | 2;
     grantee: { id: string; name: string; email: string };
+};
+/* The grantee's identity as the server serves it, for the owner to check against a pin. */
+export type ServedIdentity = {
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    kem: { publicKey: string; signature: string } | null;
 };
 /* A share received: the node as a root of its own, and the granter's key to check against a pin. */
 export type SharedWithMeView = {
@@ -350,6 +359,12 @@ export interface DriveApi {
         input: { granteeUserId: string; role: ShareRole; keyEpoch: number; shareEnvelope: string },
     ): Promise<{ share: ShareView }>;
     nodeShares(workspaceId: string, nodeId: string): Promise<{ shares: ShareView[] }>;
+    /* Replaces a live share's envelope at the current epoch: how a suite 1 share becomes hybrid. */
+    resealShare(
+        workspaceId: string,
+        shareId: string,
+        input: { keyEpoch: number; shareEnvelope: string },
+    ): Promise<{ resealed: true }>;
     revokeShare(workspaceId: string, shareId: string): Promise<{ revoked: boolean }>;
     sharedWithMe(): Promise<{ shares: SharedWithMeView[] }>;
     createLink(
@@ -395,7 +410,7 @@ export interface DriveApi {
     revokeLink(workspaceId: string, linkId: string): Promise<{ revoked: boolean }>;
     /* Everything the caller shares out, by account and by link, with the nodes to name them. */
     sharedByMe(): Promise<{
-        shares: (ShareView & { node: NodeView })[];
+        shares: (ShareView & { node: NodeView; granteeIdentity: ServedIdentity })[];
         links: (LinkView & { node: NodeView })[];
     }>;
     /* Who a report is sealed to, and filing one; neither needs a session. */

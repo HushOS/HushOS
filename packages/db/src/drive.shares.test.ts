@@ -127,7 +127,8 @@ beforeEach(async () => {
         wrappingNonce: randomBytes(24),
         encryptedKey: randomBytes(48),
     });
-    await identityFor(owner.userId);
+    // Every account has an identity; the owner's listing joins the grantee's.
+    for (const person of [owner, guest, stranger]) await identityFor(person.userId);
     const created = await drive.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
@@ -336,5 +337,45 @@ describe('shares and the trash', () => {
         expect((await drive.listSharesForGrantee(guest.userId)).map((row) => row.node.id)).toEqual([
             keep.id,
         ]);
+    });
+});
+
+describe('hybrid envelopes and re-sealing', () => {
+    test('a share takes a suite 1 or suite 2 envelope and nothing in between', async () => {
+        const project = await folder(rootId, rootEpoch);
+        expect(
+            (await share(project, guest.userId, 'viewer', { shareEnvelope: randomBytes(1160) }))
+                .status,
+        ).toBe('ok');
+        await expect(
+            share(project, stranger.userId, 'viewer', { shareEnvelope: randomBytes(100) }),
+        ).rejects.toThrow();
+    });
+
+    test('the granter re-seals a live share under the current epoch only', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const made = await share(project, guest.userId);
+        if (made.status !== 'ok') throw new Error(made.status);
+        const reseal = (overrides: Partial<Parameters<typeof drive.resealShare>[0]> = {}) =>
+            drive.resealShare({
+                workspaceId: owner.workspaceId,
+                shareId: made.share.id,
+                granterUserId: owner.userId,
+                keyEpoch: project.keyEpoch,
+                shareEnvelope: randomBytes(1160),
+                ...overrides,
+            });
+        expect((await reseal({ granterUserId: guest.userId })).status).toBe('not-found');
+        expect((await reseal({ keyEpoch: project.keyEpoch + 1 })).status).toBe('stale');
+        const hybrid = randomBytes(1160);
+        expect((await reseal({ shareEnvelope: hybrid })).status).toBe('ok');
+        const listed = await drive.listSharesForGrantee(guest.userId);
+        expect(listed[0]?.shareEnvelope.equals(hybrid)).toBe(true);
+        // The owner's listing carries the grantee's served identity for the pin check.
+        const mine = await drive.listSharesByGranter(owner.userId);
+        expect(mine[0]?.granteeIdentity.encryptionPublicKey).toHaveLength(32);
+        expect(mine[0]?.granteeIdentity.kemPublicKey).toBeNull();
+        await drive.revokeShare(owner.workspaceId, made.share.id);
+        expect((await reseal()).status).toBe('not-found');
     });
 });

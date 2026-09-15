@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { createDeviceKey, rememberAccountKey } from './device';
 import { createIdentity } from './identity';
-import { openShareKey, sealShareKey } from './shares';
+import { HYBRID_SHARE_ENVELOPE_BYTES, openShareKey, sealShareKey } from './shares';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode } from './keys';
@@ -72,16 +72,24 @@ describe('share envelopes', () => {
             granteeUserId: GUEST,
             granterUserId: OWNER,
         };
-        const envelope = await sealShareKey(nodeKey, publicKey(guest), owner.privateKey, ctx);
+        const legacy = (who: (typeof identities)[number]) => ({
+            encryptionPublicKey: publicKey(who),
+            kemPublicKey: null,
+        });
+        const secrets = (who: (typeof identities)[number]) => ({
+            privateKey: who.privateKey,
+            kemSecretKey: null,
+        });
+        const envelope = await sealShareKey(nodeKey, legacy(guest), owner.privateKey, ctx);
         expect(envelope).toHaveLength(72);
-        const opened = await openShareKey(envelope, publicKey(owner), guest.privateKey, ctx);
+        const opened = await openShareKey(envelope, publicKey(owner), secrets(guest), ctx);
         expect(Buffer.from(opened).equals(Buffer.from(nodeKey))).toBe(true);
         // The wrong person, the wrong granter key, or a shifted context: refused.
         await expect(
-            openShareKey(envelope, publicKey(owner), stranger.privateKey, ctx),
+            openShareKey(envelope, publicKey(owner), secrets(stranger), ctx),
         ).rejects.toThrow();
         await expect(
-            openShareKey(envelope, publicKey(stranger), guest.privateKey, ctx),
+            openShareKey(envelope, publicKey(stranger), secrets(guest), ctx),
         ).rejects.toThrow();
         for (const change of [
             { keyEpoch: 4 },
@@ -90,8 +98,83 @@ describe('share envelopes', () => {
             { granterUserId: GUEST },
         ])
             await expect(
-                openShareKey(envelope, publicKey(owner), guest.privateKey, { ...ctx, ...change }),
+                openShareKey(envelope, publicKey(owner), secrets(guest), { ...ctx, ...change }),
             ).rejects.toThrow();
+    });
+
+    test('the hybrid suite needs both private halves, and a suite 1 envelope still opens beside it', async () => {
+        const { openIdentityEncryptionKey, openIdentityKemKey } = await import('./identity');
+        const { KEM_CIPHERTEXT_BYTES } = await import('./pq');
+        const make = async (userId: string) => {
+            const root = crypto.getRandomValues(new Uint8Array(32));
+            const envelope = await createIdentity(root, userId);
+            return {
+                envelope,
+                privateKey: await openIdentityEncryptionKey(root, userId, envelope),
+                kem: (await openIdentityKemKey(root, userId, envelope))!,
+            };
+        };
+        const [owner, guest, stranger] = await Promise.all([make(OWNER), make(GUEST), make(CHILD)]);
+        const nodeKey = crypto.getRandomValues(new Uint8Array(32));
+        const ctx = {
+            workspaceId: WS,
+            nodeId: SHARED,
+            keyEpoch: 3,
+            granteeUserId: GUEST,
+            granterUserId: OWNER,
+        };
+        const guestKeys = {
+            encryptionPublicKey: decode(guest.envelope.encryptionPublicKey, 32),
+            kemPublicKey: decode(guest.kem.publicKey, 1184),
+        };
+        const ownerPublic = decode(owner.envelope.encryptionPublicKey, 32);
+        const envelope = await sealShareKey(nodeKey, guestKeys, owner.privateKey, ctx);
+        expect(envelope).toHaveLength(HYBRID_SHARE_ENVELOPE_BYTES);
+        const both = { privateKey: guest.privateKey, kemSecretKey: guest.kem.secretKey };
+        expect(
+            Buffer.from(await openShareKey(envelope, ownerPublic, both, ctx)).equals(
+                Buffer.from(nodeKey),
+            ),
+        ).toBe(true);
+        // The X25519 half alone is not enough, nor is it with somebody else's KEM key.
+        await expect(
+            openShareKey(envelope, ownerPublic, { ...both, kemSecretKey: null }, ctx),
+        ).rejects.toThrow(/does not hold/);
+        await expect(
+            openShareKey(
+                envelope,
+                ownerPublic,
+                { ...both, kemSecretKey: stranger.kem.secretKey },
+                ctx,
+            ),
+        ).rejects.toThrow();
+        // Nor is the KEM half with somebody else's X25519 key.
+        await expect(
+            openShareKey(envelope, ownerPublic, { ...both, privateKey: stranger.privateKey }, ctx),
+        ).rejects.toThrow();
+        // A bit flipped in the KEM ciphertext: ML-KEM rejects implicitly, the AEAD refuses.
+        const tampered = envelope.slice();
+        tampered[24 + KEM_CIPHERTEXT_BYTES - 1]! ^= 1;
+        await expect(openShareKey(tampered, ownerPublic, both, ctx)).rejects.toThrow();
+        // The same context under the other suite does not open it either.
+        const asLegacy = await sealShareKey(
+            nodeKey,
+            { ...guestKeys, kemPublicKey: null },
+            owner.privateKey,
+            ctx,
+        );
+        expect(asLegacy).toHaveLength(72);
+        expect(
+            Buffer.from(await openShareKey(asLegacy, ownerPublic, both, ctx)).equals(
+                Buffer.from(nodeKey),
+            ),
+        ).toBe(true);
+        await expect(
+            openShareKey(envelope.subarray(0, 72), ownerPublic, both, ctx),
+        ).rejects.toThrow();
+        await expect(
+            openShareKey(envelope.subarray(0, 100), ownerPublic, both, ctx),
+        ).rejects.toThrow();
     });
 
     test('through the session: the contact reads the shared folder and nothing above it', async () => {
@@ -127,7 +210,9 @@ describe('share envelopes', () => {
             granterUserId: OWNER,
             granteeUserId: GUEST,
             granteePublicKey: guest.identity.encryptionPublicKey,
+            granteeKemPublicKey: guest.identity.kem!.publicKey,
         })) as { shareEnvelope: string };
+        expect(decode(shareEnvelope)).toHaveLength(HYBRID_SHARE_ENVELOPE_BYTES);
         // A stale epoch is refused before anything is sealed.
         await expect(
             owner.call('driveSealShare', {

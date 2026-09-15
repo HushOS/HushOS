@@ -31,7 +31,7 @@ The stable X25519 and Ed25519 identities prepare for recipient key exchange and 
 - OPAQUE profile 1: Serenity's Ristretto implementation, explicit Argon2id with 65,536 KiB memory, three iterations, parallelism four, and server identifier `hushos/opaque/profile/1`.
 - Envelope suite 1: HKDF-SHA-256 and libsodium XChaCha20-Poly1305-IETF, combined ciphertext followed by its 16-byte tag.
 - Account-key revisions begin at 1 and increment on master-key rotation; each root is 32 random bytes. Credential revisions increment on password change, password recovery, and either key rotation, independently of root revisions.
-- Identity suite 1: independently generated `crypto_box_keypair` (X25519) and `crypto_sign_seed_keypair` (Ed25519 from a random 32-byte seed).
+- Identity suite 1: independently generated `crypto_box_keypair` (X25519) and `crypto_sign_seed_keypair` (Ed25519 from a random 32-byte seed), plus an ML-KEM-768 (FIPS 203) key pair expanded from a random 64-byte seed, for hybrid share sealing. The KEM half is null on identities made before it existed and is minted on their next unlock.
 - Recovery suite 1: a random 32-byte secret encoded as 24 English BIP39 words. Recovery revisions increment when that secret is replaced.
 - Device suite 1: browser Web Crypto AES-256-GCM with a non-exportable device key, 12-byte nonce, and 16-byte tag.
 
@@ -78,13 +78,14 @@ encryptedKey = XChaCha20-Poly1305-IETF(workspaceKey, wrappingKey, nonce, aad)
 
 ## Stable account identity
 
-At signup, create independent X25519 encryption and Ed25519 signing key pairs. Encrypt the X25519 private key (32 bytes) and Ed25519 seed (32 bytes), each producing 48-byte ciphertext. Only public keys and encrypted private material reach the server.
+At signup, create independent X25519 encryption and Ed25519 signing key pairs, and an ML-KEM-768 key pair. Encrypt the X25519 private key (32 bytes) and Ed25519 seed (32 bytes), each producing 48-byte ciphertext, and the 64-byte ML-KEM seed, producing 80 bytes; the ML-KEM key pair is expanded from the seed wherever it is used and never stored expanded. Only public keys and encrypted private material reach the server.
 
 A single fresh identity wrapping salt is 32 bytes; each envelope uses its own random 24-byte nonce. HKDF input is the account root, with distinct `info` strings:
 
 ```text
 hushos/identity/encryption-private-wrap/v1
 hushos/identity/signing-seed-wrap/v1
+hushos/identity/kem-seed-wrap/v1
 ```
 
 Associated data is:
@@ -93,7 +94,9 @@ Associated data is:
 ["hushos/identity", 1, lowercase(userId), keyVersion, purpose, publicKeyBase64url]
 ```
 
-`purpose` is respectively `encryption-private-wrap` or `signing-seed-wrap`. Public-key binding detects substitution when the client opens the envelope. The encrypted Ed25519 seed reconstructs its full signing key using libsodium. Identity records are unchanged during password recovery; authenticated master-key rotation rewraps their private material while preserving the public keys. [Libsodium signatures](https://doc.libsodium.org/public-key_cryptography/public-key_signatures).
+`purpose` is respectively `encryption-private-wrap`, `signing-seed-wrap` or `kem-seed-wrap`. Public-key binding detects substitution when the client opens the envelope. The encrypted Ed25519 seed reconstructs its full signing key using libsodium; the encrypted ML-KEM seed reconstructs its key pair with noble's FIPS 203 implementation. Identity records are unchanged during password recovery; authenticated master-key rotation rewraps their private material while preserving the public keys, the KEM key included, and the server refuses a rotation whose bundle names a different KEM key or none. [Libsodium signatures](https://doc.libsodium.org/public-key_cryptography/public-key_signatures).
+
+The KEM public key carries a binding signature by the identity's Ed25519 key over `["hushos/identity/kem", 1, lowercase(userId), x25519PublicKeyBase64url, kemPublicKeyBase64url]`. It names no key version, so it survives rotation. The server verifies it before storing the key, at registration and when an older identity adds one through `POST /api/auth/identity/kem` (once; a second device that raced is told so and re-reads), and serves the signature beside the key so contacts can verify it against the signing key they pinned. This is what lets the fingerprint stay over the X25519 key alone: no pin changed when identities gained their KEM keys, and a server that swapped a KEM key alone could not sign for it.
 
 ## Recovery envelopes and authorization
 

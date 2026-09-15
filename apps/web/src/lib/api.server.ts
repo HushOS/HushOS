@@ -178,6 +178,11 @@ const uuidSchema = t.String({
 const epochSchema = t.Integer({ minimum: 1, maximum: 2147483646 });
 // 72 bytes of nonce || wrapped key is 96 Base64url characters; metadata is bounded by its column.
 const keyEnvelopeSchema = t.String({ minLength: 96, maxLength: 96, pattern: '^[A-Za-z0-9_-]+$' });
+/* A share envelope: 72 bytes under X25519 alone, 1160 with the ML-KEM ciphertext beside it. */
+const shareEnvelopeSchema = t.Union([
+    keyEnvelopeSchema,
+    t.String({ minLength: 1547, maxLength: 1547, pattern: '^[A-Za-z0-9_-]+$' }),
+]);
 /* A suite 2 version envelope (84 bytes): the content key sealed with the sizes. */
 const versionEnvelopeSchema = t.String({
     minLength: 112,
@@ -265,8 +270,16 @@ const recoverySchema = t.Object({
     publicKey: tokenSchema,
 });
 
+/* The KEM half of an identity: a 1184-byte public key, an 80-byte wrapped seed, a 64-byte signature. */
+const identityKemSchema = t.Object({
+    publicKey: t.String({ minLength: 1579, maxLength: 1579, pattern: '^[A-Za-z0-9_-]+$' }),
+    seedNonce: t.String({ minLength: 32, maxLength: 32 }),
+    encryptedSeed: t.String({ minLength: 107, maxLength: 107 }),
+    signature: t.String({ minLength: 86, maxLength: 86 }),
+});
 const identitySchema = t.Object({
     version: t.Literal(1),
+    kem: t.Optional(t.Nullable(identityKemSchema)),
     keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     wrappingSalt: tokenSchema,
     encryptionPublicKey: tokenSchema,
@@ -492,6 +505,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ sessionToken, body }) => auth.confirmRecoveryBackup(sessionToken, body.recoveryVersion),
     )
     .get('/auth/identity', ({ sessionToken }) => auth.getIdentityEnvelope(sessionToken))
+    .post('/auth/identity/kem', { body: identityKemSchema }, ({ sessionToken, body }) =>
+        auth.addIdentityKem(sessionToken, body),
+    )
     .get(
         '/auth/contacts/lookup',
         { query: t.Object({ email: emailSchema }) },
@@ -970,7 +986,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 granteeUserId: uuidSchema,
                 role: t.Union([t.Literal('viewer'), t.Literal('editor')]),
                 keyEpoch: epochSchema,
-                shareEnvelope: keyEnvelopeSchema,
+                shareEnvelope: shareEnvelopeSchema,
             }),
         },
         async ({ request, sessionToken, params, body, log }) => {
@@ -993,6 +1009,24 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 (await driveUser(request, sessionToken)).id,
                 query.workspaceId,
                 params.id,
+            ),
+    )
+    .put(
+        '/drive/shares/:id/envelope',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({
+                workspaceId: uuidSchema,
+                keyEpoch: epochSchema,
+                shareEnvelope: shareEnvelopeSchema,
+            }),
+        },
+        async ({ request, sessionToken, params, body }) =>
+            drive.resealShare(
+                (await driveMutation(request, sessionToken)).id,
+                body.workspaceId,
+                params.id,
+                body,
             ),
     )
     .delete(
@@ -1159,7 +1193,10 @@ export const apiApp = new Elysia({ prefix: '/api' })
                                     { maxItems: 1000 },
                                 ),
                                 shares: t.Array(
-                                    t.Object({ id: uuidSchema, shareEnvelope: keyEnvelopeSchema }),
+                                    t.Object({
+                                        id: uuidSchema,
+                                        shareEnvelope: shareEnvelopeSchema,
+                                    }),
                                     { maxItems: 1000 },
                                 ),
                                 links: t.Array(

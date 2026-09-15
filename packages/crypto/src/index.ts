@@ -21,4 +21,4 @@ export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './securi
 export type { WorkspaceKeyEnvelope } from './workspace';
 export type { NodeMetadata } from './drive';
 export type { ContactPin, Settings, SettingsEnvelope } from './contacts';
-export { fingerprint, publicKeyBytes } from './fingerprint';
+export { fingerprint, keyDigest, publicKeyBytes } from './fingerprint';

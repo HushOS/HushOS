@@ -794,11 +794,18 @@ export async function changeAccountSecurity(input: {
         )
             return false;
         if (input.action === 'master-key') {
+            // Public identity survives the rotation: the same X25519, signing and, once
+            // it exists, KEM key. A KEM key is added by its own path, never here.
+            const sameKem =
+                current.identity.kemPublicKey === null
+                    ? !input.identity?.kemPublicKey
+                    : Boolean(input.identity?.kemPublicKey?.equals(current.identity.kemPublicKey));
             if (
                 !input.identity ||
                 input.identity.keyVersion !== input.envelope.keyVersion ||
                 !input.identity.encryptionPublicKey.equals(current.identity.encryptionPublicKey) ||
-                !input.identity.signingPublicKey.equals(current.identity.signingPublicKey)
+                !input.identity.signingPublicKey.equals(current.identity.signingPublicKey) ||
+                !sameKem
             )
                 return false;
             // Every grant this member holds must follow the root, with its workspace key
@@ -893,11 +900,34 @@ export async function lookupIdentity(normalizedEmail: string) {
             email: users.email,
             encryptionPublicKey: accountIdentities.encryptionPublicKey,
             signingPublicKey: accountIdentities.signingPublicKey,
+            kemPublicKey: accountIdentities.kemPublicKey,
+            kemSignature: accountIdentities.kemSignature,
         })
         .from(users)
         .innerJoin(accountIdentities, eq(accountIdentities.userId, users.id))
         .where(eq(users.normalizedEmail, normalizedEmail));
     return row ?? null;
+}
+
+/*
+ * Gives an identity made before hybrid sharing its KEM key, once: the first
+ * device to unlock after the change mints it, and a second device that raced
+ * is told so and re-reads. The X25519 and signing keys are never touched here.
+ */
+export async function addIdentityKem(input: {
+    userId: string;
+    kemPublicKey: Buffer;
+    kemSeedNonce: Buffer;
+    encryptedKemSeed: Buffer;
+    kemSignature: Buffer;
+}) {
+    const { userId, ...kem } = input;
+    const [row] = await db
+        .update(accountIdentities)
+        .set(kem)
+        .where(and(eq(accountIdentities.userId, userId), isNull(accountIdentities.kemPublicKey)))
+        .returning({ userId: accountIdentities.userId });
+    return row !== undefined;
 }
 
 export async function getSettings(userId: string) {

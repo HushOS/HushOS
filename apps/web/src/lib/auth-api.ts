@@ -28,6 +28,7 @@ export const authApi: AuthApi = {
     deleteFinish: (input) => unwrap(api().delete.finish.post(input)),
     updateProfile: (name) => unwrap(api().profile.post({ name })),
     identity: () => unwrap(api().identity.get()),
+    addIdentityKem: (kem) => unwrap(api().identity.kem.post(kem)),
     lookupContact: (email) => unwrap(api().contacts.lookup.get({ query: { email } })),
     settings: () => unwrap(api().settings.get()),
     saveSettings: (input) => unwrap(api().settings.put(input)),

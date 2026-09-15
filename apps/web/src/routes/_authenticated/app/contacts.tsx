@@ -126,6 +126,7 @@ function Contacts() {
                                         <p className="text-sm">{contact.name}</p>
                                         <p className="font-mono text-[11px] text-muted-foreground">
                                             {contact.email} · pinned {formatWhen(contact.pinnedAt)}
+                                            {contact.kemPublicKeyHash ? ' · post-quantum' : ''}
                                         </p>
                                         <p className="mt-1 font-mono text-[11px] wrap-anywhere">
                                             {contact.fingerprint}
@@ -234,6 +235,18 @@ function AddContact({ userId }: { userId: string }) {
                                 data-fingerprint
                             >
                                 {found.fingerprint}
+                            </p>
+                            <p
+                                className="mt-1 font-mono text-[11px] text-muted-foreground"
+                                data-kem={
+                                    found.kem ? (found.kem.valid ? 'signed' : 'unsigned') : 'none'
+                                }
+                            >
+                                {found.kem
+                                    ? found.kem.valid
+                                        ? 'Post-quantum key present, signed by this identity.'
+                                        : 'Post-quantum key present but not signed by this identity. Do not pin.'
+                                    : 'No post-quantum key yet; they get one the next time they sign in.'}
                             </p>
                             {found.changed && (
                                 <p

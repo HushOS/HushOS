@@ -264,12 +264,25 @@ export const accountIdentities = pgTable(
         signingPublicKey: bytea('signing_public_key').notNull(),
         signingSeedNonce: bytea('signing_seed_nonce').notNull(),
         encryptedSigningSeed: bytea('encrypted_signing_seed').notNull(),
+        /*
+         * The ML-KEM-768 half, for hybrid share sealing: the public key, the seed
+         * wrapped under the root, and the Ed25519 binding by the signing key. All
+         * null on an identity made before hybrid sharing, until its next unlock.
+         */
+        kemPublicKey: bytea('kem_public_key'),
+        kemSeedNonce: bytea('kem_seed_nonce'),
+        encryptedKemSeed: bytea('encrypted_kem_seed'),
+        kemSignature: bytea('kem_signature'),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [
         check(
             'account_identities_versions_valid',
             sql`${table.version} = 1 and ${table.keyVersion} > 0`,
+        ),
+        check(
+            'account_identities_kem_valid',
+            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (${table.kemPublicKey} is not null and ${table.kemSeedNonce} is not null and ${table.encryptedKemSeed} is not null and ${table.kemSignature} is not null and octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and octet_length(${table.kemSignature}) = 64)`,
         ),
         check(
             'account_identities_lengths_valid',

@@ -19,6 +19,12 @@ export async function fingerprint(encryptionPublicKey: Uint8Array) {
     return hex.match(/.{4}/g)!.join(' ');
 }
 
+/* SHA-256 of a public key, as hex: what a pin keeps of a contact's ML-KEM key instead of 1184 bytes. */
+export async function keyDigest(publicKey: Uint8Array) {
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', publicKey.slice()));
+    return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /* Base64url to bytes without the keys module, which pulls in the password profile. */
 export function publicKeyBytes(value: string) {
     const binary = atob(value.replaceAll('-', '+').replaceAll('_', '/'));

@@ -597,12 +597,24 @@ Sharing is built after the first release, but the tree, the keys and the walk ar
 
 A share is one node's key, sealed to one grantee, with a role. The grantee unwraps the node key and descends the subtree exactly as the owner does, because every descendant's key is wrapped under its parent's. A share is one row and one envelope whatever the size of the subtree, and the workspace key is never involved.
 
+Share envelopes come in two suites, told apart by length. Suite 2 is hybrid: the X25519 agreement of suite 1 and an ML-KEM-768 (FIPS 203) encapsulation to the grantee's post-quantum identity key, combined so the envelope opens only for someone holding both private halves and stays shut unless both problems fall. Suite 1 is still read, for shares made before the grantee had a KEM key, and still written for a grantee who has none yet; it is never chosen when the grantee's KEM key is known, and a suite 1 share is re-sealed as suite 2 by the owner's device once the grantee's key appears (see re-sealing below).
+
 ```text
-shareEnvelope (to an account)
+shareEnvelope, suite 1 (72 bytes; X25519 alone)
   key   = crypto_box_beforenm(granteePk, granterSk)   // X25519 identity keys, libsodium
   nonce = random(24)
   aad   = ["hushos/drive/share", 1, workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId]
   body  = XChaCha20-Poly1305(nodeKey, key, nonce, aad)   // 48 bytes
+  envelope = nonce || body
+
+shareEnvelope, suite 2 (1160 bytes; hybrid X25519 + ML-KEM-768)
+  pair    = crypto_box_beforenm(granteePk, granterSk)
+  ct, ss  = ML-KEM-768.Encaps(granteeKemPk)             // ct 1088 bytes, ss 32 bytes; noble
+  key     = HKDF-SHA-256(ikm = pair || ss, salt = ct, info = "hushos/drive/share-key/v2")
+  nonce   = random(24)
+  aad     = ["hushos/drive/share", 2, workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId]
+  body    = XChaCha20-Poly1305(nodeKey, key, nonce, aad)   // 48 bytes
+  envelope = nonce || ct || body
 
 linkEnvelope (to anyone with the link)
   linkSecret  = random(32), carried in the URL fragment, never sent to the server
@@ -615,12 +627,18 @@ linkEnvelope (to anyone with the link)
 
 ### Pinned identity keys
 
-The granter seals to the grantee's identity encryption key, which the server serves, and the grantee derives the same key from the granter's public key. Because the server serves those keys, a dishonest server could substitute its own and read the share.
+The granter seals to the grantee's identity keys, which the server serves, and the grantee derives the same key from the granter's public key. Because the server serves those keys, a dishonest server could substitute its own and read the share.
 
 - The client pins a contact's key on first use and shows both people a fingerprint to compare. A changed key is a warning that must be accepted, never a silent update.
 - Pins live in the person's encrypted settings on the server, sealed under a key derived from the identity encryption private key, which survives password changes, root rotation and recovery unchanged, so the settings never need rewrapping. Every device they unlock sees the same pins.
 - A pin kept in one browser would make each new device trust-on-first-use again, which is the attack the pin exists to catch.
+- The fingerprint covers the X25519 key. The ML-KEM key is vouched for by the identity's Ed25519 signing key: the identity signs `["hushos/identity/kem", 1, userId, x25519PublicKey, kemPublicKey]`, the server refuses to store a KEM key without a valid signature, and a client verifies it before using the key. A pin records the KEM key's SHA-256 the first time it is seen valid; a different KEM key served later is refused like a changed X25519 key, and a KEM key that goes missing is refused as a downgrade, so a server cannot quietly turn hybrid shares back into X25519 ones.
+- Every place the server, not the person, names the grantee goes through the pin: the share dialog looks the pinned contact up and seals to the served keys only when they match the pin; a rotation re-seals each remaining share to the pinned keys and leaves a share whose served keys the pin refuses with its old envelope, which the rotation makes unopenable, rather than sealing to a key nobody vouched for; and the background pass that re-seals older shares does the same.
 - Key transparency is a later layer on top of the same pin.
+
+### Re-sealing older shares
+
+An identity made before hybrid sharing has no KEM key. On its next unlock the device mints one (seed wrapped under the root beside the X25519 key, binding signed), stores it once through `POST /api/auth/identity/kem`, and from then on every share sealed to that person is suite 2. Shares sealed to them earlier stay suite 1 until the owner's device next opens Drive: it lists what it shares out, and for each suite 1 share whose grantee now serves a KEM key the pin accepts, re-seals the node key hybrid at the current epoch through `PUT /api/drive/shares/:id/envelope`. The repository accepts that only from the granter, only for a live share, and only at the node's current key epoch, so a rotation in flight is never raced.
 
 ### Authorization is the walk
 
