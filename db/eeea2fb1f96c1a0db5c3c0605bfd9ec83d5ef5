@@ -1,0 +1,24 @@
+apps/web/src/components/email-step.tsx
+  s_3e6b5e360451dc::t_6148b30d47377b 15,28-31,33-34,39-40,46-63,122-125,128-146
+  s_3e6b5e360451dc::t_b2cc44ead56bf7 126-127
+e2e/referrals.spec.ts
+  s_3e6b5e360451dc::t_b2cc44ead56bf7 78,85
+  s_3e6b5e360451dc::t_b84dc5befe97ed 83-84
+  s_3e6b5e360451dc::t_6148b30d47377b 73-77,79-82,86-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dbeeea2fb1f96c1a0db5c3c0605bfd9ec83d5ef5",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
