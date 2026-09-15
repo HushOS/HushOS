@@ -1,0 +1,21 @@
+packages/crypto/src/session.drive.test.ts
+  s_3e6b5e360451dc::t_143a63b778bbe9 529-535
+AGENTS.md
+  s_3e6b5e360451dc::t_143a63b778bbe9 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a813a0faa1c73d0d6855213d71a21f0c546cd910",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
