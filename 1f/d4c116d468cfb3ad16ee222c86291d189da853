@@ -1,0 +1,22 @@
+apps/web/src/routes/_authenticated/app/shared.tsx
+  s_3e6b5e360451dc::t_b915d681b55564 7,14-15,105-117,120,124-126,155,173-178,191,256,317-320,330-341
+e2e/sharing.spec.ts
+  s_3e6b5e360451dc::t_cb227596a43569 210-232,234-235
+  s_3e6b5e360451dc::t_e9c81be8879815 233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1fd4c116d468cfb3ad16ee222c86291d189da853",
+  "prompts": {},
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
