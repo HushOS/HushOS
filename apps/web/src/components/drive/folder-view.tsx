@@ -1,4 +1,3 @@
-import { CommandPalette } from '@/components/drive/command-palette';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { useDrive } from '@/components/drive/drive-shell';
 import { HotkeyHints, Kbd } from '@/components/drive/hotkey-hints';
@@ -60,6 +59,7 @@ import {
 } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import type { DriveNode, FolderListing } from '@hushos/drive/client';
 import { useHotkey } from '@tanstack/react-hotkeys';
+import { lendPaletteContext, usePaletteOpen } from '@/lib/palette';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import {
@@ -79,6 +79,9 @@ import {
     ListIcon,
     PencilIcon,
     Share2Icon,
+    SquareCheckIcon,
+    SquareIcon,
+    SquareMinusIcon,
     Trash2Icon,
     UploadIcon,
 } from 'lucide-react';
@@ -135,6 +138,54 @@ function NodeThumb({
                 'aria-hidden': 'true',
                 className: `${iconClassName} ${node.kind === 'folder' ? 'text-primary' : 'text-muted-foreground'}`,
             })}
+        </span>
+    );
+}
+
+/*
+ * Once anything is selected, every row and tile shows a box in place of, or
+ * over, its icon: on a phone that is the one target that reliably adds or
+ * removes a row, where a tap elsewhere on the row is easy to miss and a tap on
+ * the name opens it. It is a checkbox in role and behaviour, and it stops the
+ * tap from reaching the row underneath so a tap is exactly one toggle.
+ */
+function SelectMark({
+    checked,
+    indeterminate = false,
+    name,
+    className,
+    onToggle,
+}: {
+    checked: boolean;
+    /* Some but not all: the header's box while a selection is partial. */
+    indeterminate?: boolean;
+    name: string;
+    className: string;
+    onToggle: () => void;
+}) {
+    return (
+        <span className={`flex items-center justify-center ${className}`}>
+            {/* The input covers the box and takes the tap; the icon beneath is its face. */}
+            <input
+                type="checkbox"
+                className="absolute inset-0 size-full cursor-default appearance-none opacity-0"
+                checked={checked}
+                ref={(input) => {
+                    if (input) input.indeterminate = indeterminate;
+                }}
+                aria-label={`Select ${name}`}
+                tabIndex={-1}
+                onChange={onToggle}
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+            />
+            {checked ? (
+                <SquareCheckIcon aria-hidden="true" className="size-4 text-primary" />
+            ) : indeterminate ? (
+                <SquareMinusIcon aria-hidden="true" className="size-4 text-primary" />
+            ) : (
+                <SquareIcon aria-hidden="true" className="size-4 text-muted-foreground" />
+            )}
         </span>
     );
 }
@@ -300,7 +351,7 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [sharing, setSharing] = useState<DriveNode | null>(null);
     const [reporting, setReporting] = useState<DriveNode | null>(null);
     const [trashing, setTrashing] = useState(false);
-    const [paletteOpen, setPaletteOpen] = useState(false);
+    const paletteOpen = usePaletteOpen();
     // The viewer's state lives in the URL: opening a file pushes an entry, the
     // arrows replace it, and closing goes back, so the browser's back button
     // dismisses the viewer and a preview can be opened in a new tab.
@@ -394,6 +445,19 @@ export function FolderView({ folderId }: { folderId: string }) {
             });
         else setSelected(new Set([node.id]));
     }
+    /* The checkbox's toggle: always additive, whatever the pointer or modifier. */
+    function toggle(node: DriveNode) {
+        setFocused(node.id);
+        setAnchor(node.id);
+        setSelected((current) => {
+            const next = new Set(current);
+            if (next.has(node.id)) next.delete(node.id);
+            else next.add(node.id);
+            return next;
+        });
+    }
+    const selecting = selection.length > 0;
+    const allSelected = rows.length > 0 && selection.length === rows.length;
     function open(node: DriveNode) {
         if (node.kind === 'folder') void navigate(folderLink(rootId, node.id));
         else showPreview(node);
@@ -601,6 +665,41 @@ export function FolderView({ folderId }: { folderId: string }) {
     );
     // The whole view takes drops, not only the list: an empty folder has no list.
     const over = useDropZone(dropRef, folder, rows);
+    const paletteHandlers = useRef({ download, trash });
+    useEffect(() => {
+        paletteHandlers.current = { download, trash };
+    });
+    // The command center, mounted at the app's root, shows this folder's actions while it is on screen.
+    useEffect(() => {
+        lendPaletteContext({
+            folders: rows.filter((row) => row.kind === 'folder'),
+            parentId: folder?.parentId ?? null,
+            selection,
+            rows: rows.length,
+            view,
+            setView,
+            selectAll: () => setSelected(new Set(rows.map((row) => row.id))),
+            clearSelection: () => setSelected(new Set()),
+            actions: {
+                newFolder: () => setCreating(true),
+                upload: () => picker.current?.pickFiles(),
+                rename: () => selection.length === 1 && setRenaming(selection[0]!),
+                move: () => selection.length > 0 && setMoving(selection),
+                copy: () => selection.length > 0 && setCopying(selection),
+                versions: () =>
+                    selection.length === 1 &&
+                    selection[0]!.kind === 'file' &&
+                    setVersionsOf(selection[0]!),
+                share: () =>
+                    selection.length === 1 &&
+                    selection[0]!.workspaceId === workspaceId &&
+                    setSharing(selection[0]!),
+                download: () => paletteHandlers.current.download(selection),
+                trash: () => void paletteHandlers.current.trash(selection),
+            },
+        });
+    }, [rows, folder, selection, view, workspaceId]);
+    useEffect(() => () => lendPaletteContext(null), []);
 
     /* Moves dragged rows into a folder row or a breadcrumb ancestor; with Alt held, copies them. */
     async function moveTo(ids: string[], destination: DriveNode, copy = false) {
@@ -798,6 +897,20 @@ export function FolderView({ folderId }: { folderId: string }) {
                 <Button
                     variant="ghost"
                     size="xs"
+                    aria-label={allSelected ? 'Clear selection' : 'Select all'}
+                    aria-pressed={allSelected}
+                    disabled={!rows.length}
+                    className={view === 'grid' ? '' : 'hidden'}
+                    onClick={() =>
+                        setSelected(allSelected ? new Set() : new Set(rows.map((row) => row.id)))
+                    }
+                >
+                    {allSelected ? <SquareCheckIcon /> : <SquareIcon />}
+                    <span className="max-sm:sr-only">{allSelected ? 'Clear' : 'Select all'}</span>
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="xs"
                     aria-label="Rename"
                     disabled={selection.length !== 1}
                     onClick={() => setRenaming(selection[0]!)}
@@ -975,7 +1088,26 @@ export function FolderView({ folderId }: { folderId: string }) {
                                             scope="col"
                                             className="eyebrow py-2.5 pl-5 text-left font-medium text-muted-foreground sm:pl-8"
                                         >
-                                            Name
+                                            <span className="flex items-center gap-3">
+                                                {rows.length > 0 && (
+                                                    <SelectMark
+                                                        checked={allSelected}
+                                                        indeterminate={selecting && !allSelected}
+                                                        name={allSelected ? 'none' : 'all'}
+                                                        className="relative size-6 shrink-0"
+                                                        onToggle={() =>
+                                                            setSelected(
+                                                                allSelected
+                                                                    ? new Set()
+                                                                    : new Set(
+                                                                          rows.map((row) => row.id),
+                                                                      ),
+                                                            )
+                                                        }
+                                                    />
+                                                )}
+                                                Name
+                                            </span>
                                         </th>
                                         <th
                                             scope="col"
@@ -1017,11 +1149,20 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                             onClick={(event) => select(node, event)}
                                                             onDoubleClick={() => open(node)}
                                                         >
-                                                            <NodeThumb
-                                                                node={node}
-                                                                className="size-6 shrink-0"
-                                                                iconClassName="size-4"
-                                                            />
+                                                            {selecting ? (
+                                                                <SelectMark
+                                                                    checked={isSelected}
+                                                                    name={node.name}
+                                                                    className="relative size-6 shrink-0"
+                                                                    onToggle={() => toggle(node)}
+                                                                />
+                                                            ) : (
+                                                                <NodeThumb
+                                                                    node={node}
+                                                                    className="size-6 shrink-0"
+                                                                    iconClassName="size-4"
+                                                                />
+                                                            )}
                                                             <NodeName
                                                                 node={node}
                                                                 rootId={rootId}
@@ -1118,12 +1259,20 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     onClick={(event) => select(node, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >
-                                                    <div className="flex aspect-4/3 w-full items-center justify-center overflow-hidden border-b bg-muted/40 sm:aspect-square">
+                                                    <div className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden border-b bg-muted/40 sm:aspect-square">
                                                         <NodeThumb
                                                             node={node}
                                                             className="h-full w-full"
                                                             iconClassName="size-8"
                                                         />
+                                                        {selecting && (
+                                                            <SelectMark
+                                                                checked={isSelected}
+                                                                name={node.name}
+                                                                className="absolute top-2 left-2 size-8 border bg-popover shadow-hard"
+                                                                onToggle={() => toggle(node)}
+                                                            />
+                                                        )}
                                                     </div>
                                                     <div className="min-w-0 px-2.5 py-2">
                                                         <p className="truncate text-sm">
@@ -1250,30 +1399,6 @@ export function FolderView({ folderId }: { folderId: string }) {
                 signedIn
                 open={reporting !== null}
                 onOpenChange={(open) => !open && setReporting(null)}
-            />
-            <CommandPalette
-                open={paletteOpen}
-                onOpenChange={setPaletteOpen}
-                folders={rows.filter((row) => row.kind === 'folder')}
-                parentId={folder?.parentId ?? null}
-                selection={selection}
-                actions={{
-                    newFolder: () => setCreating(true),
-                    upload: () => picker.current?.pickFiles(),
-                    rename: () => selection.length === 1 && setRenaming(selection[0]!),
-                    move: () => selection.length > 0 && setMoving(selection),
-                    copy: () => selection.length > 0 && setCopying(selection),
-                    versions: () =>
-                        selection.length === 1 &&
-                        selection[0]!.kind === 'file' &&
-                        setVersionsOf(selection[0]!),
-                    share: () =>
-                        selection.length === 1 &&
-                        selection[0]!.workspaceId === workspaceId &&
-                        setSharing(selection[0]!),
-                    download: () => download(selection),
-                    trash: () => void trash(selection),
-                }}
             />
             <Preview
                 files={rows.filter((row) => row.kind === 'file')}
