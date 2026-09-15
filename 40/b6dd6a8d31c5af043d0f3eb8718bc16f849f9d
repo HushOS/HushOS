@@ -1,0 +1,41 @@
+apps/web/src/routes/security/route.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 3-4
+apps/web/src/routes/blog/$slug.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 5,59-60,67
+apps/web/src/lib/post-bodies.ts
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 1-11
+apps/web/vite.config.ts
+  s_3e6b5e360451dc::t_de37997cd4926a 20,27-28,31-32,36
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 10-19,21-26,29-30,33-35,37-40,70
+apps/web/src/routes/privacy/route.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 3-4
+apps/web/src/lib/content.ts
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 8-12,14-19,22
+apps/web/src/mdx.d.ts
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 8-12
+apps/web/src/routes/terms/route.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 3-4
+apps/web/src/routes/about/route.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "40b6dd6a8d31c5af043d0f3eb8718bc16f849f9d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
