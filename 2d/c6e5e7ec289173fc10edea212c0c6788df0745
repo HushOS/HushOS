@@ -1,0 +1,28 @@
+apps/web/src/components/copy-button.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 1,20,30,36
+apps/web/src/lib/motion-features.ts
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 1-4
+apps/web/src/components/motion.tsx
+  s_3e6b5e360451dc::t_d4fdb623d2aef5 1,16-18,21-25,37,46,65,74,96,108,147,156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2dc6e5e7ec289173fc10edea212c0c6788df0745",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
