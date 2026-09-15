@@ -1,0 +1,24 @@
+turbo.json
+  s_d510e9fe2caa17::t_948350c531dde3 14,70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5380be7c7c05a72d62cce4434c5f96129c91c19e",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
