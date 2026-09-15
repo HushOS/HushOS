@@ -1,4 +1,5 @@
 import { Brand } from '@/components/brand';
+import { setPaletteOpen } from '@/lib/palette';
 import { Progress, ProgressLabel, ProgressValue } from '@/components/ui/progress';
 import {
     Sidebar,
@@ -32,6 +33,7 @@ import {
     KeyRoundIcon,
     PercentIcon,
     SettingsIcon,
+    ZapIcon,
     Share2Icon,
     ShieldCheckIcon,
     Trash2Icon,
@@ -59,7 +61,7 @@ type NavItem = {
 };
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
-const workspace: NavItem[] = [
+export const workspace: NavItem[] = [
     // Drive is the app's home: the root and every folder page.
     {
         to: '/app',
@@ -75,7 +77,7 @@ const workspace: NavItem[] = [
     },
     { to: '/app/trash', label: 'Trash', icon: Trash2Icon, active: under('/app/trash') },
 ];
-const account: NavItem[] = [
+export const account: NavItem[] = [
     { to: '/app/account', label: 'Settings', icon: SettingsIcon, active: under('/app/account') },
     { to: '/app/contacts', label: 'Contacts', icon: UsersIcon, active: under('/app/contacts') },
     {
@@ -98,7 +100,7 @@ const account: NavItem[] = [
         active: under('/app/referrals'),
     },
 ];
-const operator: NavItem[] = [
+export const operator: NavItem[] = [
     {
         to: '/app/admin',
         label: 'Management',
@@ -184,6 +186,28 @@ export function AppSidebar({
                 />
             </SidebarHeader>
             <SidebarContent>
+                <SidebarGroup>
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            <SidebarMenuItem>
+                                <SidebarMenuButton
+                                    tooltip="Quick actions"
+                                    data-cuelume-hover="tick"
+                                    onClick={() => {
+                                        setOpenMobile(false);
+                                        setPaletteOpen(true);
+                                    }}
+                                >
+                                    <ZapIcon aria-hidden="true" />
+                                    <span>Quick actions</span>
+                                    <kbd className="ml-auto font-mono text-[10px] text-muted-foreground max-sm:hidden">
+                                        ⌘K
+                                    </kbd>
+                                </SidebarMenuButton>
+                            </SidebarMenuItem>
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
                 <SidebarGroup>
                     <SidebarGroupLabel>Workspace</SidebarGroupLabel>
                     <SidebarGroupContent>

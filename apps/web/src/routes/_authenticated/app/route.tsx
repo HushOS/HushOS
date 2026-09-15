@@ -6,6 +6,7 @@ import { AppSidebar } from '@/components/app-sidebar';
 import { DeviceControl } from '@/components/device-control';
 import { ReleaseNotice } from '@/components/release-notice';
 import { CollisionDialog } from '@/components/drive/collision-dialog';
+import { CommandCenter } from '@/components/drive/command-palette';
 import { StorageFullDialog } from '@/components/drive/storage-full-dialog';
 import { TransfersPanel } from '@/components/drive/transfers-panel';
 import { Spinner, TextSwap } from '@/components/motion';
@@ -208,6 +209,7 @@ function AppLayout() {
             <TransfersPanel />
             <StorageFullDialog />
             <CollisionDialog />
+            <CommandCenter user={user} />
         </SidebarProvider>
     );
 }

@@ -27,6 +27,7 @@ import {
     trashQueryOptions,
 } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
+import { emptyTrashAll } from '@/lib/trash';
 
 /*
  * Everything with its own trashed_at, newest first. Restore puts it back where it
@@ -34,7 +35,7 @@ import { cue } from '@/lib/sounds';
  * which is a move and a restore in one request.
  */
 export function TrashView() {
-    const { rootId } = useDrive();
+    const { rootId, userId } = useDrive();
     const queryClient = useQueryClient();
     const trash = useQuery(trashQueryOptions);
     const root = useQuery(folderQueryOptions(rootId));
@@ -70,13 +71,7 @@ export function TrashView() {
         setEmptying(0);
         let purged = 0;
         try {
-            for (;;) {
-                const step = await driveClient.emptyTrash();
-                purged += step.purged;
-                setEmptying(purged);
-                await queryClient.invalidateQueries({ queryKey: trashQueryOptions.queryKey });
-                if (step.remaining === 0 || step.purged === 0) break;
-            }
+            purged = await emptyTrashAll(queryClient, userId, setEmptying);
             cue('droplet');
             toast.add({
                 type: 'success',
