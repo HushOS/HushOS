@@ -1,0 +1,53 @@
+e2e/helpers.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 6-12,25-47
+  s_3e6b5e360451dc::t_f9e344b6e5a34e 92-94
+  s_3e6b5e360451dc::t_6d1bac5698808c 48
+.env.example
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 85-88
+e2e/contacts.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 3,22,24
+e2e/sharing.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 2,28,30,196
+e2e/screenshots.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 6,224,323,341
+e2e/palette.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 2,20
+e2e/links.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 3,42,70,115,131,178,219
+e2e/mobile.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 2,20
+e2e/referrals.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 2,28,48,75,97
+CONTRIBUTING.md
+  s_3e6b5e360451dc::t_28b0c4f7575d1f 21
+e2e/reports.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 4,32,37,63,150,197
+playwright.config.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 19,43-46
+  s_3e6b5e360451dc::t_2591e1df8df9ac 14-16
+e2e/office.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 2,21
+e2e/drive.spec.ts
+  s_3e6b5e360451dc::t_0a2d3d49b604fa 4,36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d2e3aea544594d53ca5965db825e929f3da6aec6",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_3e6b5e360451dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bde8b957-50ac-4c5e-9b63-d8bd8567c598",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
