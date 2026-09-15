@@ -7,7 +7,7 @@
         "dev": "vite --strictPort",
         "build": "vite build",
         "start": "NODE_ENV=production PORT=${PORT:-5173} bun .output/server/index.mjs",
-        "typecheck": "tsr generate && tsc --noEmit",
+        "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "test:watch": "vitest",
         "images:optimize": "bun scripts/optimize-images.tsx",
@@ -79,7 +79,6 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@tailwindcss/vite": "4.3.3",
-        "@tanstack/router-cli": "1.167.33",
         "@testing-library/jest-dom": "7.0.1",
         "@testing-library/react": "16.3.3",
         "@testing-library/user-event": "14.6.7",
