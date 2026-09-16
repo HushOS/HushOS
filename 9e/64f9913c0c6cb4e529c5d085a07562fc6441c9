@@ -1,0 +1,61 @@
+packages/crypto/src/session.drive.test.ts
+  s_d510e9fe2caa17::t_639e1dad2dc328 707,725,728
+  s_d510e9fe2caa17::t_b7abc37dcaa299 704-706,708-724,726-727,729-730
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 57
+  s_d510e9fe2caa17::t_865581ac3a559d 2-56,58-64,66,68-888
+  s_d510e9fe2caa17::t_d8c14b54692676 1,65,67
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_d510e9fe2caa17::t_865581ac3a559d 1-22,24,26-166
+  s_d510e9fe2caa17::t_d8c14b54692676 23,25
+apps/web/src/routes/_authenticated/app/_drive/trash.tsx
+  s_d510e9fe2caa17::t_d8c14b54692676 11,13
+  s_d510e9fe2caa17::t_865581ac3a559d 1-10,12,14-15
+packages/crypto/src/session.ts
+  s_d510e9fe2caa17::t_d0843408deb188 66-67,237-239,493-494,1439-1460
+packages/crypto/src/drive.ts
+  s_d510e9fe2caa17::t_0f165e0ce5095a 41-45,70,87,199-209,318-319,325-332,338-362
+  s_d510e9fe2caa17::t_64e8912d4b551c 46-67,266-270,333-337
+  s_d510e9fe2caa17::t_4fe93bcee3c94d 68-69,320-324
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_d510e9fe2caa17::t_2544420a697e7d 146,221
+  s_d510e9fe2caa17::t_865581ac3a559d 1-31,33,35-145,147-220,222-342
+  s_d510e9fe2caa17::t_d8c14b54692676 32,34
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_d510e9fe2caa17::t_d8c14b54692676 39,41
+  s_d510e9fe2caa17::t_865581ac3a559d 1-21,23-30,32-38,40,42-393
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 31
+  s_d510e9fe2caa17::t_93592969ed0c0f 22
+packages/crypto/src/drive.test.ts
+  s_d510e9fe2caa17::t_f3cce828ef7103 31,34-35,363-399,401-402
+  s_d510e9fe2caa17::t_e9034d29ee5bda 400
+  s_d510e9fe2caa17::t_ca9903a809fcc9 403-405,407,410,420,450-451
+  s_d510e9fe2caa17::t_64e8912d4b551c 32-33,37,406,408,411-418,421-422,428-449
+  s_d510e9fe2caa17::t_18e5ab0f7ff345 409,419,423-427
+apps/web/src/routes/_authenticated/app/_drive/drive/f.$folderId.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 1-22
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_d510e9fe2caa17::t_865581ac3a559d 1-5,7-36,38,40-307
+  s_d510e9fe2caa17::t_d8c14b54692676 6,37,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9e64f9913c0c6cb4e529c5d085a07562fc6441c9",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
