@@ -1,0 +1,65 @@
+packages/drive/package.json
+  s_d510e9fe2caa17::t_ca9903a809fcc9 14-16
+packages/drive/src/mirror.ts
+  s_d510e9fe2caa17::t_21b786657e3b18 1-120
+packages/drive/src/tags.ts
+  s_d510e9fe2caa17::t_18e5ab0f7ff345 85-88,92-94
+  s_d510e9fe2caa17::t_be494bcacf10e9 15-29,77-79,103-107,110-115,120,124,141-142,145
+  s_d510e9fe2caa17::t_69043f43f38ddc 133
+  s_d510e9fe2caa17::t_142bca7bb13c51 1,8-14,30-31,34-37,39-40,42,44-46,48-54,56-60,62,65-76,80-83,98-102,108-109,116-118,121-123,125,127-131,134,136-140,143,146-148,150,153-154,178-180,187-197,204-205,217
+  s_d510e9fe2caa17::t_ce1cfbe59cd462 2-7,32-33,55,63-64,84,89-91,95-97,126,135,144,149,151-152,155-165,167-177,181-186,198-203,206-216
+  s_d510e9fe2caa17::t_74a3a20906e7c4 38,41,43,47,61,119,132,166
+packages/drive/src/catalogue.ts
+  s_d510e9fe2caa17::t_18e5ab0f7ff345 195-197
+  s_d510e9fe2caa17::t_569c1ada278e67 1-2,4-13,15,59-61,63,66-86,103-105,110-124,127,133-185,189,191-192,217,223,225-254
+  s_d510e9fe2caa17::t_f13cca989bfe1d 28,58,187,190,202-203,211-213,215,218-222,224
+  s_d510e9fe2caa17::t_d245668981882d 36-37,199-201
+  s_d510e9fe2caa17::t_143c3e19f9d4de 14,16-27,29-35,38-57,186,188,193-194,198,204-210,214,216
+  s_d510e9fe2caa17::t_7eed9f4e80b576 3,62,64-65,87-102,106-109,125-126
+  s_d510e9fe2caa17::t_2d45b1ded7eaa4 128-132
+packages/drive/src/api.ts
+  s_d510e9fe2caa17::t_e4a89c3f1ef7c8 83-89
+  s_d510e9fe2caa17::t_ca85194adf3406 90-91,408-414
+packages/drive/src/client.ts
+  s_d510e9fe2caa17::t_143c3e19f9d4de 105
+  s_d510e9fe2caa17::t_7eed9f4e80b576 13,17,441-444,447-450,469,484,487,1451
+  s_d510e9fe2caa17::t_fceaa8f293f6df 34
+  s_d510e9fe2caa17::t_4fe93bcee3c94d 300-301,370-374
+  s_d510e9fe2caa17::t_5b258e83ed79fc 328-330
+  s_d510e9fe2caa17::t_ebc61bf2ac0dc8 9-12,14-16,18-19,94-100,117-122,260-299,302-327,331-369,375-395,401,406-440,445-446,451-468,470-483,485-486,488-489,1152,1391-1397,1439-1446,1449-1450,1452-1455
+  s_d510e9fe2caa17::t_555932310fb333 103-104,106
+  s_d510e9fe2caa17::t_f13cca989bfe1d 396-400,402-405,1447-1448
+  s_d510e9fe2caa17::t_decd82f4c8ddd0 101
+packages/drive/src/server.ts
+  s_d510e9fe2caa17::t_e4a89c3f1ef7c8 2277,2294
+  s_d510e9fe2caa17::t_2ea693ffdfac81 30,198-200,817-854
+  s_d510e9fe2caa17::t_251175212e388d 93-95
+  s_d510e9fe2caa17::t_1c3129400e49c7 855
+docs/drive-design.md
+  s_d510e9fe2caa17::t_0c802ff9659370 153-157,159,161
+  s_d510e9fe2caa17::t_69e076beb25934 138-149,151-152,163,777
+  s_d510e9fe2caa17::t_542af8842a6eda 135,150,158,160,162
+packages/drive/src/protocol.ts
+  s_d510e9fe2caa17::t_c52a383ce80627 17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ab35f8d8207e20d3da1416a39c8e46b97a4e7c35",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
