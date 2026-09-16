@@ -1,0 +1,67 @@
+packages/crypto/src/reports.test.ts
+  s_d510e9fe2caa17::t_38e2affaab3905 3-9,27-40,45,47,49,51-53,55,61,65-95,97-112,114-115
+packages/db/drizzle/20260915234814_hybrid_reports/snapshot.json
+  s_d510e9fe2caa17::t_56781de014a55d 1-7723
+  s_d510e9fe2caa17::t_97da2b6727fd76 7724-7726
+packages/db/src/readiness.ts
+  s_d510e9fe2caa17::t_56781de014a55d 14
+packages/drive/src/client.ts
+  s_d510e9fe2caa17::t_59558059f139a4 722-727
+apps/web/src/content/blog/post-quantum-sharing.mdx
+  s_d510e9fe2caa17::t_59558059f139a4 40-41
+packages/drive/src/server.ts
+  s_d510e9fe2caa17::t_38e2affaab3905 1583,1703,1705
+  s_d510e9fe2caa17::t_59558059f139a4 1683-1689,1691-1697,1701-1702,1704,1706-1713,1771,1927,1941
+packages/crypto/src/hybrid.ts
+  s_d510e9fe2caa17::t_59558059f139a4 1-33
+packages/crypto/src/reports.ts
+  s_d510e9fe2caa17::t_38e2affaab3905 84-88,103,116-118,168-172
+  s_d510e9fe2caa17::t_59558059f139a4 3-10,14-29,34-39,49-68,72,82,89,91-98,108-109,112,114-115,119-152,160,164,166-167,173-204,207
+  s_d510e9fe2caa17::t_b4bad2f8eec0e9 90
+packages/crypto/src/shares.ts
+  s_d510e9fe2caa17::t_59558059f139a4 4,41-42,113,152
+docs/drive-design.md
+  s_d510e9fe2caa17::t_59558059f139a4 31
+packages/db/src/schema/drive.ts
+  s_d510e9fe2caa17::t_38e2affaab3905 456-459
+  s_d510e9fe2caa17::t_59558059f139a4 442
+packages/db/src/reports.ts
+  s_d510e9fe2caa17::t_59558059f139a4 42-44
+packages/db/drizzle/20260915234814_hybrid_reports/migration.sql
+  s_d510e9fe2caa17::t_56781de014a55d 1
+packages/crypto/src/session.ts
+  s_d510e9fe2caa17::t_59558059f139a4 21,187-193,1266-1277,1281-1296,1299,1309-1314
+packages/drive/src/api.ts
+  s_d510e9fe2caa17::t_59558059f139a4 437-438
+apps/web/src/content/security.mdx
+  s_d510e9fe2caa17::t_59558059f139a4 46,244
+packages/db/src/drive.reports.test.ts
+  s_d510e9fe2caa17::t_a779c6ab4348e4 231,236
+  s_d510e9fe2caa17::t_b7056d1cbd40f1 215,217-224,229,232-235,241-244,247,249-251,253-254
+  s_d510e9fe2caa17::t_2d7d00ac2fb877 216,225-228,230,237-240,245-246,248,252
+apps/web/src/lib/api.server.ts
+  s_d510e9fe2caa17::t_af23eb22ecfa87 182
+  s_d510e9fe2caa17::t_59558059f139a4 183-187,1370
+  s_d510e9fe2caa17::t_cdbe115bf4414e 1504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ff2c82d6d1b10c016814841785f76cfa7d53816e",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
