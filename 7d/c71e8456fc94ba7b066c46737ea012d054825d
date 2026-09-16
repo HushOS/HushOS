@@ -1,0 +1,33 @@
+packages/drive/src/transfers.ts
+  s_d510e9fe2caa17::t_4a407f3f27eb58 216-219
+  s_d510e9fe2caa17::t_d3484b562d8fbc 226-232,254-255,493,768
+  s_d510e9fe2caa17::t_8561e32b7619b8 233-253
+packages/drive/src/transfers.test.ts
+  s_d510e9fe2caa17::t_6fa471314746c3 188-189,192,194-199,428-438
+  s_d510e9fe2caa17::t_615eda53839ec4 88-89,101-102,311,439
+  s_d510e9fe2caa17::t_2649a5a9a7c7e6 440-441
+apps/web/src/lib/transfers.ts
+  s_d510e9fe2caa17::t_d3484b562d8fbc 65,72-89
+  s_d510e9fe2caa17::t_66309dd54d58b3 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7dc71e8456fc94ba7b066c46737ea012d054825d",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
