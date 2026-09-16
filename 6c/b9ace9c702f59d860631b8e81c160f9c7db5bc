@@ -1,0 +1,26 @@
+e2e/catalogue.spec.ts
+  s_d510e9fe2caa17::t_23edbaab540b5f 45-49,174
+e2e/mobile.spec.ts
+  s_d510e9fe2caa17::t_7ae7e4772b3421 88-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6cb9ace9c702f59d860631b8e81c160f9c7db5bc",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
