@@ -1,0 +1,26 @@
+apps/web/src/lib/previews.ts
+  s_d510e9fe2caa17::t_59558059f139a4 32-33,259-262,267-268,298
+apps/web/src/components/drive/preview.tsx
+  s_d510e9fe2caa17::t_59558059f139a4 239-240,484-487,501,512-522,553,573-576,581,584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "776827e69e68885e433bf52fcdea80428f68dbd1",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
