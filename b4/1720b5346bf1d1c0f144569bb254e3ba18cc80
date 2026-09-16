@@ -1,0 +1,26 @@
+e2e/global-setup.ts
+  s_d510e9fe2caa17::t_af23eb22ecfa87 5-8,27,33
+e2e/helpers.ts
+  s_d510e9fe2caa17::t_ed53394bf3d38d 99-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b41720b5346bf1d1c0f144569bb254e3ba18cc80",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
