@@ -1,0 +1,34 @@
+apps/web/src/routes/index.tsx
+  s_d510e9fe2caa17::t_ba496d5d97a010 143-150
+apps/web/src/content/security.mdx
+  s_d510e9fe2caa17::t_ba496d5d97a010 124,274-277
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_d510e9fe2caa17::t_ba496d5d97a010 83,99
+  s_d510e9fe2caa17::t_d8a493933d7c2d 88-94
+  s_d510e9fe2caa17::t_33e4b22d27347e 87
+e2e/screenshots.spec.ts
+  s_d510e9fe2caa17::t_ba496d5d97a010 216,219-242,276-277,279,302-311
+  s_d510e9fe2caa17::t_d8a493933d7c2d 278
+  s_d510e9fe2caa17::t_8715560970f0b2 312-314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a6b3b083a83c52a9775af7bde14743127effc109",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
