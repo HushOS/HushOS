@@ -1,0 +1,37 @@
+apps/web/src/components/drive/info-dialog.tsx
+  s_d510e9fe2caa17::t_ca7f70c40e54e4 152,154,309,312
+  s_d510e9fe2caa17::t_686f6831eaf5b3 2,16
+  s_d510e9fe2caa17::t_16d4b40155b113 148-151,153,155-165,300-308,310-311,313-314
+  s_d510e9fe2caa17::t_36f957ab6a0925 315
+apps/web/src/routes/index.tsx
+  s_d510e9fe2caa17::t_16d4b40155b113 155-162
+apps/web/src/lib/sealed-copy.ts
+  s_d510e9fe2caa17::t_16d4b40155b113 1-130,135-158,164-181
+  s_d510e9fe2caa17::t_686f6831eaf5b3 131-134,159-163
+docs/drive-design.md
+  s_d510e9fe2caa17::t_16d4b40155b113 953-956
+e2e/sealed-copy.spec.ts
+  s_d510e9fe2caa17::t_597925039545d1 1-53,58-91,95
+  s_d510e9fe2caa17::t_7084122415734b 54-57,92-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bd238da8da33ff930235a13909faaa82d2ec7dae",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
