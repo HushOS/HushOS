@@ -1,0 +1,27 @@
+apps/web/src/lib/brand.ts
+  s_9cc21c3539a4f3::t_0432baf328f4f9 32-35,37-38
+apps/web/scripts/brand-assets.ts
+  s_9cc21c3539a4f3::t_0432baf328f4f9 50-71,74-96,102-104
+  s_9cc21c3539a4f3::t_7ee902850019b7 72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "318cdcf54547935bb890f2c4abfbc0d26d3f3afd",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_9cc21c3539a4f3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2a02c59-69c0-4082-b359-62a0deda49a5",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
