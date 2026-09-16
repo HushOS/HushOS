@@ -1,0 +1,26 @@
+packages/drive/src/storage.ts
+  s_d510e9fe2caa17::t_a5961b729cafc7 54-56,242-249,255-258,260-261,263-327
+docs/drive-design.md
+  s_d510e9fe2caa17::t_30648dd5a7c3c8 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "53db13f5b2bb460dd74ced4ab468bd3fc09e2dc7",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
