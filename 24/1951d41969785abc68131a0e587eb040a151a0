@@ -1,0 +1,30 @@
+apps/web/src/lib/progress.test.ts
+  s_d510e9fe2caa17::t_be546c4c4d8b40 78-81
+  s_d510e9fe2caa17::t_1c5871021a00f0 7-8,85,95-105
+apps/web/src/lib/batch-progress.ts
+  s_d510e9fe2caa17::t_1c5871021a00f0 5-6,35-39,43-56,60,62-85
+apps/web/src/lib/progress.ts
+  s_d510e9fe2caa17::t_1c5871021a00f0 75-78,80,82-84,87-90,92
+  s_d510e9fe2caa17::t_be546c4c4d8b40 58-59,65,68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "241951d41969785abc68131a0e587eb040a151a0",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
