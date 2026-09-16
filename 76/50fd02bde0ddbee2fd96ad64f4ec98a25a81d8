@@ -1,0 +1,242 @@
+e2e/contacts.spec.ts
+  s_d510e9fe2caa17::t_7ee9c53aa337c3 72
+e2e/referrals.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 68
+apps/web/src/components/ui/popover.tsx
+  s_d510e9fe2caa17::t_c47ded94d81734 1-13,15-31,33-36,38-49
+  s_d510e9fe2caa17::t_b1224190c2c15d 14,32,37
+e2e/palette.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 47
+  s_d510e9fe2caa17::t_284d605b76552a 16
+  s_d510e9fe2caa17::t_5b258e83ed79fc 53
+apps/web/src/routeTree.gen.ts
+  s_d510e9fe2caa17::t_865581ac3a559d 49-50,55,60,248-249,251,253-255,257,259,284-285,314-315,363-364,369,374,410-411,416,421,463-464,469,474,513,515,526,561-562,573,614-615,620,625,916-921,924-925,928,959-960,963,994-995,998,1044-1045,1049,1053,1058-1059,1063-1064,1068-1069
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 56,61,288,290-293,299-300,318-323,371-372,375,405,418-419,422,471,475,514,523-524,527,557,570,574,622,626,923,930,964,966-979,985,999-1005,1051,1054,1066,1070-1071
+  s_d510e9fe2caa17::t_d8c14b54692676 44,222-225,250,252,256,258,294,306,324,457,608,882-886,922,929,1006,1043,1057,1072-1078,1080,1090
+  s_d510e9fe2caa17::t_2544420a697e7d 51-53,58,260-277,302-305,365-367,370,412-414,417,465-467,470,517,521-522,564,568-569,616-618,621,910,931-936,938-939,942-943,945-946,949-950,980-984,1046-1048,1050,1060-1062,1065
+  s_d510e9fe2caa17::t_a1dfef1066a96b 57
+  s_d510e9fe2caa17::t_9351863a499d05 295-298
+  s_d510e9fe2caa17::t_a0920162f202af 301
+  s_d510e9fe2caa17::t_fe7bd8fcfae1fd 472
+  s_d510e9fe2caa17::t_341be757b0082d 571
+  s_d510e9fe2caa17::t_f2f6e91a9a17e4 623
+  s_d510e9fe2caa17::t_14a7ff03cec23e 887-888
+  s_d510e9fe2caa17::t_f0ad3d18a1b063 911-915
+  s_d510e9fe2caa17::t_0529ac0c925999 1052
+  s_d510e9fe2caa17::t_77babf4016d39d 1055-1056
+  s_d510e9fe2caa17::t_59bea8a0d5caa8 1067
+apps/web/src/routes/login/route.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 44,91
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 31
+apps/web/src/routes/_authenticated/app/_drive/search.tsx
+  s_d510e9fe2caa17::t_d8c14b54692676 15,17
+  s_d510e9fe2caa17::t_865581ac3a559d 1-14,16,18-19
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_d510e9fe2caa17::t_3aaafa74e821bf 291-292,294,296-302
+  s_d510e9fe2caa17::t_d3e407de34ea21 261-288,293,295
+e2e/reports.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 46
+apps/web/src/routes/_authenticated/app/_drive/tags.$tagId.tsx
+  s_d510e9fe2caa17::t_2544420a697e7d 1-12
+apps/web/src/routes/vs/$slug.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 64
+apps/web/src/lib/open-node.ts
+  s_d510e9fe2caa17::t_ec0fdb1b18a31e 8,15,20
+  s_d510e9fe2caa17::t_3bb9e72c5f76e6 1-7,9-10,13-14,16-19,21-24
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 11-12
+apps/web/src/routes/r/$code.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 60
+apps/web/src/routes/_authenticated/app/_drive/tags.index.tsx
+  s_d510e9fe2caa17::t_99d8b85a6b5e82 1-7
+apps/web/src/components/app-sidebar.tsx
+  s_d510e9fe2caa17::t_284d605b76552a 37,138,141,214,222-223,225
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 48,69,72,203
+  s_d510e9fe2caa17::t_fb9ccd077c19f5 80,215
+  s_d510e9fe2caa17::t_974105ee5dd8da 2-3,127-137,139-140,142-143,295
+  s_d510e9fe2caa17::t_1ccd55170f45e7 144
+apps/web/src/components/drive/tag-view.tsx
+  s_d510e9fe2caa17::t_01097da3beba23 14,69,269-270,291-295
+  s_d510e9fe2caa17::t_f5b954d47cb32d 5,107,240-242,384
+  s_d510e9fe2caa17::t_afe8c4adbe6f1b 336
+  s_d510e9fe2caa17::t_92b079d83ccb05 250
+  s_d510e9fe2caa17::t_f8d237318396ed 167
+  s_d510e9fe2caa17::t_9814df58194420 1-4,6-12,15-53,55-68,70-96,102-106,108-118,124-136,138-159,163-166,173-199,204-234,239,243,249,260,264,274-278,284-290,296-307,312-315,318-322,328-335,337-383,385-409,416-426
+  s_d510e9fe2caa17::t_e294d87ac62b7f 97-101,119-123,160-162,200-203,235-238,244-248,279-283,308-311,316-317,323-327,410-415
+  s_d510e9fe2caa17::t_31d2b68f7ebd50 13,54,137,168-172
+  s_d510e9fe2caa17::t_c47ded94d81734 251-259,261-263,265-268,271-273
+apps/web/src/lib/api.server.ts
+  s_d510e9fe2caa17::t_e4a89c3f1ef7c8 209,212
+  s_d510e9fe2caa17::t_6db63aed6c0f48 210-211,213-215,1131-1158
+apps/web/src/routes/register/route.tsx
+  s_d510e9fe2caa17::t_829bb5a9e0ce29 21-22
+apps/web/src/lib/tags.ts
+  s_d510e9fe2caa17::t_b9916cf017c1b8 50,66
+  s_d510e9fe2caa17::t_be494bcacf10e9 1,23-24,31,67-72
+  s_d510e9fe2caa17::t_3f96ba06c39795 3-22,25-30,32-37,73-84
+  s_d510e9fe2caa17::t_8aafc83ae80f37 38-49,51-65
+  s_d510e9fe2caa17::t_25731eed5e7545 2
+apps/web/src/components/drive/search-view.tsx
+  s_d510e9fe2caa17::t_aa880601c292bc 7,32
+  s_d510e9fe2caa17::t_66399d41ab63ae 2,5-6,12-16,33-37,40-45,118,135,147-149
+  s_d510e9fe2caa17::t_284d605b76552a 71
+  s_d510e9fe2caa17::t_d245668981882d 65-66
+  s_d510e9fe2caa17::t_a0ea7a3c6f6b36 125-128
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 129
+  s_d510e9fe2caa17::t_26b59058993fa3 1,3-4,8-11,17-31,38-39,46-64,67-70,72-117,119-124,130-134,136-146,150-182
+e2e/sharing.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 48,56,99,187
+apps/web/src/components/drive/tag-colour.tsx
+  s_d510e9fe2caa17::t_c8c8be41cd512e 83
+  s_d510e9fe2caa17::t_c701a8b534a470 212,255
+  s_d510e9fe2caa17::t_99776d79268669 3,39,71-72,74,76-82,94-210,213-226,230-231,233-254,256-257,259-261,263-284,287
+  s_d510e9fe2caa17::t_7cab3089733dc5 1-2,5-19,25-38,40,42,75,227-229,232,258,262,285-286,288-289
+  s_d510e9fe2caa17::t_97a69305115f78 4,20-24,41,43-70,73,84-93,211
+apps/web/src/components/drive/highlight.tsx
+  s_d510e9fe2caa17::t_e957ce2135911a 1-46
+apps/web/src/components/drive/drive-shell.tsx
+  s_d510e9fe2caa17::t_282d52f6e40314 34-40,72-79,81,96-97
+  s_d510e9fe2caa17::t_7ee9c53aa337c3 80,82-95
+  s_d510e9fe2caa17::t_aa2a22e899ddd4 67-68
+apps/web/src/components/drive/folder-view.tsx
+  s_d510e9fe2caa17::t_ec0fdb1b18a31e 754-758
+  s_d510e9fe2caa17::t_fb9cc31f9f08ad 1559-1566
+  s_d510e9fe2caa17::t_829bb5a9e0ce29 249-254
+  s_d510e9fe2caa17::t_974105ee5dd8da 160-161,165,170-173,177,181-186,196-203,205-207,601-604,612-618,714-717
+  s_d510e9fe2caa17::t_57551aecaa2099 1290-1291
+  s_d510e9fe2caa17::t_6033a50b9fac46 743-751
+  s_d510e9fe2caa17::t_01097da3beba23 1327-1332
+  s_d510e9fe2caa17::t_18e5ab0f7ff345 57,1321-1325
+  s_d510e9fe2caa17::t_e294d87ac62b7f 10-11,56,89,287,302-303,341-346,391-393,451,503-505,740,816,1094-1104,1147-1151,1320,1326,1333,1366-1370,1479-1483,1575-1578
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 121-122,247
+  s_d510e9fe2caa17::t_3ec2087527fc50 821
+  s_d510e9fe2caa17::t_92b079d83ccb05 1334
+  s_d510e9fe2caa17::t_c23b041d3362fc 707-713,720,727
+  s_d510e9fe2caa17::t_c47ded94d81734 1285-1289,1292,1295,1298-1304,1306-1308,1310,1312-1317,1319,1336
+  s_d510e9fe2caa17::t_417790f7d26f03 718,1152,1579
+apps/web/src/components/ui/command.tsx
+  s_d510e9fe2caa17::t_d245668981882d 33-34,43-45,66-67
+  s_d510e9fe2caa17::t_e3a9a7b7b719bc 35-36,46-48,60-65
+apps/web/src/components/drive/tag-stamp.tsx
+  s_d510e9fe2caa17::t_9c2cefa72e40f4 46,93-98,100,122,132
+  s_d510e9fe2caa17::t_31d2b68f7ebd50 2,61,68,76-80
+  s_d510e9fe2caa17::t_c47ded94d81734 1,5,36-45,47-52,86,90-92,99,101-103,137-138
+  s_d510e9fe2caa17::t_b9916cf017c1b8 8,12
+  s_d510e9fe2caa17::t_01097da3beba23 4,55-58,63-64,70-71,75,89,104-121,123-131,133-136
+  s_d510e9fe2caa17::t_52faeba36f85ee 3,7,13-21,23-24,26,28-35,53-54,59-60,62,65-67,69,72-74,81-85,87-88,139-142
+  s_d510e9fe2caa17::t_8aafc83ae80f37 6,9-11,22,25,27
+e2e/drive.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 308,357
+apps/web/src/routes/pricing/route.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 314
+apps/web/src/lib/drive.ts
+  s_d510e9fe2caa17::t_aa2a22e899ddd4 20,49,54
+  s_d510e9fe2caa17::t_555932310fb333 1-6
+  s_d510e9fe2caa17::t_f13cca989bfe1d 8,183-191
+  s_d510e9fe2caa17::t_0ceac5ab2df56e 192
+apps/web/src/components/drive/tags-view.tsx
+  s_d510e9fe2caa17::t_f8d237318396ed 240
+  s_d510e9fe2caa17::t_fb9cc31f9f08ad 5,198-202,289-290
+  s_d510e9fe2caa17::t_e46c8c88a1f961 1-4,7-29,31-39,41-52,54-74,76-78,80-132,141-186,188-190,192-197,203-211,213-239,248-288,291-310
+  s_d510e9fe2caa17::t_31d2b68f7ebd50 6,30,40,53,75,79,133-140,187,191,212,241-247
+apps/web/src/components/drive/info-dialog.tsx
+  s_d510e9fe2caa17::t_fb9cc31f9f08ad 16-19,32,37-38,43,112-114,212-217,224-237
+  s_d510e9fe2caa17::t_01097da3beba23 218-223
+apps/web/src/routes/_authenticated/app/_drive/drive/index.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 2,5,23,25
+e2e/catalogue.spec.ts
+  s_d510e9fe2caa17::t_8b6d34678435cc 1-80,82-99,103-119,136-193
+  s_d510e9fe2caa17::t_fb9cc31f9f08ad 120-135
+  s_d510e9fe2caa17::t_1b1fc6002d5bc4 81,100-102
+apps/web/src/routes/register/complete.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 95
+apps/web/src/components/mdx.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 80
+apps/web/src/components/site-header.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 38
+apps/web/src/components/recovery-phrase.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 109
+  s_d510e9fe2caa17::t_d3e407de34ea21 2,31,33-49,51-52,107,204-206,236,243,247-248
+apps/web/src/lib/drive-api.ts
+  s_d510e9fe2caa17::t_6db63aed6c0f48 213-216
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_d510e9fe2caa17::t_282d52f6e40314 10,202
+  s_d510e9fe2caa17::t_2544420a697e7d 40
+  s_d510e9fe2caa17::t_afe8c4adbe6f1b 41
+  s_d510e9fe2caa17::t_d3e407de34ea21 1,20,66-76,78-83,85-98
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 16
+apps/web/src/components/drive/tag-dialog.tsx
+  s_d510e9fe2caa17::t_1ae961753f2442 12,15,17-29,31-68,70-86,88-96,116,118,129-131,133-134,137,139-152,155,157-160,162,165-175,177-188,191-210,238-241,243,245-258,260,287-294,300,317-320
+  s_d510e9fe2caa17::t_18487459e11796 120,135-136
+  s_d510e9fe2caa17::t_8aafc83ae80f37 14,296-299,301,303
+  s_d510e9fe2caa17::t_eff2cc60a270ad 234
+  s_d510e9fe2caa17::t_abe31b234146bb 108-111,114
+  s_d510e9fe2caa17::t_a62d11da2826c1 112,122-125,233,235-237,276,282
+  s_d510e9fe2caa17::t_2bf1a80b3cd8d1 244,259,261-275,277-281,283-286
+  s_d510e9fe2caa17::t_afe8c4adbe6f1b 13,30,69,153-154,156,161,163-164,189-190,295,302,304-316
+  s_d510e9fe2caa17::t_976c46915b3c17 8
+  s_d510e9fe2caa17::t_e294d87ac62b7f 176
+  s_d510e9fe2caa17::t_31d2b68f7ebd50 1-7,9-11,16,87,97-107,113,115,117,119,121,126-128,132,138,211-232,242
+apps/web/src/routes/_authenticated/app/_drive.tsx
+  s_d510e9fe2caa17::t_d8c14b54692676 1-20
+apps/web/src/components/drive/command-palette.tsx
+  s_d510e9fe2caa17::t_e294d87ac62b7f 30,370-379
+  s_d510e9fe2caa17::t_e3a9a7b7b719bc 109-121,127,208-209,211-216,218-219,246-256,259,284,287,299
+  s_d510e9fe2caa17::t_fb9cc31f9f08ad 452-453,455
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 426,436,531
+  s_d510e9fe2caa17::t_afe8c4adbe6f1b 451
+  s_d510e9fe2caa17::t_284d605b76552a 139
+  s_d510e9fe2caa17::t_2544420a697e7d 318,461
+  s_d510e9fe2caa17::t_d245668981882d 4-5,9,11,13,25,37,63-66,89-95,97-108,122-126,128-129,141,204-207,210,217,220-222,225-231,242-245,257-258,260-283,285-286,288-298,300-317,319-327,423-425,427-435,437-450,456-457,460,463-464,466-489,491-520
+e2e/links.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 51,137,202
+apps/web/src/components/drive/shortcuts.ts
+  s_d510e9fe2caa17::t_e294d87ac62b7f 14
+apps/web/src/lib/palette.ts
+  s_d510e9fe2caa17::t_e294d87ac62b7f 20
+  s_d510e9fe2caa17::t_c23b041d3362fc 36,38,50-59
+apps/web/src/routes/index.tsx
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 253
+e2e/screenshots.spec.ts
+  s_d510e9fe2caa17::t_e7ac2cdd8ecec3 178,211
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_d510e9fe2caa17::t_65d64fd49ba347 22,29,31,39,41
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_d510e9fe2caa17::t_58a85f0c1d5dac 1,55,57,65,67
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_d510e9fe2caa17::t_ae238aa008682c 6,24,37,39
+apps/web/src/routes/_authenticated/app/_drive/drive/f.$folderId.tsx
+  s_d510e9fe2caa17::t_541b64eaf147df 4,18,20
+apps/web/src/routes/_authenticated/app/_drive/referrals.tsx
+  s_d510e9fe2caa17::t_7f200c35db9a40 10,23,25
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_d510e9fe2caa17::t_920376fae6c057 18,32,34,146,221
+apps/web/src/routes/_authenticated/app/_drive/trash.tsx
+  s_d510e9fe2caa17::t_5db81b2b715cfb 4,11,13
+apps/web/src/content/security.mdx
+  s_d510e9fe2caa17::t_f7f043e838556e 149-152,274-277
+apps/web/src/routes/_authenticated/app/index.tsx
+  s_d510e9fe2caa17::t_9d85a82c267d95 1-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7650fd02bde0ddbee2fd96ad64f4ec98a25a81d8",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
