@@ -1,0 +1,21 @@
+apps/web/src/routes/index.tsx
+  s_d510e9fe2caa17::t_43c9a3a558132e 3,11,194,224-264,267,272
+apps/web/src/lib/product-hunt.ts
+  s_d510e9fe2caa17::t_43c9a3a558132e 1-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "62161ca32df0d7a66099ed022132207b348818dd",
+  "prompts": {},
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
