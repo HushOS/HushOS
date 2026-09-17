@@ -1,0 +1,21 @@
+apps/web/src/components/drive/link-row.tsx
+  s_d510e9fe2caa17::t_19c7fc1690f9ba 177
+  s_d510e9fe2caa17::t_30e6ec3e7f9333 243,256,265,269,278,292,295,310,323,327,333
+  s_d510e9fe2caa17::t_338beef1caaa7c 178-179,186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1b63838ab257e3569b5dd725c7ceb9c4c126d00e",
+  "prompts": {},
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
