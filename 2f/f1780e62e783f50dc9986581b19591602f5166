@@ -1,0 +1,19 @@
+apps/web/src/components/drive/preview.tsx
+  s_2772148052e9ac::t_775df41260492c 78,453-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2ff1780e62e783f50dc9986581b19591602f5166",
+  "prompts": {},
+  "sessions": {
+    "s_2772148052e9ac": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b0f7-09b1-7b60-92b2-c4807b6870f2",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
