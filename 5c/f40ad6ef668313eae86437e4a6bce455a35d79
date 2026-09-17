@@ -1,0 +1,29 @@
+apps/web/src/lib/rotation.ts
+  s_d510e9fe2caa17::t_9cb0eee72c671a 4,55-72
+  s_d510e9fe2caa17::t_ae1606935009cc 73
+apps/web/src/components/drive/share-dialog.tsx
+  s_d510e9fe2caa17::t_9cb0eee72c671a 32,92-93,322-323
+e2e/links.spec.ts
+  s_d510e9fe2caa17::t_b06e5606107c0c 227-261
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5cf40ad6ef668313eae86437e4a6bce455a35d79",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
