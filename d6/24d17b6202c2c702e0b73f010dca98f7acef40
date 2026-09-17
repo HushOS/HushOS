@@ -1,0 +1,43 @@
+packages/billing/src/server.test.ts
+  s_d510e9fe2caa17::t_b7fbe2e65065f3 134,136-149,446-530
+  s_d510e9fe2caa17::t_5805ae203beb4d 130-133,135,531
+apps/web/src/lib/api.server.ts
+  s_d510e9fe2caa17::t_59154b05ff7fa1 657
+  s_d510e9fe2caa17::t_b8f3c751475875 636-642,655-656,658-661
+  s_d510e9fe2caa17::t_7c53edddd42309 662-663
+apps/web/src/lib/growth-api.ts
+  s_d510e9fe2caa17::t_59154b05ff7fa1 12
+packages/billing/src/growth.ts
+  s_d510e9fe2caa17::t_b8f3c751475875 14,17,276-278,281-287,290,292-319,323-336,340-357
+  s_d510e9fe2caa17::t_001018ff4c64b1 279-280
+  s_d510e9fe2caa17::t_3ef2c243fd02c3 358
+packages/billing/src/server.ts
+  s_d510e9fe2caa17::t_b8f3c751475875 396-450
+packages/billing/src/api.ts
+  s_d510e9fe2caa17::t_b8f3c751475875 145,147
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_d510e9fe2caa17::t_001018ff4c64b1 9-18,82,122-133,148-149,155-156,159-160,173-182,186-194,200-233,308,326,341-572
+packages/db/src/growth.ts
+  s_d510e9fe2caa17::t_b8f3c751475875 314,321-326,332-343
+  s_d510e9fe2caa17::t_3db608afc3340a 344-347
+packages/db/src/growth.test.ts
+  s_d510e9fe2caa17::t_7c7e0a3d717783 7-13
+  s_d510e9fe2caa17::t_b7fbe2e65065f3 200-219
+  s_d510e9fe2caa17::t_efeeb9c0c20367 199,220-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d624d17b6202c2c702e0b73f010dca98f7acef40",
+  "prompts": {},
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
