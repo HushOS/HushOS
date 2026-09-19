@@ -1,0 +1,19 @@
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_d510e9fe2caa17::t_8dd40b562bdd20 40-44,48-49,51-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b5f6e6843c8ef812fff5a22ce430709b0f17a335",
+  "prompts": {},
+  "sessions": {
+    "s_d510e9fe2caa17": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2bccab15-9bfd-47c0-aad6-3d0d479d81dc",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
