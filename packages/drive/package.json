@@ -1,0 +1,40 @@
+{
+    "name": "@hushos/drive",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        "./server": "./src/server.ts",
+        "./storage": "./src/storage.ts",
+        "./protocol": "./src/protocol.ts",
+        "./api": "./src/api.ts",
+        "./client": "./src/client.ts",
+        "./transfers": "./src/transfers.ts",
+        "./journal": "./src/journal.ts",
+        "./mirror": "./src/mirror.ts",
+        "./catalogue": "./src/catalogue.ts",
+        "./tags": "./src/tags.ts",
+        "./downloads": "./src/downloads.ts",
+        "./jobs": "./src/jobs.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "check:evidence": "bun scripts/check-evidence.ts"
+    },
+    "dependencies": {
+        "@aws-sdk/client-s3": "3.1131.0",
+        "@aws-sdk/s3-request-presigner": "3.1131.0",
+        "@hushos/crypto": "workspace:*",
+        "@hushos/db": "workspace:*",
+        "@hushos/env": "workspace:*",
+        "@hushos/logging": "workspace:*",
+        "idb": "8.0.3"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
+    }
+}

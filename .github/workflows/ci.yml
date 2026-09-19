@@ -1,0 +1,196 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+env:
+    TURBO_TELEMETRY_DISABLED: 1
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    check:
+        name: Check, migrate, test, and build
+        runs-on: ubuntu-latest
+        services:
+            postgres:
+                image: postgres:18-alpine
+                env:
+                    POSTGRES_USER: hushos
+                    POSTGRES_PASSWORD: ci
+                    POSTGRES_DB: hushos
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hushos -d hushos"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            DATABASE_URL: postgresql://hushos:ci@127.0.0.1:5432/hushos
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.0
+            - run: bun install --frozen-lockfile
+            - name: Lint, format, and typecheck
+              run: bun run check
+            - name: Apply migrations to a fresh database
+              run: bun run --cwd packages/db db:migrate
+            - name: Check the schema matches the checked-in migrations
+              run: |
+                  bun run --cwd packages/db db:generate
+                  if [ -n "$(git status --porcelain packages/db/drizzle)" ]; then
+                    echo "Schema drift: run bun run db:generate and commit the migration." >&2
+                    git status --porcelain packages/db/drizzle >&2
+                    exit 1
+                  fi
+            - name: Check the rendered emails match the templates
+              run: |
+                  bun run email:render
+                  if [ -n "$(git status --porcelain packages/emails/src/rendered)" ]; then
+                    echo "Rendered emails are stale: run bun run email:render and commit." >&2
+                    exit 1
+                  fi
+            - name: Test
+              run: bun run test
+            - name: Build
+              run: bun run build
+            # The Start plugin regenerates the route tree during the build; a commit
+            # whose checked-in tree is stale fails here with the missing lines.
+            - name: The committed route tree matches the built one
+              run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
+
+    e2e:
+        name: Browser tests
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.0
+            - run: bun install --frozen-lockfile
+            - name: Local infrastructure (Postgres, MailHog, MinIO) and environment
+              run: |
+                  bun run setup
+                  bun run infra:up
+            - name: Apply migrations
+              run: bun run db:migrate
+            - name: Install Chromium for Playwright
+              run: bunx playwright install --with-deps chromium
+            # WebKit runs locally on demand: on this runner it is slow enough to
+            # blow the hook budget and its download events never fire.
+            # Streamed, not grouped: Turborepo holds a task's output until it ends on
+            # this runner, and a dev server never ends, so its log stayed empty.
+            - name: Run the browser suite against the dev server
+              run: bun run e2e -- --project=chromium --project=mobile
+              env:
+                  TURBO_LOG_ORDER: stream
+            - name: Keep traces of failures and the server log
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: playwright-traces
+                  path: |
+                      test-results
+                      scratchpad/e2e-server.log
+                  retention-days: 7
+
+    images:
+        name: Image ${{ matrix.image }}
+        needs: check
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - image: web
+                      dockerfile: apps/web/Dockerfile
+                      target: runtime
+                    - image: migrate
+                      dockerfile: packages/db/Dockerfile
+                      target: migrate
+                    - image: worker
+                      dockerfile: packages/jobs/Dockerfile
+                      target: worker
+        steps:
+            - uses: actions/checkout@v7
+            - name: Set image name
+              id: image
+              env:
+                  IMAGE_SUFFIX: ${{ matrix.image }}
+              run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${IMAGE_SUFFIX}" >> "$GITHUB_OUTPUT"
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4
+            - name: Log in to GHCR
+              if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+              uses: docker/login-action@v4
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+            # Pull requests build the images without publishing, so a broken Dockerfile cannot merge.
+            - name: Build (and publish on main)
+              uses: docker/build-push-action@v7
+              with:
+                  context: .
+                  file: ${{ matrix.dockerfile }}
+                  target: ${{ matrix.target }}
+                  build-args: RELEASE_SHA=${{ github.sha }}
+                  platforms: linux/amd64
+                  push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+                  tags: |
+                      ${{ steps.image.outputs.name }}:latest
+                      ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+                  labels: |
+                      org.opencontainers.image.source=https://github.com/${{ github.repository }}
+                      org.opencontainers.image.revision=${{ github.sha }}
+                      org.opencontainers.image.licenses=AGPL-3.0-only
+
+    deploy:
+        name: Deploy production
+        # Never ship a build the browser suite refused.
+        needs: [images, e2e]
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        environment:
+            name: production
+            url: ${{ vars.DEPLOY_ORIGIN }}
+        steps:
+            - name: Request deployment
+              env:
+                  DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+                  DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
+              run: |
+                  curl --request POST --fail --silent --show-error --max-time 30 --output /dev/null \
+                    --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+                    "$DEPLOY_WEBHOOK_URL"
+            - name: Wait for the published release
+              env:
+                  DEPLOY_ORIGIN: ${{ vars.DEPLOY_ORIGIN }}
+              run: |
+                  for attempt in $(seq 1 90); do
+                    if curl --fail --silent --show-error --max-time 10 \
+                      --dump-header /tmp/readiness-headers --output /dev/null \
+                      "$DEPLOY_ORIGIN/api/ready" && \
+                      tr -d '\r' < /tmp/readiness-headers | grep -iq "^x-hushos-release: $GITHUB_SHA$"; then
+                      echo "Published release is ready."
+                      exit 0
+                    fi
+                    sleep 5
+                  done
+                  echo "Timed out waiting for the published release." >&2
+                  exit 1

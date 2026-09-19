@@ -1,0 +1,3 @@
+ALTER TABLE "workspaces" ADD COLUMN "tombstones_dropped_through" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "workspace_documents" DROP CONSTRAINT "workspace_documents_envelope_valid", ADD CONSTRAINT "workspace_documents_envelope_valid" CHECK (octet_length("envelope") between 42 and 1048616);--> statement-breakpoint
+ALTER TABLE "workspaces" DROP CONSTRAINT "workspaces_counters_valid", ADD CONSTRAINT "workspaces_counters_valid" CHECK ("change_seq" >= 0 and "key_epoch_seq" >= 0 and "tombstones_dropped_through" >= 0);

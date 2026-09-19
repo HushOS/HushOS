@@ -1,0 +1,44 @@
+---
+title: Sharing that outlasts X25519
+description: Shares between accounts are sealed with ML-KEM-768 beside X25519, so a copy of the database taken today stays shut to a quantum computer later. How the seal works, and how pins cover the second key.
+date: 2026-09-18
+order: 2
+author: HushOS
+---
+
+import { Cta, Ledger, Note } from '../../components/mdx';
+
+Every file in HushOS is encrypted with a symmetric cipher, and symmetric ciphers with 256-bit keys are not what a quantum computer breaks. The place a quantum computer could hurt a service like this is sharing: when you share a folder with someone, your device seals that folder's key to their public key. If that seal rested on X25519 alone, a copy of the database taken today, plus a large enough quantum computer some years from now, would open every share ever made.
+
+So it does not rest on X25519 alone. Shares between accounts are sealed with two key exchanges at once: an X25519 agreement, and an ML-KEM-768 encapsulation to a post-quantum key every identity carries. The two secrets are combined into one key, so the envelope opens only for someone who holds both private halves, and it stays shut unless both problems fall.
+
+<Ledger
+    rows={[
+        ['The seal', 'X25519 and ML-KEM-768 (FIPS 203) together, a 1160-byte envelope'],
+        ['Your files', 'XChaCha20-Poly1305 with 256-bit keys, which is not the weak point'],
+        [
+            'Your fingerprint',
+            'The X25519 key alone: the post-quantum key is signed by your identity, not folded into the fingerprint',
+        ],
+        ['What you do', 'Nothing. Both keys are made at sign-up and used for every share'],
+    ]}
+/>
+
+## Why two, and not just the new one
+
+ML-KEM is young. X25519 has two decades of attention behind it. Sealing to both means a flaw found in either one leaves the share shut, and the cost is a larger envelope that nobody ever sees.
+
+## Pins cover the second key
+
+The server serves public keys, and a dishonest server could serve its own. Pins catch that for the X25519 key, with a fingerprint two people compare. Rather than make the fingerprint longer, the post-quantum key is vouched for by the identity's signing key: the server refuses to store one without that signature, your device verifies it before using it, and a digest of it joins the pin. A different key served later is refused like any changed key. A key that goes missing is refused too, so a server cannot quietly turn hybrid shares into X25519 ones.
+
+The same holds when you stop sharing with someone. Your device re-keys the folder and re-seals it to whoever remains, and it takes their keys through your pins, not from the server directly. A share to someone whose served key the pin refuses is left closed rather than sealed to a key you never vouched for.
+
+<Note title="What this does not cover">
+    Sign-in rests on OPAQUE, which has no post-quantum standard; the security page says what that
+    means. Report escrow uses the same hybrid envelope as shares.
+</Note>
+
+The full construction is on the [security page](/security), and `docs/drive-design.md` in the repository fixes the byte layout.
+
+<Cta title="Share something">It is sealed to the person you pick, twice over, on your device.</Cta>

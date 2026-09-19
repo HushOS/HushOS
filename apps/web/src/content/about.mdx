@@ -1,0 +1,100 @@
+---
+title: About HushOS
+updated: 2026-09-14
+summary: HushOS exists to make privacy the easy choice. This page says what we are building, why, and what we promise.
+---
+
+import { Ledger, Note } from '../components/mdx';
+import { Shot } from '../components/screenshot';
+
+## What HushOS is
+
+HushOS is a place to keep your files where the only people who can read anything are you and the people you choose.
+
+It starts with Drive. Upload, organise, preview and share, the way you already know how. The difference is underneath: your files are locked on your own device before they go anywhere, and the keys never leave your hands.
+
+It is open source, so anyone can read how it works. And it can run on a server you control, for free.
+
+<Shot
+    name="preview"
+    width={2560}
+    height={1600}
+    alt="HushOS Drive: a reading list opened in place, decrypted on the device."
+    className="mt-6 block"
+/>
+
+## Why we are building it
+
+Privacy products have a reputation, and it is deserved. They feel like a chore:
+
+- Key files to keep safe.
+- Settings to get right.
+- A second app to install.
+- Warnings on every screen.
+
+So most people, sensibly, give up and use whatever is easiest. And the easiest thing reads their files.
+
+We think that is a design failure, not a law of nature. Privacy should be the default, and the default should feel like nothing at all. You should not need to understand encryption to have it, any more than you need to understand seatbelts to be protected by one.
+
+The goal of HushOS is simple to say and hard to do: **make the private choice the easy choice.** Build something a person with no interest in technology would pick because it is pleasant. Keep it private because that is how it is made.
+
+## What we promise
+
+<Ledger
+    rows={[
+        [
+            'Private by default',
+            'Everything you store is locked on your device. There is no setting for this; it is how it works.',
+        ],
+        [
+            'Simple by default',
+            'An email, a password, and one phrase to keep safe. Then it is just your drive.',
+        ],
+        ['Yours', 'Your keys, your files, your account. Delete it and it is gone, everywhere.'],
+        [
+            'Open',
+            'The code is public, under a licence (the AGPL) that keeps it that way. Read it, run it, or check that the claims on this site are true.',
+        ],
+        [
+            'Honest about limits',
+            'We say plainly what we can and cannot see, and what happens if you lose your recovery phrase.',
+        ],
+        [
+            'No shield for abuse',
+            'Privacy is for people, not for harm. Anything shared can be reported, and reports are acted on.',
+        ],
+    ]}
+/>
+
+## Where we are
+
+Version 1 is Drive:
+
+- Folders, previews, versions and trash.
+- Sharing with people, and links for anyone.
+- An app you can add to your phone.
+- Running at hushos.com, or on any server you set up with the self-hosting guide.
+
+Drive is the first room in a bigger house. The same keys and the same care are coming to the other things people do every day:
+
+- Desktop and mobile apps.
+- Messages.
+- Notes and documents.
+- The rest of a productivity suite that respects you by design.
+
+Each piece will arrive the way Drive did, whole and documented, and this page will say so.
+
+## Who is behind it
+
+HushOS is a company incorporated in Delaware, United States, and an open-source project.
+
+- The hosted service at hushos.com is run by the company, with its servers and storage in the European Union.
+- A self-hosted copy is run by whoever set it up, under their own terms.
+- There is no advertising business behind it, and nothing about you is sold.
+- The hosted service is paid for by people who buy more storage, and by nothing else.
+
+<Note title="How to help">
+    Use it and tell us what is confusing. Report bugs on GitHub. Read the code and tell us where we
+    are wrong. Run your own copy for your family or your team. If you write about privacy, hold us
+    to the promises above.
+</Note>

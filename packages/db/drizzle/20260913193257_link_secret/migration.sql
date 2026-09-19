@@ -1,0 +1,2 @@
+ALTER TABLE "drive_links" ADD COLUMN "secret_envelope" bytea;--> statement-breakpoint
+ALTER TABLE "drive_links" DROP CONSTRAINT "drive_links_valid", ADD CONSTRAINT "drive_links_valid" CHECK ("key_epoch" >= 1 and octet_length("token_hash") = 32 and octet_length("link_envelope") = 72 and octet_length("link_salt") = 16 and ("secret_envelope" is null or octet_length("secret_envelope") = 104) and "use_count" >= 0);

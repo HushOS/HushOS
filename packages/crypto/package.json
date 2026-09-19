@@ -1,0 +1,34 @@
+{
+    "name": "@hushos/crypto",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts",
+        "./protocol": "./src/protocol.ts",
+        "./server": "./src/server.ts",
+        "./device": "./src/device.ts",
+        "./recovery": "./src/recovery.ts",
+        "./identity": "./src/identity.ts",
+        "./drive": "./src/drive.ts",
+        "./contacts": "./src/contacts.ts",
+        "./fingerprint": "./src/fingerprint.ts"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@noble/post-quantum": "0.7.1",
+        "@scure/bip39": "2.4.0",
+        "@serenity-kit/opaque": "1.1.0",
+        "hash-wasm": "^4.12.0",
+        "libsodium-wrappers": "0.8.4"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
+    }
+}

@@ -1,0 +1,16 @@
+# Run the published images instead of building from source:
+#   docker compose -f compose.yaml -f compose.images.yaml up -d
+# Pin a release by setting HUSHOS_IMAGE_TAG to a sha-<commit> tag.
+
+services:
+    migrate:
+        image: ghcr.io/hushos/hushos-migrate:${HUSHOS_IMAGE_TAG:-latest}
+        build: !reset null
+
+    web:
+        image: ghcr.io/hushos/hushos-web:${HUSHOS_IMAGE_TAG:-latest}
+        build: !reset null
+
+    worker:
+        image: ghcr.io/hushos/hushos-worker:${HUSHOS_IMAGE_TAG:-latest}
+        build: !reset null

@@ -1,0 +1,51 @@
+---
+title: How HushOS 1.0 was built
+description: The engineering behind the launch. What an earlier attempt got wrong, the rules that replaced its shortcuts, and the cryptography under sharing, sign-in and reports.
+date: 2026-09-18
+order: 1
+author: HushOS
+---
+
+import { Note } from '../../components/mdx';
+
+This is the companion to the [1.0 announcement](/blog/hushos-1-0), for readers who want the engineering. The announcement says what HushOS does. This says how, and what we had to unlearn to get there.
+
+## What we got wrong the first time
+
+HushOS is not our first attempt at this.
+
+Before it, we built an encrypted drive that worked. Files were encrypted in the browser. Every folder and file had its own key, wrapped under its parent's. Encrypted bytes went straight to object storage without touching the application server. Those ideas were right, and they are still the shape of HushOS today.
+
+But software that grows keeps its shortcuts. Before writing a line of the real thing, we reviewed every line of what we had and wrote down what it got wrong:
+
+- The root folder's key was the account key itself.
+- Envelopes were not bound to their position, so one could be swapped for another.
+- Moves could create cycles.
+- Quota was checked and then written, so two uploads at once could overshoot.
+- Cancelling an upload updated a row and left the pieces in the bucket.
+- Sharing was a checkbox that did nothing.
+
+## The rules that replaced them
+
+So we started over, with a design document first. Every item on that list became a rule and a test before it became code:
+
+- Sign-in moved to OPAQUE, so the password never leaves your browser, not even in a disguised form.
+- Every key envelope names exactly where it belongs, so it cannot be moved.
+- The tree cannot be bent into a loop.
+- Storage is reserved before an upload begins and confirmed by the store when it ends.
+- Sharing seals keys to people instead of flipping a flag, and stopping it rotates the keys beneath, so what someone saw before stays shut.
+
+Every piece landed with its own tests, and the browser suite runs the whole product, on a phone-sized screen too, before anything is deployed.
+
+## Under sharing, search and reports
+
+- **Shares between accounts** are sealed with X25519 and ML-KEM-768 together. Opening one needs both private halves, so a copy of the database taken today stays shut even if a quantum computer later breaks X25519. [The details have their own post](/blog/post-quantum-sharing).
+- **Search and tags** run in the browser, over names the device has already unlocked. No query leaves it. Tags are sealed to the workspace and never written on a file, which is why the people you share with cannot see them.
+- **Reports** work by escrow: when someone with access reports an item, their browser seals that item's key to the operators' identity keys. That is the only path by which an operator ever reads content, and it is opened by a person who had legitimate access. A report snapshots what was shared and holds the bytes, and copies of reported material go to a separate, write-once store that the application itself cannot delete from.
+- **No addresses are logged** for people who upload, share or report, and nothing is scanned, because nothing can be.
+
+<Note title="Where the detail lives">
+    The design is public: `docs/drive-design.md` in the repository fixes every rule above, and the
+    [security page](/security) explains each claim on this site in enough detail to check it against
+    the code.
+</Note>

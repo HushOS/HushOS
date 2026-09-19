@@ -1,0 +1,1 @@
+ALTER TABLE "drive_report_keys" DROP CONSTRAINT "drive_report_keys_envelope_valid", ADD CONSTRAINT "drive_report_keys_envelope_valid" CHECK (octet_length("key_envelope") in (112, 1224));
