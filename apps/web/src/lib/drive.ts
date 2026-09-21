@@ -31,6 +31,7 @@ export const driveClient = createDriveClient(authClient.rpc, driveApi, {
 export const driveKeys = {
     all: ['drive'] as const,
     shared: ['drive', 'shared'] as const,
+    mine: ['drive', 'mine'] as const,
     open: (userId: string) => ['drive', 'open', userId] as const,
     folder: (folderId: string) => ['drive', 'folder', folderId] as const,
     trash: ['drive', 'trash'] as const,
@@ -62,6 +63,13 @@ export const sharedQueryOptions = queryOptions({
     queryFn: () => driveClient.mountShares(true),
     staleTime: 15_000,
     retry: 1,
+});
+
+/* What this account shares out: by account and by link. */
+export const mySharingQueryOptions = queryOptions({
+    queryKey: driveKeys.mine,
+    queryFn: () => driveClient.mySharing(),
+    staleTime: 15_000,
 });
 
 export const trashQueryOptions = queryOptions({

@@ -137,7 +137,7 @@ export function LinkRow({
                 expiresAt: expiryDate(expiry),
             });
             await onChanged();
-            await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'mine'] });
+            await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             cue('success');
             toast.add({
                 type: 'success',
@@ -159,7 +159,7 @@ export function LinkRow({
         try {
             await driveClient.revokeLink(node, link.id);
             await onChanged();
-            await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'mine'] });
+            await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             cue('droplet');
             toast.add({
                 type: 'success',

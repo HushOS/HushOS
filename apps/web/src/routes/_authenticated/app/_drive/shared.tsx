@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShieldAlertIcon, Trash2Icon } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
 import { LinkRow } from '@/components/drive/link-row';
 import { Preview } from '@/components/drive/preview';
@@ -10,7 +10,14 @@ import { PageHeader } from '@/components/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { driveClient, driveError, driveKeys, formatWhen, sharedQueryOptions } from '@/lib/drive';
+import {
+    driveClient,
+    driveError,
+    driveKeys,
+    formatWhen,
+    mySharingQueryOptions,
+    sharedQueryOptions,
+} from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
 import type { DriveNode } from '@hushos/drive/client';
 import { rotateAfterRevoke } from '@/lib/rotation';
@@ -44,6 +51,12 @@ const tabIdle = 'text-muted-foreground hover:text-foreground';
 function Shared() {
     const { view } = Route.useSearch();
     const byMe = view === 'by-me';
+    const queryClient = useQueryClient();
+    // The other tab's list is fetched alongside the open one, so switching shows it at once.
+    useEffect(() => {
+        if (byMe) void queryClient.prefetchQuery(sharedQueryOptions);
+        else void queryClient.prefetchQuery(mySharingQueryOptions);
+    }, [queryClient, byMe]);
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
@@ -188,11 +201,7 @@ function WithMe() {
 
 function ByMe() {
     const queryClient = useQueryClient();
-    const mine = useQuery({
-        queryKey: [...driveKeys.all, 'mine'],
-        queryFn: () => driveClient.mySharing(),
-        staleTime: 15_000,
-    });
+    const mine = useQuery(mySharingQueryOptions);
     const [pending, setPending] = useState<string | null>(null);
     const [previewing, setPreviewing] = useState<DriveNode | null>(null);
     async function stop(
@@ -205,7 +214,7 @@ function ByMe() {
         try {
             if (kind === 'share') await driveClient.revokeShare(node, id);
             else await driveClient.revokeLink(node, id);
-            await queryClient.invalidateQueries({ queryKey: [...driveKeys.all, 'mine'] });
+            await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             cue('droplet');
             toast.add({ type: 'success', title: `Sharing with ${who} stopped` });
             void rotateAfterRevoke(queryClient, node);
@@ -302,7 +311,7 @@ function ByMe() {
                                     link={link}
                                     onChanged={() =>
                                         queryClient.invalidateQueries({
-                                            queryKey: [...driveKeys.all, 'mine'],
+                                            queryKey: driveKeys.mine,
                                         })
                                     }
                                     title={
