@@ -98,6 +98,11 @@ const authActions = new Set([
     'security/finish',
     'delete/start',
     'delete/finish',
+    'identity',
+    'identity/kem',
+    'contacts/lookup',
+    'settings',
+    'profile',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
 export type Failure = { kind: string; code?: string; cause?: Failure };
