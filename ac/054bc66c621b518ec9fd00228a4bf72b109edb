@@ -1,0 +1,19 @@
+apps/web/src/components/drive/link-row.tsx
+  s_27a14029b70c86::t_ac872ac25ad0d0 187-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ac054bc66c621b518ec9fd00228a4bf72b109edb",
+  "prompts": {},
+  "sessions": {
+    "s_27a14029b70c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "769cd93e-b3ca-482d-b49e-bf174703a433",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
