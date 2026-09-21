@@ -122,6 +122,41 @@ export function sanitizeFailure(value: unknown, depth = 3): Failure | undefined 
         depth > 1 && input.cause !== value ? sanitizeFailure(input.cause, depth - 1) : undefined;
     return { kind, ...(code ? { code } : {}), ...(cause ? { cause } : {}) };
 }
+// Pages behind the private prefixes, by their exact path. One that carries an
+// identifier is logged as its pattern, so the identifier never reaches the log.
+const knownPages = new Set([
+    '/app',
+    '/app/account',
+    '/app/billing',
+    '/app/contacts',
+    '/app/drive',
+    '/app/shared',
+    '/app/trash',
+    '/app/search',
+    '/app/tags',
+    '/app/referrals',
+    '/app/recovery-key',
+    '/app/admin',
+    '/app/admin/reports',
+    '/app/admin/affiliates',
+    '/setup/recovery-key',
+    '/login',
+    '/register',
+    '/register/check-email',
+    '/register/complete',
+    '/recover',
+    '/recover/check-email',
+    '/recover/complete',
+]);
+const pagePatterns: [RegExp, string][] = [
+    [/^\/app\/drive\/f\/[^/]+$/, '/app/drive/f/:folderId'],
+    [/^\/app\/tags\/[^/]+$/, '/app/tags/:tagId'],
+    [/^\/app\/admin\/reports\/[^/]+$/, '/app/admin/reports/:reportId'],
+];
+function privatePage(path: string) {
+    if (knownPages.has(path)) return path;
+    return pagePatterns.find(([pattern]) => pattern.test(path))?.[1] ?? '/private/unknown';
+}
 export function authLogAction(pathname: string) {
     const action = pathname.slice('/api/auth/'.length);
     return authActions.has(action) ? action : 'unknown';
@@ -139,22 +174,7 @@ export function redactAuthenticationEvent(event: WideEvent) {
     if (!privateRoute) return;
     for (const key of Object.keys(event)) if (!safeAuthFields.has(key)) delete event[key];
     if (path.startsWith('/api/auth/')) event.path = `/api/auth/${authLogAction(path)}`;
-    else {
-        const knownPages = new Set([
-            '/app',
-            '/app/account',
-            '/setup/recovery-key',
-            '/app/recovery-key',
-            '/login',
-            '/register',
-            '/register/check-email',
-            '/register/complete',
-            '/recover',
-            '/recover/check-email',
-            '/recover/complete',
-        ]);
-        event.path = knownPages.has(path) ? path : '/private/unknown';
-    }
+    else event.path = privatePage(path);
     const auth = event.auth;
     if (auth && typeof auth === 'object') {
         const value = auth as Record<string, unknown>;
