@@ -160,7 +160,7 @@ const faq = [
     },
     {
         q: 'Can I switch between monthly and yearly?',
-        a: 'Yes. Monthly and yearly are separate plans. Choose the one you want and the prorated difference is charged, or credited, to your saved card straight away. Yearly plans cost ten months.',
+        a: 'Yes. Monthly and yearly are separate plans. Choose the one you want and the prorated difference is charged, or credited, to your saved card straight away. Paying yearly gets you two months free.',
     },
     {
         q: 'Is self-hosting free?',
@@ -234,7 +234,7 @@ function PricingPage() {
                     </h1>
                     <p className="mt-5 max-w-xl text-lg leading-relaxed text-pretty text-muted-foreground">
                         Every plan is end-to-end encrypted the same way. Paid plans only add
-                        storage. Yearly plans cost ten months. Billing runs through Polar, our
+                        storage. Pay yearly and two months are free. Billing runs through Polar, our
                         merchant of record, so tax is handled at checkout.
                     </p>
                 </section>
@@ -354,9 +354,9 @@ function PricingPage() {
                                     price={`${money(plan)} / ${plan.interval}`}
                                     note={
                                         plan.interval === 'year'
-                                            ? `Billed ${money(plan)} once a year.`
+                                            ? '12 months for the price of 10.'
                                             : other
-                                              ? `Or ${money(other)} a year.`
+                                              ? `Or ${money(other)} a year, 2 months free.`
                                               : 'Billed monthly.'
                                     }
                                     action={

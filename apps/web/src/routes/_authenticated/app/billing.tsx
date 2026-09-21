@@ -526,7 +526,7 @@ function BillingPage() {
                 <Section
                     id="plans-title"
                     title="Plans"
-                    description="Prices include tax where it applies. Switching plans charges or credits the prorated difference to your saved card straight away; yearly plans cost ten months."
+                    description="Prices include tax where it applies. Switching plans charges or credits the prorated difference to your saved card straight away. Paying yearly gets you two months free."
                 >
                     <Collapse open={Boolean(switching)}>
                         {switching && (
