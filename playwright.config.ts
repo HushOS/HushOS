@@ -39,9 +39,10 @@ export default defineConfig({
     ],
     webServer: {
         // From the root, so Bun loads the root .env the way `bun run dev` does. In CI
-        // the server's own output is kept in a file the workflow uploads on failure.
+        // the server's output goes to a file the workflow uploads on failure, and only
+        // there: three lines a request, it was most of the job log and buried the tests.
         command: process.env.CI
-            ? 'mkdir -p scratchpad && bun run dev 2>&1 | tee scratchpad/e2e-server.log'
+            ? 'mkdir -p scratchpad && bun run dev > scratchpad/e2e-server.log 2>&1'
             : 'bun run dev',
         // Each test context sends its own x-forwarded-for (see helpers.ts), so the
         // per-address cap on verification emails never trips. A dev server you
@@ -50,8 +51,7 @@ export default defineConfig({
         url: 'http://localhost:5173',
         reuseExistingServer: true,
         timeout: 180_000,
-        // In CI the server log is the only way to see a dev-server reload mid-run.
-        stdout: process.env.CI ? 'pipe' : 'ignore',
+        stdout: 'ignore',
         stderr: 'pipe',
     },
 });

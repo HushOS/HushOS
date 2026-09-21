@@ -95,6 +95,11 @@ jobs:
               run: bun run e2e -- --project=chromium --project=mobile
               env:
                   TURBO_LOG_ORDER: stream
+            # The whole log is in the artifact below; its end is enough to see a server
+            # that never came up.
+            - name: Show the end of the server log
+              if: failure()
+              run: tail -n 60 scratchpad/e2e-server.log || true
             - name: Keep traces of failures and the server log
               if: failure()
               uses: actions/upload-artifact@v4
