@@ -33,7 +33,10 @@ export const Route = createFileRoute('/_authenticated/app')({
         'Referrer-Policy': 'no-referrer',
     }),
     head: () => ({ meta: [{ name: 'robots', content: 'noindex' }] }),
-    staleTime: 0,
+    // The sidebar cookie is read once, for the first render. Never stale, so a click on
+    // the page already open does not go back to the server for it; gcTime 0 still drops
+    // it on leaving /app, so the next sign-in reads it afresh.
+    staleTime: Infinity,
     gcTime: 0,
     component: AppLayout,
 });
