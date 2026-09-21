@@ -21,6 +21,10 @@ import { growthApi } from '@/lib/growth-api';
 import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
 import { publicOrigin } from '@/lib/social';
 
+/* Yearly first and named as the pricing page names them, in the prices and the buttons alike. */
+const periods = ['year', 'month'] as const;
+const periodLabel = { month: 'Monthly', year: 'Yearly' } as const;
+
 /*
  * An offer page: a creator's discount, by their slug or code, or a code the
  * operator made at Polar and shared as a link. The plans are priced with the
@@ -262,7 +266,7 @@ function OfferPage() {
                                         )}
                                     </div>
                                     <dl className="text-sm tabular-nums">
-                                        {(['month', 'year'] as const).map((interval) => {
+                                        {periods.map((interval) => {
                                             const plan = tier[interval];
                                             if (!plan) return null;
                                             const price = priceOf(plan, currency);
@@ -277,7 +281,7 @@ function OfferPage() {
                                                     className="flex items-baseline justify-between gap-4 border-b border-dotted border-rule py-2.5 last:border-b-0"
                                                 >
                                                     <dt className="text-muted-foreground">
-                                                        Per {interval}
+                                                        {periodLabel[interval]}
                                                     </dt>
                                                     <dd className="flex items-baseline gap-3">
                                                         {after === null ? (
@@ -311,7 +315,7 @@ function OfferPage() {
                                     <div className="flex flex-col gap-2">
                                         {hasSession ? (
                                             // One button per period: the checkout opens with the code applied.
-                                            (['year', 'month'] as const).map((interval) => {
+                                            periods.map((interval) => {
                                                 const plan = tier[interval];
                                                 if (!plan) return null;
                                                 return (
@@ -328,7 +332,7 @@ function OfferPage() {
                                                     >
                                                         <PendingLabel
                                                             pending={starting === plan.id}
-                                                            idle={`Subscribe per ${interval}`}
+                                                            idle={`Subscribe ${periodLabel[interval].toLowerCase()}`}
                                                             busy="Opening checkout…"
                                                         />
                                                         <ArrowRightIcon aria-hidden="true" />
