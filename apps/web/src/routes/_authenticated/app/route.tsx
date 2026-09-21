@@ -6,6 +6,7 @@ import { authClient } from '@/lib/auth-client';
 import { createFileRoute, Outlet, useLocation, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
 import { DeviceControl } from '@/components/device-control';
+import { NavigationBar } from '@/components/navigation-bar';
 import { ReleaseNotice } from '@/components/release-notice';
 import { CollisionDialog } from '@/components/drive/collision-dialog';
 import { DriveRuntime } from '@/components/drive/drive-shell';
@@ -168,6 +169,7 @@ function AppLayout() {
             defaultOpen={sidebarOpen}
             style={{ '--sidebar-width': '14rem' } as CSSProperties}
         >
+            <NavigationBar />
             <AppSidebar user={user} />
             {/*
              * The one sheet every page lies on. On a desk-sized screen it keeps its place, a margin
