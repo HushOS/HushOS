@@ -1,0 +1,19 @@
+packages/logging/src/privacy.ts
+  s_ee626e444373b2::t_2be169dc7fd3b3 125-159,177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a24993537ff62abb02620428b51a6e1a8cc856c4",
+  "prompts": {},
+  "sessions": {
+    "s_ee626e444373b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07c06300-835b-4f70-8ba1-6343988adb1d",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
