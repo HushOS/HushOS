@@ -184,7 +184,8 @@ export function LinkRow({
         <li data-link={link.id} className={cn('@container flex flex-col px-4 py-2.5', className)}>
             {/* Details on one line and the actions on the next, flush with them; one line only where the row is wide. */}
             <div className="flex flex-col gap-1 @2xl:flex-row @2xl:items-center @2xl:gap-x-3">
-                <div className="min-w-0 flex-1">
+                {/* A title carries a file mark taller than its text; the gap keeps the line below off it. */}
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
                     {title}
                     <p className="text-xs text-muted-foreground tabular-nums">
                         {describeLink(link)}
