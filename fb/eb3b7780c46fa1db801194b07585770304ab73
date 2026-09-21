@@ -1,0 +1,21 @@
+playwright.config.ts
+  s_9a264a4adeaf4e::t_836b10c852fc2e 42-43,45,54
+.github/workflows/ci.yml
+  s_9a264a4adeaf4e::t_836b10c852fc2e 98-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fbeb3b7780c46fa1db801194b07585770304ab73",
+  "prompts": {},
+  "sessions": {
+    "s_9a264a4adeaf4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb0f1167-31ed-43ef-82ac-d20b1fe6b74e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
