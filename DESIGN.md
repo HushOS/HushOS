@@ -324,6 +324,7 @@ Motion has a purpose or it does not ship: feedback for a press, a state that cha
 - **Springs.** State swaps use `duration: 0.3, bounce: 0`. Content that arrives may use `duration: 0.45, bounce: 0.15`. If a spring looks wrong, raise damping.
 - **Curves.** Entrances and exits use `ease-out-expo`; on-screen moves use `ease-in-out-cubic`; colour and border use `ease-out-soft` at 150ms. Never `ease-in`.
 - **Durations.** 150ms press and colour, 200ms enter of errors and alerts, 220ms icon swaps, 300ms text swaps, 400ms the auth entrance and the account-settings collapses (delete, password, key rotation), 500ms progress fills.
+- **Navigation bar.** A 2px `primary` hairline across the top of the window while the router loads a page under `/app` (`components/navigation-bar.tsx`). It waits 150ms, so a navigation that resolves at once never shows it; then it grows toward 85% over 8s on `ease-out-expo`, never reaching the end on its own, and on arrival fills and fades in 200ms. CSS transforms only, so it stays smooth while the next page's script is parsed. Fixed and inert: it takes no room and catches no clicks. It follows route loading only; a page that fetches after it appears still owns its own loading state.
 - **Text swaps** crossfade with a 10px lift and a 2px blur. **Icon swaps** scale from 0.6. **Recovery words** stagger in at 25ms. **Menus** scale from 0.95 at their trigger's transform origin over 100ms.
 - `prefers-reduced-motion` collapses every CSS animation, and `MotionConfig` limits Motion to opacity and colour.
 
