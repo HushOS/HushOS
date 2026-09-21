@@ -1,0 +1,19 @@
+apps/web/src/content/about.mdx
+  s_9a264a4adeaf4e::t_22b411d8f1bc22 35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8b40aaac86dedc04145e3e1be689d129f6df026b",
+  "prompts": {},
+  "sessions": {
+    "s_9a264a4adeaf4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb0f1167-31ed-43ef-82ac-d20b1fe6b74e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
