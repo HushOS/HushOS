@@ -1,0 +1,22 @@
+apps/web/src/components/navigation-bar.tsx
+  s_27a14029b70c86::t_0777444bf959aa 16-21,23-25
+  s_27a14029b70c86::t_d1889279e1713b 1-15,22,26-45
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_27a14029b70c86::t_afaf6a23326b1b 9,172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ed95acc98298b54a1efe375235523d92585a3618",
+  "prompts": {},
+  "sessions": {
+    "s_27a14029b70c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "769cd93e-b3ca-482d-b49e-bf174703a433",
+        "model": "claude-opus-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
