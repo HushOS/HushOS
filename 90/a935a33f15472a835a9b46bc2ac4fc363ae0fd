@@ -1,0 +1,25 @@
+apps/web/src/components/drive/link-row.tsx
+  s_27a14029b70c86::t_6edc4749cce4c4 140,162
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_27a14029b70c86::t_cf45f21feb5c1d 4
+  s_27a14029b70c86::t_6edc4749cce4c4 13-20,54-59,204,217,314
+apps/web/src/lib/drive.ts
+  s_27a14029b70c86::t_6edc4749cce4c4 34,68-72
+  s_27a14029b70c86::t_8a574933c67a7b 73-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "90a935a33f15472a835a9b46bc2ac4fc363ae0fd",
+  "prompts": {},
+  "sessions": {
+    "s_27a14029b70c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "769cd93e-b3ca-482d-b49e-bf174703a433",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
