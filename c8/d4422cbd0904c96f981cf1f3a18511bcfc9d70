@@ -1,0 +1,27 @@
+packages/logging/src/privacy.test.ts
+  s_ee626e444373b2::t_43a349f2ec2c21 94-98
+  s_ee626e444373b2::t_5a4268f0c38858 1-93,99-150
+packages/logging/package.json
+  s_ee626e444373b2::t_707062889f94c3 26-27
+  s_ee626e444373b2::t_2be169dc7fd3b3 18
+packages/logging/vitest.config.ts
+  s_ee626e444373b2::t_2be169dc7fd3b3 1-8
+bun.lock
+  s_ee626e444373b2::t_0ad65876cce6ad 255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c8d4422cbd0904c96f981cf1f3a18511bcfc9d70",
+  "prompts": {},
+  "sessions": {
+    "s_ee626e444373b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07c06300-835b-4f70-8ba1-6343988adb1d",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
