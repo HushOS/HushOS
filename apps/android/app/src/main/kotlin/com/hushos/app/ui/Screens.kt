@@ -137,7 +137,11 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var sortAscending by rememberSaveable { mutableStateOf(prefs.getBoolean("sortAscending", true)) }
     var sortMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val listScope = rememberCoroutineScope()
+    // A new order starts at the top, once the list holds it; scrolling earlier would still follow the anchored row.
+    var sortSeen by remember { mutableStateOf(sortKey to sortAscending) }
+    LaunchedEffect(sortKey, sortAscending) {
+        if (sortSeen != (sortKey to sortAscending)) { sortSeen = sortKey to sortAscending; listState.scrollToItem(0) }
+    }
     val unfiltered = if (query.isBlank()) sortItems(folderId?.let { state.folders[it] } ?: emptyList(), sortKey, sortAscending)
         else state.everything.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     val items = tagFilter?.let { id -> unfiltered.filter { it.id in state.tags.nodesWith(id) } } ?: unfiltered
@@ -177,8 +181,6 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                         if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
                                         prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
                                         sortMenu = false
-                                        // A new order starts at the top; the list would otherwise follow the row it was anchored to.
-                                        listScope.launch { listState.scrollToItem(0) }
                                     },
                                 )
                             }
