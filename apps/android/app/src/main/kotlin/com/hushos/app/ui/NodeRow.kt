@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -92,6 +93,13 @@ fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () 
                     tint = if (item.isFolder) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(32.dp),
                 )
+            }
+        },
+        trailingContent = {
+            // Fetching to open: a small ring on the row, as the drives do, not a banner.
+            state.opening[item.id]?.let { fraction ->
+                if (fraction > 0f) CircularProgressIndicator(progress = { fraction }, modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
+                else CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
             }
         },
         modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),

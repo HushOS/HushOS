@@ -1,23 +1,18 @@
-import { useLocation } from '@tanstack/react-router';
 import { RefreshCwIcon } from 'lucide-react';
-import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { reloadIfStale, useReleaseStale } from '@/lib/release';
+import { useReleaseStale } from '@/lib/release';
 import { useTransfers } from '@/lib/transfers';
 
 /*
- * The app after a deploy: the page reloads itself on the next navigation once
- * nothing is uploading, and says so meanwhile, so nobody is left on a page the
- * server no longer speaks to. An upload in flight is never interrupted; the
- * journal would bring it back, but there is no need to make it.
+ * The app after a deploy: a line says so and offers a reload, and that is
+ * all. The page never reloads itself: a reload mid-upload lost or doubled
+ * transfers, and a reload always locks the vault, which read as being thrown
+ * out. The server refuses a client that is too old, so a stale page fails
+ * clearly rather than oddly.
  */
 export function ReleaseNotice() {
     const stale = useReleaseStale();
     const { active } = useTransfers();
-    const { pathname } = useLocation();
-    useEffect(() => {
-        reloadIfStale(active > 0);
-    }, [pathname, active, stale]);
     if (!stale) return null;
     return (
         <div
@@ -27,8 +22,8 @@ export function ReleaseNotice() {
             <span>
                 HushOS was updated.{' '}
                 {active > 0
-                    ? 'The page will reload once your uploads finish.'
-                    : 'The page reloads when you open another section, or now.'}
+                    ? 'Reload once your uploads finish to get the new version.'
+                    : 'Reload when convenient to get the new version.'}
             </span>
             <Button
                 size="xs"

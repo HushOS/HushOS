@@ -20,6 +20,7 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.sync
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -132,6 +133,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = guarded {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
+        // The app may have built the catalogue in this process; a sync keeps Files as fresh as the server.
+        runCatching { vault.sync() }
         for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault)
         cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId))
         cursor

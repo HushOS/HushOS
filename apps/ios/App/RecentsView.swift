@@ -101,7 +101,7 @@ struct HomeView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Home")
             .refreshable { await store.refreshRecents() }
             .nodeActionSheets(action: $action, store: store)
             .quickLookPreview($preview)

@@ -44,7 +44,8 @@ import java.io.File
 
 enum class Gate { CHECKING, SIGNED_OUT, SIGNED_IN }
 
-data class Transfer(val title: String, val fraction: Float)
+/* A transfer in flight or just finished, with its own bar, as the web's panel shows them. */
+data class TransferItem(val id: String, val kind: String, val name: String, val fraction: Float, val done: Boolean = false, val failed: Boolean = false)
 
 data class DriveState(
     val gate: Gate = Gate.CHECKING,
@@ -63,7 +64,9 @@ data class DriveState(
     /* What Copy or Cut picked up, until Paste places it. */
     val clipboard: Pair<List<Opened>, Boolean>? = null,
     val billing: BillingSummary? = null,
-    val transfer: Transfer? = null,
+    val transfers: List<TransferItem> = emptyList(),
+    /* Files being fetched to open, by node id, with progress: a ring on the row, not a banner. */
+    val opening: Map<String, Float> = emptyMap(),
     val error: String? = null,
     val busy: Boolean = false,
     /* The last request could not reach the server; what is on the phone is shown. */
@@ -130,6 +133,25 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() = _state.update { it.copy(error = null) }
 
+    private fun begin(kind: String, name: String): String {
+        val id = java.util.UUID.randomUUID().toString()
+        _state.update { it.copy(transfers = it.transfers + TransferItem(id, kind, name, 0f)) }
+        return id
+    }
+
+    private fun progress(id: String, fraction: Float, name: String? = null) = _state.update { s ->
+        s.copy(transfers = s.transfers.map { if (it.id == id) it.copy(fraction = fraction, name = name ?: it.name) else it })
+    }
+
+    private fun finish(id: String, failed: Boolean = false) {
+        _state.update { s -> s.copy(transfers = s.transfers.map { if (it.id == id) it.copy(done = true, failed = failed, fraction = if (failed) it.fraction else 1f) else it }) }
+        // Finished rows linger so the result is seen, then go once everything is done.
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(4000)
+            _state.update { s -> if (s.transfers.all { it.done }) s.copy(transfers = emptyList()) else s }
+        }
+    }
+
     private suspend fun <T> io(block: (Vault) -> T): T? {
         val vault = vault ?: return null
         return try {
@@ -166,6 +188,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val touched = io { it.sync() } ?: return
         if (touched.isEmpty()) return
         redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
+        // A kept file replaced elsewhere is fetched again, so the offline copy is the current one.
+        val kept = Offline.entries(context).filter { it.id in touched }
+        if (kept.isNotEmpty()) {
+            val tickets = kept.associate { it.id to begin("keep", it.name) }
+            io { vault -> vault.refreshOffline(tickets.keys) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } }
+            tickets.values.forEach { finish(it) }
+            refreshOffline()
+        }
     }
 
     private suspend fun redraw(folderIds: Collection<String>) {
@@ -252,9 +282,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean {
         val revoked = io { it.revokeShare(share, item); true } ?: return false
-        _state.update { it.copy(transfer = Transfer("Rotating keys for ${item.name}", 0f)) }
-        val ok = io { vault -> vault.rotate(item) { count -> _state.update { it.copy(transfer = Transfer("Rotating keys · $count sealed", 0f)) } }; true } ?: false
-        _state.update { it.copy(transfer = null, folders = emptyMap()) }
+        val ticket = begin("rotate", "Rotating keys for ${item.name}")
+        val ok = io { vault -> vault.rotate(item) { count -> progress(ticket, 0f, "Rotating keys · $count sealed") }; true } ?: false
+        finish(ticket, failed = !ok)
+        _state.update { it.copy(folders = emptyMap()) }
         item.node.parentId?.let { refresh(it) }
         return revoked && ok
     }
@@ -303,8 +334,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun write(folder: String?, block: (Vault) -> Unit): Boolean {
         _state.update { it.copy(busy = true) }
         val ok = io { block(it); true } ?: false
+        // The catalogue answers listings, so pull the feed first: the write is in it already.
+        if (ok) sync()
         if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
-        _state.update { it.copy(busy = false, transfer = null) }
+        _state.update { it.copy(busy = false) }
         if (ok) context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
         return ok
     }
@@ -329,11 +362,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         for ((index, item) in items.withIndex()) {
             val sameDrive = item.node.workspaceId == targetWorkspace
             if (cut && sameDrive) { move(item, folder).join(); continue }
-            _state.update { it.copy(transfer = Transfer(if (items.size > 1) "Copying ${index + 1} of ${items.size}" else "Copying ${item.name}", 0f)) }
-            if (sameDrive) write(folder) { it.copy(item.id, folder) }
+            val ticket = begin("copy", item.name)
+            if (sameDrive) finish(ticket, failed = !write(folder) { it.copy(item.id, folder) })
             else {
                 // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                val ok = write(folder) { vault -> vault.copyAcross(item.id, folder) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } } }
+                val ok = write(folder) { vault -> vault.copyAcross(item.id, folder) { fraction -> progress(ticket, fraction) } }
+                finish(ticket, failed = !ok)
                 if (ok && cut) trash(item).join()
             }
         }
@@ -401,12 +435,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 Conflict.REPLACE -> replacing = clash
                 Conflict.KEEP_BOTH -> name = renames[name] ?: freeName(name, taken)
             }
-            _state.update { it.copy(transfer = Transfer(if (uris.size > 1) "Uploading ${index + 1} of ${uris.size}" else "Uploading $name", 0f)) }
+            val ticket = begin("upload", name)
             val ok = write(folder) { vault ->
                 vault.upload(staged.first, name, staged.third, folder, replacing, vault.makeThumbnail(staged.first, staged.third)) { fraction ->
-                    _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) }
+                    progress(ticket, fraction)
                 }
             }
+            finish(ticket, failed = !ok)
             staged.first.delete()
             if (!ok) break
         }
@@ -427,9 +462,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Keep downloaded on or off: the local copy comes or goes. */
     fun setKeptDownloaded(item: Opened, keep: Boolean) = viewModelScope.launch {
         if (keep) {
-            _state.update { it.copy(transfer = Transfer("Keeping ${item.name}", 0f)) }
-            io { vault -> vault.keepDownloaded(item) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } } }
-            _state.update { it.copy(transfer = null) }
+            val ticket = begin("keep", item.name)
+            val ok = io { vault -> vault.keepDownloaded(item) { fraction -> progress(ticket, fraction) }; true } ?: false
+            finish(ticket, failed = !ok)
         } else Offline.forget(context, item.id)
         _state.update { it.copy(offline = Offline.entries(context)) }
     }
@@ -438,13 +473,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun download(item: Opened, version: VersionListView? = null): Uri? {
         if (version == null) Offline.localCopy(context, item)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) }
-        _state.update { it.copy(transfer = Transfer("Downloading ${item.name}", 0f)) }
+        // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
+        _state.update { it.copy(opening = it.opening + (item.id to 0f)) }
         val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: "current"}/${item.name}")
         val ok = if (file.exists()) true else io { vault ->
-            vault.download(item.id, file, version) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } }
+            vault.download(item.id, file, version) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
             true
         } ?: false
-        _state.update { it.copy(transfer = null) }
+        _state.update { it.copy(opening = it.opening - item.id) }
         return if (ok) FileProvider.getUriForFile(context, "${context.packageName}.shared", file) else null
     }
 }

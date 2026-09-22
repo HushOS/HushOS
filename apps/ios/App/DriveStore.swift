@@ -32,18 +32,48 @@ final class DriveStore {
     /* Folder ids being fetched right now. */
     var loading: Set<String> = []
     var busy = false
-    var transfer: Transfer? {
-        didSet {
-            guard let transfer else { return }
-            activity.update(title: transfer.title, fraction: transfer.fraction)
-        }
+    /* Transfers in flight and just finished, each with its own bar, as the web's panel shows them. */
+    struct TransferItem: Identifiable, Equatable {
+        enum Kind { case upload, download, copy, keep, rotate }
+        let id = UUID()
+        var kind: Kind
+        var name: String
+        var fraction: Double
+        var done = false
+        var failed = false
     }
+    var transfers: [TransferItem] = []
+    /* Files being fetched to open, by node id, with progress: a spinner on the row, not a banner. */
+    var opening: [String: Double] = [:]
     private let activity = TransferActivity()
     private var thumbnailTasks: Set<String> = []
 
-    struct Transfer: Equatable {
-        var title: String
-        var fraction: Double
+    @discardableResult
+    func begin(_ kind: TransferItem.Kind, _ name: String) -> UUID {
+        let item = TransferItem(kind: kind, name: name, fraction: 0)
+        transfers.append(item)
+        return item.id
+    }
+
+    func progress(_ id: UUID, _ fraction: Double, name: String? = nil) {
+        guard let index = transfers.firstIndex(where: { $0.id == id }) else { return }
+        transfers[index].fraction = fraction
+        if let name { transfers[index].name = name }
+        let running = transfers.filter { !$0.done }
+        let title = running.count > 1 ? "\(running.count) transfers" : (running.first?.name ?? "")
+        activity.update(title: title, fraction: running.map(\.fraction).reduce(0, +) / Double(max(running.count, 1)))
+    }
+
+    func finish(_ id: UUID, failed: Bool = false) {
+        guard let index = transfers.firstIndex(where: { $0.id == id }) else { return }
+        transfers[index].done = true
+        transfers[index].failed = failed
+        if !failed { transfers[index].fraction = 1 }
+        // Finished rows linger so the result is seen, then go once everything is done.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if transfers.allSatisfy(\.done) { transfers.removeAll() }
+        }
     }
 
     init(vault: Vault) {
@@ -82,6 +112,14 @@ final class DriveStore {
         }
         recents = (try? await vault.recents()) ?? recents
         catalogueVersion += 1
+        // A kept file replaced elsewhere is fetched again, so the offline copy is the current one.
+        let kept = Offline.entries()
+        if kept.contains(where: { touched.contains($0.id) }) {
+            let tickets = Dictionary(uniqueKeysWithValues: kept.filter { touched.contains($0.id) }.map { ($0.id, begin(.keep, $0.name)) })
+            await vault.refreshOffline { id, fraction in Task { @MainActor in if let ticket = tickets[id] { self.progress(ticket, fraction) } } }
+            for ticket in tickets.values { finish(ticket) }
+            offlineVersion += 1
+        }
     }
 
     func refresh(folder id: String) async {
@@ -161,7 +199,7 @@ final class DriveStore {
 
     private func perform(_ title: String? = nil, in folder: String?, _ work: () async throws -> Void) async -> Bool {
         busy = true
-        defer { busy = false; transfer = nil }
+        defer { busy = false }
         do {
             try await work()
             if let folder { await refresh(folder: folder) }
@@ -201,12 +239,15 @@ final class DriveStore {
             if cut && targetWorkspace == item.node.workspaceId {
                 await move(item, to: folder)
             } else {
-                transfer = Transfer(title: items.count > 1 ? "Copying \(index + 1) of \(items.count)" : "Copying \(item.name)", fraction: 0)
+                _ = index
+                let ticket = begin(.copy, item.name)
                 if targetWorkspace == item.node.workspaceId {
-                    _ = await perform(in: folder) { _ = try await vault.copy(item.id, to: folder) }
+                    let ok = await perform(in: folder) { _ = try await vault.copy(item.id, to: folder) }
+                    finish(ticket, failed: !ok)
                 } else {
                     // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                    let ok = await perform(in: folder) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.transfer?.fraction = fraction } } }
+                    let ok = await perform(in: folder) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                    finish(ticket, failed: !ok)
                     if ok && cut { await trash(item) }
                 }
             }
@@ -230,9 +271,9 @@ final class DriveStore {
     /* Keep downloaded on or off: the local copy comes or goes, and Files follows through the extension. */
     func setKeptDownloaded(_ item: Opened, _ keep: Bool) async {
         if keep {
-            transfer = Transfer(title: "Keeping \(item.name)", fraction: 0)
-            defer { transfer = nil }
-            _ = await perform(in: nil) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.transfer?.fraction = fraction } } }
+            let ticket = begin(.keep, item.name)
+            let ok = await perform(in: nil) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+            finish(ticket, failed: !ok)
         } else {
             Offline.forget(item.id)
         }
@@ -251,13 +292,13 @@ final class DriveStore {
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     func revokeAndRotate(_ share: ShareView, for item: Opened) async throws {
         try await vault.revokeShare(share, for: item)
-        transfer = Transfer(title: "Rotating keys for \(item.name)", fraction: 0)
+        let ticket = begin(.rotate, "Rotating keys for \(item.name)")
         holdBackground(); activity.start(kind: "rotate", title: "Rotating keys for \(item.name)")
         defer {
-            transfer = nil
+            finish(ticket)
             releaseBackground(); activity.finish(title: "Keys rotated")
         }
-        _ = try await vault.rotate(item) { count in Task { @MainActor in self.transfer = Transfer(title: "Rotating keys · \(count) sealed", fraction: 0) } }
+        _ = try await vault.rotate(item) { count in Task { @MainActor in self.progress(ticket, 0, name: "Rotating keys · \(count) sealed") } }
         folders.removeAll()
         if let parent = item.node.parentId { await refresh(folder: parent) }
     }
@@ -343,13 +384,15 @@ final class DriveStore {
                 case .keepBoth: name = renames[file.name] ?? Self.freeName(file.name, among: existing.map(\.name))
                 }
             }
-            transfer = Transfer(title: files.count > 1 ? "Uploading \(index + 1) of \(files.count)" : "Uploading \(name)", fraction: 0)
+            _ = index
+            let ticket = begin(.upload, name)
             let ok = await perform(in: folder) {
                 _ = try await vault.upload(
                     fileURL: file.url, name: name, mime: mime, in: folder, replacing: replacing,
                     thumbnail: Thumbnails.make(for: file.url, mime: mime)
-                ) { fraction in Task { @MainActor in self.transfer?.fraction = fraction } }
+                ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
             }
+            finish(ticket, failed: !ok)
             try? FileManager.default.removeItem(at: file.url)
             if !ok { break }
         }
@@ -375,14 +418,15 @@ final class DriveStore {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(item.name)
         if FileManager.default.fileExists(atPath: file.path) { return file }
-        transfer = Transfer(title: "Downloading \(item.name)", fraction: 0)
-        holdBackground(); activity.start(kind: "download", title: "Downloading \(item.name)")
+        // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
+        opening[item.id] = 0
+        holdBackground()
         defer {
-            transfer = nil
-            releaseBackground(); activity.finish(title: "\(item.name) downloaded")
+            opening[item.id] = nil
+            releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.transfer?.fraction = fraction } }
+            try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
             return file
         } catch {
             report(error)

@@ -33,7 +33,7 @@ private fun Vault.pullFeed(workspaceId: String): List<NodeChange> {
 }
 
 /* Rows in an order every parent precedes its children; rows whose parent is missing come back separately. */
-private fun parentsFirst(rows: List<NodeView>): Pair<List<NodeView>, List<NodeView>> {
+private fun parentsFirst(rows: List<NodeView>, known: (String) -> Boolean = { false }): Pair<List<NodeView>, List<NodeView>> {
     val byId = rows.associateBy { it.id }
     val children = HashMap<String, MutableList<NodeView>>()
     val roots = ArrayList<NodeView>()
@@ -41,7 +41,8 @@ private fun parentsFirst(rows: List<NodeView>): Pair<List<NodeView>, List<NodeVi
     for (row in rows) {
         val parent = row.parentId
         when {
-            parent == null -> roots.add(row)
+            // A parent already open (a sync's batch sits under the catalogue) starts a chain like a root.
+            parent == null || (known(parent) && !byId.containsKey(parent)) -> roots.add(row)
             byId.containsKey(parent) -> children.getOrPut(parent) { ArrayList() }.add(row)
             else -> orphans.add(row)
         }
@@ -130,7 +131,14 @@ fun Vault.sync(): Set<String> {
             queue.add(child)
         }
     }
-    file(parentsFirst(rows + below).first)
+    val batch = (rows + below).map { it.id }.toSet()
+    val (ordered, orphans) = parentsFirst(rows + below) { id -> id !in batch && opened.containsKey(id) }
+    file(ordered)
+    if (orphans.isNotEmpty()) {
+        // A row under a folder this device never saw: the next build fills the gap.
+        android.util.Log.w("HushOSSync", "sync: ${orphans.size} rows without an open parent")
+        catalogueState = CatalogueState.IDLE
+    }
     return touched
 }
 

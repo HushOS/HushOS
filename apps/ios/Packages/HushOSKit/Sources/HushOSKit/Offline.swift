@@ -86,11 +86,12 @@ extension Vault {
         Offline.remember(item)
     }
 
-    /* Brings every kept file up to its current version; what was replaced elsewhere is fetched again. */
-    public func refreshOffline() async {
+    /* Brings every kept file up to its current version; what was replaced elsewhere is fetched again, what was trashed is forgotten. */
+    public func refreshOffline(progress: @Sendable @escaping (String, Double) -> Void = { _, _ in }) async {
         for entry in Offline.entries() {
-            guard let item = try? await resolve(entry.id), !item.isFolder else { continue }
-            if Offline.localCopy(of: item) == nil { try? await keepDownloaded(item) }
+            guard let item = try? await resolve(entry.id) else { continue }
+            if item.isFolder || item.node.trashedAt != nil { Offline.forget(entry.id); continue }
+            if Offline.localCopy(of: item) == nil { try? await keepDownloaded(item) { progress(entry.id, $0) } }
         }
     }
 }

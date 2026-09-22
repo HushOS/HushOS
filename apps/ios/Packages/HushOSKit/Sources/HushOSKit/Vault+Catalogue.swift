@@ -39,14 +39,17 @@ extension Vault {
     }
 
     /* Rows in an order every parent precedes its children; rows whose parent is missing come back separately. */
-    private func parentsFirst(_ rows: [NodeView]) -> (ordered: [NodeView], orphans: [NodeView]) {
+    private func parentsFirst(_ rows: [NodeView], known: (String) -> Bool = { _ in false }) -> (ordered: [NodeView], orphans: [NodeView]) {
         let byId = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var children: [String: [NodeView]] = [:]
         var roots: [NodeView] = []
         var orphans: [NodeView] = []
         for row in rows {
             if let parent = row.parentId {
-                if byId[parent] != nil { children[parent, default: []].append(row) } else { orphans.append(row) }
+                if byId[parent] != nil { children[parent, default: []].append(row) }
+                // A parent already open (a sync's batch sits under the catalogue) starts a chain like a root.
+                else if known(parent) { roots.append(row) }
+                else { orphans.append(row) }
             } else {
                 roots.append(row)
             }
@@ -132,9 +135,12 @@ extension Vault {
             }
         }
         // Changed rows may include a folder whose key rotated: its children are re-opened after it.
-        let (ordered, _) = parentsFirst(rows + descendants(of: rows.map(\.id), except: Set(rows.map(\.id))))
+        let batchRows = rows + descendants(of: rows.map(\.id), except: Set(rows.map(\.id)))
+        let batch = Set(batchRows.map(\.id))
+        let (ordered, orphans) = parentsFirst(batchRows) { id in !batch.contains(id) && opened[id] != nil }
         file(ordered)
-        if mirror.rows(workspaceId).isEmpty { catalogueState = .idle }
+        // A row under a folder this device never saw: the next build fills the gap.
+        if !orphans.isEmpty || mirror.rows(workspaceId).isEmpty { catalogueState = .idle }
         return touched
     }
 

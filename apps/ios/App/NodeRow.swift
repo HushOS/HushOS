@@ -23,6 +23,11 @@ struct NodeRow: View {
                 }
             }
             Spacer(minLength: 0)
+            if let fraction = store.opening[item.id] {
+                // Fetching to open: a small ring on the row, as the drives do, not a banner.
+                Spacer(minLength: 8)
+                ProgressView(value: fraction).progressViewStyle(.circular).controlSize(.small)
+            }
         }
         .contentShape(Rectangle())
         .task { store.thumbnail(for: item) }

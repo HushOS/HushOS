@@ -31,19 +31,23 @@ private val NightRule = Color(0xFF3A3F4F)
 
 private val Light = lightColorScheme(
     primary = Blue, onPrimary = SheetColor, primaryContainer = Color(0xFFDDE3F8), onPrimaryContainer = Ink,
-    secondaryContainer = Color(0xFFE3E0D6), onSecondaryContainer = Ink,
-    background = Desk, onBackground = Ink, surface = SheetColor, onSurface = Ink,
-    surfaceVariant = Color(0xFFEFECE4), onSurfaceVariant = Color(0xFF5C6070), surfaceContainer = SheetColor,
-    surfaceContainerLow = Color(0xFFF3F1EB), surfaceContainerHigh = Color(0xFFF6F4EE), surfaceContainerHighest = Color(0xFFFFFFFF),
+    // Selected states (segments, chips, the tab indicator) take the blue tint, not a beige that reads as unselected.
+    secondaryContainer = Color(0xFFDDE3F8), onSecondaryContainer = Ink,
+    // One sheet from top to bottom; cards and bars step through the desk tones rather than banding white on beige.
+    background = SheetColor, onBackground = Ink, surface = SheetColor, onSurface = Ink,
+    surfaceVariant = Color(0xFFEFECE4), onSurfaceVariant = Color(0xFF5C6070),
+    surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF6F4EE), surfaceContainer = Color(0xFFF0EDE5),
+    surfaceContainerHigh = Color(0xFFEBE8DF), surfaceContainerHighest = Desk,
     outline = Rule, outlineVariant = Color(0xFFE0DBD0), error = Color(0xFFB3261E),
 )
 
 private val Dark = darkColorScheme(
     primary = NightBlue, onPrimary = Color(0xFF121833), primaryContainer = Color(0xFF2C3A6B), onPrimaryContainer = Color(0xFFDDE3F8),
-    secondaryContainer = Color(0xFF2A2E3A), onSecondaryContainer = NightInk,
-    background = NightDesk, onBackground = NightInk, surface = NightSheet, onSurface = NightInk,
-    surfaceVariant = Color(0xFF262A35), onSurfaceVariant = Color(0xFFA9ADBB), surfaceContainer = NightSheet,
-    surfaceContainerLow = Color(0xFF181B23), surfaceContainerHigh = Color(0xFF232733), surfaceContainerHighest = Color(0xFF2B2F3B),
+    secondaryContainer = Color(0xFF2C3A6B), onSecondaryContainer = Color(0xFFDDE3F8),
+    background = NightDesk, onBackground = NightInk, surface = NightDesk, onSurface = NightInk,
+    surfaceVariant = Color(0xFF262A35), onSurfaceVariant = Color(0xFFA9ADBB),
+    surfaceContainerLowest = Color(0xFF0E1015), surfaceContainerLow = Color(0xFF181B23), surfaceContainer = NightSheet,
+    surfaceContainerHigh = Color(0xFF232733), surfaceContainerHighest = Color(0xFF2B2F3B),
     outline = NightRule, outlineVariant = Color(0xFF2E3341), error = Color(0xFFF2B8B5),
 )
 

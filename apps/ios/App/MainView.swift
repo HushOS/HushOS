@@ -37,8 +37,8 @@ struct MainView: View {
                     }
                 }
                 .overlay(alignment: .bottom) {
-                    if let transfer = store.transfer {
-                        TransferBanner(transfer: transfer).padding(.bottom, 64)
+                    if !store.transfers.isEmpty {
+                        TransferPanel(transfers: store.transfers).padding(.bottom, 64)
                     }
                 }
                 .alert("Something went wrong", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
@@ -60,17 +60,61 @@ struct MainView: View {
     }
 }
 
-struct TransferBanner: View {
-    let transfer: DriveStore.Transfer
+/* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
+struct TransferPanel: View {
+    let transfers: [DriveStore.TransferItem]
+
+    private var headline: String {
+        let running = transfers.filter { !$0.done }
+        if running.isEmpty { return transfers.contains(where: \.failed) ? "Some transfers failed" : "Done" }
+        let uploads = running.filter { $0.kind == .upload }.count
+        if uploads == running.count { return uploads == 1 ? "Uploading" : "Uploading \(uploads) files" }
+        return running.count == 1 ? verb(running[0].kind) : "\(running.count) transfers"
+    }
+
+    private func verb(_ kind: DriveStore.TransferItem.Kind) -> String {
+        switch kind {
+        case .upload: return "Uploading"
+        case .download: return "Downloading"
+        case .copy: return "Copying"
+        case .keep: return "Keeping downloaded"
+        case .rotate: return "Rotating keys"
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(transfer.title).font(.footnote.weight(.medium)).lineLimit(1)
-            ProgressView(value: transfer.fraction)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(headline).font(.subheadline.weight(.semibold))
+                Spacer()
+                let done = transfers.filter(\.done).count
+                if transfers.count > 1 { Text("\(done) of \(transfers.count)").font(.footnote).foregroundStyle(.secondary) }
+            }
+            ForEach(transfers.suffix(4)) { item in
+                HStack(spacing: 10) {
+                    Image(systemName: item.failed ? "exclamationmark.circle" : item.done ? "checkmark.circle.fill" : icon(item.kind))
+                        .foregroundStyle(item.failed ? Color.red : item.done ? Color.green : Color.accentColor)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.footnote).lineLimit(1)
+                        if !item.done, item.kind != .rotate { ProgressView(value: item.fraction) }
+                    }
+                    Text(item.failed ? "Failed" : item.done ? "Done" : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing)
+                }
+            }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: 360)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .padding(.horizontal)
+    }
+
+    private func icon(_ kind: DriveStore.TransferItem.Kind) -> String {
+        switch kind {
+        case .upload: return "arrow.up.circle"
+        case .download, .keep: return "arrow.down.circle"
+        case .copy: return "doc.on.doc"
+        case .rotate: return "key"
+        }
     }
 }

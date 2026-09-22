@@ -180,7 +180,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Clear") } },
             shape = CircleShape,
             colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp),
         )
         if (folderId != null && folderId in state.loading && !state.folders.containsKey(folderId)) {
             androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
@@ -307,7 +307,9 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
     }
     val rows = base.filter { filter.matches(it) }
     val heading = tagFilter?.let { id -> state.tags.tags.firstOrNull { it.id == id }?.name } ?: if (query.isBlank()) "Recent" else "Results"
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize()) {
+        // Titled like the other tabs; the search pill sits under it rather than in its place.
+        TopAppBar(title = { Text("Home") })
         TextField(
             value = query, onValueChange = { query = it }, singleLine = true,
             placeholder = { Text("Search in HushOS") },
@@ -315,7 +317,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Clear") } },
             shape = CircleShape,
             colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp),
         )
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (option in HomeFilter.entries) FilterChip(selected = filter == option, onClick = { filter = option }, label = { Text(option.label) })

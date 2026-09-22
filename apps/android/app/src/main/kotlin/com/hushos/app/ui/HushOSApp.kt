@@ -10,6 +10,17 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -45,7 +56,8 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         Gate.SIGNED_OUT -> SignInScreen(model, state)
         Gate.SIGNED_IN -> Column(Modifier.fillMaxSize()) {
             if (state.unreachable) OfflineBanner()
-            Box(Modifier.weight(1f)) { Main(model, state) }
+            // The banner took the status bar's height; the screens below must not pad for it again.
+            Box(if (state.unreachable) Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars) else Modifier.weight(1f)) { Main(model, state) }
         }
     }
     state.error?.let { message ->
@@ -86,16 +98,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
                 }
             }
         },
-        snackbarHost = {
-            state.transfer?.let { transfer ->
-                Snackbar(modifier = Modifier.padding(12.dp)) {
-                    Column {
-                        Text(transfer.title, style = MaterialTheme.typography.labelLarge)
-                        LinearProgressIndicator(progress = { transfer.fraction }, modifier = Modifier.padding(top = 8.dp))
-                    }
-                }
-            }
-        },
+        snackbarHost = { if (state.transfers.isNotEmpty()) TransferPanel(state.transfers) },
     ) { padding ->
         Box(Modifier.padding(bottom = padding.calculateBottomPadding())) {
             when (tab) {
@@ -113,5 +116,40 @@ private fun Main(model: DriveViewModel, state: DriveState) {
 private fun OfflineBanner() {
     Surface(color = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
         Text("You're offline. Showing what's on this phone.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+    }
+}
+
+/* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
+@Composable
+private fun TransferPanel(transfers: List<TransferItem>) {
+    val running = transfers.filter { !it.done }
+    val headline = when {
+        running.isEmpty() -> if (transfers.any { it.failed }) "Some transfers failed" else "Done"
+        running.all { it.kind == "upload" } -> if (running.size == 1) "Uploading" else "Uploading ${running.size} files"
+        running.size == 1 -> when (running[0].kind) { "copy" -> "Copying"; "keep" -> "Keeping downloaded"; "rotate" -> "Rotating keys"; else -> "Downloading" }
+        else -> "${running.size} transfers"
+    }
+    Surface(tonalElevation = 3.dp, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(headline, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                if (transfers.size > 1) Text("${transfers.count { it.done }} of ${transfers.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            for (item in transfers.takeLast(4)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Icon(
+                        when { item.failed -> Icons.Outlined.ErrorOutline; item.done -> Icons.Outlined.CheckCircle; item.kind == "upload" -> Icons.Outlined.CloudUpload; item.kind == "copy" -> Icons.Outlined.ContentCopy; item.kind == "rotate" -> Icons.Outlined.Key; else -> Icons.Outlined.CloudDownload },
+                        null,
+                        tint = if (item.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    )
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text(item.name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                        if (!item.done && item.kind != "rotate") LinearProgressIndicator(progress = { item.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                    }
+                    Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }

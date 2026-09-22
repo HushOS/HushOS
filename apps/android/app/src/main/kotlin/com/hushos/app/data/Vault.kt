@@ -323,6 +323,15 @@ class Vault(private val context: Context, val api: DriveApi) {
         Offline.remember(context, item)
     }
 
+    /* Brings every kept file up to its current version; what was replaced elsewhere is fetched again, what was trashed is forgotten. */
+    fun refreshOffline(ids: Collection<String>, progress: (String, Float) -> Unit = { _, _ -> }) {
+        for (entry in Offline.entries(context).filter { it.id in ids }) {
+            val item = runCatching { resolve(entry.id) }.getOrNull() ?: continue
+            if (item.isFolder || item.node.trashedAt != null) { Offline.forget(context, entry.id); continue }
+            if (Offline.localCopy(context, item) == null) runCatching { keepDownloaded(item) { progress(entry.id, it) } }
+        }
+    }
+
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
     fun recoveryPhrase(): String = recoveryPhrase(api.session.userId, unlockAccount(), Auth.recoveryKey(context))
 
