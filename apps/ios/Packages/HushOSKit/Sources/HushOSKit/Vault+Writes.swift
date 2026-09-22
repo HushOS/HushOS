@@ -230,7 +230,15 @@ extension Vault {
                 if index == layout.chunkCount - 1, let thumbnail, thumbnailBytes > 0 {
                     sealed.append(try thumbnailEncrypt(content: content, thumbnail: thumbnail))
                 }
-                let etag = try await api.putPart(url, data: sealed)
+                // A part the network dropped is sent again; an expired address is fetched fresh first.
+                var partURL = url
+                let etag = try await Resumable.run(onExpired: {
+                    let more = try await api.partUrls(uploadId: begun.upload.id, workspaceId: workspace.workspaceId, from: partNumber, count: 64)
+                    for part in more.parts { urls[part.partNumber] = part }
+                    if let fresh = urls[partNumber].flatMap({ URL(string: $0.url) }) { partURL = fresh }
+                }) {
+                    try await api.putPart(partURL, data: sealed)
+                }
                 etags.append(["partNumber": partNumber, "etag": etag])
                 progress(Double(index + 1) / Double(layout.chunkCount))
             }

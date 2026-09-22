@@ -269,24 +269,17 @@ public actor Vault {
         let item = try await resolve(nodeId)
         let opened = try openVersion(item, version: version)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
-        guard let objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
-        let layout = opened.layout
-        // Written beside the destination and moved into place whole: a download cut off
-        // partway never leaves a truncated file that a later open or keep takes as done.
-        let partial = destination.appendingPathExtension("part")
-        FileManager.default.createFile(atPath: partial.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: partial)
-        defer { try? handle.close(); try? FileManager.default.removeItem(at: partial) }
-        for index in 0 ..< layout.chunkCount {
-            try Task.checkCancellation()
+        guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
+        // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`
+        // an earlier try left is continued from its last whole chunk; it moves into place whole.
+        try await Resumable.download(
+            to: destination, count: opened.layout.chunkCount, chunkBytes: opened.layout.chunkBytes,
+            onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
+            progress: progress
+        ) { index in
             let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, index: index))
-            let plaintext = try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
-            try handle.write(contentsOf: plaintext)
-            progress(Double(index + 1) / Double(layout.chunkCount))
+            return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
-        try handle.close()
-        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-        try FileManager.default.moveItem(at: partial, to: destination)
     }
 
     /* The sealed thumbnail trailer of a file's current version, decrypted; nil when it has none. */

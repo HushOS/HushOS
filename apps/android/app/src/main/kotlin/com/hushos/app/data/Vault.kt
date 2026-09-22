@@ -447,28 +447,15 @@ class Vault(private val context: Context, val api: DriveApi) {
         return OpenedVersion(content, id)
     }
 
-    /* Downloads and decrypts a file's version into `destination`, chunk by chunk. */
+    /* Downloads and decrypts a file's version into `destination`, chunk by chunk, resuming a `.part` an earlier try left. */
     fun download(id: String, destination: File, version: VersionListView? = null, progress: (Float) -> Unit = {}) {
         val item = resolve(id)
         val v = openVersion(item, version)
-        val url = api.versionUrl(v.versionId, item.node.workspaceId)
-        val count = v.layout.chunkCount
-        destination.parentFile?.mkdirs()
-        // Written beside the destination and moved into place whole: a download cut off
-        // partway never leaves a truncated file that a later open or keep takes as done.
-        val partial = File(destination.path + ".part")
-        try {
-            partial.outputStream().use { out ->
-                for (index in 0uL until count) {
-                    val ciphertext = api.range(url, chunkRange(v.content.plaintextSize, index))
-                    out.write(chunkDecrypt(v.content, index, ciphertext))
-                    progress((index + 1uL).toFloat() / count.toFloat())
-                }
-            }
-            if (!partial.renameTo(destination)) throw java.io.IOException("Could not keep ${destination.name}")
-        } finally {
-            partial.delete()
-        }
+        var url = api.versionUrl(v.versionId, item.node.workspaceId)
+        Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
+            online = { Resumable.online(context) }, progress = progress,
+            onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, index))) }
     }
 
     fun thumbnail(id: String): ByteArray? {
@@ -700,7 +687,14 @@ class Vault(private val context: Context, val api: DriveApi) {
                     raf.readFully(plaintext)
                     var sealed = chunkEncrypt(content, index, plaintext)
                     if (index == layout.chunkCount - 1uL && thumbnail != null && thumbnailBytes > 0u) sealed += thumbnailEncrypt(content, thumbnail)
-                    val etag = api.putPart(urls[partNumber] ?: throw ApiError(500, "No URL for part $partNumber"), sealed)
+                    // A part the network dropped is sent again; an expired address is fetched fresh first.
+                    val etag = Resumable.run(online = { Resumable.online(context) }, onExpired = {
+                        urls.remove(partNumber)
+                        for (part in api.partUrls(begun.uploadId, ws, partNumber)) urls[part.partNumber] = part.url
+                    }) {
+                        if (!urls.containsKey(partNumber)) for (part in api.partUrls(begun.uploadId, ws, partNumber)) urls[part.partNumber] = part.url
+                        api.putPart(urls[partNumber] ?: throw ApiError(500, "No URL for part $partNumber"), sealed)
+                    }
                     etags.put(JSONObject().put("partNumber", partNumber).put("etag", etag))
                     progress((index + 1uL).toFloat() / layout.chunkCount.toFloat())
                 }

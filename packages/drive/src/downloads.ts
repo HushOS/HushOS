@@ -8,7 +8,7 @@ import {
     type FolderListing,
     type Rpc,
 } from './client';
-import { backoffDelay } from './transfers';
+import { OFFLINE_RECHECK_MS, backoffDelay, isOffline, onlineAgain } from './transfers';
 
 /*
  * The download engine. A file is fetched from its presigned URL one chunk at a
@@ -100,6 +100,8 @@ export type DownloadManagerOptions = {
     maxAttempts?: number;
     lookahead?: number;
     now?: () => number;
+    /* Whether the device has no network: a failed chunk then waits for one without spending a try. Tests stub it. */
+    offline?: () => boolean;
 };
 
 type Internal = {
@@ -124,7 +126,14 @@ function isLockError(error: unknown) {
 }
 
 export function createDownloadManager(options: DownloadManagerOptions) {
-    const { rpc, api, maxAttempts = 6, lookahead = 1, now = () => Date.now() } = options;
+    const {
+        rpc,
+        api,
+        maxAttempts = 6,
+        lookahead = 1,
+        now = () => Date.now(),
+        offline = isOffline,
+    } = options;
     const downloads = new Map<string, Internal>();
     const order: string[] = [];
     const listeners = new Set<() => void>();
@@ -328,6 +337,15 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 }
                 if (cancelled()) throw new Error('Cancelled.');
                 if (result.status === 403) url = ''; // expired: fetch a fresh one
+                if (result.retryable && offline()) {
+                    // No network at all: wait for one, and do not count the try.
+                    attempt--;
+                    await Promise.race([
+                        onlineAgain(),
+                        new Promise((resolve) => setTimeout(resolve, OFFLINE_RECHECK_MS)),
+                    ]);
+                    continue;
+                }
                 if (!result.retryable || attempt >= maxAttempts) throw new Error(result.message);
                 await new Promise((resolve) => setTimeout(resolve, backoffDelay(attempt)));
             }

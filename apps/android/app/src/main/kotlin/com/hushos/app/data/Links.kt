@@ -228,15 +228,11 @@ class LinkVault(origin: String, url: String) {
 
     fun download(item: Opened, destination: File, progress: (Float) -> Unit = {}) {
         val v = openVersion(item)
-        val url = api.linkVersionUrl(token, v.versionId)
-        val count = v.layout.chunkCount
-        destination.parentFile?.mkdirs()
-        destination.outputStream().use { out ->
-            for (index in 0uL until count) {
-                out.write(chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, index))))
-                progress((index + 1uL).toFloat() / count.toFloat())
-            }
-        }
+        var url = api.linkVersionUrl(token, v.versionId)
+        // Resumable like the drive's own downloads: a dropped chunk is fetched again, a `.part` is continued.
+        Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(), progress = progress,
+            onExpired = { url = api.linkVersionUrl(token, v.versionId) },
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, index))) }
     }
 
     fun thumbnail(item: Opened): ByteArray? {

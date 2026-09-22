@@ -181,17 +181,18 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         false
     }
 
-    private fun cacheFile(id: String): File = File(context!!.cacheDir, "files/$id").also { it.parentFile?.mkdirs() }
+    /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
+    private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}").also { it.parentFile?.mkdirs() }
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
-        val file = cacheFile(id)
+        val file = cacheFile(id, item.node.currentVersion?.id)
         if (mode.contains("r") && !mode.contains("w")) {
-            // A kept file opens from the phone, network or not; anything else comes down fresh.
+            // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
-            vault.download(id, file)
+            if (!file.exists()) vault.download(id, file)
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
         // Written by another app: the bytes land in the cache file and go up as a new version when it closes.

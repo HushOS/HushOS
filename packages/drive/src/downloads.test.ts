@@ -86,6 +86,7 @@ function harness(options: {
     folders?: Record<string, DriveNode[]>;
     zip?: boolean;
     lookahead?: number;
+    offline?: () => boolean;
 }) {
     const calls: string[] = [];
     const attempts = new Map<string, number>();
@@ -218,6 +219,7 @@ function harness(options: {
         zip: options.zip ? zip : undefined,
         lookahead: options.lookahead,
         maxAttempts: 3,
+        offline: options.offline,
     });
     const release = (objectId: string, index: number) =>
         pendingChunks.get(`${objectId}:${index}`)?.();
@@ -279,6 +281,25 @@ describe('download manager', () => {
         );
         expect(sameBytes(concat(sink!.writes), expected)).toBe(true);
         expect(h.closed).toEqual(['o-a']);
+    });
+
+    test('while offline a failing chunk waits for the network and the tries are not counted', async () => {
+        let offline = true;
+        const h = harness({
+            offline: () => offline,
+            // Five failures, more than the harness's three tries, all while offline.
+            decide: (_object, index, attempt) =>
+                index === 1 && attempt <= 5
+                    ? { ok: false, status: 0, retryable: true, message: 'offline' }
+                    : null,
+        });
+        h.manager.download([file('c', 3 * CHUNK)]);
+        await settle(200_000);
+        offline = false;
+        await settle(70_000);
+        expect(h.manager.getState().downloads[0]!.status).toBe('done');
+        expect(h.attempts.get('o-c:1')).toBe(6);
+        expect(concat(h.sinks[0]!.writes).byteLength).toBe(3 * CHUNK);
     });
 
     test('replaces an expired URL after a 403 and backs off a retryable failure', async () => {

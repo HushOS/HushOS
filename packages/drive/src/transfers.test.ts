@@ -81,6 +81,7 @@ function harness(
         conflict?: boolean;
         stash?: ReturnType<typeof fakeStash>;
         random?: () => number;
+        offline?: () => boolean;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -288,6 +289,7 @@ function harness(
         journal,
         stash: options.stash,
         random: options.random,
+        offline: options.offline,
         openNodes: async () => ({ parent: node('root', null) }),
         onPublished: (n) => published.push(n.id),
         maxPartsInFlight: 3,
@@ -441,6 +443,28 @@ describe('transfer manager', () => {
         expect(h.item(id!).partsDone).toBe(2);
         await settle(70_000);
         expect(failures).toBe(2);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.server.completed[0]!.parts).toEqual([1, 2, 3]);
+    });
+
+    test('while offline a failing part waits for the network and the tries are not counted', async () => {
+        let failures = 0;
+        const h = harness({
+            random: () => 0.5,
+            offline: () => failures < 5,
+            send: async (_objectId, index) => {
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                // Five failures, more than the harness's three tries, all while offline.
+                if (index === 1 && failures < 5) {
+                    failures++;
+                    return { ok: false, status: 0, retryable: true, message: 'offline' };
+                }
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [id] = h.manager.enqueue([{ file: fakeFile(3 * CHUNK), parent: node('root', null) }]);
+        await settle(200_000);
+        expect(failures).toBe(5);
         expect(h.item(id!).status).toBe('done');
         expect(h.server.completed[0]!.parts).toEqual([1, 2, 3]);
     });

@@ -245,7 +245,7 @@ class DriveApi(val session: Shared.Session) {
         connection.readTimeout = 120_000
         val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
         if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
-        return connection.inputStream.use { it.readBytes() }
+        return try { connection.inputStream.use { it.readBytes() } } catch (error: java.io.IOException) { throw Unreachable() }
     }
 
     fun putPart(url: String, data: ByteArray): String {
@@ -255,8 +255,8 @@ class DriveApi(val session: Shared.Session) {
         connection.setFixedLengthStreamingMode(data.size)
         connection.connectTimeout = 30_000
         connection.readTimeout = 300_000
-        connection.outputStream.use { it.write(data) }
-        val status = connection.responseCode
+        // A connection that drops mid-part is the network's doing: say so, so the part is sent again.
+        val status = try { connection.outputStream.use { it.write(data) }; connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
         if (status !in 200..299) throw ApiError(status, "Part upload failed")
         return connection.getHeaderField("ETag") ?: throw ApiError(500, "The store returned no ETag")
     }

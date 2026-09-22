@@ -1,4 +1,5 @@
 [versions]
+junit = "4.13.2"
 agp = "9.4.1"
 kotlin = "2.3.0"
 composeBom = "2026.09.00"
@@ -16,6 +17,7 @@ kotlinxCoroutines = "1.11.0"
 documentfile = "1.1.0"
 
 [libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }

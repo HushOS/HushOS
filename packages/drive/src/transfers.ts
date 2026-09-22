@@ -129,6 +129,8 @@ export type TransferManagerOptions = {
     now?: () => number;
     /* The jitter behind retry backoff; tests pin it so a retry cannot land early by chance. */
     random?: () => number;
+    /* Whether the device has no network: a failed part then waits for one without spending a try. Tests stub it. */
+    offline?: () => boolean;
 };
 
 type Internal = {
@@ -177,6 +179,21 @@ function workspaceOf(u: Internal) {
 
 const MIN_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
+/* While offline a waiting piece also looks again this often, in case the browser's online flag is wrong. */
+export const OFFLINE_RECHECK_MS = 15_000;
+
+/* Whether the browser knows it has no network at all. */
+export function isOffline() {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/* Resolves when the browser is back online; at once when it is not known to be offline. */
+export function onlineAgain(): Promise<void> {
+    if (!isOffline() || typeof window === 'undefined') return Promise.resolve();
+    return new Promise((resolve) =>
+        window.addEventListener('online', () => resolve(), { once: true }),
+    );
+}
 
 export function backoffDelay(attempt: number, random = Math.random) {
     // Exponential with full jitter, capped: every client that lost the store at the
@@ -221,6 +238,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         maxActiveFiles = 6,
         maxAttempts = 8,
         now = () => Date.now(),
+        offline = isOffline,
     } = options;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
@@ -665,7 +683,12 @@ export function createTransferManager(options: TransferManagerOptions) {
             emit();
             return;
         }
-        const attempt = (u.attempts.get(part) ?? 0) + 1;
+        // No network at all: the part waits for one and the try is not counted, so an upload
+        // outlasts a tunnel or a flight instead of failing after a few minutes of backoff.
+        const waiting = result.retryable && offline();
+        const attempt = waiting
+            ? Math.max(1, u.attempts.get(part) ?? 0)
+            : (u.attempts.get(part) ?? 0) + 1;
         u.attempts.set(part, attempt);
         if (!result.retryable || attempt >= maxAttempts) {
             fail(u, result.message);
@@ -673,14 +696,17 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
         // A 403 is almost always an expired URL: fetch fresh ones before retrying.
         if (result.status === 403) u.urls.delete(part);
+        const retry = () => {
+            if (!u.backoff.delete(timer)) return;
+            clearTimeout(timer);
+            void schedule();
+        };
         const timer = setTimeout(
-            () => {
-                u.backoff.delete(timer);
-                void schedule();
-            },
-            backoffDelay(attempt, options.random),
+            retry,
+            waiting ? OFFLINE_RECHECK_MS : backoffDelay(attempt, options.random),
         );
         u.backoff.add(timer);
+        if (waiting) void onlineAgain().then(retry);
         emit();
     }
 
