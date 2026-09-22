@@ -1,0 +1,34 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Tags.kt
+  s_de0e5293e39e1a::t_5b37d524a75371 91-100
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_5b37d524a75371 31,139-140,180-181,249-253,255,399-402
+apps/android/app/src/main/kotlin/com/hushos/app/data/Mirror.kt
+  s_de0e5293e39e1a::t_5b37d524a75371 28-40,78
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_de0e5293e39e1a::t_5b37d524a75371 134-139
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_de0e5293e39e1a::t_5b37d524a75371 104-113
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_de0e5293e39e1a::t_5b37d524a75371 122-129
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Tags.swift
+  s_de0e5293e39e1a::t_50f880f3692a14 110,114,116
+  s_de0e5293e39e1a::t_5b37d524a75371 108-109,111-113,115,117,119
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Mirror.swift
+  s_de0e5293e39e1a::t_5b37d524a75371 25-34,120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3d4d7f38487f38b23097c58a47859b12401261d5",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
