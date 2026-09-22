@@ -1,0 +1,19 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_2f24b31a3b1743 140-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d339fc808fac029bd80e042f7e87219ffb9e98e3",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
