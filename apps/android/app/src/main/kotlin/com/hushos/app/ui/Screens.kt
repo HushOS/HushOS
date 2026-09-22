@@ -159,6 +159,26 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                 TopAppBar(
                     title = { Text(current?.name ?: "Files") },
                     navigationIcon = { if (current != null) IconButton(onClick = { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
+                    actions = {
+                        // The order, on the title line where the drives put it.
+                        Box {
+                            TextButton(onClick = { sortMenu = true }) {
+                                Text(sortLabel(sortKey))
+                                Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+                            }
+                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                                for (key in listOf("name", "modified", "size")) DropdownMenuItem(
+                                    text = { Text(sortLabel(key)) },
+                                    trailingIcon = { if (key == sortKey) Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.size(16.dp)) },
+                                    onClick = {
+                                        if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
+                                        prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
+                                        sortMenu = false
+                                    },
+                                )
+                            }
+                        }
+                    },
                     scrollBehavior = scroll,
                     // Scrolling (or pulling to refresh) must not tint the bar: the sheet stays one colour.
                     colors = TopAppBarDefaults.topAppBarColors(scrolledContainerColor = MaterialTheme.colorScheme.surface),
@@ -203,26 +223,6 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 8.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (tag in state.tags.tags) TagPill(tag, selected = tagFilter == tag.id) { tagFilter = if (tagFilter == tag.id) null else tag.id }
-            }
-        }
-        if (query.isBlank()) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            // The order, where the drives put it: a small line at the head of the list.
-            Box {
-                TextButton(onClick = { sortMenu = true }) {
-                    Text(sortLabel(sortKey))
-                    Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.padding(start = 4.dp).size(16.dp))
-                }
-                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                    for (key in listOf("name", "modified", "size")) DropdownMenuItem(
-                        text = { Text(sortLabel(key)) },
-                        trailingIcon = { if (key == sortKey) Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.size(16.dp)) },
-                        onClick = {
-                            if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
-                            prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
-                            sortMenu = false
-                        },
-                    )
-                }
             }
         }
         state.clipboard?.let { (clip, cut) ->

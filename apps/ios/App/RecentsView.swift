@@ -101,7 +101,8 @@ struct HomeView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Home")
+            // The heading is drawn in the list like Files' own, so the two tabs start at the same height.
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable { await store.refreshRecents() }
             .nodeActionSheets(action: $action, store: store)
             .quickLookPreview($preview)
@@ -128,6 +129,7 @@ struct HomeView: View {
 
     private var homeHeader: some View {
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("Home").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil)
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                             TextField("Search in HushOS", text: $query)

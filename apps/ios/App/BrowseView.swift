@@ -97,9 +97,25 @@ struct FolderView: View {
                 }
             } header: {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
+                    HStack(spacing: 16) {
                         if isRoot { Text("Files").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil) }
                         Spacer()
+                        // The order, on the title line beside Select.
+                        Menu {
+                            ForEach(SortKey.allCases, id: \.self) { key in
+                                Button {
+                                    if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
+                                } label: {
+                                    if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text(sortKey.label)
+                                Image(systemName: sortAscending ? "arrow.up" : "arrow.down").font(.caption2.weight(.semibold))
+                            }
+                            .font(.subheadline.weight(.medium)).textCase(nil)
+                        }
                         Button(selecting ? "Done" : "Select") {
                             selecting.toggle()
                             if !selecting { selection = [] }
@@ -127,24 +143,6 @@ struct FolderView: View {
                                     }
                                 }
                             }
-                        }
-                    }
-                    if query.isEmpty {
-                        // The order, where the drives put it: a small line at the head of the list.
-                        Menu {
-                            ForEach(SortKey.allCases, id: \.self) { key in
-                                Button {
-                                    if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
-                                } label: {
-                                    if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(sortKey.label)
-                                Image(systemName: sortAscending ? "arrow.up" : "arrow.down").font(.caption2.weight(.semibold))
-                            }
-                            .font(.subheadline.weight(.medium)).textCase(nil)
                         }
                     }
                 }
