@@ -9,6 +9,7 @@ import { CopyCheckIcon } from '@/components/copy-button';
 import { QrCode } from '@/components/qr-code';
 import { FormNote, FormTable } from '@/components/form-rows';
 import { PendingLabel, TextSwap } from '@/components/motion';
+import { returnTarget } from '@/lib/return-to';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { UnlockDevice } from '@/components/unlock-device';
@@ -139,7 +140,8 @@ export function RecoveryPhrase({
                 await authClient.confirmRecoveryBackup(backup.recovery.recoveryVersion);
             queryClient.removeQueries({ queryKey: backupKey });
             cue('ready');
-            await router.navigate({ to: '/app/drive', replace: true });
+            // A sign-up or sign-in that started on a link or an app page goes back there now.
+            await router.navigate({ href: returnTarget(), replace: true });
         } catch (error) {
             cue('error');
             setError(authError(error));

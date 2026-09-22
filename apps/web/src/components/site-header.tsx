@@ -2,10 +2,14 @@ import { cn } from 'cn';
 import { Brand } from '@/components/brand';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Button } from '@/components/ui/button';
-import { Link, useRouteContext, type LinkProps } from '@tanstack/react-router';
+import { Link, useLocation, useRouteContext, type LinkProps } from '@tanstack/react-router';
+import { rememberReturn, safeReturnPath } from '@/lib/return-to';
 import type { ReactNode } from 'react';
 
 /* A quiet text link in the header; the page you are on reads in ink. */
+const BAR_LINK =
+    'inline-flex h-9 items-center rounded-md px-2.5 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground data-[status=active]:text-foreground';
+
 function BarLink({
     to,
     children,
@@ -22,10 +26,7 @@ function BarLink({
             to={to}
             activeOptions={{ exact }}
             // Merged, not joined: a caller's `hidden` has to beat the link's own display.
-            className={cn(
-                'inline-flex h-9 items-center rounded-md px-2.5 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground data-[status=active]:text-foreground',
-                className,
-            )}
+            className={cn(BAR_LINK, className)}
         >
             {children}
         </Link>
@@ -35,13 +36,32 @@ function BarLink({
 /* Sign in and create account, or open the app when a session exists. */
 export function SessionLinks() {
     const { hasSession } = useRouteContext({ from: '__root__' });
+    const location = useLocation();
+    // Signing in from a page comes back to it. A shared link keeps its key after the '#',
+    // so it is remembered in this browser instead of travelling in the URL.
+    const onLink = location.pathname.startsWith('/s/');
+    const redirect = onLink
+        ? undefined
+        : (safeReturnPath(location.pathname + location.searchStr) ?? undefined);
     return hasSession ? (
         <Button render={<Link to="/app/drive" />} nativeButton={false} size="sm">
             Go to Drive
         </Button>
     ) : (
         <>
-            <BarLink to="/login">Sign in</BarLink>
+            <Link
+                to="/login"
+                search={{ redirect }}
+                onClick={() =>
+                    onLink &&
+                    rememberReturn(
+                        window.location.pathname + window.location.search + window.location.hash,
+                    )
+                }
+                className={BAR_LINK}
+            >
+                Sign in
+            </Link>
             <Button render={<Link to="/register" />} nativeButton={false} size="sm">
                 Create account
             </Button>

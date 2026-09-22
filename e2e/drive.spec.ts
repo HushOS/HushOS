@@ -61,7 +61,9 @@ test('uploads encrypt on the device and land in the folder with thumbnails where
 });
 
 test('the list sorts by a column, flips on a second click, and keeps the order after a reload', async () => {
-    const names = () => rows(page).evaluateAll((els) => els.map((el) => el.textContent ?? ''));
+    // Compared by id: a row's text changes as its thumbnail replaces the file-type label.
+    const names = () =>
+        rows(page).evaluateAll((els) => els.map((el) => el.getAttribute('data-node-id') ?? ''));
     const bySize = page.getByRole('button', { name: 'Sort by size' });
     await bySize.click();
     await expect(page.locator('th[aria-sort=descending]')).toContainText('Size');

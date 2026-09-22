@@ -1,4 +1,5 @@
 import { Preview } from '@/components/drive/preview';
+import { rememberReturn } from '@/lib/return-to';
 import { ReportDialog } from '@/components/drive/report-dialog';
 import { AuthActions, AuthNote } from '@/components/auth-layout';
 import { FileMark } from '@/components/drive/file-mark';
@@ -533,7 +534,22 @@ function SaveToDrive({ opened }: { opened: Opened }) {
     const user = session.data ?? null;
     if (!hasSession)
         return (
-            <Button variant="outline" render={<Link to="/login" />}>
+            <Button
+                variant="outline"
+                render={
+                    <Link
+                        to="/login"
+                        // The link's key is after the '#': it is kept in this browser, never put in the URL.
+                        onClick={() =>
+                            rememberReturn(
+                                window.location.pathname +
+                                    window.location.search +
+                                    window.location.hash,
+                            )
+                        }
+                    />
+                }
+            >
                 <SaveIcon />
                 Sign in to save a copy
             </Button>

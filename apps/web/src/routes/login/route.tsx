@@ -14,7 +14,8 @@ import { AuthActions, AuthFields, AuthLayout, AuthNote, Stamp } from '@/componen
 import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
-import { ensureSessionUser } from '@/lib/session';
+import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
+import { ensureSessionUser, sessionQueryOptions } from '@/lib/session';
 import { authError, emailValue } from '@/lib/form';
 import { oneOf } from '@/lib/search';
 import { cue } from '@/lib/sounds';
@@ -27,8 +28,12 @@ const loginFields = z.object({
 });
 
 export const Route = createFileRoute('/login')({
-    validateSearch: (search: { securityChanged?: unknown } & SearchSchemaInput) => ({
+    validateSearch: (
+        search: { securityChanged?: unknown; redirect?: unknown } & SearchSchemaInput,
+    ) => ({
         securityChanged: securityChanged(search.securityChanged),
+        // Only ever a same-site path: anything else is dropped here, before any page reads it.
+        redirect: safeReturnPath(search.redirect) ?? undefined,
     }),
     beforeLoad: async ({ context, search, preload }) => {
         if (preload) return;
@@ -40,7 +45,7 @@ export const Route = createFileRoute('/login')({
                 : undefined;
         throw rotated
             ? redirect({ to: '/setup/recovery-key', search: { reason: rotated } })
-            : redirect({ to: '/app/drive' });
+            : redirect({ href: search.redirect ?? '/app/drive' });
     },
     headers: () => ({
         'Cache-Control': 'private, no-store',
@@ -62,7 +67,7 @@ export const Route = createFileRoute('/login')({
 });
 function LoginPage() {
     const router = useRouter();
-    const { securityChanged } = Route.useSearch();
+    const { securityChanged, redirect: returnTo } = Route.useSearch();
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const form = useForm({
@@ -76,18 +81,24 @@ function LoginPage() {
                 await authClient.login(value.email, value.password);
                 form.reset();
                 cue('success');
-                router.options.context.queryClient.clear();
+                const queryClient = router.options.context.queryClient;
+                queryClient.clear();
+                // Known again before moving on: a public page (a shared link) reads the session from the cache,
+                // and an empty cache there reads as signed out.
+                await queryClient.fetchQuery(sessionQueryOptions).catch(() => null);
                 const rotated =
                     securityChanged === 'master-key' || securityChanged === 'recovery-key'
                         ? securityChanged
                         : undefined;
-                if (rotated)
+                if (rotated) {
+                    // The recovery step comes first; it goes on to the page asked for when it is done.
+                    if (returnTo) rememberReturn(returnTo);
                     await router.navigate({
                         to: '/setup/recovery-key',
                         search: { reason: rotated },
                         replace: true,
                     });
-                else await router.navigate({ to: '/app/drive', replace: true });
+                } else await router.navigate({ href: returnTarget(returnTo), replace: true });
             } catch (error) {
                 cue('error');
                 setError(authError(error));
@@ -177,7 +188,12 @@ function LoginPage() {
                         </Link>
                         <span>
                             New here?{' '}
-                            <Link to="/register" className="text-link">
+                            <Link
+                                to="/register"
+                                className="text-link"
+                                // Signing up instead still ends on the page that sent them here.
+                                onClick={() => returnTo && rememberReturn(returnTo)}
+                            >
                                 Create an account
                             </Link>
                         </span>

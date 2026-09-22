@@ -83,7 +83,8 @@ export async function registerAccount(
     page: Page,
     name = 'E2E Tester',
     email = `e2e-${Date.now()}-${randomBytes(3).toString('hex')}@hushos.local`,
-    options: { viaCurrentPage?: boolean } = {},
+    // `landsOn`: where the finished sign-up should arrive, when it is not an empty Drive.
+    options: { viaCurrentPage?: boolean; landsOn?: RegExp } = {},
 ) {
     // Pages are server rendered; typing before React hydrates is typing into a
     // form that hydration then resets, so wait for the network to settle first.
@@ -114,6 +115,10 @@ export async function registerAccount(
     await page.waitForURL(/\/setup\/recovery-key/, { timeout: 120_000 });
     await page.getByRole('checkbox').click();
     await page.getByRole('button', { name: /continue to hushos/i }).click();
+    if (options.landsOn) {
+        await page.waitForURL(options.landsOn, { timeout: 60_000 });
+        return { email };
+    }
     await page.waitForURL(/\/app/);
     await expect(page.getByText('Nothing here yet')).toBeVisible();
     return { email };
