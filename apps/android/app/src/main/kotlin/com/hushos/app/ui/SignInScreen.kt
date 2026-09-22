@@ -14,6 +14,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -37,6 +47,7 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
     var password by rememberSaveable { mutableStateOf("") }
     var pending by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
+    var showPassword by rememberSaveable { mutableStateOf(false) }
     var editingOrigin by rememberSaveable { mutableStateOf(false) }
     var originDraft by rememberSaveable { mutableStateOf(state.origin) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -71,7 +82,12 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         )
         OutlinedTextField(
             value = password, onValueChange = { password = it }, label = { Text("Password") }, singleLine = true, enabled = !pending,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showPassword = !showPassword }) {
+                    Icon(if (showPassword) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = if (showPassword) "Hide password" else "Show password")
+                }
+            },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go, autoCorrectEnabled = false),
             keyboardActions = KeyboardActions(onGo = { submit() }),
             modifier = Modifier.fillMaxWidth(),
@@ -83,8 +99,11 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         TextButton(onClick = {
             context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(state.origin + "/recover")))
         }) { Text("Forgot your password?") }
-        TextButton(onClick = { originDraft = state.origin; editingOrigin = true }) {
-            Text("HushOS: ${state.origin.removePrefix("https://")}")
+    }
+    // Advanced: which HushOS this phone talks to, behind a gear so nobody else has to read an address.
+    Box(Modifier.fillMaxSize().statusBarsPadding().padding(8.dp), contentAlignment = Alignment.TopEnd) {
+        IconButton(onClick = { originDraft = state.origin; editingOrigin = true }) {
+            Icon(Icons.Outlined.Settings, contentDescription = "Advanced", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     if (editingOrigin) {
@@ -92,8 +111,11 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
             onDismissRequest = { editingOrigin = false },
             title = { Text("HushOS address") },
             text = {
+                Column {
+                Text("Only for a self-hosted HushOS. Leave it alone otherwise.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
                 OutlinedTextField(value = originDraft, onValueChange = { originDraft = it }, singleLine = true, label = { Text("https://hush.example") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false))
+                }
             },
             confirmButton = { TextButton(onClick = { model.setOrigin(originDraft); editingOrigin = false }) { Text("Done") } },
             dismissButton = { TextButton(onClick = { editingOrigin = false }) { Text("Cancel") } },

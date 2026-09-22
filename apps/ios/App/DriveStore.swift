@@ -16,6 +16,8 @@ final class DriveStore {
     var folders: [String: [Opened]] = [:]
     /* Bumped whenever the offline list changes, so views showing it refresh. */
     var offlineVersion = 0
+    /* Bumped when the catalogue changes what lists show. */
+    var catalogueVersion = 0
     var names: [String: String] = [:]
     var recents: [Opened] = []
     var trash: [(item: Opened, parentTrashed: Bool)] = []
@@ -25,6 +27,10 @@ final class DriveStore {
     /* What Copy or Cut picked up, until Paste places it. */
     var clipboard: (items: [Opened], cut: Bool)?
     var error: String?
+    /* The last request could not reach the server; what is on this phone is shown. */
+    var offline = false
+    /* Folder ids being fetched right now. */
+    var loading: Set<String> = []
     var busy = false
     var transfer: Transfer? {
         didSet {
@@ -50,6 +56,8 @@ final class DriveStore {
             let id = try await vault.rootId()
             rootId = id
             names[id] = "HushOS"
+            // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
+            Task { await buildCatalogue() }
             return id
         } catch {
             report(error)
@@ -57,10 +65,33 @@ final class DriveStore {
         }
     }
 
+    /* Builds the catalogue once, then redraws every list from it. */
+    private func buildCatalogue() async {
+        await vault.buildCatalogue()
+        guard await vault.catalogueState == .ready else { return }
+        for id in folders.keys { if let children = try? await vault.children(of: id) { folders[id] = children } }
+        recents = (try? await vault.recents()) ?? recents
+        catalogueVersion += 1
+    }
+
+    /* Pulls what changed since the cursor and redraws the lists it touched. */
+    func sync() async {
+        guard let touched = try? await vault.sync(), !touched.isEmpty else { return }
+        for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
+            if let children = try? await vault.children(of: id) { folders[id] = children }
+        }
+        recents = (try? await vault.recents()) ?? recents
+        catalogueVersion += 1
+    }
+
     func refresh(folder id: String) async {
+        loading.insert(id)
+        defer { loading.remove(id) }
         do {
+            await sync()
             let children = try await vault.children(of: id)
             folders[id] = children
+            offline = false
             for child in children { names[child.id] = child.name }
         } catch {
             report(error)
@@ -96,6 +127,7 @@ final class DriveStore {
 
     func refreshRecents() async {
         do {
+            await sync()
             recents = try await vault.recents()
         } catch {
             report(error)
@@ -361,6 +393,8 @@ final class DriveStore {
     func report(_ error: Error) {
         error_: do {
             if case DriveAPIError.notAuthenticated = error { self.error = "Your session ended. Sign in again."; break error_ }
+            // No network: say so at the top rather than interrupting; kept files still open.
+            if case DriveAPIError.transport = error { offline = true; break error_ }
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }

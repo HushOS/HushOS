@@ -6,6 +6,7 @@ struct SignInView: View {
     @Environment(AppModel.self) private var model
     @State private var email = ""
     @State private var password = ""
+    @State private var showPassword = false
     @State private var pending = false
     @State private var error = ""
     @State private var showingServer = false
@@ -35,10 +36,23 @@ struct SignInView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.next).focused($focus, equals: .email)
                         .onSubmit { focus = .password }
-                    SecureField("Password", text: $password)
+                    HStack {
+                        Group {
+                            if showPassword {
+                                TextField("Password", text: $password)
+                            } else {
+                                SecureField("Password", text: $password)
+                            }
+                        }
                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.go).focused($focus, equals: .password)
                         .onSubmit { submit() }
+                        Button { showPassword.toggle() } label: {
+                            Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(showPassword ? "Hide password" : "Show password")
+                    }
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Password stays on this device.")
@@ -64,21 +78,21 @@ struct SignInView: View {
                 } footer: {
                     Text("Recovery uses your recovery phrase and runs on the web.")
                 }
-                Section {
-                    LabeledContent("HushOS", value: model.origin.replacingOccurrences(of: "https://", with: ""))
-                        .onTapGesture { showingServer = true }
-                } footer: {
-                    Text("Which HushOS this device talks to. Tap to change it for a self-hosted instance.")
-                }
             }
             .navigationTitle("HushOS")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Advanced: which HushOS this phone talks to, behind a gear so nobody else has to read an address.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingServer = true } label: { Image(systemName: "gearshape") }.accessibilityLabel("Advanced")
+                }
+            }
             .alert("HushOS address", isPresented: $showingServer) {
                 TextField("https://hush.example", text: $model.origin)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("Done") {}
             } message: {
-                Text("The origin of the HushOS you signed up with.")
+                Text("Only for a self-hosted HushOS. Leave it alone otherwise.")
             }
         }
     }

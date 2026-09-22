@@ -43,3 +43,9 @@ The same four tabs as iOS: Home (search, type chips, tags row and manager with p
 
 - Enable Developer options and USB debugging on the phone, plug it in, accept the debugging prompt, then `bun run android:device` (builds the debug APK and `adb install -r`s it). The debug APK also sideloads from `apps/android/app/build/outputs/apk/debug/app-debug.apk`.
 - A real phone defaults to `https://hushos.com` (`defaultOrigin()` in `DriveViewModel.kt` checks the build fingerprint); the emulator keeps `http://localhost:5173` through `adb reverse`.
+
+## The mirror and the catalogue (added 2026-09-22 night)
+
+- `data/Mirror.kt` (SQLiteOpenHelper: nodes, cursors, thumbnails) and `data/Catalogue.kt` mirror the web: pull the whole feed once, open rows parents first, then `sync()` pulls only changes. `listChildren`, `recents`, `trash` and `thumbnail` answer from the catalogue first. `NodeView.rawJson` keeps the row as served for the mirror.
+- The view model builds the catalogue after `loadRoot()` and syncs before every refresh. A `Surface` in `HushOSTheme` paints the background, and `values-night/themes.xml` gives the window a dark theme; without both, dark mode showed grey text on white.
+- If the emulator window ignores keys and buttons, it was started from a background shell: quit it and start it from Android Studio or your own terminal (`emulator -avd Pixel_9_API_36`).

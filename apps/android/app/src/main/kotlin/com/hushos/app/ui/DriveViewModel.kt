@@ -12,6 +12,7 @@ import com.hushos.app.data.Auth
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
+import com.hushos.app.data.Unreachable
 import com.hushos.app.data.Contact
 import com.hushos.app.data.ContactPin
 import com.hushos.app.data.LinkView
@@ -20,6 +21,9 @@ import com.hushos.app.data.OwnedShare
 import com.hushos.app.data.SharedByMe
 import com.hushos.app.data.Offline
 import com.hushos.app.data.Opened
+import com.hushos.app.data.sync
+import com.hushos.app.data.buildCatalogue
+import com.hushos.app.data.CatalogueState
 import com.hushos.app.data.SessionUser
 import com.hushos.app.data.ShareView
 import com.hushos.app.data.TagRegistry
@@ -62,6 +66,10 @@ data class DriveState(
     val transfer: Transfer? = null,
     val error: String? = null,
     val busy: Boolean = false,
+    /* The last request could not reach the server; what is on the phone is shown. */
+    val unreachable: Boolean = false,
+    /* Folder ids (and "recents") being fetched right now. */
+    val loading: Set<String> = emptySet(),
 ) {
     /* Every item this session has opened, for search across folders. */
     val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
@@ -125,9 +133,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun <T> io(block: (Vault) -> T): T? {
         val vault = vault ?: return null
         return try {
-            withContext(Dispatchers.IO) { block(vault) }
+            withContext(Dispatchers.IO) { block(vault) }.also { if (state.value.unreachable) _state.update { it.copy(unreachable = false) } }
         } catch (error: NotAuthenticated) {
             sessionLost()
+            null
+        } catch (error: Unreachable) {
+            // No network: say so at the top rather than interrupting; kept files still open.
+            _state.update { it.copy(unreachable = true) }
             null
         } catch (error: Exception) {
             _state.update { it.copy(error = error.message ?: error.toString()) }
@@ -138,15 +150,44 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun loadRoot() = viewModelScope.launch {
         if (state.value.rootId != null) return@launch
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
+        // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
+        buildCatalogue()
+    }
+
+    /* Builds the catalogue once, then redraws every list from it. */
+    private suspend fun buildCatalogue() {
+        val ready = io { vault -> vault.buildCatalogue(); vault.catalogueState == CatalogueState.READY } ?: false
+        if (!ready) return
+        redraw(state.value.folders.keys)
+    }
+
+    /* Pulls what changed since the cursor and redraws the lists it touched. */
+    private suspend fun sync() {
+        val touched = io { it.sync() } ?: return
+        if (touched.isEmpty()) return
+        redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
+    }
+
+    private suspend fun redraw(folderIds: Collection<String>) {
+        val vault = vault ?: return
+        val fresh = withContext(Dispatchers.IO) { folderIds.associateWith { runCatching { vault.listChildren(it) }.getOrNull() } }
+        val recents = withContext(Dispatchers.IO) { runCatching { vault.recents() }.getOrNull() }
+        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents) }
     }
 
     fun refresh(folderId: String) = viewModelScope.launch {
+        _state.update { it.copy(loading = it.loading + folderId) }
+        sync()
         io { it.listChildren(folderId) }?.let { children -> _state.update { it.copy(folders = it.folders + (folderId to children)) } }
+        _state.update { it.copy(loading = it.loading - folderId) }
     }
 
     fun refreshRecents() = viewModelScope.launch {
+        _state.update { it.copy(loading = it.loading + "recents") }
         loadRoot().join()
+        sync()
         io { it.recents() }?.let { recents -> _state.update { it.copy(recents = recents) } }
+        _state.update { it.copy(loading = it.loading - "recents") }
     }
 
     fun refreshTrash() = viewModelScope.launch {

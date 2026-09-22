@@ -28,6 +28,14 @@ struct MainView: View {
                     }
                 }
                 .tabBarMinimizeBehavior(.onScrollDown)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if store.offline {
+                        // A quiet line at the top while the server is out of reach; kept files still open.
+                        Text("You're offline. Showing what's on this phone.")
+                            .font(.footnote).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            .background(.regularMaterial)
+                    }
+                }
                 .overlay(alignment: .bottom) {
                     if let transfer = store.transfer {
                         TransferBanner(transfer: transfer).padding(.bottom, 64)

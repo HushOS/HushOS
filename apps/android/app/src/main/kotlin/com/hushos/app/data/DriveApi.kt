@@ -31,6 +31,8 @@ data class NodeView(
     val keyEpoch: ULong, val parentKeyEpoch: ULong, val keyEnvelope: String,
     val metadataVersion: ULong, val metadataEnvelope: String, val currentVersion: VersionView?,
     val trashedAt: String?, val createdAt: String?, val updatedAt: String?, val changeSeq: Int? = null,
+    /* The row as the server sent it, for the mirror to keep byte for byte. */
+    val rawJson: String = "",
 ) {
     val isFolder get() = kind == "folder"
 
@@ -44,6 +46,7 @@ data class NodeView(
             if (json.isNull("trashedAt")) null else json.getString("trashedAt"),
             json.optString("createdAt").takeIf { it.isNotEmpty() }, json.optString("updatedAt").takeIf { it.isNotEmpty() },
             if (json.isNull("changeSeq")) null else json.optInt("changeSeq"),
+            json.toString(),
         )
     }
 }

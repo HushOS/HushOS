@@ -182,6 +182,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
+        if (folderId != null && folderId in state.loading && !state.folders.containsKey(folderId)) {
+            androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+        }
         if (state.tags.tags.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 8.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -349,6 +352,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
                     }
                 }
                 item { Text(heading, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
+                if ("recents" in state.loading && rows.isEmpty()) item(key = "loading") { androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
                 items(rows, key = { it.id }) { item ->
                     NodeRow(model, state, item,
                         onClick = { if (!item.isFolder) scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } } },

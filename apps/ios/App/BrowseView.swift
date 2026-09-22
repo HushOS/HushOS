@@ -63,6 +63,9 @@ struct FolderView: View {
 
     var body: some View {
         List {
+            if !loaded && store.folders[folderId] == nil {
+                HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
+            }
             if loaded && children.isEmpty {
                 ContentUnavailableView("Nothing here yet", systemImage: "folder", description: Text("Add files from the button above, or from the Files app."))
                     .listRowBackground(Color.clear)

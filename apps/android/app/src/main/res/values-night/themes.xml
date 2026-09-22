@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.HushOS" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.HushOS" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowSplashScreenBackground">@color/splash</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowBackground">@color/desk</item>
     </style>
 </resources>

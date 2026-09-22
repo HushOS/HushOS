@@ -71,11 +71,16 @@ struct TagPill: View {
     let tag: Tag
     var selected = false
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
+        let base = TagColour.swiftUI(tag.colour)
+        // Dark sheets need a lighter ink and a stronger wash, or a deep blue tag vanishes.
+        let ink = scheme == .dark ? base.mix(with: .white, by: 0.45) : base
         Text(tag.name)
             .font(.caption2.weight(.medium))
-            .foregroundStyle(selected ? Color.white : TagColour.swiftUI(tag.colour))
+            .foregroundStyle(selected ? Color.white : ink)
             .padding(.horizontal, 7).padding(.vertical, 2)
-            .background(TagColour.swiftUI(tag.colour).opacity(selected ? 1 : 0.14), in: Capsule())
+            .background(selected ? base : ink.opacity(scheme == .dark ? 0.22 : 0.14), in: Capsule())
     }
 }

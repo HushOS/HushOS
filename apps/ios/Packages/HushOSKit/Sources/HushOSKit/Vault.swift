@@ -34,20 +34,24 @@ public actor Vault {
     public nonisolated let api: DriveAPI
     let session: SharedKeychain.Session
     private var accountKey: Data?
-    private var workspace: WorkspaceView?
+    var workspace: WorkspaceView?
     private var workspaceKey: Data?
     var nodeKeys: [String: Data] = [:]
     var opened: [String: Opened] = [:]
     private var identity: IdentityKeys?
-    private var parents: [String: String]
+    var parents: [String: String]
     private let indexURL: URL?
+    /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue). */
+    let mirror: Mirror?
+    public var catalogueState: CatalogueState = .idle
+    var catalogueChildren: [String: Set<String>] = [:]
 
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
         self.session = session
-        indexURL = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)?
-            .appendingPathComponent("files-parents.json")
+        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
+        indexURL = container?.appendingPathComponent("files-parents.json")
+        mirror = container.flatMap { Mirror(url: $0.appendingPathComponent("mirror.sqlite")) }
         if let indexURL, let data = try? Data(contentsOf: indexURL),
            let saved = try? JSONDecoder().decode([String: String].self, from: data) {
             parents = saved
@@ -206,6 +210,8 @@ public actor Vault {
 
     /* A folder's children, opened and sorted folders first. */
     public func children(of folderId: String) async throws -> [Opened] {
+        // The catalogue answers first when it can, so a folder draws before the server is asked.
+        if let fast = catalogueChildren(of: folderId) { return fast }
         let listing = try await listChildren(of: folderId)
         return listing.children.compactMap { opened[$0.id] }.sorted(by: Opened.byName)
     }
@@ -272,14 +278,14 @@ public actor Vault {
         guard item.hasThumbnail, let version = item.node.currentVersion else { return nil }
         let opened = try openVersion(item)
         guard opened.content.thumbnailBytes > 0 else { return nil }
-        let urls = try await api.thumbnails(workspaceId: item.node.workspaceId, versionIds: [version.id])
-        guard let entry = urls.urls.first, let url = URL(string: entry.url) else { return nil }
-        let ciphertext = try await api.range(url, thumbnailRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes))
+        _ = version
+        guard let ciphertext = try await sealedThumbnail(for: item, opened: opened) else { return nil }
         return try thumbnailDecrypt(content: opened.content, ciphertext: ciphertext)
     }
 
     /* Every page of the trash, opened; items whose parent is also trashed are marked. */
     public func trash() async throws -> [(item: Opened, parentTrashed: Bool)] {
+        if let fast = catalogueTrash() { return fast }
         let workspace = try await loadWorkspace()
         var after: String? = nil
         var result: [(Opened, Bool)] = []
@@ -297,6 +303,7 @@ public actor Vault {
 
     /* The most recently changed files, from the tail of the change feed. */
     public func recents(limit: Int = 60) async throws -> [Opened] {
+        if let fast = catalogueRecents(limit: limit) { return fast }
         let workspace = try await loadWorkspace()
         let seq = workspace.changeSeq ?? 0
         let feed = try await api.changes(workspaceId: workspace.workspaceId, since: max(0, seq - 400), limit: 400)

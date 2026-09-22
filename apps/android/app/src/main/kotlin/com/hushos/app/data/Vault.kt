@@ -79,11 +79,15 @@ class Vault(private val context: Context, val api: DriveApi) {
     private var accountKey: ByteArray? = null
     private var workspace: WorkspaceView? = null
     private var workspaceKey: ByteArray? = null
-    private val nodeKeys = HashMap<String, ByteArray>()
+    /* The tree mirror on disk and the catalogue built from it (see Catalogue.kt). */
+    internal val mirror = Mirror(context)
+    @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
+    internal val catalogueChildren = HashMap<String, HashSet<String>>()
+    internal val nodeKeys = HashMap<String, ByteArray>()
     private var identity: IdentityKeys? = null
-    private val opened = HashMap<String, Opened>()
+    internal val opened = HashMap<String, Opened>()
     private val indexFile = File(context.filesDir, "files-parents.json")
-    private val parents: HashMap<String, String> = HashMap<String, String>().also { map ->
+    internal val parents: HashMap<String, String> = HashMap<String, String>().also { map ->
         runCatching {
             val json = JSONObject(indexFile.readText())
             for (key in json.keys()) map[key] = json.getString(key)
@@ -100,7 +104,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         runCatching { indexFile.writeText(json.toString()) }
     }
 
-    private fun rememberParent(id: String, parent: String) {
+    internal fun rememberParent(id: String, parent: String) {
         if (parents[id] == parent) return
         parents[id] = parent
         saveIndex()
@@ -376,6 +380,8 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* Every page of a folder, every key along the way opened; parents first, folders before files. */
     fun listChildren(folderId: String): List<Opened> {
+        // The catalogue answers first when it can, so a folder draws before the server is asked.
+        catalogueChildren(folderId)?.let { return it }
         val ws = workspaceOf(folderId)
         var after: String? = null
         val children = ArrayList<Opened>()
@@ -436,12 +442,15 @@ class Vault(private val context: Context, val api: DriveApi) {
         if (!item.hasThumbnail) return null
         val v = openVersion(item)
         if (v.content.thumbnailBytes == 0u) return null
-        val url = api.thumbnailUrl(v.versionId, item.node.workspaceId) ?: return null
-        val ciphertext = api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes))
+        val ciphertext = mirror.thumbnail(v.versionId) ?: run {
+            val url = api.thumbnailUrl(v.versionId, item.node.workspaceId) ?: return null
+            api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes)).also { mirror.putThumbnail(v.versionId, it) }
+        }
         return thumbnailDecrypt(v.content, ciphertext)
     }
 
     fun trash(): List<TrashItem> {
+        catalogueTrash()?.let { return it }
         val ws = workspaceId
         var after: String? = null
         val result = ArrayList<TrashItem>()
@@ -459,6 +468,7 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* The most recently changed files, from the tail of the change feed. */
     fun recents(limit: Int = 60): List<Opened> {
+        catalogueRecents(limit)?.let { return it }
         val view = loadWorkspace()
         val feed = api.changes(view.workspaceId, maxOf(0, view.changeSeq - 400), 400)
         val latest = LinkedHashMap<String, NodeView>()

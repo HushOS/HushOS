@@ -10,6 +10,9 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -40,7 +43,10 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     when (state.gate) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
         Gate.SIGNED_OUT -> SignInScreen(model, state)
-        Gate.SIGNED_IN -> Main(model, state)
+        Gate.SIGNED_IN -> Column(Modifier.fillMaxSize()) {
+            if (state.unreachable) OfflineBanner()
+            Box(Modifier.weight(1f)) { Main(model, state) }
+        }
     }
     state.error?.let { message ->
         AlertDialog(
@@ -99,5 +105,13 @@ private fun Main(model: DriveViewModel, state: DriveState) {
                 Tab.ACCOUNT -> AccountScreen(model, state)
             }
         }
+    }
+}
+
+/* A quiet line at the top while the server is out of reach; kept files still open. */
+@Composable
+private fun OfflineBanner() {
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
+        Text("You're offline. Showing what's on this phone.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
     }
 }

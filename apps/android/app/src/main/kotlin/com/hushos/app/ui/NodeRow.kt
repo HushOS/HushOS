@@ -101,14 +101,17 @@ fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () 
 /* A tag as a small named pill in its colour. */
 @Composable
 fun TagPill(tag: com.hushos.app.data.Tag, selected: Boolean = false, onClick: (() -> Unit)? = null) {
-    val colour = tagColour(tag.colour)
+    val base = tagColour(tag.colour)
+    // Dark sheets need a lighter ink and a stronger wash, or a deep blue tag vanishes.
+    val dark = androidx.compose.foundation.isSystemInDarkTheme()
+    val ink = if (dark) androidx.compose.ui.graphics.lerp(base, androidx.compose.ui.graphics.Color.White, 0.45f) else base
     Text(
         tag.name,
         style = MaterialTheme.typography.labelSmall,
-        color = if (selected) androidx.compose.ui.graphics.Color.White else colour,
+        color = if (selected) androidx.compose.ui.graphics.Color.White else ink,
         modifier = Modifier
             .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-            .background(colour.copy(alpha = if (selected) 1f else 0.14f), RoundedCornerShape(999.dp))
+            .background(if (selected) base else ink.copy(alpha = if (dark) 0.22f else 0.14f), RoundedCornerShape(999.dp))
             .padding(horizontal = 8.dp, vertical = 2.dp),
     )
 }
