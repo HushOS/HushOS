@@ -80,12 +80,12 @@ describe('change feeds', () => {
         if (trashed.status !== 'ok') throw new Error(trashed.status);
         expect(trashed.node.trashedAt).not.toBeNull();
         expect(trashed.node.updatedAt).toEqual(before);
-        expect(trashed.node.changeSeq).toBeGreaterThan(a.changeSeq);
+        expect(trashed.node.changeSeq).toBeGreaterThan(a.changeSeq ?? 0);
         const restored = await drive.restoreNode({ workspaceId: owner.workspaceId, nodeId: a.id });
         if (restored.status !== 'ok') throw new Error(restored.status);
         expect(restored.node.trashedAt).toBeNull();
         expect(restored.node.updatedAt).toEqual(before);
-        expect(restored.node.changeSeq).toBeGreaterThan(trashed.node.changeSeq);
+        expect(restored.node.changeSeq).toBeGreaterThan(trashed.node.changeSeq ?? 0);
     });
 
     test('the workspace feed is ordered, cursored, and carries tombstones', async () => {
