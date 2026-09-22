@@ -60,6 +60,24 @@ test('uploads encrypt on the device and land in the folder with thumbnails where
     await expect(row(page, 'payload.bin').locator('img')).toHaveCount(0);
 });
 
+test('the list sorts by a column, flips on a second click, and keeps the order after a reload', async () => {
+    const names = () => rows(page).evaluateAll((els) => els.map((el) => el.textContent ?? ''));
+    const bySize = page.getByRole('button', { name: 'Sort by size' });
+    await bySize.click();
+    await expect(page.locator('th[aria-sort=descending]')).toContainText('Size');
+    const largestFirst = await names();
+    await bySize.click();
+    await expect(page.locator('th[aria-sort=ascending]')).toContainText('Size');
+    expect(await names()).toEqual([...largestFirst].reverse());
+    await page.reload();
+    await expect(rows(page)).toHaveCount(5, { timeout: 60_000 });
+    await expect(page.locator('th[aria-sort=ascending]')).toContainText('Size');
+    expect(await names()).toEqual([...largestFirst].reverse());
+    // Back to the default, so the rest of the file sees the order it expects.
+    await page.getByRole('button', { name: 'Sort by name' }).click();
+    await expect(page.locator('th[aria-sort=ascending]')).toContainText('Name');
+});
+
 test('previews render each kind on the device: Markdown as a document, code highlighted, unknown text sniffed', async () => {
     await openPreview(page, 'notes.md');
     const rendered = dialog(page).locator('.rt-markdown');

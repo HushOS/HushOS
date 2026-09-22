@@ -381,8 +381,9 @@ function Links({ node }: { node: DriveNode }) {
                                     Share…
                                 </Button>
                             )}
+                            {/* Collapses the fresh link; "Done" here read as a second way to close the dialog. */}
                             <Button variant="outline" size="xs" onClick={() => setMade(null)}>
-                                Done
+                                Hide
                             </Button>
                         </div>
                         <div className="flex flex-col items-center gap-2 border-t border-rule pt-3">

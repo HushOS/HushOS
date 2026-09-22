@@ -51,7 +51,10 @@ import {
     formatWhen,
     invalidateFolders,
     nodeSize,
-    sortNodes,
+    sortNodesBy,
+    DEFAULT_SORT,
+    type SortKey,
+    type SortOrder,
 } from '@/lib/drive';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
@@ -87,6 +90,8 @@ import {
     Trash2Icon,
     UploadIcon,
     XIcon,
+    ArrowDownIcon,
+    ArrowUpIcon,
 } from 'lucide-react';
 import {
     Fragment,
@@ -352,9 +357,10 @@ export function FolderView({ folderId }: { folderId: string }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const listing = useQuery(folderQueryOptions(folderId));
+    const [order, setOrder] = useSortOrder();
     const rows = useMemo(
-        () => (listing.data ? sortNodes(listing.data.children) : []),
-        [listing.data],
+        () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
+        [listing.data, order],
     );
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -1289,6 +1295,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                         <tr className="border-b border-rule">
                                             <th
                                                 scope="col"
+                                                aria-sort={ariaSort(order, 'name')}
                                                 className="eyebrow py-2.5 pl-5 text-left text-muted-foreground sm:pl-8"
                                             >
                                                 <span className="flex items-center gap-3">
@@ -1313,20 +1320,38 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                             }
                                                         />
                                                     )}
-                                                    Name
+                                                    <SortHeader
+                                                        label="Name"
+                                                        sortKey="name"
+                                                        order={order}
+                                                        onOrder={setOrder}
+                                                    />
                                                 </span>
                                             </th>
                                             <th
                                                 scope="col"
+                                                aria-sort={ariaSort(order, 'modified')}
                                                 className="eyebrow hidden w-40 py-2.5 text-left text-muted-foreground sm:table-cell"
                                             >
-                                                Modified
+                                                <SortHeader
+                                                    label="Modified"
+                                                    sortKey="modified"
+                                                    order={order}
+                                                    onOrder={setOrder}
+                                                />
                                             </th>
                                             <th
                                                 scope="col"
+                                                aria-sort={ariaSort(order, 'size')}
                                                 className="eyebrow w-28 py-2.5 pr-5 text-right text-muted-foreground sm:pr-8"
                                             >
-                                                Size
+                                                <SortHeader
+                                                    label="Size"
+                                                    sortKey="size"
+                                                    order={order}
+                                                    onOrder={setOrder}
+                                                    align="end"
+                                                />
                                             </th>
                                         </tr>
                                     </thead>
@@ -1685,5 +1710,71 @@ export function FolderView({ folderId }: { folderId: string }) {
             />
             <HotkeyHints />
         </div>
+    );
+}
+
+const SORT_STORAGE = 'hushos.folder-sort';
+
+/* The order folder lists use, remembered in this browser; a missing or blocked store falls back to name. */
+function useSortOrder() {
+    const [order, setOrder] = useState<SortOrder>(() => {
+        try {
+            const saved = JSON.parse(
+                window.localStorage.getItem(SORT_STORAGE) ?? 'null',
+            ) as SortOrder | null;
+            if (saved && ['name', 'modified', 'size'].includes(saved.key)) return saved;
+        } catch {
+            /* No storage here: the default order. */
+        }
+        return DEFAULT_SORT;
+    });
+    const update = (next: SortOrder) => {
+        setOrder(next);
+        try {
+            window.localStorage.setItem(SORT_STORAGE, JSON.stringify(next));
+        } catch {
+            /* Not remembered, still applied. */
+        }
+    };
+    return [order, update] as const;
+}
+
+function ariaSort(order: SortOrder, key: SortKey) {
+    if (order.key !== key) return undefined;
+    return order.ascending ? ('ascending' as const) : ('descending' as const);
+}
+
+/* A column label that sorts by it; a second click flips the direction. Newest and largest come first on the first click. */
+function SortHeader({
+    label,
+    sortKey,
+    order,
+    onOrder,
+    align = 'start',
+}: {
+    label: string;
+    sortKey: SortKey;
+    order: SortOrder;
+    onOrder: (order: SortOrder) => void;
+    align?: 'start' | 'end';
+}) {
+    const active = order.key === sortKey;
+    const Arrow = order.ascending ? ArrowUpIcon : ArrowDownIcon;
+    return (
+        <button
+            type="button"
+            onClick={() =>
+                onOrder(
+                    active
+                        ? { key: sortKey, ascending: !order.ascending }
+                        : { key: sortKey, ascending: sortKey === 'name' },
+                )
+            }
+            className={`eyebrow inline-flex items-center gap-1 hover:text-foreground ${active ? 'text-foreground' : ''} ${align === 'end' ? 'flex-row-reverse' : ''}`}
+            aria-label={`Sort by ${label.toLowerCase()}`}
+        >
+            {label}
+            {active && <Arrow className="size-3" aria-hidden="true" />}
+        </button>
     );
 }

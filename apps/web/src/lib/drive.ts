@@ -179,6 +179,27 @@ export function formatWhen(iso: string | null | undefined) {
     return sameDay ? timeFormat.format(date) : dateFormat.format(date);
 }
 
+/* What a folder list is ordered by, as on the phone apps. */
+export type SortKey = 'name' | 'modified' | 'size';
+export type SortOrder = { key: SortKey; ascending: boolean };
+export const DEFAULT_SORT: SortOrder = { key: 'name', ascending: true };
+
+/* Folders first whichever key is chosen, as every drive does it; equal values fall back to the name. */
+export function sortNodesBy(nodes: DriveNode[], order: SortOrder) {
+    const value = (node: DriveNode) => {
+        if (order.key === 'modified')
+            return Date.parse(node.metadata?.modified ?? node.updatedAt) || 0;
+        const size = nodeSize(node);
+        return size === null || Number.isNaN(size) ? 0 : size;
+    };
+    return [...nodes].sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+        const primary = order.key === 'name' ? 0 : value(a) - value(b);
+        const result = primary !== 0 ? primary : collator.compare(a.name, b.name);
+        return order.ascending ? result : -result;
+    });
+}
+
 /* The size a file shows: what its version envelope sealed, else what its metadata says. */
 export function nodeSize(node: DriveNode) {
     if (node.kind !== 'file') return null;

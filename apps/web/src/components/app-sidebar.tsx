@@ -24,6 +24,7 @@ import {
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
+import { formatBytes } from '@/lib/drive';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useRouter } from '@tanstack/react-router';
 import {
@@ -140,7 +141,7 @@ function StorageMeter() {
                         storage ? (
                             <>
                                 <span className="font-semibold text-foreground">
-                                    {formatGiB(storage.usedBytes)}
+                                    {formatBytes(storage.usedBytes)}
                                 </span>{' '}
                                 of {formatGiB(storage.quotaBytes)} used
                             </>
@@ -153,7 +154,7 @@ function StorageMeter() {
             <p className="flex justify-between gap-3 text-xs text-muted-foreground tabular-nums">
                 <span>
                     {storage
-                        ? `${formatGiB(storage.availableBytes)} available.`
+                        ? `${formatBytes(storage.availableBytes)} available.`
                         : 'Opening your account…'}
                 </span>
                 {billing && catalogue && summary && (
