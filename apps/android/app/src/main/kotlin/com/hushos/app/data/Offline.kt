@@ -50,6 +50,12 @@ object Offline {
     /* The local copy, when it is the current version. */
     fun localCopy(context: Context, item: Opened): File? = file(context, item)?.takeIf { it.exists() }
 
+    /* Whether this version is on the phone under any name: a rename elsewhere moves it, nothing comes down. */
+    fun hasVersion(context: Context, item: Opened): Boolean {
+        val version = item.node.currentVersion ?: return false
+        return File(File(root(context), item.id), version.id).listFiles()?.any { it.isFile && !it.name.endsWith(".part") } == true
+    }
+
     fun remember(context: Context, item: Opened) {
         val list = entries(context).filter { it.id != item.id } +
             Entry(item.id, item.name, item.node.currentVersion?.id ?: "", item.size, item.metadata.mime, Instant.now().toString())

@@ -206,21 +206,42 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val ready = io { vault -> vault.buildCatalogue(); vault.catalogueState == CatalogueState.READY } ?: false
         if (!ready) return
         redraw(state.value.folders.keys)
+        // The build took in every change since the last run, so every kept file is checked against it.
+        refreshKept(Offline.entries(context).map { it.id }.toSet())
     }
 
     /* Pulls what changed since the cursor and redraws the lists it touched. */
     private suspend fun sync() {
+        // Null: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
         val touched = io { it.sync() } ?: return
         // The feed answered: whatever the last request said, the server is reachable now.
         if (state.value.unreachable) _state.update { it.copy(unreachable = false) }
         if (touched.isEmpty()) return
         redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
-        // A kept file replaced elsewhere is fetched again, so the offline copy is the current one.
-        val kept = Offline.entries(context).filter { it.id in touched }
-        if (kept.isNotEmpty()) {
-            val tickets = kept.associate { it.id to begin("keep", it.name) }
-            io { vault -> vault.refreshOffline(tickets.keys) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } }
-            tickets.values.forEach { finish(it) }
+        refreshKept(touched)
+    }
+
+    private val refreshingKept = HashSet<String>()
+
+    /*
+     * A kept file changed elsewhere is brought up to date on its own, so a
+     * refresh or an upload never waits for a large file to come down again.
+     */
+    private fun refreshKept(touched: Set<String>) {
+        val kept = Offline.entries(context).filter { it.id in touched && it.id !in refreshingKept }
+        if (kept.isEmpty()) return
+        refreshingKept.addAll(kept.map { it.id })
+        viewModelScope.launch {
+            val ids = kept.map { it.id }
+            val vault = vault
+            // Only files whose copy is missing get a row: a rename or a tag moves nothing.
+            val stale = withContext(Dispatchers.IO) {
+                kept.filter { entry -> vault?.item(entry.id)?.let { !Offline.hasVersion(context, it) && it.node.trashedAt == null } ?: true }
+            }
+            val tickets = stale.associate { it.id to begin("keep", it.name) }
+            val failed = io { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } } ?: ids.toSet()
+            tickets.forEach { (id, ticket) -> finish(ticket, failed = id in failed) }
+            refreshingKept.removeAll(ids.toSet())
             refreshOffline()
         }
     }
@@ -502,7 +523,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         if (version == null) Offline.localCopy(context, item)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) }
         // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
         _state.update { it.copy(opening = it.opening + (item.id to 0f)) }
-        val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: "current"}/${item.name}")
+        // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
+        val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: item.node.currentVersion?.id ?: "current"}/${item.name}")
         val ok = if (file.exists()) true else io { vault ->
             vault.download(item.id, file, version) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
             true

@@ -49,6 +49,22 @@ export function useReleaseStale() {
     );
 }
 
+/*
+ * Whether a public page may reload itself after a deploy. Never once this tab
+ * has been in the app: it may hold an open vault a reload would lock, and
+ * uploads a reload would drop. A sign-in, sign-up or recovery form waits for
+ * the next navigation so what was typed is not lost.
+ */
+export function mayReloadPublicPage(page: {
+    pathname: string;
+    moved: boolean;
+    visitedApp: boolean;
+}) {
+    if (page.visitedApp || page.pathname.startsWith('/app')) return false;
+    const form = ['/login', '/register', '/recover'].some((p) => page.pathname.startsWith(p));
+    return !form || page.moved;
+}
+
 /* Reloads now when the page is stale and nothing would be lost; says whether it did. */
 export function reloadIfStale(busy: boolean) {
     if (!stale || busy || typeof window === 'undefined') return false;

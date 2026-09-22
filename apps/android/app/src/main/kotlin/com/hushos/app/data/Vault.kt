@@ -46,6 +46,7 @@ import com.hushos.core.versionSeal
 import com.hushos.core.workspaceOpen
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -80,14 +81,16 @@ class Vault(private val context: Context, val api: DriveApi) {
     private var workspace: WorkspaceView? = null
     private var workspaceKey: ByteArray? = null
     /* The tree mirror on disk and the catalogue built from it (see Catalogue.kt). */
-    internal val mirror = Mirror(context)
+    internal val mirror = Mirror.shared(context)
     @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
-    internal val catalogueChildren = HashMap<String, HashSet<String>>()
-    internal val nodeKeys = HashMap<String, ByteArray>()
+    /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
+    internal val syncLock = Any()
+    internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
+    internal val nodeKeys = ConcurrentHashMap<String, ByteArray>()
     private var identity: IdentityKeys? = null
-    internal val opened = HashMap<String, Opened>()
+    internal val opened = ConcurrentHashMap<String, Opened>()
     private val indexFile = File(context.filesDir, "files-parents.json")
-    internal val parents: HashMap<String, String> = HashMap<String, String>().also { map ->
+    internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
             val json = JSONObject(indexFile.readText())
             for (key in json.keys()) map[key] = json.getString(key)
@@ -324,19 +327,26 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* Keeps a file: downloads its current version into the offline store and records it. */
     fun keepDownloaded(item: Opened, progress: (Float) -> Unit = {}) {
         val destination = Offline.file(context, item) ?: throw ApiError(400, "Only files can be kept downloaded.")
-        if (!destination.exists()) download(item.id, destination, null, progress)
+        if (!destination.exists()) {
+            // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
+            val earlier = destination.parentFile?.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
+            if (earlier == null || !earlier.renameTo(destination)) download(item.id, destination, null, progress)
+        }
         // Older versions of the same file go; only the current one is kept.
         destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
         Offline.remember(context, item)
     }
 
-    /* Brings every kept file up to its current version; what was replaced elsewhere is fetched again, what was trashed is forgotten. */
-    fun refreshOffline(ids: Collection<String>, progress: (String, Float) -> Unit = { _, _ -> }) {
+    /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
+    fun refreshOffline(ids: Collection<String>, progress: (String, Float) -> Unit = { _, _ -> }): Set<String> {
+        val failed = HashSet<String>()
         for (entry in Offline.entries(context).filter { it.id in ids }) {
-            val item = runCatching { resolve(entry.id) }.getOrNull() ?: continue
+            val item = runCatching { resolve(entry.id) }.getOrNull()
+            if (item == null) { failed.add(entry.id); continue }
             if (item.isFolder || item.node.trashedAt != null) { Offline.forget(context, entry.id); continue }
-            if (Offline.localCopy(context, item) == null) runCatching { keepDownloaded(item) { progress(entry.id, it) } }
+            if (Offline.localCopy(context, item) == null && runCatching { keepDownloaded(item) { progress(entry.id, it) } }.isFailure) failed.add(entry.id)
         }
+        return failed
     }
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
@@ -444,12 +454,20 @@ class Vault(private val context: Context, val api: DriveApi) {
         val url = api.versionUrl(v.versionId, item.node.workspaceId)
         val count = v.layout.chunkCount
         destination.parentFile?.mkdirs()
-        destination.outputStream().use { out ->
-            for (index in 0uL until count) {
-                val ciphertext = api.range(url, chunkRange(v.content.plaintextSize, index))
-                out.write(chunkDecrypt(v.content, index, ciphertext))
-                progress((index + 1uL).toFloat() / count.toFloat())
+        // Written beside the destination and moved into place whole: a download cut off
+        // partway never leaves a truncated file that a later open or keep takes as done.
+        val partial = File(destination.path + ".part")
+        try {
+            partial.outputStream().use { out ->
+                for (index in 0uL until count) {
+                    val ciphertext = api.range(url, chunkRange(v.content.plaintextSize, index))
+                    out.write(chunkDecrypt(v.content, index, ciphertext))
+                    progress((index + 1uL).toFloat() / count.toFloat())
+                }
             }
+            if (!partial.renameTo(destination)) throw java.io.IOException("Could not keep ${destination.name}")
+        } finally {
+            partial.delete()
         }
     }
 

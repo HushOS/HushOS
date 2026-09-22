@@ -119,10 +119,13 @@ final class DriveStore {
         for id in folders.keys { if let children = try? await vault.children(of: id) { folders[id] = children } }
         recents = (try? await vault.recents()) ?? recents
         catalogueVersion += 1
+        // The build took in every change since the last run, so every kept file is checked against it.
+        refreshKept(Set(Offline.entries().map(\.id)))
     }
 
     /* Pulls what changed since the cursor and redraws the lists it touched. */
     func sync() async {
+        // Nil: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
         guard let touched = try? await vault.sync() else { return }
         // The feed answered: whatever the last request said, the server is reachable now.
         offline = false
@@ -132,12 +135,28 @@ final class DriveStore {
         }
         recents = (try? await vault.recents()) ?? recents
         catalogueVersion += 1
-        // A kept file replaced elsewhere is fetched again, so the offline copy is the current one.
-        let kept = Offline.entries()
-        if kept.contains(where: { touched.contains($0.id) }) {
-            let tickets = Dictionary(uniqueKeysWithValues: kept.filter { touched.contains($0.id) }.map { ($0.id, begin(.keep, $0.name)) })
-            await vault.refreshOffline { id, fraction in Task { @MainActor in if let ticket = tickets[id] { self.progress(ticket, fraction) } } }
-            for ticket in tickets.values { finish(ticket) }
+        refreshKept(touched)
+    }
+
+    private var refreshingKept: Set<String> = []
+
+    /*
+     * A kept file changed elsewhere is brought up to date on its own, so a
+     * refresh or an upload never waits for a large file to come down again.
+     */
+    private func refreshKept(_ touched: Set<String>) {
+        let kept = Offline.entries().filter { touched.contains($0.id) && !refreshingKept.contains($0.id) }
+        guard !kept.isEmpty else { return }
+        let ids = Set(kept.map(\.id))
+        refreshingKept.formUnion(ids)
+        Task {
+            // Only files whose copy is missing get a row: a rename or a tag moves nothing.
+            var tickets: [String: UUID] = [:]
+            for entry in kept where await vault.keptVersionMissing(entry.id) { tickets[entry.id] = begin(.keep, entry.name) }
+            let rows = tickets
+            let failed = await vault.refreshOffline(ids) { id, fraction in Task { @MainActor in if let ticket = rows[id] { self.progress(ticket, fraction) } } }
+            for (id, ticket) in rows { finish(ticket, failed: failed.contains(id)) }
+            refreshingKept.subtract(ids)
             offlineVersion += 1
         }
     }
@@ -433,7 +452,8 @@ final class DriveStore {
     /* Decrypts to a temporary file named as the user sees it, for Quick Look and the share sheet. */
     func download(_ item: Opened, version: VersionListView? = nil) async -> URL? {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(item.id)/\(version?.id ?? "current")", isDirectory: true)
+        // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(item.id)/\(version?.id ?? item.node.currentVersion?.id ?? "current")", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(item.name)
         if FileManager.default.fileExists(atPath: file.path) { return file }

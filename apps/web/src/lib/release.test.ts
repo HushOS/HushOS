@@ -54,4 +54,25 @@ describe('release', () => {
         await release.checkRelease();
         expect(fetch).toHaveBeenCalledTimes(1);
     });
+
+    test('a public page reloads itself only if this tab never opened the app', async () => {
+        const { mayReloadPublicPage } = await fresh();
+        expect(mayReloadPublicPage({ pathname: '/pricing', moved: true, visitedApp: false })).toBe(
+            true,
+        );
+        // The tab went through /app: an open vault or an upload would be lost.
+        expect(mayReloadPublicPage({ pathname: '/pricing', moved: true, visitedApp: true })).toBe(
+            false,
+        );
+        expect(
+            mayReloadPublicPage({ pathname: '/app/drive', moved: true, visitedApp: false }),
+        ).toBe(false);
+        // A form waits for the next navigation so what was typed survives.
+        expect(mayReloadPublicPage({ pathname: '/login', moved: false, visitedApp: false })).toBe(
+            false,
+        );
+        expect(mayReloadPublicPage({ pathname: '/login', moved: true, visitedApp: false })).toBe(
+            true,
+        );
+    });
 });

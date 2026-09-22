@@ -15,7 +15,14 @@ import org.json.JSONObject
  * never claims a page that was not kept. Thumbnail trailers are kept beside
  * the rows, still sealed, so a list draws its pictures without a round trip.
  */
-class Mirror(context: Context) : SQLiteOpenHelper(context, "mirror.db", null, 1) {
+class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "mirror.db", null, 1) {
+    companion object {
+        @Volatile private var instance: Mirror? = null
+
+        /* One helper per process: the app and the documents provider share its connection, so their writes never lock each other out. */
+        fun shared(context: Context): Mirror = instance ?: synchronized(this) { instance ?: Mirror(context.applicationContext).also { instance = it } }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE nodes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, json TEXT NOT NULL)")
         db.execSQL("CREATE INDEX nodes_workspace ON nodes (workspace_id)")

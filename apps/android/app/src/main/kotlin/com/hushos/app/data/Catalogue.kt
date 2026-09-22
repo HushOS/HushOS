@@ -1,5 +1,7 @@
 package com.hushos.app.data
 
+import java.util.concurrent.ConcurrentHashMap
+
 /*
  * The catalogue, as the web builds one from its mirror: the whole workspace
  * opened in memory, parents first, so folders, recents, trash and search
@@ -64,44 +66,50 @@ private fun Vault.file(rows: List<NodeView>) {
         runCatching { open(row) }.onSuccess {
             row.parentId?.let { parent ->
                 rememberParent(row.id, parent)
-                catalogueChildren.getOrPut(parent) { HashSet() }.add(row.id)
+                catalogueChildren.getOrPut(parent) { ConcurrentHashMap.newKeySet() }.add(row.id)
             }
         }
     }
 }
 
-/* Builds the catalogue for this account's workspace; a second call while ready is free. */
-fun Vault.buildCatalogue() {
-    if (catalogueState == CatalogueState.BUILDING || catalogueState == CatalogueState.READY) return
+/*
+ * Builds the catalogue for this account's workspace; a second call while ready
+ * is free. Returns whether the feed was pulled: false when the tree opened from
+ * the phone alone because the server was out of reach, or nothing was built.
+ */
+fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
+    if (catalogueState == CatalogueState.READY) return false
     val workspaceId = loadWorkspace().workspaceId
     catalogueState = CatalogueState.BUILDING
-    val started = System.currentTimeMillis()
     try {
         // One workspace per device: another account's tree is not kept beside this one.
         for (other in mirror.workspaces()) if (other != workspaceId) mirror.clear(other)
         // No network: the tree already on this phone opens as it was; the next sync catches up.
-        try { pullFeed(workspaceId) } catch (error: Unreachable) { if (mirror.cursor(workspaceId) == 0) throw error }
+        val pulled = try { pullFeed(workspaceId); true } catch (error: Unreachable) { if (mirror.cursor(workspaceId) == 0) throw error; false }
         var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
-        if (orphans.isNotEmpty()) {
+        if (orphans.isNotEmpty() && pulled) {
             // A row without its parent is a page this device missed: start over once.
             mirror.clear(workspaceId)
             pullFeed(workspaceId)
             parentsFirst(mirror.rows(workspaceId)).let { ordered = it.first }
         }
         catalogueChildren.clear()
-        val pulled = System.currentTimeMillis()
         file(ordered)
         catalogueState = CatalogueState.READY
-        android.util.Log.i("HushOS", "catalogue: ${ordered.size} rows, feed ${pulled - started} ms, open ${System.currentTimeMillis() - pulled} ms")
+        pulled
     } catch (error: Exception) {
         catalogueState = CatalogueState.FAILED
         throw error
     }
 }
 
-/* Pulls what changed since the cursor and files it; returns the ids that changed (and their folders). */
-fun Vault.sync(): Set<String> {
-    if (catalogueState != CatalogueState.READY) { buildCatalogue(); return emptySet() }
+/*
+ * Pulls what changed since the cursor and files it; returns the ids that
+ * changed (and their folders), or null when the server was not asked because
+ * the catalogue had to be built first and opened from the phone alone.
+ */
+fun Vault.sync(): Set<String>? = synchronized(syncLock) {
+    if (catalogueState != CatalogueState.READY) return if (buildCatalogue()) emptySet() else null
     val workspaceId = loadWorkspace().workspaceId
     val changes = pullFeed(workspaceId)
     if (changes.isEmpty()) return emptySet()

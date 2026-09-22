@@ -76,7 +76,11 @@ extension Vault {
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: destination.path) {
-            try await download(item.id, to: destination, progress: progress)
+            // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
+            let folder = destination.deletingLastPathComponent()
+            let earlier = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).first { $0.pathExtension != "part" }
+            let moved = earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
+            if !moved { try await download(item.id, to: destination, progress: progress) }
         }
         // Older versions of the same file go; only the current one is kept.
         let versions = destination.deletingLastPathComponent().deletingLastPathComponent()
@@ -86,12 +90,23 @@ extension Vault {
         Offline.remember(item)
     }
 
-    /* Brings every kept file up to its current version; what was replaced elsewhere is fetched again, what was trashed is forgotten. */
-    public func refreshOffline(progress: @Sendable @escaping (String, Double) -> Void = { _, _ in }) async {
-        for entry in Offline.entries() {
-            guard let item = try? await resolve(entry.id) else { continue }
+    /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
+    public func refreshOffline(_ ids: Set<String>, progress: @Sendable @escaping (String, Double) -> Void = { _, _ in }) async -> Set<String> {
+        var failed: Set<String> = []
+        for entry in Offline.entries() where ids.contains(entry.id) {
+            guard let item = try? await resolve(entry.id) else { failed.insert(entry.id); continue }
             if item.isFolder || item.node.trashedAt != nil { Offline.forget(entry.id); continue }
-            if Offline.localCopy(of: item) == nil { try? await keepDownloaded(item) { progress(entry.id, $0) } }
+            if Offline.localCopy(of: item) == nil {
+                do { try await keepDownloaded(item) { progress(entry.id, $0) } } catch { failed.insert(entry.id) }
+            }
         }
+        return failed
+    }
+
+    /* Whether a kept file's current version needs fetching: not on the phone under any name. */
+    public func keptVersionMissing(_ id: String) -> Bool {
+        guard let item = opened[id], let version = item.node.currentVersion, item.node.trashedAt == nil else { return false }
+        let folder = Offline.root().appendingPathComponent(id, isDirectory: true).appendingPathComponent(version.id, isDirectory: true)
+        return !((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).contains { $0.pathExtension != "part" }
     }
 }

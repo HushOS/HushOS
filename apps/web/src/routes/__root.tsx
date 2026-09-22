@@ -23,6 +23,7 @@ import {
 import {
     checkRelease,
     getReleaseServerFn,
+    mayReloadPublicPage,
     reloadIfStale,
     setServedRelease,
     startReleaseChecks,
@@ -187,13 +188,14 @@ function Document({ children, release }: { children: ReactNode; release: string 
     // losing what was typed, and the app decides for itself, since an upload may be running.
     const stale = useReleaseStale();
     const lastPath = useRef(pathname);
+    const visitedApp = useRef(false);
     useEffect(() => {
         const moved = lastPath.current !== pathname;
         lastPath.current = pathname;
-        if (pathname.startsWith('/app')) return;
-        const form = ['/login', '/register', '/recover'].some((p) => pathname.startsWith(p));
-        if (!form || moved) reloadIfStale(false);
-        if (moved) void checkRelease();
+        if (pathname.startsWith('/app')) visitedApp.current = true;
+        else if (mayReloadPublicPage({ pathname, moved, visitedApp: visitedApp.current }))
+            reloadIfStale(false);
+        if (moved && !pathname.startsWith('/app')) void checkRelease();
     }, [pathname, stale]);
     return (
         <html lang="en" className={theme}>

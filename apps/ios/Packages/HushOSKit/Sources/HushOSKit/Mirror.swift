@@ -122,6 +122,11 @@ final class Mirror {
         exec("COMMIT")
     }
 
+    /* Whether any row of this workspace is kept, without reading them. */
+    func hasRows(_ workspaceId: String) -> Bool {
+        !query("SELECT 1 FROM nodes WHERE workspace_id = ? LIMIT 1", bind: [workspaceId]) { _ in true }.isEmpty
+    }
+
     /* Every workspace with a cursor here. */
     func workspaces() -> [String] {
         query("SELECT workspace_id FROM cursors") { text($0, 0) }

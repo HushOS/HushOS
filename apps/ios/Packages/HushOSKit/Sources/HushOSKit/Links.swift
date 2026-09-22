@@ -264,15 +264,21 @@ public actor LinkVault {
         let url = try await api.linkVersionURL(token: token, versionId: opened.versionId)
         guard let objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         let layout = opened.layout
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
+        // Written beside the destination and moved into place whole: a download cut off
+        // partway never leaves a truncated file that a later open or keep takes as done.
+        let partial = destination.appendingPathExtension("part")
+        FileManager.default.createFile(atPath: partial.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: partial)
+        defer { try? handle.close(); try? FileManager.default.removeItem(at: partial) }
         for index in 0 ..< layout.chunkCount {
             try Task.checkCancellation()
             let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, index: index))
             try handle.write(contentsOf: try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext))
             progress(Double(index + 1) / Double(layout.chunkCount))
         }
+        try handle.close()
+        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+        try FileManager.default.moveItem(at: partial, to: destination)
     }
 
     public func thumbnail(_ item: Opened) async throws -> Data? {

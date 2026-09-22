@@ -77,25 +77,45 @@ extension Vault {
         }
     }
 
-    /* Builds the catalogue for this account's workspace; a second call while ready is free. */
-    public func buildCatalogue() async {
-        guard let mirror, catalogueState != .building else { return }
+    /*
+     * Builds the catalogue for this account's workspace; a second call while
+     * ready is free. Returns whether the feed was pulled: false when the tree
+     * opened from the phone alone, or nothing was built.
+     */
+    @discardableResult
+    public func buildCatalogue() async -> Bool {
+        if catalogueState == .ready { return false }
+        if let running = catalogueBuilding {
+            // Someone else started it: wait until it is done, so callers can rely on the state after this returns.
+            _ = await running.value
+            return false
+        }
+        let build = Task { await self.performBuild() }
+        catalogueBuilding = build
+        let pulled = await build.value
+        catalogueBuilding = nil
+        return pulled
+    }
+
+    private func performBuild() async -> Bool {
+        guard let mirror else { return false }
+        catalogueState = .building
         let workspaceId: String
         do { workspaceId = try await loadWorkspace().workspaceId } catch {
             catalogueState = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
-            return
+            return false
         }
-        if catalogueState == .ready { return }
-        catalogueState = .building
         do {
             // One workspace per device: another account's tree is not kept beside this one.
             for other in mirror.workspaces() where other != workspaceId { mirror.clear(other) }
+            var pulled = true
             do { _ = try await pullFeed(workspaceId) } catch DriveAPIError.transport(let message) {
                 // No network: the tree already on this phone opens as it was; the next sync catches up.
                 if mirror.cursor(workspaceId) == 0 { throw DriveAPIError.transport(message) }
+                pulled = false
             }
             var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
-            if !orphans.isEmpty {
+            if !orphans.isEmpty && pulled {
                 // A row without its parent is a page this device missed: start over once.
                 mirror.clear(workspaceId)
                 _ = try await pullFeed(workspaceId)
@@ -104,17 +124,22 @@ extension Vault {
             catalogueChildren = [:]
             file(ordered)
             catalogueState = .ready
+            return pulled
         } catch {
             catalogueState = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            return false
         }
     }
 
-    /* Pulls what changed since the cursor and files it; returns the ids that changed. */
+    /*
+     * Pulls what changed since the cursor and files it; returns the ids that
+     * changed, or nil when the server was not asked because the catalogue was
+     * still being built or had to open from the phone alone.
+     */
     @discardableResult
-    public func sync() async throws -> Set<String> {
+    public func sync() async throws -> Set<String>? {
         guard catalogueState == .ready, let mirror else {
-            await buildCatalogue()
-            return []
+            return await buildCatalogue() ? [] : nil
         }
         let workspaceId = try await loadWorkspace().workspaceId
         let changes = try await pullFeed(workspaceId)
@@ -143,7 +168,7 @@ extension Vault {
         let (ordered, orphans) = parentsFirst(batchRows) { id in !batch.contains(id) && opened[id] != nil }
         file(ordered)
         // A row under a folder this device never saw: the next build fills the gap.
-        if !orphans.isEmpty || mirror.rows(workspaceId).isEmpty { catalogueState = .idle }
+        if !orphans.isEmpty || !mirror.hasRows(workspaceId) { catalogueState = .idle }
         return touched
     }
 

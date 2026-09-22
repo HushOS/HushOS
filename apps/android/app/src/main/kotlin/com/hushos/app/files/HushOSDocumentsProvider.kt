@@ -21,6 +21,8 @@ import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
 import com.hushos.app.data.sync
+import com.hushos.app.data.buildCatalogue
+import com.hushos.app.data.Offline
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -44,6 +46,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val ctx = context ?: throw FileNotFoundException("no context")
         val created = Vault.fromShared(ctx) ?: throw authenticationRequired()
         vault = created
+        // The tree on the phone first: listings answer from it, and without a network they still answer.
+        runCatching { created.buildCatalogue() }
         return created
     }
 
@@ -133,11 +137,30 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = guarded {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
-        // The app may have built the catalogue in this process; a sync keeps Files as fresh as the server.
-        runCatching { vault.sync() }
         for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault)
         cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId))
+        syncInBackground(vault, parentDocumentId)
         cursor
+    }
+
+    private val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val background = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /*
+     * The listing answers from what the phone holds; the feed is pulled after,
+     * off the binder thread, and Files is told to ask again if anything changed.
+     * A slow or absent network never holds a listing up.
+     */
+    private fun syncInBackground(vault: Vault, parentDocumentId: String) {
+        if (!syncing.compareAndSet(false, true)) return
+        background.execute {
+            try {
+                val touched = runCatching { vault.sync() }.getOrNull()
+                if (!touched.isNullOrEmpty()) context?.contentResolver?.notifyChange(DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId), null)
+            } finally {
+                syncing.set(false)
+            }
+        }
     }
 
     override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor = guarded {
@@ -163,9 +186,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
         val id = nodeId(documentId, vault)
-        vault.resolve(id)
+        val item = vault.resolve(id)
         val file = cacheFile(id)
         if (mode.contains("r") && !mode.contains("w")) {
+            // A kept file opens from the phone, network or not; anything else comes down fresh.
+            Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
             vault.download(id, file)
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
