@@ -1,0 +1,23 @@
+apps/ios/App/RecentsView.swift
+  s_de0e5293e39e1a::t_8c6ec19ef8c980 104-105,132
+apps/ios/App/BrowseView.swift
+  s_de0e5293e39e1a::t_8c6ec19ef8c980 100,103-118
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_8c6ec19ef8c980 162-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ccc0fffc1f272c9a88c4e4b807f415a1bba897d9",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
