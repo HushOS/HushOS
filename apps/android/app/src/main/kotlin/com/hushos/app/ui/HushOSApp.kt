@@ -10,6 +10,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.AlertDialog
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -55,6 +56,13 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
         Gate.SIGNED_OUT -> SignInScreen(model, state)
         Gate.SIGNED_IN -> Column(Modifier.fillMaxSize()) {
+            // While the app is on screen the lists follow the server, as the web's feed does; in the background nothing polls.
+            val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+            androidx.compose.runtime.LaunchedEffect(lifecycle) {
+                lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                    while (true) { model.liveSync(); kotlinx.coroutines.delay(10_000) }
+                }
+            }
             if (state.unreachable) OfflineBanner()
             // The banner took the status bar's height; the screens below must not pad for it again.
             Box(if (state.unreachable) Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars) else Modifier.weight(1f)) { Main(model, state) }
@@ -98,7 +106,18 @@ private fun Main(model: DriveViewModel, state: DriveState) {
                 }
             }
         },
-        snackbarHost = { if (state.transfers.isNotEmpty()) TransferPanel(state.transfers) },
+        snackbarHost = {
+            Column {
+                state.notice?.let { notice ->
+                    Snackbar(
+                        // Above the add button, which sits over this corner on Files and would cover Undo.
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty()) 76.dp else 4.dp),
+                        action = notice.undo?.let { undo -> { TextButton(onClick = { model.dismissNotice(); undo() }, colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inversePrimary)) { Text("Undo") } } },
+                    ) { Text(notice.text, maxLines = 2) }
+                }
+                if (state.transfers.isNotEmpty()) TransferPanel(state.transfers)
+            }
+        },
     ) { padding ->
         Box(Modifier.padding(bottom = padding.calculateBottomPadding())) {
             when (tab) {

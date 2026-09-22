@@ -37,12 +37,13 @@ import java.text.DateFormat
 import java.util.Date
 
 fun formatBytes(bytes: Long): String {
+    // The web's rule, so a size reads the same everywhere: binary units, whole numbers from 100 up.
     if (bytes < 1024) return "$bytes B"
-    val units = arrayOf("KB", "MB", "GB", "TB")
+    val units = arrayOf("KiB", "MiB", "GiB", "TiB")
     var value = bytes.toDouble()
     var unit = -1
     while (value >= 1024 && unit < units.size - 1) { value /= 1024; unit++ }
-    return String.format("%.1f %s", value, units[unit])
+    return if (value >= 100) "${Math.round(value)} ${units[unit]}" else String.format(java.util.Locale.US, "%.1f %s", value, units[unit])
 }
 
 fun mimeOf(item: Opened): String? = item.metadata.mime ?: android.webkit.MimeTypeMap.getSingleton()

@@ -47,7 +47,7 @@ struct NodeRow: View {
     private var subtitle: String {
         var parts: [String] = []
         if let modified = item.modified { parts.append(modified.formatted(date: .abbreviated, time: .shortened)) }
-        if let size = item.size { parts.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) }
+        if let size = item.size { parts.append(formatBytes(Int64(size))) }
         if item.isFolder { parts.append("Folder") }
         return parts.joined(separator: " · ")
     }
@@ -88,4 +88,14 @@ struct TagPill: View {
             .padding(.horizontal, 7).padding(.vertical, 2)
             .background(selected ? base : ink.opacity(scheme == .dark ? 0.22 : 0.14), in: Capsule())
     }
+}
+
+/* The web's rule, so a size reads the same everywhere: binary units, whole numbers from 100 up. */
+func formatBytes(_ value: Int64) -> String {
+    if value < 1024 { return "\(max(value, 0)) B" }
+    let units = ["KiB", "MiB", "GiB", "TiB"]
+    var n = Double(value)
+    var unit = -1
+    while n >= 1024 && unit < units.count - 1 { n /= 1024; unit += 1 }
+    return n >= 100 ? "\(Int(n.rounded())) \(units[unit])" : String(format: "%.1f %@", n, units[unit])
 }

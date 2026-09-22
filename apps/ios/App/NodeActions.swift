@@ -259,20 +259,9 @@ struct InfoSheet: View {
                 Section {
                     LabeledContent("Name", value: item.name)
                     LabeledContent("Kind", value: item.isFolder ? "Folder" : (NodeRow.type(for: item).localizedDescription ?? "File"))
-                    if let size = item.size { LabeledContent("Size", value: ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) }
+                    if let size = item.size { LabeledContent("Size", value: formatBytes(Int64(size))) }
                     if let modified = item.modified { LabeledContent("Modified", value: modified.formatted(date: .long, time: .shortened)) }
                     if let created = parseDate(item.node.createdAt) { LabeledContent("Created", value: created.formatted(date: .long, time: .shortened)) }
-                }
-                Section {
-                    LabeledContent("Key epoch", value: String(item.node.keyEpoch))
-                    if let version = item.node.currentVersion {
-                        LabeledContent("Content suite", value: String(version.contentSuite))
-                        LabeledContent("Chunks", value: String(version.chunkCount))
-                    }
-                } header: {
-                    Text("Encryption")
-                } footer: {
-                    Text("Names, sizes and contents are sealed on this device. The server stores only ciphertext and the shape of the tree.")
                 }
             }
             .navigationTitle("Info")

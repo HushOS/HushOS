@@ -126,6 +126,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     LaunchedEffect(Unit) { model.loadRoot(); model.refreshTags() }
     LaunchedEffect(folderId) { if (folderId != null && !state.folders.containsKey(folderId)) model.refresh(folderId) }
     BackHandler(enabled = stack.size > floor || onLeave != null) { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }
+    // Declared after the folder handler so it wins: Back closes the add menu before it leaves a folder or the app.
+    BackHandler(enabled = fabOpen) { fabOpen = false }
     var query by rememberSaveable { mutableStateOf("") }
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -591,12 +593,12 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrashScreen(model: DriveViewModel, state: DriveState) {
+fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
     LaunchedEffect(Unit) { model.refreshTrash() }
     Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = {
-        TopAppBar(title = { Text("Trash") }, actions = { TextButton(enabled = state.trash.isNotEmpty(), onClick = { confirmEmpty = true }) { Text("Empty") } })
+        TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = { TextButton(enabled = state.trash.isNotEmpty(), onClick = { confirmEmpty = true }) { Text("Empty") } })
     }) { padding ->
         PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshTrash() }, modifier = Modifier.padding(padding)) {
             if (state.trash.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

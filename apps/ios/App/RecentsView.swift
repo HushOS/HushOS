@@ -66,7 +66,7 @@ struct HomeView: View {
                                     Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(entry.name).lineLimit(1)
-                                        Text(entry.size.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "Kept downloaded")
+                                        Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
                                             .font(.footnote).foregroundStyle(.secondary)
                                     }
                                 }
@@ -235,8 +235,6 @@ struct SharedView: View {
                     .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 11, trailing: 20))
                 } header: {
                     sharedHeader
-                } footer: {
-                    Text("A link opens here with the key it carries; nothing is sent to HushOS but the address.")
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
                 if loaded && mounts.isEmpty && failure == nil {

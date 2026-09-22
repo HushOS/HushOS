@@ -63,7 +63,7 @@ struct ShareItemSheet: View {
                 } header: {
                     Text("People")
                 } footer: {
-                    Text("Sharing seals this item's key to a contact you pinned. Revoking rotates the item's keys, so what they held opens nothing new.")
+                    Text("Pick someone from your contacts. You can stop sharing at any time.")
                 }
                 Section {
                     if loaded && links.isEmpty { Text("No links yet.").foregroundStyle(.secondary) }
@@ -89,7 +89,7 @@ struct ShareItemSheet: View {
                 } header: {
                     Text("Links")
                 } footer: {
-                    Text("Anyone with a link can open this \(item.isFolder ? "folder" : "file") until you revoke it. The key rides in the link itself; HushOS never sees it.")
+                    Text("Anyone with the link can open this \(item.isFolder ? "folder" : "file") until you turn the link off.")
                 }
                 Section("New link") {
                     Toggle("Password", isOn: $withPassword)
@@ -377,7 +377,7 @@ struct NodeRowPlain: View {
     private var subtitle: String {
         var parts: [String] = []
         if let modified = item.modified { parts.append(modified.formatted(date: .abbreviated, time: .shortened)) }
-        if item.isFolder { parts.append("Folder") } else if let size = item.size { parts.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) }
+        if item.isFolder { parts.append("Folder") } else if let size = item.size { parts.append(formatBytes(Int64(size))) }
         return parts.joined(separator: " · ")
     }
 }

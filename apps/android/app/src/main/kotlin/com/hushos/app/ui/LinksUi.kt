@@ -134,11 +134,11 @@ fun LinkSheet(model: DriveViewModel, item: Opened, dismiss: () -> Unit) {
                     TextButton(onClick = { showingContacts = true }, modifier = Modifier.padding(start = 8.dp, top = 8.dp)) { Text("Contacts") }
                 }
             }
-            Text("Sharing seals this item's key to a contact you pinned. Revoking rotates the item's keys, so what they held opens nothing new.",
+            Text("Pick someone from your contacts. You can stop sharing at any time.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Links", style = MaterialTheme.typography.titleSmall)
-            Text("Anyone with a link can open “${item.name}” until you revoke it. The key rides in the link itself; HushOS never sees it.",
+            Text("Anyone with the link can open “${item.name}” until you turn the link off.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
             val current = links
             if (current == null) Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }

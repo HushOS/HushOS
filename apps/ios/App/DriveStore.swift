@@ -342,7 +342,50 @@ final class DriveStore {
     }
 
     func trash(_ items: [Opened]) async {
-        for item in items { await trash(item) }
+        var moved: [Opened] = []
+        for item in items where await trashOne(item) { moved.append(item) }
+        announceTrash(moved)
+    }
+
+    /* A short line after an action, with a way to take it back: "Moved 2 items to trash · Undo". */
+    struct Notice: Identifiable {
+        let id = UUID()
+        let text: String
+        let undo: (() -> Void)?
+    }
+    var notice: Notice?
+
+    func notify(_ text: String, undo: (() -> Void)? = nil) {
+        let notice = Notice(text: text, undo: undo)
+        self.notice = notice
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            if self.notice?.id == notice.id { self.notice = nil }
+        }
+    }
+
+    /* Says what went to the trash and offers to bring it straight back. */
+    private func announceTrash(_ items: [Opened]) {
+        guard !items.isEmpty else { return }
+        notify(items.count == 1 ? "Moved “\(items[0].name)” to trash" : "Moved \(items.count) items to trash") { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                for item in items { await self.restore(item, parentTrashed: false) }
+                await self.refreshRecents()
+            }
+        }
+    }
+
+    /*
+     * Keeps lists current while the app is on screen, as the web polls its
+     * feed: changes from other devices appear without a pull. A failure here
+     * raises nothing; sync() only keeps or sets the offline line.
+     */
+    func liveSync() async {
+        while !Task.isCancelled {
+            await sync()
+            try? await Task.sleep(for: .seconds(10))
+        }
     }
 
     func move(_ items: [Opened], to folder: String) async {
@@ -350,8 +393,13 @@ final class DriveStore {
     }
 
     func trash(_ item: Opened) async {
-        _ = await perform(in: item.node.parentId) { try await vault.trash(item.id) }
+        if await trashOne(item) { announceTrash([item]) }
+    }
+
+    private func trashOne(_ item: Opened) async -> Bool {
+        let ok = await perform(in: item.node.parentId) { try await vault.trash(item.id) }
         recents.removeAll { $0.id == item.id }
+        return ok
     }
 
     func restore(_ item: Opened, parentTrashed: Bool) async {

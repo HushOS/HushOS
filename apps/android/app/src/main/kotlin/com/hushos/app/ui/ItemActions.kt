@@ -102,7 +102,11 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
                 onDismissRequest = dismiss,
                 title = { Text("Rename") },
                 text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") }) },
-                confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { if (name.trim() != item.name) model.rename(item, name.trim()); dismiss() }) { Text("Save") } },
+                confirmButton = {
+                    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+                    // The dialog goes with the keyboard: left up, it covers the list the new name lands in.
+                    TextButton(enabled = name.isNotBlank(), onClick = { keyboard?.hide(); if (name.trim() != item.name) model.rename(item, name.trim()); dismiss() }) { Text("Save") }
+                },
                 dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
             )
         }
@@ -114,13 +118,12 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
             Column(Modifier.padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
                 Text(item.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
                 HorizontalDivider(Modifier.padding(bottom = 4.dp))
-                Detail("Kind", if (item.isFolder) "Folder" else mimeOf(item) ?: "File")
+                Detail("Kind", kindOf(item))
                 item.size?.let { Detail("Size", formatBytes(it)) }
-                item.modifiedMillis?.let { Detail("Modified", DateFormat.getDateTimeInstance(DateFormat.LONG, DateFormat.SHORT).format(Date(it))) }
-                Detail("Key epoch", item.node.keyEpoch.toString())
-                item.node.currentVersion?.let { Detail("Content suite", it.contentSuite.toString()); Detail("Chunks", it.chunkCount.toString()) }
-                Text("Names, sizes and contents are sealed on this device. The server stores only ciphertext and the shape of the tree.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 16.dp))
+                val format = DateFormat.getDateTimeInstance(DateFormat.LONG, DateFormat.SHORT)
+                item.modifiedMillis?.let { Detail("Modified", format.format(Date(it))) }
+                item.node.createdAt?.let { created -> runCatching { Instant.parse(created).toEpochMilli() }.getOrNull()?.let { Detail("Created", format.format(Date(it))) } }
+                item.node.parentId?.let { parent -> state.folders.values.flatten().firstOrNull { it.id == parent }?.name ?: if (parent == state.rootId) "HushOS" else null }?.let { Detail("Folder", it) }
             }
         }
     }
@@ -248,4 +251,21 @@ fun tagColour(value: String): androidx.compose.ui.graphics.Color = when (value) 
     "teal" -> androidx.compose.ui.graphics.Color(0xFF2A7F7F)
     "coral" -> androidx.compose.ui.graphics.Color(0xFFD9634A)
     else -> value.removePrefix("#").toLongOrNull(16)?.let { androidx.compose.ui.graphics.Color(0xFF000000 or it) } ?: androidx.compose.ui.graphics.Color.Gray
+}
+
+/* What a file is, the way people say it: "PNG image", "PDF document", not a MIME type. */
+fun kindOf(item: Opened): String {
+    if (item.isFolder) return "Folder"
+    val mime = mimeOf(item) ?: ""
+    val ext = item.name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 5 }
+    return when {
+        mime == "application/pdf" -> "PDF document"
+        mime.startsWith("image/") -> "${ext ?: "Image"}${if (ext != null) " image" else ""}"
+        mime.startsWith("video/") -> "${ext ?: "Video"}${if (ext != null) " video" else ""}"
+        mime.startsWith("audio/") -> "${ext ?: "Audio"}${if (ext != null) " audio" else ""}"
+        mime.startsWith("text/") -> "${ext ?: "Text"}${if (ext != null) " text" else ""}"
+        mime.contains("zip") || mime.contains("compressed") -> "${ext ?: ""} archive".trim()
+        ext != null -> "$ext file"
+        else -> "File"
+    }
 }

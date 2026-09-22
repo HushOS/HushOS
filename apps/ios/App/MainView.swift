@@ -8,6 +8,7 @@ import SwiftUI
  */
 struct MainView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var store: DriveStore?
 
     var body: some View {
@@ -37,9 +38,17 @@ struct MainView: View {
                     }
                 }
                 .overlay(alignment: .bottom) {
-                    if !store.transfers.isEmpty {
-                        TransferPanel(transfers: store.transfers).padding(.bottom, 64)
+                    VStack(spacing: 8) {
+                        // Above the add button, which sits over this corner on Files and would cover Undo.
+                        if let notice = store.notice { NoticeBar(notice: notice, dismiss: { store.notice = nil }).padding(.bottom, store.transfers.isEmpty ? 70 : 0) }
+                        if !store.transfers.isEmpty { TransferPanel(transfers: store.transfers) }
                     }
+                    .padding(.bottom, 64)
+                    .animation(.snappy, value: store.notice?.id)
+                }
+                // While the app is on screen the lists follow the server; in the background nothing polls.
+                .task(id: scenePhase) {
+                    if scenePhase == .active { await store.liveSync() }
                 }
                 .alert("Something went wrong", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
                     Button("OK") {
@@ -116,5 +125,26 @@ struct TransferPanel: View {
         case .copy: return "doc.on.doc"
         case .rotate: return "key"
         }
+    }
+}
+
+/* "Moved 2 items to trash · Undo", for a few seconds, above the tab bar. */
+struct NoticeBar: View {
+    let notice: DriveStore.Notice
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(notice.text).font(.subheadline).lineLimit(2)
+            Spacer(minLength: 8)
+            if let undo = notice.undo {
+                Button("Undo") { dismiss(); undo() }.font(.subheadline.weight(.semibold))
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: 360)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.horizontal)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

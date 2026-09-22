@@ -44,6 +44,9 @@ import java.io.File
 
 enum class Gate { CHECKING, SIGNED_OUT, SIGNED_IN }
 
+/* A short line after an action, with a way to take it back: "Moved 2 items to trash · Undo". */
+data class Notice(val id: Long, val text: String, val undo: (() -> Unit)? = null)
+
 /* A transfer in flight or just finished, with its own bar, as the web's panel shows them. */
 data class TransferItem(val id: String, val kind: String, val name: String, val fraction: Float, val done: Boolean = false, val failed: Boolean = false)
 
@@ -67,6 +70,7 @@ data class DriveState(
     val transfers: List<TransferItem> = emptyList(),
     /* Files being fetched to open, by node id, with progress: a ring on the row, not a banner. */
     val opening: Map<String, Float> = emptyMap(),
+    val notice: Notice? = null,
     val error: String? = null,
     val busy: Boolean = false,
     /* The last request could not reach the server; what is on the phone is shown. */
@@ -177,6 +181,19 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun <T> quietly(block: (Vault) -> T): T? {
+        val vault = vault ?: return null
+        return try {
+            withContext(Dispatchers.IO) { block(vault) }
+        } catch (error: NotAuthenticated) {
+            sessionLost(); null
+        } catch (error: Unreachable) {
+            _state.update { it.copy(unreachable = true) }; null
+        } catch (error: Exception) {
+            null
+        }
+    }
+
     private suspend fun <T> io(block: (Vault) -> T): T? {
         val vault = vault ?: return null
         return try {
@@ -211,9 +228,19 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /* Pulls what changed since the cursor and redraws the lists it touched. */
-    private suspend fun sync() {
+    /*
+     * Keeps lists current while the app is open, as the web polls its feed:
+     * changes from other devices appear without a pull. Quiet: a failure here
+     * never raises an alert, it only keeps or sets the offline line.
+     */
+    suspend fun liveSync() {
+        if (state.value.gate != Gate.SIGNED_IN || vault == null) return
+        sync(quiet = true)
+    }
+
+    private suspend fun sync(quiet: Boolean = false) {
         // Null: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
-        val touched = io { it.sync() } ?: return
+        val touched = (if (quiet) quietly { it.sync() } else io { it.sync() }) ?: return
         // The feed answered: whatever the last request said, the server is reachable now.
         if (state.value.unreachable) _state.update { it.copy(unreachable = false) }
         if (touched.isEmpty()) return
@@ -421,12 +448,41 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun trashAll(items: List<Opened>) = viewModelScope.launch { for (item in items) trash(item).join() }
+    fun trashAll(items: List<Opened>) = viewModelScope.launch {
+        for (item in items) trashOne(item)
+        announceTrash(items)
+    }
+
+    /* Says what went to the trash and offers to bring it straight back. */
+    private fun announceTrash(items: List<Opened>) {
+        val text = if (items.size == 1) "Moved “${items[0].name}” to trash" else "Moved ${items.size} items to trash"
+        notify(text) { viewModelScope.launch { for (item in items) restoreQuietly(item) } }
+    }
+
+    fun notify(text: String, undo: (() -> Unit)? = null) {
+        val notice = Notice(System.nanoTime(), text, undo)
+        _state.update { it.copy(notice = notice) }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(6000)
+            _state.update { if (it.notice?.id == notice.id) it.copy(notice = null) else it }
+        }
+    }
+
+    fun dismissNotice() = _state.update { it.copy(notice = null) }
+
+    private suspend fun restoreQuietly(item: Opened) {
+        if (write(item.node.parentId) { it.restore(TrashItem(item, false)) }) refreshRecents()
+    }
     fun moveAll(items: List<Opened>, folder: String) = viewModelScope.launch { for (item in items) move(item, folder).join() }
 
     fun trash(item: Opened) = viewModelScope.launch {
-        write(item.node.parentId) { it.trash(item.id) }
+        if (trashOne(item)) announceTrash(listOf(item))
+    }
+
+    private suspend fun trashOne(item: Opened): Boolean {
+        val ok = write(item.node.parentId) { it.trash(item.id) }
         _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
+        return ok
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {
         if (write(null) { it.restore(entry) }) { refreshTrash(); entry.item.node.parentId?.let { if (state.value.folders.containsKey(it)) refresh(it) } }
@@ -535,7 +591,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 }
 
 /* The emulator talks to the dev server on the host; a real phone talks to production unless the person changes it. */
-private fun defaultOrigin(): String {
+internal fun defaultOrigin(): String {
     val fingerprint = android.os.Build.FINGERPRINT.lowercase()
     val emulator = fingerprint.contains("generic") || fingerprint.contains("emulator") || android.os.Build.PRODUCT.lowercase().contains("sdk")
     return if (emulator) BuildConfig.DEFAULT_ORIGIN else "https://hushos.com"

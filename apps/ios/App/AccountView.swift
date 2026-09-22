@@ -32,6 +32,9 @@ struct AccountView: View {
                             Button("Edit") { nameDraft = user.name; editingName = true }.font(.footnote)
                         }
                         .padding(.vertical, 4)
+                    } header: {
+                        Text("Account").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
                     }
                 }
                 Section {
@@ -66,26 +69,35 @@ struct AccountView: View {
                     Button("Change password") { changingPassword = true }
                     Button("Recovery phrase") { showingPhrase = true }
                     Button("Rotate keys") { rotating = true }
-                    Button("Delete account", role: .destructive) { deleting = true }
                 } header: {
                     Text("Security")
                 } footer: {
-                    Text("The recovery phrase opens the account without the password; rotating keys replaces the account key and mints a new phrase.")
+                    Text("Keep your recovery phrase somewhere safe: it gets you back in if you forget your password. Rotate keys if you think either was exposed.")
                 }
                 Section {
                     NavigationLink { TrashView().environment(store) } label: { Label("Trash", systemImage: "trash") }
-                    LabeledContent("HushOS", value: model.origin.replacingOccurrences(of: "https://", with: ""))
+                    // The address only matters to someone on their own server; everyone else never needs to read it.
+                    if model.origin != AppModel.defaultOrigin {
+                        LabeledContent("Server", value: model.origin.replacingOccurrences(of: "https://", with: ""))
+                    }
                 } footer: {
-                    Text("HushOS is a location in the Files app: browsing, downloads, uploads and Keep Downloaded work there without opening HushOS.")
+                    Text("HushOS is also a location in the Files app, for browsing, opening and saving files from other apps.")
                 }
                 Section {
-                    Button("Sign out", role: .destructive) { signingOut = true }
+                    Button("Sign out") { signingOut = true }
+                }
+                Section {
+                    Button("Delete account", role: .destructive) { deleting = true }
                 } footer: {
-                    Text("Signing out locks the account key on this device and removes the Files location.")
+                    VStack(spacing: 18) {
+                        Text("Deletes every file and the account. This cannot be undone.")
+                        Text("HushOS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
                 }
             }
-            .navigationTitle("Account")
-            .navigationBarTitleDisplayMode(.inline)
+            // The heading is drawn like the other tabs', so all four start at the same height.
+            .toolbar(.hidden, for: .navigationBar)
             .alert("Your name", isPresented: $editingName) {
                 TextField("Name", text: $nameDraft)
                 Button("Cancel", role: .cancel) {}
@@ -116,9 +128,7 @@ struct AccountView: View {
         }
     }
 
-    private func bytes(_ value: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
-    }
+    private func bytes(_ value: Int64) -> String { formatBytes(value) }
 }
 
 struct ChangePasswordSheet: View {

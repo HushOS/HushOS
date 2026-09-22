@@ -17,6 +17,8 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Autorenew
+import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material3.AlertDialog
@@ -57,7 +59,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount() }
     if (showingTrash) {
         BackHandler { showingTrash = false }
-        TrashScreen(model, state)
+        TrashScreen(model, state) { showingTrash = false }
         return
     }
     Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = { TopAppBar(title = { Text("Account") }) }) { padding ->
@@ -88,36 +90,35 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
                 trailingContent = { TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.origin + "/app/billing"))) }) { Text("Manage") } },
             )
             HorizontalDivider()
-            ListItem(headlineContent = { Text("Change password") }, supportingContent = { Text("Proved with OPAQUE; the account key is sealed again on this device.") },
-                leadingContent = { Icon(Icons.Outlined.Key, null) }, modifier = Modifier.clickable { dialog = AccountDialog.PASSWORD })
-            ListItem(headlineContent = { Text("Recovery phrase") }, supportingContent = { Text("The 24 words that open the account without the password.") },
+            ListItem(headlineContent = { Text("Change password") }, supportingContent = { Text("The password you sign in with.") },
+                leadingContent = { Icon(Icons.Outlined.Password, null) }, modifier = Modifier.clickable { dialog = AccountDialog.PASSWORD })
+            ListItem(headlineContent = { Text("Recovery phrase") }, supportingContent = { Text("24 words that get you back in if you forget your password.") },
                 leadingContent = { Icon(Icons.Outlined.Key, null) }, modifier = Modifier.clickable { dialog = AccountDialog.PHRASE })
-            ListItem(headlineContent = { Text("Rotate keys") }, supportingContent = { Text("A fresh account key and a new recovery phrase; files and shares stay.") },
-                leadingContent = { Icon(Icons.Outlined.Key, null) }, modifier = Modifier.clickable { dialog = AccountDialog.ROTATE })
-            ListItem(headlineContent = { Text("Delete account", color = MaterialTheme.colorScheme.error) }, supportingContent = { Text("Every file and the account itself, gone for good.") },
-                leadingContent = { Icon(Icons.Outlined.DeleteForever, null, tint = MaterialTheme.colorScheme.error) }, modifier = Modifier.clickable { dialog = AccountDialog.DELETE })
-            Text("The recovery phrase opens the account without the password; rotating keys replaces the account key and mints a new phrase.", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            ListItem(headlineContent = { Text("Rotate keys") }, supportingContent = { Text("New keys and a new recovery phrase, if you think either was exposed.") },
+                leadingContent = { Icon(Icons.Outlined.Autorenew, null) }, modifier = Modifier.clickable { dialog = AccountDialog.ROTATE })
             HorizontalDivider()
             ListItem(
                 headlineContent = { Text("Trash") },
-                supportingContent = { state.storage?.let { Text("${formatBytes(it.trashBytes)} across ${it.trashItems} items · ${formatBytes(it.supersededBytes)} in earlier versions") } },
+                supportingContent = { state.storage?.let { Text("${formatBytes(it.trashBytes)} in the trash · ${formatBytes(it.supersededBytes)} in earlier versions") } },
                 leadingContent = { Icon(Icons.Outlined.Delete, null) },
                 modifier = Modifier.clickable { showingTrash = true },
             )
             ListItem(
-                overlineContent = { Text("This device") },
-                headlineContent = { Text(state.origin.removePrefix("https://")) },
-                supportingContent = { Text("HushOS appears in Files and every app's file picker. Browsing, downloads, uploads and edits work there without opening HushOS.") },
+                headlineContent = { Text("HushOS in Files") },
+                // The address only matters to someone on their own server; everyone else never needs to read it.
+                supportingContent = { Text("Browse, open and save files from the Files app and any app's file picker." + if (state.origin != defaultOrigin()) "\nServer: ${state.origin.removePrefix("https://")}" else "") },
                 leadingContent = { Icon(Icons.Outlined.FolderOpen, null) },
             )
             HorizontalDivider()
             ListItem(
-                headlineContent = { Text("Sign out", color = MaterialTheme.colorScheme.error) },
-                supportingContent = { Text("Locks the account key on this device.") },
-                leadingContent = { Icon(Icons.Outlined.Logout, null, tint = MaterialTheme.colorScheme.error) },
+                headlineContent = { Text("Sign out") },
+                leadingContent = { Icon(Icons.Outlined.Logout, null) },
                 modifier = Modifier.clickable { dialog = AccountDialog.SIGN_OUT },
             )
+            ListItem(headlineContent = { Text("Delete account", color = MaterialTheme.colorScheme.error) }, supportingContent = { Text("Deletes every file and the account. This cannot be undone.") },
+                leadingContent = { Icon(Icons.Outlined.DeleteForever, null, tint = MaterialTheme.colorScheme.error) }, modifier = Modifier.clickable { dialog = AccountDialog.DELETE })
+            Text("HushOS ${com.hushos.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
     when (dialog) {
