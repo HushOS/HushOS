@@ -115,7 +115,8 @@ export function TagsView() {
                 }}
                 noValidate
             >
-                <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-sm">
+                {/* A floor on the width, so on a phone the colours wrap below instead of squeezing the field. */}
+                <div className="flex min-w-48 flex-1 flex-col gap-2 sm:max-w-sm">
                     <label htmlFor={id} className="eyebrow text-muted-foreground">
                         New tag
                     </label>

@@ -141,7 +141,7 @@ function StorageMeter() {
                         storage ? (
                             <>
                                 <span className="font-semibold text-foreground">
-                                    {formatBytes(storage.usedBytes)}
+                                    {formatSpace(storage.usedBytes)}
                                 </span>{' '}
                                 of {formatGiB(storage.quotaBytes)} used
                             </>
@@ -154,7 +154,7 @@ function StorageMeter() {
             <p className="flex justify-between gap-3 text-xs text-muted-foreground tabular-nums">
                 <span>
                     {storage
-                        ? `${formatBytes(storage.availableBytes)} available.`
+                        ? `${formatSpace(storage.availableBytes)} available.`
                         : 'Opening your account…'}
                 </span>
                 {billing && catalogue && summary && (
@@ -253,4 +253,9 @@ export function AppSidebar({
             <SidebarRail />
         </Sidebar>
     );
+}
+
+/* Space in the unit that fits, written like the quota beside it: "2 GiB", "1.6 KiB", never "2.0 GiB" next to "2 GiB". */
+function formatSpace(bytes: string | number) {
+    return Number(bytes) >= 1_073_741_824 ? formatGiB(bytes) : formatBytes(bytes);
 }

@@ -87,7 +87,8 @@ function Contacts() {
                                 {message(own.error)}
                             </span>
                         ) : (
-                            <CopyValue value={own.data} label="Your fingerprint" />
+                            // Wrapped, never cut short: every group is read aloud to the other person.
+                            <CopyValue value={own.data} label="Your fingerprint" wrap />
                         )}
                     </div>
                     <p className="text-sm leading-relaxed text-muted-foreground">

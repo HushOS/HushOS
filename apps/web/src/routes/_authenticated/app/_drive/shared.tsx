@@ -62,7 +62,7 @@ function Shared() {
             <PageHeader
                 eyebrow="Workspace"
                 title="Shared"
-                description="What others gave you a key to, and what you share out by account or by link. Bytes stay in the owner’s storage; stopping a share takes effect on the next request."
+                description="Files and folders people have shared with you, and what you have shared with others by account or by link."
             >
                 <div
                     role="tablist"
