@@ -1,0 +1,44 @@
+apps/web/src/components/auth-layout.tsx
+  s_de0e5293e39e1a::t_4045c3df244a62 5-8,11-14,52,60
+  s_de0e5293e39e1a::t_3d313119fe3cb6 61-62
+apps/ios/App/NodeActions.swift
+  s_de0e5293e39e1a::t_09176443396731 62,71-76,211,223-224,250-253
+packages/db/src/drive.changes.test.ts
+  s_de0e5293e39e1a::t_a84df9ba51e948 76-90
+apps/ios/App/NodeRow.swift
+  s_de0e5293e39e1a::t_09176443396731 9-10,51
+apps/ios/App/BrowseView.swift
+  s_de0e5293e39e1a::t_09176443396731 103,105-124,128-129,135,152-153,155-158
+apps/ios/App/RecentsView.swift
+  s_de0e5293e39e1a::t_09176443396731 342
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_c56099773c575f 632-634
+  s_de0e5293e39e1a::t_e4e2cd37d92b3f 77-78,182-185
+  s_de0e5293e39e1a::t_d0783564b847b4 74-76,180-181,251-257
+  s_de0e5293e39e1a::t_2579bfb15daaf0 177-178,190,200-206
+  s_de0e5293e39e1a::t_8a85cad1f48ae7 207
+packages/db/src/drive.ts
+  s_de0e5293e39e1a::t_a84df9ba51e948 643-644,710
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_de0e5293e39e1a::t_c56099773c575f 73,85-86,88-92,189-194,202-205
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_c56099773c575f 496-500
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_de0e5293e39e1a::t_c56099773c575f 55,60-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8bc1eb538d84f4ed6890b72c06caf21115bab48a",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
