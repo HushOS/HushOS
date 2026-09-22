@@ -70,14 +70,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
             Text(item.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
             HorizontalDivider()
             if (onSelect != null) Action("Select", Icons.Outlined.Checklist) { onSelect(); dismiss() }
-            Action("Rename", Icons.Outlined.Edit) { sheet = Sheet.RENAME }
-            if (!item.isFolder) {
-                val kept = Offline.isKept(context, item.id)
-                Action(if (kept) "Remove download" else "Keep downloaded", if (kept) Icons.Outlined.CloudOff else Icons.Outlined.DownloadForOffline) { model.setKeptDownloaded(item, !kept); dismiss() }
-            }
-            Action("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
-            Action("Cut", Icons.Outlined.ContentCut) { model.cut(listOf(item)); dismiss() }
-            Action("Move to…", Icons.Outlined.DriveFileMove) { sheet = Sheet.MOVE }
+            // Sharing first, as the drives order it: it is what a long press is most often for.
             Action("Share", Icons.Outlined.Link) { sheet = Sheet.LINKS }
             if (!item.isFolder) {
                 Action("Send a copy", Icons.Outlined.Share) {
@@ -89,8 +82,14 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
                         }
                     }
                 }
-                Action("Versions", Icons.Outlined.History) { sheet = Sheet.VERSIONS }
+                val kept = Offline.isKept(context, item.id)
+                Action(if (kept) "Remove download" else "Keep downloaded", if (kept) Icons.Outlined.CloudOff else Icons.Outlined.DownloadForOffline) { model.setKeptDownloaded(item, !kept); dismiss() }
             }
+            Action("Rename", Icons.Outlined.Edit) { sheet = Sheet.RENAME }
+            Action("Move to…", Icons.Outlined.DriveFileMove) { sheet = Sheet.MOVE }
+            Action("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
+            Action("Cut", Icons.Outlined.ContentCut) { model.cut(listOf(item)); dismiss() }
+            if (!item.isFolder) Action("Versions", Icons.Outlined.History) { sheet = Sheet.VERSIONS }
             Action("Tags", Icons.Outlined.Label) { sheet = Sheet.TAGS }
             Action("Info", Icons.Outlined.Info) { sheet = Sheet.INFO }
             HorizontalDivider()
@@ -187,7 +186,12 @@ private fun VersionsSheet(model: DriveViewModel, item: Opened, dismiss: () -> Un
     var versions by remember { mutableStateOf<List<VersionListView>?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    LaunchedEffect(item.id) { versions = model.versions(item) }
+    var sizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    LaunchedEffect(item.id) {
+        versions = model.versions(item)
+        // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.
+        sizes = model.versionSizes(item, versions.orEmpty())
+    }
     ModalBottomSheet(onDismissRequest = dismiss) {
         Text("Versions", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
         LazyColumn {
@@ -195,7 +199,10 @@ private fun VersionsSheet(model: DriveViewModel, item: Opened, dismiss: () -> Un
                 val created = runCatching { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(Instant.parse(version.createdAt).toEpochMilli())) }.getOrDefault(version.createdAt)
                 ListItem(
                     headlineContent = { Text(created) },
-                    supportingContent = { Text(if (version.current) "Current version" else if (version.status == "ready") "Earlier version" else version.status) },
+                    supportingContent = {
+                        val what = if (version.current) "Current version" else if (version.status == "ready") "Earlier version" else version.status
+                        Text(listOfNotNull(what, sizes[version.id]?.let { formatBytes(it) }).joinToString(" · "))
+                    },
                     trailingContent = {
                         if (!version.current && version.status == "ready") TextButton(onClick = { model.restoreVersion(version, item); dismiss() }) { Text("Restore") }
                     },

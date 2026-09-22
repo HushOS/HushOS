@@ -71,6 +71,11 @@ import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.FilterList
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -169,13 +174,20 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                     title = { Text(current?.name ?: "Files") },
                     navigationIcon = { if (current != null) IconButton(onClick = { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
                     actions = {
-                        // The order, on the title line where the drives put it.
+                        // One control for how the list is shown: its label is the order, its menu sorts and filters by a tag
+                        // (only the tags this folder's items carry), and nothing on the page comes and goes.
                         Box {
-                            TextButton(onClick = { sortMenu = true }) {
+                            val here = folderId?.let { state.folders[it] } ?: emptyList()
+                            val folderTags = state.tags.tags.filter { tag -> here.any { it.id in state.tags.nodesWith(tag.id) } }
+                            // The funnel says the menu filters as well as sorts; the words say the order in force.
+                            TextButton(onClick = { sortMenu = true }, modifier = Modifier.semantics { contentDescription = "Sort and filter" }) {
+                                Icon(Icons.Outlined.FilterList, null, modifier = Modifier.padding(end = 6.dp).size(18.dp),
+                                    tint = if (tagFilter != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(sortLabel(sortKey))
                                 Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.padding(start = 4.dp).size(16.dp))
                             }
                             DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                                Text("Sort by", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
                                 for (key in listOf("name", "modified", "size")) DropdownMenuItem(
                                     text = { Text(sortLabel(key)) },
                                     trailingIcon = { if (key == sortKey) Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.size(16.dp)) },
@@ -184,6 +196,14 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                         prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
                                         sortMenu = false
                                     },
+                                )
+                                androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                                Text("Tag", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                                if (folderTags.isEmpty()) DropdownMenuItem(text = { Text("No tags in this folder") }, enabled = false, onClick = {})
+                                for (tag in folderTags) DropdownMenuItem(
+                                    text = { TagPill(tag, selected = tag.id == tagFilter) },
+                                    trailingIcon = { if (tag.id == tagFilter) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(16.dp)) },
+                                    onClick = { tagFilter = if (tagFilter == tag.id) null else tag.id; sortMenu = false },
                                 )
                             }
                         }
@@ -228,10 +248,13 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
         if (folderId != null && folderId in state.loading && !state.folders.containsKey(folderId)) {
             androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
         }
-        if (state.tags.tags.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 8.dp))
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (tag in state.tags.tags) TagPill(tag, selected = tagFilter == tag.id) { tagFilter = if (tagFilter == tag.id) null else tag.id }
+        state.tags.tags.firstOrNull { it.id == tagFilter }?.let { tag ->
+            // The filter says so where the rows are, so a shorter list never looks like missing files.
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Filtered by", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+                TagPill(tag, selected = true)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { tagFilter = null }) { Text("Clear") }
             }
         }
         state.clipboard?.let { (clip, cut) ->
@@ -606,7 +629,9 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.trash, key = { it.item.id }) { entry ->
-                    NodeRow(model, state, entry.item, onClick = { selected = entry }, onLongClick = { selected = entry })
+                    val trashed = entry.item.node.trashedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+                        ?.let { "Trashed " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(it)) }
+                    NodeRow(model, state, entry.item, onClick = { selected = entry }, onLongClick = { selected = entry }, note = trashed)
                 }
             }
         }

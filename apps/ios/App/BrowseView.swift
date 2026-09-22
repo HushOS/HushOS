@@ -100,22 +100,39 @@ struct FolderView: View {
                     HStack(spacing: 16) {
                         if isRoot { Text("Files").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil) }
                         Spacer()
-                        // The order, on the title line beside Select.
+                        // One control for how the list is shown: the funnel says it filters, the words say the order in force.
                         Menu {
-                            ForEach(SortKey.allCases, id: \.self) { key in
-                                Button {
-                                    if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
-                                } label: {
-                                    if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                            Section("Sort by") {
+                                ForEach(SortKey.allCases, id: \.self) { key in
+                                    Button {
+                                        if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
+                                    } label: {
+                                        if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                                    }
+                                }
+                            }
+                            Section("Tag") {
+                                // Only the tags this folder's items carry.
+                                let here = Set((store.folders[folderId] ?? []).map(\.id))
+                                let folderTags = store.tags.tags.filter { tag in !here.isDisjoint(with: store.tags.nodes(with: tag.id)) }
+                                if folderTags.isEmpty { Text("No tags in this folder") }
+                                ForEach(folderTags) { tag in
+                                    Button {
+                                        tagFilter = tagFilter == tag.id ? nil : tag.id
+                                    } label: {
+                                        if tagFilter == tag.id { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
+                                    }
                                 }
                             }
                         } label: {
-                            HStack(spacing: 3) {
+                            HStack(spacing: 4) {
+                                Image(systemName: tagFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
                                 Text(sortKey.label)
                                 Image(systemName: sortAscending ? "arrow.up" : "arrow.down").font(.caption2.weight(.semibold))
                             }
                             .font(.subheadline.weight(.medium)).textCase(nil)
                         }
+                        .accessibilityLabel("Sort and filter")
                         Button(selecting ? "Done" : "Select") {
                             selecting.toggle()
                             if !selecting { selection = [] }
@@ -132,17 +149,13 @@ struct FolderView: View {
                     }
                     .padding(.horizontal, 14).padding(.vertical, 11)
                     .glassEffect(.regular, in: .capsule)
-                    if !store.tags.tags.isEmpty {
+                    if let tag = store.tags.tags.first(where: { $0.id == tagFilter }) {
+                        // The filter says so where the rows are, so a shorter list never looks like missing files.
                         HStack(spacing: 8) {
-                            Text("Tags").font(.subheadline.weight(.semibold)).foregroundStyle(Color(.label)).textCase(nil)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(store.tags.tags) { tag in
-                                        Button { tagFilter = tagFilter == tag.id ? nil : tag.id } label: { TagPill(tag: tag, selected: tagFilter == tag.id) }
-                                            .buttonStyle(.plain)
-                                    }
-                                }
-                            }
+                            Text("Filtered by").font(.subheadline).foregroundStyle(.secondary).textCase(nil)
+                            TagPill(tag: tag, selected: true)
+                            Spacer()
+                            Button("Clear") { tagFilter = nil }.font(.subheadline).textCase(nil)
                         }
                     }
                 }

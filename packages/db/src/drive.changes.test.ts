@@ -73,6 +73,21 @@ beforeEach(async () => {
 afterAll(closeDatabase);
 
 describe('change feeds', () => {
+    test("trash and restore reach the feed but leave the item's date alone", async () => {
+        const a = await folder(rootId, rootEpoch);
+        const before = a.updatedAt;
+        const trashed = await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: a.id });
+        if (trashed.status !== 'ok') throw new Error(trashed.status);
+        expect(trashed.node.trashedAt).not.toBeNull();
+        expect(trashed.node.updatedAt).toEqual(before);
+        expect(trashed.node.changeSeq).toBeGreaterThan(a.changeSeq);
+        const restored = await drive.restoreNode({ workspaceId: owner.workspaceId, nodeId: a.id });
+        if (restored.status !== 'ok') throw new Error(restored.status);
+        expect(restored.node.trashedAt).toBeNull();
+        expect(restored.node.updatedAt).toEqual(before);
+        expect(restored.node.changeSeq).toBeGreaterThan(trashed.node.changeSeq);
+    });
+
     test('the workspace feed is ordered, cursored, and carries tombstones', async () => {
         const start = (await drive.getPersonalWorkspace(owner.userId))!.changeSeq;
         const a = await folder(rootId, rootEpoch);

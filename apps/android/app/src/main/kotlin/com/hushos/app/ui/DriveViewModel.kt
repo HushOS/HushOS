@@ -493,6 +493,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun versions(item: Opened): List<VersionListView> = io { it.versions(item.id) } ?: emptyList()
 
+    /* Each version's size, from its sealed envelope; a version that will not open here is left out. */
+    suspend fun versionSizes(item: Opened, versions: List<VersionListView>): Map<String, Long> = quietly { vault ->
+        versions.mapNotNull { v -> runCatching { v.id to vault.openVersion(item, v).content.plaintextSize.toLong() }.getOrNull() }.toMap()
+    } ?: emptyMap()
+
     /* What to do with a picked file whose name a file in the folder already has, as the web asks. */
     enum class Conflict { REPLACE, KEEP_BOTH, SKIP }
 

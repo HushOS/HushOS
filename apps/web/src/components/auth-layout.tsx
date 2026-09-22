@@ -2,16 +2,16 @@ import type { ReactNode } from 'react';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 
 /*
- * Every line below states what the current code does. Keep it that honest:
- * OPAQUE keeps the password on the device, account keys are made and wrapped
- * on the device, and the repository is public. Drive content encryption is
- * not implemented yet, so it is never mentioned here.
+ * Every line below states what the current code does, in the landing page's
+ * words rather than protocol names: the password never leaves the device
+ * (OPAQUE), files are sealed on the device before upload, the account key is
+ * made and wrapped here, and the repository is public.
  */
 const ledger = [
-    ['Protocol', 'OPAQUE'],
-    ['Password sent', 'Never'],
-    ['Key created on', 'This device'],
-    ['Source', 'AGPL · Public'],
+    ['Your password', 'Never sent to us'],
+    ['Your files', 'Locked on your device'],
+    ['Your key', 'Made on this device'],
+    ['The code', 'Open for anyone to read'],
 ] as const;
 
 export type AuthPurpose = 'login' | 'register' | 'recover';
@@ -49,7 +49,7 @@ export function SessionLedger({ purpose = 'login' }: { purpose?: AuthPurpose }) 
     return (
         <aside className="hidden w-72 shrink-0 flex-col gap-8 lg:flex">
             <div>
-                <p className="eyebrow text-muted-foreground">Session ledger</p>
+                <p className="eyebrow text-muted-foreground">At a glance</p>
                 <dl className="mt-2 text-sm">
                     {ledger.map(([key, value]) => (
                         <div
@@ -57,7 +57,9 @@ export function SessionLedger({ purpose = 'login' }: { purpose?: AuthPurpose }) 
                             className="flex justify-between gap-6 border-b border-dotted border-rule py-2"
                         >
                             <dt className="text-muted-foreground">{key}</dt>
-                            <dd className={value === 'Never' ? 'font-bold' : ''}>{value}</dd>
+                            <dd className={value === 'Never sent to us' ? 'font-bold' : ''}>
+                                {value}
+                            </dd>
                         </div>
                     ))}
                 </dl>

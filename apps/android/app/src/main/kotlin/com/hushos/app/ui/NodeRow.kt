@@ -52,12 +52,13 @@ fun mimeOf(item: Opened): String? = item.metadata.mime ?: android.webkit.MimeTyp
 /* One node in a list: a thumbnail or a type icon, the name, size and date. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () -> Unit, onLongClick: () -> Unit, note: String? = null) {
     LaunchedEffect(item.id) { model.thumbnail(item) }
     val thumbnail = state.thumbnails[item.id]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
     val subtitle = buildList {
-        item.modifiedMillis?.let { add(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it))) }
+        // A note (the trash's "Trashed Sep 23") takes the date's place.
+        if (note != null) add(note) else item.modifiedMillis?.let { add(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it))) }
         item.size?.let { add(formatBytes(it)) }
         if (item.isFolder) add("Folder")
     }.joinToString(" · ")

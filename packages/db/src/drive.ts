@@ -640,7 +640,8 @@ export async function trashNode(input: { workspaceId: string; nodeId: string }) 
         if (chain.trashed) return { status: 'trashed' as const };
         const [node] = await tx
             .update(driveNodes)
-            .set({ trashedAt: new Date(), changeSeq, updatedAt: new Date() })
+            // Trashing is not a change to the item: its date stays what it was, trashedAt says when.
+            .set({ trashedAt: new Date(), changeSeq })
             .where(eq(driveNodes.id, input.nodeId))
             .returning(nodeColumns);
         return { status: 'ok' as const, node: node as NodeRow };
@@ -706,10 +707,10 @@ export async function restoreNode(input: {
         if (removal?.removedAt) return { status: 'removed' as const };
         const parent = chain.node.parent_id ? await walk(tx, chain.node.parent_id) : null;
         const parentTrashed = parent?.trashed ?? false;
+        // Restoring is not a change either: a folder comes back with the date it had, not today's.
         const set: Partial<typeof driveNodes.$inferInsert> = {
             trashedAt: null,
             changeSeq,
-            updatedAt: new Date(),
         };
         if (parentTrashed) {
             if (!input.toRoot) return { status: 'parent-trashed' as const };

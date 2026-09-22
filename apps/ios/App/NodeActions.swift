@@ -59,21 +59,21 @@ struct NodeMenu: View {
     @Binding var action: NodeAction?
 
     var body: some View {
-        Button("Rename", systemImage: "pencil") { action = .rename(item) }
-        Button("Copy", systemImage: "doc.on.doc") { store.copy([item]) }
-        Button("Cut", systemImage: "scissors") { store.cut([item]) }
-        Button("Move to…", systemImage: "folder") { action = .move(item) }
+        // Sharing first, as the drives order it: it is what a long press is most often for.
         Button("Share…", systemImage: "link") { action = .link(item) }
         if !item.isFolder {
             Button("Send a copy", systemImage: "square.and.arrow.up") { action = .share(item) }
-            Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) }
-        }
-        if !item.isFolder {
             let kept = Offline.isKept(item.id)
             Button(kept ? "Remove Download" : "Keep Downloaded", systemImage: kept ? "icloud.slash" : "arrow.down.circle") {
                 Task { await store.setKeptDownloaded(item, !kept) }
             }
         }
+        Divider()
+        Button("Rename", systemImage: "pencil") { action = .rename(item) }
+        Button("Move to…", systemImage: "folder") { action = .move(item) }
+        Button("Copy", systemImage: "doc.on.doc") { store.copy([item]) }
+        Button("Cut", systemImage: "scissors") { store.cut([item]) }
+        if !item.isFolder { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
         Button("Tags", systemImage: "tag") { action = .tags(item) }
         Button("Get Info", systemImage: "info.circle") { action = .info(item) }
         Divider()
@@ -208,6 +208,7 @@ struct VersionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     let item: Opened
     @State private var versions: [VersionListView] = []
+    @State private var sizes: [String: UInt64] = [:]
     @State private var loaded = false
     @State private var preview: URL?
 
@@ -219,7 +220,8 @@ struct VersionsSheet: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(parseDate(version.createdAt)?.formatted(date: .abbreviated, time: .shortened) ?? version.createdAt)
-                            Text(version.current ? "Current version" : (version.status == "ready" ? "Earlier version" : version.status.capitalized))
+                            Text([version.current ? "Current version" : (version.status == "ready" ? "Earlier version" : version.status.capitalized),
+                                  sizes[version.id].map { formatBytes(Int64($0)) }].compactMap { $0 }.joined(separator: " · "))
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -245,6 +247,10 @@ struct VersionsSheet: View {
         .task {
             versions = (try? await store.vault.versions(of: item.id)) ?? []
             loaded = true
+            // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.
+            for version in versions {
+                if let opened = try? await store.vault.openVersion(item, version: version) { sizes[version.id] = opened.content.plaintextSize }
+            }
         }
     }
 }

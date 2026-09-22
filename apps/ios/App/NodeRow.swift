@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct NodeRow: View {
     @Environment(DriveStore.self) private var store
     let item: Opened
+    /* Takes the date's place, as the trash's "Trashed 23 Sep". */
+    var note: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -46,7 +48,7 @@ struct NodeRow: View {
 
     private var subtitle: String {
         var parts: [String] = []
-        if let modified = item.modified { parts.append(modified.formatted(date: .abbreviated, time: .shortened)) }
+        if let note { parts.append(note) } else if let modified = item.modified { parts.append(modified.formatted(date: .abbreviated, time: .shortened)) }
         if let size = item.size { parts.append(formatBytes(Int64(size))) }
         if item.isFolder { parts.append("Folder") }
         return parts.joined(separator: " · ")

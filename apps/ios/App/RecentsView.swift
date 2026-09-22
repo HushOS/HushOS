@@ -339,7 +339,7 @@ struct TrashView: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(store.trash, id: \.item.id) { entry in
-                NodeRow(item: entry.item)
+                NodeRow(item: entry.item, note: parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" })
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { Task { await store.purge(entry.item) } } label: { Label("Delete", systemImage: "trash.slash") }
                         Button { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }.tint(.green)
