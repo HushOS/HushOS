@@ -1,0 +1,33 @@
+package.json
+  s_de0e5293e39e1a::t_f0679768e50341 31-32
+apps/ios/App/HushOS-Simulator.entitlements
+  s_de0e5293e39e1a::t_6082dd96ae5b2b 1-16
+apps/ios/App/HushOS.xcconfig
+  s_de0e5293e39e1a::t_9cd4dc7d754be5 1-4
+apps/ios/scripts/run-device.sh
+  s_de0e5293e39e1a::t_efafe23d87dd1a 9
+  s_de0e5293e39e1a::t_f0679768e50341 1-8,10-16
+apps/ios/project.yml
+  s_de0e5293e39e1a::t_9cd4dc7d754be5 39-42
+  s_de0e5293e39e1a::t_fb3f54bc7042e8 43
+apps/android/AGENTS.md
+  s_de0e5293e39e1a::t_25a32c8220b168 41-45
+apps/ios/AGENTS.md
+  s_de0e5293e39e1a::t_b417818894818e 47-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "32d146194046db9111a8eaf134f9300f7b90c119",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
