@@ -91,6 +91,30 @@ jobs:
             # blow the hook budget and its download events never fire.
             # Streamed, not grouped: Turborepo holds a task's output until it ends on
             # this runner, and a dev server never ends, so its log stayed empty.
+            # Started here rather than by Playwright: on this runner Vite now and then
+            # never listens and prints nothing, and Playwright's single 180 s wait fails
+            # the job. A server that has not answered in two minutes is killed and
+            # started again; the suite reuses whichever one answers.
+            - name: Start the dev server, again if it never listens
+              run: |
+                  mkdir -p scratchpad
+                  for attempt in 1 2 3; do
+                      setsid bash -c 'exec bun run dev >> scratchpad/e2e-server.log 2>&1' &
+                      pid=$!
+                      for i in $(seq 1 40); do
+                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
+                          sleep 3
+                      done
+                      echo "attempt $attempt: no answer in 120 s, starting again"
+                      kill -- -"$pid" 2>/dev/null || true
+                      pkill -f 'vite --strictPort' || true
+                      sleep 3
+                  done
+                  echo "the dev server never listened"
+                  exit 1
+              env:
+                  TRUSTED_PROXY_HEADER: x-forwarded-for
+                  TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the dev server
               run: bun run e2e -- --project=chromium --project=mobile
               env:
