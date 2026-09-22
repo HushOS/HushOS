@@ -1,0 +1,41 @@
+apps/android/app/src/main/AndroidManifest.xml
+  s_de0e5293e39e1a::t_3353e138f1e9f9 4
+apps/ios/App/BrowseView.swift
+  s_de0e5293e39e1a::t_895991e1804e5e 39-41,59,132-149,225,362-395
+  s_de0e5293e39e1a::t_9daf69c258fa72 396
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_de0e5293e39e1a::t_1d6f78043008d5 93,95
+  s_de0e5293e39e1a::t_2542b2361bd398 94,96
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_895991e1804e5e 68-72,133-138,163-164,169,171,208-227,618-629
+  s_de0e5293e39e1a::t_2542b2361bd398 371
+  s_de0e5293e39e1a::t_f03f20fa7cdc5d 630
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_de0e5293e39e1a::t_2542b2361bd398 82-83
+  s_de0e5293e39e1a::t_11c78fe6581c7e 78,92,95
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_3353e138f1e9f9 101-105
+  s_de0e5293e39e1a::t_895991e1804e5e 92-100,106-108,156-159
+  s_de0e5293e39e1a::t_78eabe247fa880 110-111
+  s_de0e5293e39e1a::t_2542b2361bd398 112,183,214-215
+  s_de0e5293e39e1a::t_69da7f1f1046f5 160
+apps/ios/App/DriveStore.swift
+  s_de0e5293e39e1a::t_2542b2361bd398 126-129
+  s_de0e5293e39e1a::t_895991e1804e5e 2,80-81,84-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "78ed16205486a60450799a9e18c8669935076471",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
