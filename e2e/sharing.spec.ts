@@ -64,7 +64,7 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await expect(dialog(owner)).toContainText('Share “Project”');
     await dialog(owner).getByRole('combobox', { name: 'Contact' }).click();
     await owner.getByRole('option', { name: /E2E Tester/ }).click();
-    await dialog(owner).getByLabel('Can edit').check();
+    await dialog(owner).getByRole('radio', { name: 'Can edit' }).check();
     await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('can edit');
