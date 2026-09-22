@@ -33,6 +33,7 @@ import {
     Share2Icon,
     ShieldCheckIcon,
     Trash2Icon,
+    SearchIcon,
     UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
@@ -198,8 +199,10 @@ function NavGroup({ items, pathname }: { items: NavItem[]; pathname: string }) {
 
 export function AppSidebar({
     user,
+    onSearch,
 }: {
     user: { id: string; name: string; email: string; role?: 'member' | 'admin' };
+    onSearch: () => void;
 }) {
     const pathname = useLocation({ select: (location) => location.pathname });
     const { state, setOpenMobile } = useSidebar();
@@ -216,6 +219,19 @@ export function AppSidebar({
                     compact={state === 'collapsed'}
                     className="h-9 self-start rounded-md border-r-0 px-2.5 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
                 />
+                {/* Search lives here, not beside the page title, so it never shifts as the title changes. */}
+                <button
+                    type="button"
+                    onClick={onSearch}
+                    aria-label="Search"
+                    className="mt-2 flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border border-rule bg-muted px-2.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                >
+                    <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
+                    <span className="truncate group-data-[collapsible=icon]:hidden">Search</span>
+                    <kbd className="ml-auto text-[11px] group-data-[collapsible=icon]:hidden">
+                        / ⌘K
+                    </kbd>
+                </button>
             </SidebarHeader>
             <SidebarContent className="gap-3">
                 <SidebarGroup className={group}>

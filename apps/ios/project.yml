@@ -1,0 +1,168 @@
+# XcodeGen spec: `xcodegen generate` (or `bun run ios:project`) writes HushOS.xcodeproj, which is not committed.
+name: HushOS
+options:
+    bundleIdPrefix: com.hushos
+    deploymentTarget:
+        iOS: '26.0'
+    xcodeVersion: '27.0'
+    createIntermediateGroups: true
+    generateEmptyDirectories: true
+    groupSortPosition: top
+settings:
+    base:
+        SWIFT_VERSION: '6.0'
+        SWIFT_STRICT_CONCURRENCY: complete
+        IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+packages:
+    HushOSCore:
+        path: Packages/HushOSCore
+    HushOSKit:
+        path: Packages/HushOSKit
+targets:
+    HushOS:
+        type: application
+        platform: iOS
+        sources:
+            - path: App
+        dependencies:
+            - package: HushOSKit
+            - target: HushOSFiles
+              embed: true
+            - target: HushOSFilesUI
+              embed: true
+            - target: HushOSWidgets
+              embed: true
+        entitlements:
+            path: App/HushOS.entitlements
+            properties:
+                com.apple.security.application-groups: [group.com.hushos.app]
+                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                # Lets simulator debug builds enable the Files location without the manual toggle (see FilesDomain).
+                com.apple.developer.fileprovider.testing-mode: true
+        info:
+            path: App/Info.plist
+            properties:
+                CFBundleDisplayName: HushOS
+                CFBundleName: HushOS
+                CFBundleShortVersionString: '0.1.0'
+                CFBundleVersion: '1'
+                UILaunchScreen:
+                    UIColorName: LaunchBackground
+                    UIImageName: SplashMark
+                UISupportedInterfaceOrientations:
+                    [
+                        UIInterfaceOrientationPortrait,
+                        UIInterfaceOrientationLandscapeLeft,
+                        UIInterfaceOrientationLandscapeRight,
+                    ]
+                UISupportedInterfaceOrientations~ipad:
+                    [
+                        UIInterfaceOrientationPortrait,
+                        UIInterfaceOrientationPortraitUpsideDown,
+                        UIInterfaceOrientationLandscapeLeft,
+                        UIInterfaceOrientationLandscapeRight,
+                    ]
+                CFBundleURLTypes:
+                    - CFBundleURLName: com.hushos.app
+                      CFBundleURLSchemes: [hushos]
+                NSAppTransportSecurity:
+                    NSAllowsLocalNetworking: true
+                LSSupportsOpeningDocumentsInPlace: false
+                UIFileSharingEnabled: false
+                ITSAppUsesNonExemptEncryption: false
+                NSFileProviderDomainUsageDescription: HushOS keeps your encrypted files available in the Files app.
+                NSSupportsLiveActivities: true
+        settings:
+            base:
+                PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app
+                ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+    HushOSFiles:
+        type: app-extension
+        platform: iOS
+        sources:
+            - path: Files
+        dependencies:
+            - package: HushOSKit
+            - sdk: FileProvider.framework
+        entitlements:
+            path: Files/HushOSFiles.entitlements
+            properties:
+                com.apple.security.application-groups: [group.com.hushos.app]
+                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+        info:
+            path: Files/Info.plist
+            properties:
+                CFBundleDisplayName: HushOS Files
+                CFBundleShortVersionString: '0.1.0'
+                CFBundleVersion: '1'
+                NSExtension:
+                    NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+                    NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+                    NSExtensionFileProviderSupportsEnumeration: true
+                    NSExtensionFileProviderSupportsPinning: true
+        settings:
+            base:
+                PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.files
+                # Callback-based Objective-C API: Swift 5 mode keeps the sending-closure checks as warnings.
+                SWIFT_VERSION: '5'
+                SWIFT_STRICT_CONCURRENCY: minimal
+    HushOSFilesUI:
+        type: app-extension
+        platform: iOS
+        sources:
+            - path: FilesUI
+        dependencies:
+            - package: HushOSKit
+            - sdk: FileProviderUI.framework
+        entitlements:
+            path: FilesUI/HushOSFilesUI.entitlements
+            properties:
+                com.apple.security.application-groups: [group.com.hushos.app]
+                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+        info:
+            path: FilesUI/Info.plist
+            properties:
+                CFBundleDisplayName: HushOS
+                CFBundleShortVersionString: '0.1.0'
+                CFBundleVersion: '1'
+                NSExtension:
+                    NSExtensionPointIdentifier: com.apple.fileprovider-actionsui
+                    NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderUIController
+        settings:
+            base:
+                PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.filesui
+                SWIFT_VERSION: '5'
+                SWIFT_STRICT_CONCURRENCY: minimal
+    HushOSWidgets:
+        type: app-extension
+        platform: iOS
+        sources:
+            - path: Widgets
+        dependencies:
+            - package: HushOSKit
+            - sdk: WidgetKit.framework
+            - sdk: SwiftUI.framework
+            - sdk: ActivityKit.framework
+        info:
+            path: Widgets/Info.plist
+            properties:
+                CFBundleDisplayName: HushOS
+                CFBundleShortVersionString: '0.1.0'
+                CFBundleVersion: '1'
+                NSExtension:
+                    NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        settings:
+            base:
+                PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app.widgets
+schemes:
+    HushOS:
+        build:
+            targets:
+                HushOS: all
+        run:
+            config: Debug

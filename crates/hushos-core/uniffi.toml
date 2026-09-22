@@ -1,0 +1,8 @@
+[bindings.swift]
+module_name = "HushOSCore"
+ffi_module_name = "HushOSCoreFFI"
+generate_module_map = true
+
+[bindings.kotlin]
+package_name = "com.hushos.core"
+cdylib_name = "hushos_core"

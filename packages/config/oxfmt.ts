@@ -13,6 +13,8 @@ export default defineConfig({
         '**/.nitro/**',
         '**/.tanstack/**',
         '**/.turbo/**',
+        '**/.build/**',
+        '**/DerivedData/**',
         '**/routeTree.gen.ts',
         '**/src/rendered/**',
         'bun.lock',

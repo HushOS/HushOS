@@ -1,3 +1,12 @@
 {
-    "recommendations": ["oxc.oxc-vscode", "bradlc.vscode-tailwindcss", "vitest.explorer"]
+    "recommendations": [
+        "oxc.oxc-vscode",
+        "bradlc.vscode-tailwindcss",
+        "vitest.explorer",
+        "rust-lang.rust-analyzer",
+        "swiftlang.swift-vscode",
+        "fwcd.kotlin",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb"
+    ]
 }

@@ -19,6 +19,7 @@ import { CopyValue } from '@/components/copy-value';
 import { EXPIRIES, expiryDate, FIELD_ROW, LinkRow, type Expiry } from '@/components/drive/link-row';
 import { QrCode } from '@/components/qr-code';
 import { Input } from '@/components/ui/input';
+import { RadioGroup, RadioItem } from '@/components/ui/radio-group';
 import {
     Select,
     SelectContent,
@@ -230,21 +231,14 @@ function ShareForm({
                     </div>
                     <div className={FIELD_ROW}>
                         <span className="eyebrow text-muted-foreground">Role</span>
-                        <div className="flex items-center gap-5 text-sm">
-                            {(['viewer', 'editor'] as const).map((option) => (
-                                <label key={option} className="flex h-11 items-center gap-2">
-                                    <input
-                                        type="radio"
-                                        name={`${id}-role`}
-                                        value={option}
-                                        checked={role === option}
-                                        onChange={() => setRole(option)}
-                                        className="accent-primary"
-                                    />
-                                    {option === 'viewer' ? 'Can view' : 'Can edit'}
-                                </label>
-                            ))}
-                        </div>
+                        <RadioGroup
+                            name={`${id}-role`}
+                            value={role}
+                            onValueChange={(value) => setRole(value as ShareRole)}
+                        >
+                            <RadioItem value="viewer">Can view</RadioItem>
+                            <RadioItem value="editor">Can edit</RadioItem>
+                        </RadioGroup>
                     </div>
                     {error && (
                         <p role="alert" className="py-3 text-xs text-destructive">

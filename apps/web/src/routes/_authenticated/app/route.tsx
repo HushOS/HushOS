@@ -173,7 +173,7 @@ function AppLayout() {
             style={{ '--sidebar-width': '14rem' } as CSSProperties}
         >
             <NavigationBar />
-            <AppSidebar user={user} />
+            <AppSidebar user={user} onSearch={() => setPaletteOpen(true)} />
             {/*
              * The one sheet every page lies on. On a desk-sized screen it keeps its place, a margin
              * of desk on every side, and the page scrolls inside it; on a phone it is full-bleed
@@ -185,16 +185,16 @@ function AppLayout() {
                     <div className="text-sm font-semibold text-foreground">
                         <TextSwap>{sectionTitle(pathname)}</TextSwap>
                     </div>
+                    <div className="flex-1" />
+                    {/* On a phone the sidebar is a sheet, so search stays reachable up here. */}
                     <button
                         type="button"
                         onClick={() => setPaletteOpen(true)}
-                        className="ml-2 flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-rule bg-muted px-2.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground sm:max-w-sm"
+                        aria-label="Search"
+                        className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground md:hidden"
                     >
-                        <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
-                        <span className="truncate">Search</span>
-                        <kbd className="ml-auto text-[11px] max-sm:hidden">/ ⌘K</kbd>
+                        <SearchIcon aria-hidden="true" className="size-4" />
                     </button>
-                    <div className="flex-1 max-sm:hidden" />
                     <DeviceControl
                         user={user}
                         onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}

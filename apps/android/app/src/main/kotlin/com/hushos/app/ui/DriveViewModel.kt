@@ -1,0 +1,416 @@
+package com.hushos.app.ui
+
+import android.app.Application
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.hushos.app.BuildConfig
+import com.hushos.app.data.Auth
+import com.hushos.app.data.BillingSummary
+import com.hushos.app.data.StorageAllowance
+import com.hushos.app.data.NotAuthenticated
+import com.hushos.app.data.Contact
+import com.hushos.app.data.ContactPin
+import com.hushos.app.data.LinkView
+import com.hushos.app.data.Lookup
+import com.hushos.app.data.OwnedShare
+import com.hushos.app.data.SharedByMe
+import com.hushos.app.data.Offline
+import com.hushos.app.data.Opened
+import com.hushos.app.data.SessionUser
+import com.hushos.app.data.ShareView
+import com.hushos.app.data.TagRegistry
+import com.hushos.app.data.saveTags
+import com.hushos.app.data.tags
+import com.hushos.app.data.Shared
+import com.hushos.app.data.StorageBreakdown
+import com.hushos.app.data.TrashItem
+import com.hushos.app.data.Vault
+import com.hushos.app.data.VersionListView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+enum class Gate { CHECKING, SIGNED_OUT, SIGNED_IN }
+
+data class Transfer(val title: String, val fraction: Float)
+
+data class DriveState(
+    val gate: Gate = Gate.CHECKING,
+    val user: SessionUser? = null,
+    val origin: String = "https://hushos.com",
+    val rootId: String? = null,
+    val folders: Map<String, List<Opened>> = emptyMap(),
+    val recents: List<Opened> = emptyList(),
+    val trash: List<TrashItem> = emptyList(),
+    val thumbnails: Map<String, ByteArray> = emptyMap(),
+    val storage: StorageBreakdown? = null,
+    val shares: List<Vault.ShareMount>? = null,
+    val offline: List<Offline.Entry> = emptyList(),
+    val allowance: StorageAllowance? = null,
+    val tags: TagRegistry = TagRegistry.empty(),
+    /* What Copy or Cut picked up, until Paste places it. */
+    val clipboard: Pair<List<Opened>, Boolean>? = null,
+    val billing: BillingSummary? = null,
+    val transfer: Transfer? = null,
+    val error: String? = null,
+    val busy: Boolean = false,
+) {
+    /* Every item this session has opened, for search across folders. */
+    val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
+}
+
+/*
+ * What the screens read: the gate, folder listings, recents and the trash,
+ * refreshed after every write, plus thumbnails decrypted once and kept.
+ */
+class DriveViewModel(application: Application) : AndroidViewModel(application) {
+    private val context: Context get() = getApplication()
+    private val _state = MutableStateFlow(DriveState(origin = Shared.origin(application) ?: defaultOrigin()))
+    val state: StateFlow<DriveState> = _state
+    private var vault: Vault? = null
+    private val thumbnailTasks = HashSet<String>()
+
+    init {
+        viewModelScope.launch {
+            val user = withContext(Dispatchers.IO) { runCatching { Auth.currentUser(context) } }
+            when {
+                user.isSuccess && user.getOrNull() != null -> signedIn(user.getOrNull()!!)
+                user.isFailure && Shared.session(context) != null -> {
+                    val session = Shared.session(context)!!
+                    signedIn(SessionUser(session.userId, "", "", 0uL))
+                }
+                else -> _state.update { it.copy(gate = Gate.SIGNED_OUT) }
+            }
+        }
+    }
+
+    private fun signedIn(user: SessionUser) {
+        vault = Vault.fromShared(context)
+        _state.update { it.copy(gate = Gate.SIGNED_IN, user = user) }
+    }
+
+    fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
+
+    fun signIn(email: String, password: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Auth.signIn(context, state.value.origin, email, password) } }
+            result.onSuccess { signedIn(it); done(null) }.onFailure { done(it.message ?: "Please try again.") }
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { Auth.signOut(context) }
+            vault = null
+            _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
+        }
+    }
+
+    private fun sessionLost() {
+        Shared.clearSession(context)
+        vault = null
+        _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, error = "Your session ended. Sign in again.")
+    }
+
+    fun clearError() = _state.update { it.copy(error = null) }
+
+    private suspend fun <T> io(block: (Vault) -> T): T? {
+        val vault = vault ?: return null
+        return try {
+            withContext(Dispatchers.IO) { block(vault) }
+        } catch (error: NotAuthenticated) {
+            sessionLost()
+            null
+        } catch (error: Exception) {
+            _state.update { it.copy(error = error.message ?: error.toString()) }
+            null
+        }
+    }
+
+    fun loadRoot() = viewModelScope.launch {
+        if (state.value.rootId != null) return@launch
+        io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
+    }
+
+    fun refresh(folderId: String) = viewModelScope.launch {
+        io { it.listChildren(folderId) }?.let { children -> _state.update { it.copy(folders = it.folders + (folderId to children)) } }
+    }
+
+    fun refreshRecents() = viewModelScope.launch {
+        loadRoot().join()
+        io { it.recents() }?.let { recents -> _state.update { it.copy(recents = recents) } }
+    }
+
+    fun refreshTrash() = viewModelScope.launch {
+        io { it.trash() }?.let { trash -> _state.update { it.copy(trash = trash) } }
+    }
+
+    fun refreshTags() = viewModelScope.launch {
+        io { it.tags().first }?.let { tags -> _state.update { it.copy(tags = tags) } }
+    }
+
+    /* A change to the registry, saved a version up and reflected here. */
+    fun editTags(change: (TagRegistry) -> Unit) = viewModelScope.launch {
+        io { it.saveTags(change) }?.let { tags -> _state.update { it.copy(tags = tags) } }
+    }
+
+    /* The items a tag names, as far as this session can name them. */
+    suspend fun tagged(tagId: String): List<Opened> {
+        val ids = state.value.tags.nodesWith(tagId)
+        val known = state.value.everything.associateBy { it.id }
+        return io { vault -> ids.mapNotNull { id -> known[id] ?: runCatching { vault.resolve(id) }.getOrNull() } }.orEmpty()
+            .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    }
+
+    fun refreshShares() = viewModelScope.launch {
+        io { it.mountShares() }?.let { shares -> _state.update { it.copy(shares = shares) } }
+    }
+
+    fun refreshAccount() = viewModelScope.launch {
+        val allowance = withContext(Dispatchers.IO) { runCatching { Auth.storage(context) }.getOrNull() }
+        val billing = withContext(Dispatchers.IO) { runCatching { Auth.billing(context) }.getOrNull() }
+        _state.update { it.copy(allowance = allowance, billing = billing) }
+    }
+
+    /* Account actions run off the main thread and report a message back; a lost session sends the person to sign in. */
+    private fun account(block: () -> String?, done: (String?) -> Unit) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) { runCatching(block) }
+        result.onSuccess { done(it) }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: "Please try again.")
+        }
+    }
+
+    fun updateName(name: String, done: (String?) -> Unit) = account({
+        val user = Auth.updateName(context, name)
+        _state.update { it.copy(user = user) }
+        null
+    }, done)
+
+    /* The links the owner made for an item, each with its URL when the secret was kept. */
+    suspend fun links(item: Opened): List<Pair<LinkView, String?>>? = io { vault -> vault.links(item).map { it to runCatching { vault.linkUrlOf(it, item) }.getOrNull() } }
+    suspend fun createLink(item: Opened, password: String?, expiresAt: java.time.Instant?): Pair<LinkView, String>? = io { it.createLink(item, password, expiresAt) }
+    suspend fun revokeLink(link: LinkView, item: Opened): Boolean = io { it.revokeLink(link, item); true } ?: false
+    suspend fun report(item: Opened, category: String, reason: String, email: String?): Boolean? = io { it.report(item, category, reason, email) }
+    suspend fun recoveryPhrase(): String? = io { it.recoveryPhrase() }
+    suspend fun contacts(): List<ContactPin>? = io { it.contacts() }
+    suspend fun ownFingerprint(): String? = io { it.ownFingerprint() }
+    suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
+    suspend fun pin(contact: Contact): Boolean = io { it.pin(contact); true } ?: false
+    suspend fun unpin(pin: ContactPin): Boolean = io { it.unpin(pin); true } ?: false
+    suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
+    suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
+    suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }
+    /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
+    suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean {
+        val revoked = io { it.revokeShare(share, item); true } ?: return false
+        _state.update { it.copy(transfer = Transfer("Rotating keys for ${item.name}", 0f)) }
+        val ok = io { vault -> vault.rotate(item) { count -> _state.update { it.copy(transfer = Transfer("Rotating keys · $count sealed", 0f)) } }; true } ?: false
+        _state.update { it.copy(transfer = null, folders = emptyMap()) }
+        item.node.parentId?.let { refresh(it) }
+        return revoked && ok
+    }
+
+    /* A master-key rotation ends every session too; the app signs in again and hands back the new phrase. */
+    fun rotateKeys(password: String, done: (String?, String?) -> Unit) = viewModelScope.launch {
+        val email = state.value.user?.email ?: return@launch
+        val origin = state.value.origin
+        val result = withContext(Dispatchers.IO) { runCatching { val phrase = Auth.rotateKeys(context, password); phrase to Auth.signIn(context, origin, email, password) } }
+        result.onSuccess { (phrase, user) -> signedIn(user); done(phrase, null) }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(null, failure.message ?: "Please try again.")
+        }
+    }
+
+    /* The server ends every session on a password change, as on the web; the app signs in again with the new one. */
+    fun changePassword(current: String, new: String, done: (String?) -> Unit) = viewModelScope.launch {
+        val email = state.value.user?.email ?: return@launch
+        val origin = state.value.origin
+        val result = withContext(Dispatchers.IO) { runCatching { Auth.changePassword(context, current, new); Auth.signIn(context, origin, email, new) } }
+        result.onSuccess { signedIn(it); done("Your password was changed.") }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: "Please try again.")
+        }
+    }
+
+    fun deleteAccount(password: String, done: (String?) -> Unit) = account({
+        Auth.deleteAccount(context, password)
+        vault = null
+        _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
+        null
+    }, done)
+
+    fun refreshStorage() = viewModelScope.launch {
+        io { it.api.storage(it.workspaceId) }?.let { storage -> _state.update { it.copy(storage = storage) } }
+    }
+
+    fun thumbnail(item: Opened) {
+        if (!item.hasThumbnail || state.value.thumbnails.containsKey(item.id) || !thumbnailTasks.add(item.id)) return
+        viewModelScope.launch {
+            val vault = vault ?: return@launch
+            val bytes = withContext(Dispatchers.IO) { runCatching { vault.thumbnail(item.id) }.getOrNull() }
+            if (bytes != null) _state.update { it.copy(thumbnails = it.thumbnails + (item.id to bytes)) }
+            thumbnailTasks.remove(item.id)
+        }
+    }
+
+    private suspend fun write(folder: String?, block: (Vault) -> Unit): Boolean {
+        _state.update { it.copy(busy = true) }
+        val ok = io { block(it); true } ?: false
+        if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
+        _state.update { it.copy(busy = false, transfer = null) }
+        if (ok) context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
+        return ok
+    }
+
+    fun createFolder(name: String, folder: String) = viewModelScope.launch { write(folder) { it.createFolder(folder, name) } }
+    fun rename(item: Opened, name: String) = viewModelScope.launch { write(item.node.parentId) { it.rename(item.id, name) } }
+    fun move(item: Opened, folder: String) = viewModelScope.launch {
+        if (write(item.node.parentId) { it.move(item.id, folder) }) refresh(folder)
+    }
+    fun copy(items: List<Opened>) = _state.update { it.copy(clipboard = items to false) }
+    fun cut(items: List<Opened>) = _state.update { it.copy(clipboard = items to true) }
+    fun clearClipboard() = _state.update { it.copy(clipboard = null) }
+
+    /* Cut items move; copied ones are duplicated, folder trees node by node. */
+    fun paste(folder: String) = viewModelScope.launch {
+        val (all, cut) = state.value.clipboard ?: return@launch
+        if (!canPaste(folder)) return@launch
+        _state.update { it.copy(clipboard = null) }
+        // What is already here stays as it is; only the rest comes over.
+        val items = all.filter { it.node.parentId != folder }
+        val targetWorkspace = io { it.item(folder)?.node?.workspaceId } ?: items.first().node.workspaceId
+        for ((index, item) in items.withIndex()) {
+            val sameDrive = item.node.workspaceId == targetWorkspace
+            if (cut && sameDrive) { move(item, folder).join(); continue }
+            _state.update { it.copy(transfer = Transfer(if (items.size > 1) "Copying ${index + 1} of ${items.size}" else "Copying ${item.name}", 0f)) }
+            if (sameDrive) write(folder) { it.copy(item.id, folder) }
+            else {
+                // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
+                val ok = write(folder) { vault -> vault.copyAcross(item.id, folder) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } } }
+                if (ok && cut) trash(item).join()
+            }
+        }
+    }
+
+    fun trashAll(items: List<Opened>) = viewModelScope.launch { for (item in items) trash(item).join() }
+    fun moveAll(items: List<Opened>, folder: String) = viewModelScope.launch { for (item in items) move(item, folder).join() }
+
+    fun trash(item: Opened) = viewModelScope.launch {
+        write(item.node.parentId) { it.trash(item.id) }
+        _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
+    }
+    fun restore(entry: TrashItem) = viewModelScope.launch {
+        if (write(null) { it.restore(entry) }) { refreshTrash(); entry.item.node.parentId?.let { if (state.value.folders.containsKey(it)) refresh(it) } }
+    }
+    fun purge(entry: TrashItem) = viewModelScope.launch { if (write(null) { it.purge(entry.item.id) }) refreshTrash() }
+    fun emptyTrash() = viewModelScope.launch { if (write(null) { it.emptyTrash() }) refreshTrash() }
+    fun restoreVersion(version: VersionListView, item: Opened) = viewModelScope.launch { write(item.node.parentId) { it.restoreVersion(version, item.id) } }
+
+    suspend fun versions(item: Opened): List<VersionListView> = io { it.versions(item.id) } ?: emptyList()
+
+    /* What to do with a picked file whose name a file in the folder already has, as the web asks. */
+    enum class Conflict { REPLACE, KEEP_BOTH, SKIP }
+
+    fun displayName(uri: Uri): String? {
+        var name: String? = uri.lastPathSegment?.substringAfterLast('/')
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.let { name = it }
+        }
+        return name
+    }
+
+    /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */
+    fun freeName(name: String, taken: Set<String>): String {
+        if (name.lowercase() !in taken) return name
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        for (n in 2..999) { val candidate = "$stem ($n)$ext"; if (candidate.lowercase() !in taken) return candidate }
+        return "$stem ${System.nanoTime() % 100000}$ext"
+    }
+
+    /* Files picked with the system picker, copied into the cache and uploaded in turn with their thumbnails. */
+    /* Pasting into the folder the items already sit in is a no-op the drives refuse; so do we. */
+    fun canPaste(folder: String): Boolean = pasteProblem(folder) == null
+
+    /* Why the clipboard cannot go into this folder, or null when it can. */
+    fun pasteProblem(folder: String): String? {
+        val items = state.value.clipboard?.first ?: return "Nothing to paste"
+        val vault = vault
+        if (vault != null && items.any { it.isFolder && vault.descends(folder, it.id) }) return "Can't paste a folder into itself"
+        return if (items.any { it.node.parentId != folder }) null else "Already here"
+    }
+
+    fun upload(uris: List<Uri>, folder: String, onConflict: Conflict = Conflict.KEEP_BOTH, renames: Map<String, String> = emptyMap()) = viewModelScope.launch {
+        val existing = (state.value.folders[folder] ?: emptyList()).filter { !it.isFolder }
+        val taken = existing.map { it.name.lowercase() }.toSet()
+        for ((index, uri) in uris.withIndex()) {
+            val staged = withContext(Dispatchers.IO) { stage(uri) } ?: continue
+            val clash = existing.firstOrNull { it.name.equals(staged.second, ignoreCase = true) }
+            var name = staged.second
+            var replacing: Opened? = null
+            if (clash != null) when (onConflict) {
+                Conflict.SKIP -> { staged.first.delete(); continue }
+                Conflict.REPLACE -> replacing = clash
+                Conflict.KEEP_BOTH -> name = renames[name] ?: freeName(name, taken)
+            }
+            _state.update { it.copy(transfer = Transfer(if (uris.size > 1) "Uploading ${index + 1} of ${uris.size}" else "Uploading $name", 0f)) }
+            val ok = write(folder) { vault ->
+                vault.upload(staged.first, name, staged.third, folder, replacing, vault.makeThumbnail(staged.first, staged.third)) { fraction ->
+                    _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) }
+                }
+            }
+            staged.first.delete()
+            if (!ok) break
+        }
+    }
+
+    private fun stage(uri: Uri): Triple<File, String, String?>? {
+        val resolver = context.contentResolver
+        var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.let { name = it }
+        }
+        val target = File(context.cacheDir, "staged/${System.nanoTime()}/$name").also { it.parentFile?.mkdirs() }
+        resolver.openInputStream(uri)?.use { input -> target.outputStream().use { input.copyTo(it) } } ?: return null
+        return Triple(target, name, resolver.getType(uri))
+    }
+
+    /* Decrypts to a cache file named as the user sees it; the FileProvider hands it to viewers and the share sheet. */
+    /* Keep downloaded on or off: the local copy comes or goes. */
+    fun setKeptDownloaded(item: Opened, keep: Boolean) = viewModelScope.launch {
+        if (keep) {
+            _state.update { it.copy(transfer = Transfer("Keeping ${item.name}", 0f)) }
+            io { vault -> vault.keepDownloaded(item) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } } }
+            _state.update { it.copy(transfer = null) }
+        } else Offline.forget(context, item.id)
+        _state.update { it.copy(offline = Offline.entries(context)) }
+    }
+
+    fun refreshOffline() = _state.update { it.copy(offline = Offline.entries(context)) }
+
+    suspend fun download(item: Opened, version: VersionListView? = null): Uri? {
+        if (version == null) Offline.localCopy(context, item)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) }
+        _state.update { it.copy(transfer = Transfer("Downloading ${item.name}", 0f)) }
+        val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: "current"}/${item.name}")
+        val ok = if (file.exists()) true else io { vault ->
+            vault.download(item.id, file, version) { fraction -> _state.update { it.copy(transfer = it.transfer?.copy(fraction = fraction)) } }
+            true
+        } ?: false
+        _state.update { it.copy(transfer = null) }
+        return if (ok) FileProvider.getUriForFile(context, "${context.packageName}.shared", file) else null
+    }
+}
+
+/* The emulator talks to the dev server on the host; a real phone talks to production unless the person changes it. */
+private fun defaultOrigin(): String {
+    val fingerprint = android.os.Build.FINGERPRINT.lowercase()
+    val emulator = fingerprint.contains("generic") || fingerprint.contains("emulator") || android.os.Build.PRODUCT.lowercase().contains("sdk")
+    return if (emulator) BuildConfig.DEFAULT_ORIGIN else "https://hushos.com"
+}

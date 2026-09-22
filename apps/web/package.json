@@ -11,7 +11,8 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "images:optimize": "bun scripts/optimize-images.tsx",
-        "brand:assets": "bun scripts/brand-assets.ts"
+        "brand:assets": "bun scripts/brand-assets.ts",
+        "brand:mobile": "bun scripts/mobile-brand-assets.ts"
     },
     "dependencies": {
         "@atlaskit/pragmatic-drag-and-drop": "3.1.0",

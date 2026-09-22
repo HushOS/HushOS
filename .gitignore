@@ -47,3 +47,20 @@ test-results/
 playwright-report/
 
 scratchpad/
+
+# Cargo
+target/
+
+# Native apps: generated bindings, native libraries and build products (regenerate with `bun run core:apple` / `core:android`, `ios:project`)
+**/.build/
+apps/ios/DerivedData/
+apps/ios/HushOS.xcodeproj/
+apps/ios/Packages/HushOSCore/HushOSCoreFFI.xcframework/
+apps/ios/Packages/HushOSCore/Sources/
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+apps/android/core/build/
+apps/android/core/src/main/jniLibs/
+apps/android/core/src/main/kotlin/com/hushos/core/hushos_core.kt
+apps/android/local.properties

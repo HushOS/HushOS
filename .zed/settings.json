@@ -57,6 +57,21 @@
                     }
                 }
             }
+        },
+        "rust-analyzer": {
+            "initialization_options": {
+                "check": {
+                    "command": "clippy"
+                },
+                "cargo": {
+                    "features": "all"
+                }
+            }
+        },
+        "sourcekit-lsp": {
+            "binary": {
+                "path": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp"
+            }
         }
     },
     "languages": {
@@ -180,7 +195,37 @@
                     "name": "oxfmt"
                 }
             }
+        },
+        "Rust": {
+            "language_servers": ["rust-analyzer", "..."],
+            "formatter": "language_server",
+            "format_on_save": "on"
+        },
+        "Swift": {
+            "language_servers": ["sourcekit-lsp", "..."],
+            "tab_size": 4,
+            "format_on_save": "on"
+        },
+        "Kotlin": {
+            "tab_size": 4,
+            "format_on_save": "off"
+        },
+        "TOML": {
+            "tab_size": 4
         }
     },
-    "tab_size": 4
+    "tab_size": 4,
+    "file_scan_exclusions": [
+        "**/.git",
+        "**/node_modules",
+        "**/target",
+        "**/.turbo",
+        "**/.output",
+        "**/dist",
+        "**/*.xcframework",
+        "**/jniLibs",
+        "**/.gradle",
+        "**/build",
+        "**/DerivedData"
+    ]
 }

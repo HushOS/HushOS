@@ -16,7 +16,8 @@
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "fixtures:core": "bun scripts/core-fixtures.ts"
     },
     "dependencies": {
         "@noble/post-quantum": "0.7.1",

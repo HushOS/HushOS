@@ -1,0 +1,187 @@
+{
+    "account": {
+        "accountKey": "jZEUo2xtVXchn8jbAZrVViZAP5gFxyvh4Xm1waRUu_E",
+        "envelope": {
+            "credentialVersion": 3,
+            "encryptedKey": "T2sAkGG7AGNI7mrfb4LtZWer1bqj0YwrCTraOTm6NJzfpV-xZRmtEM1Lfw4ON_t_",
+            "envelopeVersion": 1,
+            "keyVersion": 2,
+            "wrappingNonce": "S2JO6X9Rgo5YHnxLNIHOTI3zdcTJcpJQ",
+            "wrappingSalt": "usCAP5jOgvtBE9inL_aH3_hWSDmon06FBWzThiT9hHg"
+        },
+        "exportKey": "JvjzRiphJAj1XsKCqxG_T_zh-el14s-xn19j5xnrzNrkfZyTt0jKsAm4gF2YbE9legkBOcC2STZ0Hi3j1HYTNQ",
+        "userId": "4c286184-a1eb-41a7-aa7b-67bbab79c66a"
+    },
+    "device": {
+        "accountKey": "jZEUo2xtVXchn8jbAZrVViZAP5gFxyvh4Xm1waRUu_E",
+        "bundle": {
+            "credentialVersion": 3,
+            "deviceKeyId": "3b1ef48e-187a-4065-9852-80a093198a54",
+            "encryptedKey": "ul6V6pFcjjJyuRW_eRcWrFe8Vyu-bm_ePQzIPWiLrl8RUadOMFJNsbnlS-2RvFQk",
+            "keyVersion": 2,
+            "nonce": "NsiF6HKubzMLmvVH",
+            "userId": "4c286184-a1eb-41a7-aa7b-67bbab79c66a",
+            "version": 1
+        },
+        "deviceKey": "GeRqcmvep3ge011eQyu7Fg8GHMXwwX2O22irApM2rZ8"
+    },
+    "document": {
+        "ctx": {
+            "kind": "tags",
+            "version": 3,
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "envelope": "TMCrzN2IyVlgSFeEp4flf-yfxEWcYBQhmPc4GJ7FOvPvyttUjBQGoELNB7wY583g-bhxWsS8k3qsCq_CB7CBv5mohAdS1w6jo18jxsa2SL_Cop_tBCz1YW0NV-RtHh3_imatZCRfwwc8QaSMOUCQvxMbYQPNemT8QCamGaTFbHr1JfkM8aowMDUhrMAanbkjXFgWf3HkYJgDfZEZ6ToiDsAs3HpW43cDrE2wSDNVNNRPWdVk27Lbu29UzDg1JCLnjLaxnM9e7bbJFJgiRmPSVl6AopHo-4cC5k_LsrmAekWHDAGRtHwMwKv2FjuceaIA6AIRZOIxgA0wxxxC4BbxL7PEoqbmj23FsG1mPzl31N6tRTtUq3rmC6RyLqni47J3eeqXqQPXjgIAuURZya44yHtoLMnTAxX4lyO7WWD0aFWyLjYFWJhxNZFQqja_-wzrdmD1BdvzWKKYOgQZOcSm82CjpMzcOPmJQBf4AoT7O-PPDq4az6a0yhwKUBIeD4rz5V6SUmyWl9G1W8k8psQ0d2g_CVdKbgGSabTLRcdsUNdfdr7CRvtirBSSxuqxAsazz-VTlRdKfECss4v2u7Cy_agVUKZz9aPvnMeIZHx1Vm6ho067cwhucdykesacxqyCF0qMVvQTe5BkoCosZz26hNC0-CPAv1U1FLnvSUgloDkkq4tGPYHuM75inp2Ig_S7NgFXARNShibocEIDM6GSUa2SjwnRBbotjbUBj6-OcF-fajbr4SHjjORLxxkYtTXZrsmcPcT_LkwJZUZeGJ1q1yKJRh9aNDDPynDObwGQfIGbkCDozzYSa5l0qmmvXm8nqPbXHParDpGZlXHqMfgWfxFq1yV5go61hvRNsBUu1-KgfLk90SAIeBNwIs2YO6NN40Z-o7sSrPFjbp1VNtuLHfntOefsz6eqY6bOtWiKm5py6wPrwH9_GJsIJBCZmI1Z_NQhSWrmacAgN8IObjUEzLFbSJOgpe_Fd68OTiPPAFGaRRnJagogbHXZ1megEXxJnd0w1nkLh2hdOUEjToDFjSaIia0pUlEzmT1lH9k8PMXVlTE7RLN0kPTQ_sV_eGzaXEOvMGNz78chsBewCMzvzL9FzfE9E44UtTjKRixPBiyHHID2v4GTTyDgZgQjxTX0vwbGvMH9QP5xaRU9lC9sySpX6PTpGgIM7SPw1RpxSmJ5Wf6NztPPq3ucZhu___Aijo-JiDtLzf5-ifV609UGEPLFrSlVzVYkVAotbcmR8IIoTCCf94EiBP7Cxq7v-oNuEEk1KwPa0eca3OMYvYe8HGNS7WFuh1_mAwjTyH_aVPrghl-ttxuSp1dKL9fLOYEi3y3TBPqWUbmY3kbwpQAPASXjW642j31EIeU4b3Zvm9iizmNNkU97Zjv6xCb0bXYaEZyfoK5fZjM",
+        "json": "{\"version\":2,\"tags\":[{\"id\":\"957934aa-c9d0-48a4-a9a8-e0b7161d1e88\",\"name\":\"Tax\",\"colour\":\"blue\"}],\"items\":{}}",
+        "workspaceKey": "2pcbOHPyJhv7NbrS-dfw9O6OPF02H253ZPmRt2Cy3So"
+    },
+    "generatedBy": "crates/hushos-core/examples/fixtures.rs",
+    "link": {
+        "ctx": {
+            "keyEpoch": 9,
+            "linkId": "a7dcaebe-fcde-427b-aa87-6546d975dd6b",
+            "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "envelope": "bCtOg2opcjgWI-EWt1tluqrZ47do_LiBVSrtXUgaypk68xzt9lpQX__GUwePZEzkoP1sXWjX1aJhgrwBC-QNhnDmCkzNVkTm",
+        "nodeKey": "IwNU71swCPId9E6v7jFJaRFcp-099WKvIQmnchXo0pQ",
+        "password": "open sesame",
+        "salt": "9rT6lY1-CCScc2YVhsxQNg",
+        "secret": "t5lprDSwqrfB6jlsgIQk3ONzUVfUXiSwF43qy6Dvnx4",
+        "secretEnvelope": "Cg429YOZXPCHyAJ4Zd-9ruGjIzMI9y4c6reNxVeAu-Gc1Me0AC5IFvcVU3rzfhMowJWgLN80DYKAuyCy9lr0JMgTzCu3MfXIsbGJEdP77zoWzih5tNQG8Dl6vMv5oulmhMI17vxv_-OEwbouMM39dmxDpAOqjnggvcTB3lpt_uGL0c_hqG6B9g",
+        "token": "3Zls1c7_UOnux3NGzuhd4Xb0R2p3bdcjD68sJOVIMZI"
+    },
+    "node": {
+        "ctx": {
+            "keyEpoch": 9,
+            "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+            "parentId": "4f3b6142-5ada-4f43-a5d3-45b51b929cfb",
+            "parentKeyEpoch": 4,
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "emptyFile": {
+            "ciphertext": "qOfAbVKgKQ_XbmgE9CBqeg",
+            "objectId": "b01df71d-c397-4ad7-8cd9-bf8354e02e64"
+        },
+        "keyEnvelope": "-vMHsEX2wRLbnaHYQcfwZnzY5IyVboBrNrUAM645_6zDreoBu_Uv3sp3hCgVsNmqwnEcHpx-O3MjJmV6Qc9fiJOCkc-2KYEa",
+        "metadata": {
+            "mime": "application/pdf",
+            "modified": "2026-09-22T10:00:00.000Z",
+            "name": "Quarterly report — final.pdf",
+            "size": 8388613
+        },
+        "metadataCtx": {
+            "metadataVersion": 3,
+            "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "metadataEnvelope": "tOONiKsO8R6aC-zK07zDDCHIkDn1WXjyk5ksrvSvdN1KKOhZBkQKRVOx7XhNZzwIhP3fUMcFsQTtWmp6QX9BbBmUJKe15DEfVS4lpwNdUqGb-1qlAB-XAGvf2l5GnoxnLFnb38Cfbe_uTFt06ftye5ouO22iHD4kVQyug2o4IO1az0W52IEMw23qSA6Hpkhst8UpplXUqo18ZHHiEjbXaAIFYZXXfMusrirgVjgyFWH0UbUFWajVXbpb52ggyAmYiJFLzfM7UqSTuUELWkmeRw_3Cj6_d9MO1pfbJMvIs3VC9CKJWIJzMxtiIs9mcOCZyuEXSq94coGRezAMxZ_qL3t3O4IhMA7JEMfgNeCvS4fDOt4bvfnGZizA2b5nId9CSgkiBGwNIAw",
+        "nodeKey": "IwNU71swCPId9E6v7jFJaRFcp-099WKvIQmnchXo0pQ",
+        "parentKey": "2pcbOHPyJhv7NbrS-dfw9O6OPF02H253ZPmRt2Cy3So",
+        "version": {
+            "contentKey": "xNbZWWp_TAQEoMpF5wEC2sWzJlobTSybQfQy7umzDTg",
+            "contentNonce": "91OHyiWguPWzrZoGkZ699w",
+            "ctx": {
+                "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+                "objectId": "53941a9d-2f00-4c99-8e27-08cdd904cd96",
+                "suite": 2,
+                "versionId": "cb34d70b-100a-46f2-991f-42ece5db23e2",
+                "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+            },
+            "envelope": "t3TjCH3YZlu1XhBqt8tBkuSAgSUDFZHxprKhRb6actO9r_Ap5mLlpA0VP3oSjyY-m-cPeu9kdunZcOutpNACQZ50kZNxDzwiC9iAIHZpYvLSpetO",
+            "lastChunk": {
+                "ciphertext": "BNAJrO8aa5oJnfpR8B9-7BVXBlx3",
+                "index": 1,
+                "plaintext": "P19_n78"
+            },
+            "plaintextSize": 8388613,
+            "thumbnail": {
+                "ciphertext": "y1LUzMebs8_evym5DodhClvPJUiMpMwj7yY7OoHi1rl9PmDpKXXxjEXzXa3wa548-wAh-feQIN9mg5Yof0Rd_tKH_0LXDvwZ2woA9K0QxfeTw96ahoQLBn_Wey0tgfh79c6-YVehEJ0vidFv-5cB8NIA1N5R-0cuVY9a0PHJfrKep6o2_ecj2cbWTAh1Xd7l_Z3bTgm7wxFRE22QVHY8SULI24TqQECgEcAe_znRcZ0txJZ278Tf_fp8a2A1IaKMynX0RIdkA28jsUU0pz_t55bgvRPPvwc2czW6N6qL1qXkkmN_eo91gnBNS2mlx1c9W0AbzYCJbkzxzdekFuIDivoXtD3OfWncMf4rs2n1VIMT9gMSVB6e1xAMqe5XDgWRuqocJSUJWahC_53uaxW8ZvH9LKXpFytbK78LKQ",
+                "plaintext": "I0JigaHB4AAgP19-nr7d_R08XHubu9r6GjlZeJi41_cXNlZ1lbXU9BQzU3KSstHxETBQb4-vzu4OLU1sjKzL6wsqSmmJqcjoCCdHZoamxeUFJERjg6PC4gIhQWCAoL_f_x4-XX2dvNz8Gztaepq52fkYOFd3l7bW9hU1VHSUs9PzEjJRcZGw0PAPL05ujq3N7QwsS2uLqsrqCSlIaIinx-cGJkVlhaTE5AMjQmKCocHhACA_X3-evt79HTxcfJu72_oaOVl5mLjY9xc2VnaVtdX0FDNTc5Ky0vERMFBwj6_P7g4tTW2MrMzrCypKaompyegIJ0dnhqbG5QUkRGSDo8PiAiFBYYCgwN__Hj5efZ293PwbO1t6mrrZ-Rg4WHeXt9b2FTVVdJS00_MS"
+            },
+            "thumbnailBytes": 300
+        }
+    },
+    "recovery": {
+        "accountKey": "jZEUo2xtVXchn8jbAZrVViZAP5gFxyvh4Xm1waRUu_E",
+        "envelope": {
+            "backupNonce": "NBVxlTBLlOiXrdvFYpZNuEr2bi-VTVBs",
+            "encryptedKey": "Ats-yCV82XaEGiD5h3yIM6Xfc85sO3QvlvN8Ie9cmuglP0ySR1hFVVYVAQg3ZJ0h",
+            "encryptedRecoveryKey": "jFiXPGbs6PMH_VUy3MKCvZTO440sYTaKQACHdoHIW6ni4BuAuVUlfIm5cLcT9D7n",
+            "keyVersion": 2,
+            "publicKey": "vyGpnszRdfqelqjDvAbxG49sEe47C7CrCK53PG-0fC8",
+            "recoveryVersion": 3,
+            "version": 1,
+            "wrappingNonce": "126HFVk0HXT6Zex_oGz_GUna1b4-YXbn",
+            "wrappingSalt": "rMX3s6aasHuOcnwHCyM9I0INzeRN7G2LPmxwmFKxZGo"
+        },
+        "phrase": "eagle spawn grape cabbage erode give left taxi cluster team chunk embark soccer boost weapon drum flight theme notable mixed share smart beach miss",
+        "userId": "4c286184-a1eb-41a7-aa7b-67bbab79c66a"
+    },
+    "report": {
+        "classic": "D4A8iJe_x-ScSMikfdu3D0PAjcqh0R7rIu_axu4XUmKu-a0FVWbiLAVz2pjtpGjfLNpngPYGxtaDS9Yi2fVMYAS-fDedtUCm6LtVJTUgu8E-mCfn_H0e3swmPQQF-OV7qNN9n2f7sFaFMu49TionVQ",
+        "ctx": {
+            "keyEpoch": 9,
+            "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+            "operatorUserId": "5F767450-693C-4C49-81AA-476DD2FBAE3C",
+            "reportId": "36ada222-ba45-4f1d-9f46-859d713af0bf",
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "hybrid": "_NSYlvjfHBYQ0br5Ds2YBy8eUau6fSouRwjJYYDy-SyE0egahOqstH86HfPMIBJHAPOd5zntzv_HmQHzejGxcrO0pqib0JcxMNI2vwXGKYQrdcYg20umkSYdDMTe2m6wVyyjVTbYNpWhZxbivsrHjnQkrmYotn1Hz6MDabNCTXdfZGmf-Q_7GD6zhH2uRA4x6Xg06tVRT0HtNaQGsUz9_nJUbVVX29TzOw7UNTsszIjimDSVHdcjOXRyhqnkPpLKwYBbNIxGenPoqYDqy-6sh8XV0qS0ZAOgnYgNIlOr4CxhYZdBMge57ypuaYyziZLNHgOhZzr9bOn2ySkIOe6B0HUfJMWtDcHgQVwmg954bLO0NClGgPE4PXIRq7kA-Btsk_jtVIaBGcZeiAqghRCVroFFzkYtbp1UVsKWmmLLdqp-8bqkT5GUP5Moa7uYBoLfzDrKyR0d1rJX17yH_2m0Y6jce58aAveygqm7Qgy7u-7OdYd9NfF8x8H_EqX9RoNAWCvwP9JCLZpmyVXJyXCzM48RGOGSmZ4WmYEfNnwsiUD_xz6R6dUDAEtFxFrLNmtTRqwD3V00628DxcUqpJkrE-pecCN9j6I0OrcVs_Wz3s_MyKj11dbNCKgyneT1m1Nyv1p-TRoNyX9j-CYns-bqS4Ylcwb3OPCMs0_7JSkYIjBezSXo1A29--3dpoJg2EBRmDE2cIw7jpBdKqPmEBUwRLOemqOy6QFuxwqTiQp4VqvcVVzWvSazuQvYgbUi7poYIiO_syUa5XjQSkHC35BFOYqmSDOGNNUDLlBvY1PVLrzdHwmZRgd034EJvWghbZtHKmtlRIZ7tgG6hZiFf0vFkolRUqPgQj6nisGKQ9o4CPJ6wv-oTi9YeL9AF1CHH-H_KrouNFgEyMiKWv8L-aEX0ALlGS9a0IhIQzYF14uZrgkh1C0vHzo6__D7kWEQbL21JFiYeQ9x7MLKcHSdjMFlgLYF2CkAQfm1jefaMlYyrD5h4Oi-SjiUcR6PlvNena91Gg5dcGsj9fmCDTxZqyRpuaNguyEAqByzhhKDQdF3MZNN7MtP5PLtCYfAHzGhCD2k6gWNJ1TNDTwioFsBGj_nMC1lZvZz_ecHpELRcEEttoPN7DeTSCpi0sDOh2S6Eiiz6CZm62EhgHiGej_Qg6YbLpXIH9b6K0FGdlpTKIPN4nBeWbSaPE44ClpIIJXJvkjyasDC19bJUvQLL8KG0syIPfirz0Q7ikIsjQcKfSL5-lD43QV4psPbB2_6_3J-PxjwhiC2Ot_I0aqDjYcn_lzCEuPCyPXist8qRuUdKqw7geYmqKhTBbU1_PLT__jOIOOHDM3zRSU3aFDyJQ6WFzSW-IyzR9o4kxsVwt0R6Eoe4-F43LuhaJEwP6Ungk6thKLluN93bfdxIOluDn7YzCQ3HxknXLrMaTr9FTP8ln6FmgHP5KELVq5xjvsXrR6v39VXuEEwhjZzHoDQoymwi7fm3ArltEovEvfEAmVZ9G1ShU_n2vAjiS8JQ2fxE0nvyQJ5PFTQk2BgECybaVkHSWzuXpgsEehGw3ckLQQVgTYu9eZkyx1rrOqZysFo31jFJefWTwVslXtRaPObZenPfR3RXLNudQuqVLXV",
+        "nodeKey": "IwNU71swCPId9E6v7jFJaRFcp-099WKvIQmnchXo0pQ"
+    },
+    "rotation": {
+        "grant": {
+            "encryptedKey": "FTxX_P7-K_fOLEXkTOGtsUhNlp7jKqxAoVmSY7I3XqA69e5lCilaN_AV5-wVFLfT",
+            "keyVersion": 7,
+            "version": 1,
+            "workspaceId": "df9e1252-d6e1-4696-a5bf-6e5557a67c83",
+            "workspaceKeyVersion": 1,
+            "wrappingNonce": "keef3_6AyxEuW8bKqaQ1AvPKZbF9Mpu7",
+            "wrappingSalt": "ccqGWD2w7VU3LXjjC53Nb4RdyDxBWqYv4oGg1vn9zhI"
+        },
+        "identity": {
+            "encryptedEncryptionPrivateKey": "Hq22SHNEgo0uBciNOhLG6eQV1rDiqOXHAYOGcyejzHw58sFxz1J2NDifyK78KawT",
+            "encryptedSigningSeed": "3ulop5WoD_B1L6HikCc6N9u4gKqd0c1L7LxqD2Xeu4tLl6gZNcZHCt2ro-4_NfCu",
+            "encryptionPrivateKeyNonce": "MrAfnqha3jRkFSfsJeMP3ArlD60zMzvD",
+            "encryptionPublicKey": "U4GBUPhYjuIJfUUYFTZ7AR9qaniqr59CS3fY6V_oZng",
+            "kem": {
+                "encryptedSeed": "X9j3nVYp7_niJfQ0SmpamwZzv1QhaPs7suWZ_z3t_v-KHtuPPPwGYB8rx1VVSHlXQ-LWybD9yYuJo9fVaq30qyZxilVqGRypXknYHIChGP0",
+                "publicKey": "efladJp_mLNpXiu78Sdho9yQRpBQ8LUCBIB53CqU2-in9fJDmCfChThj88VFmrdh7cEIlYHAsSBPV5StOiAcamEQBqW22CuQCFPBrcajb8WYT8clNashlNgQvuNWX-IfUjG9O0gCiHV-XRxEVUp-81MqzruQtxbHVrxTDIFk2zOANLjIo7jNPEoXecu2B_dIZMu9H-Z8nTIz5IpK8oFKSzQbAJKX0ZoRQ4C394FurmceM6g-jCWLaPxCDoTKLRpjRvySgxpqOZU8dNqmFyyRO3ZLltUTTOcHfwo9NmV8wcpdq0iCN8AUM2UzBXBDv5tn7FGR61I3ELttthx9N2HAf_o_ImBKZUSua-x_QfrCx1lDTBhzunGn56TFhYh_sScCqokuVDINwfcpAFRFdCQXxZmnweiIhgtznrIqWiWWUbAyYSC7Rgibs4yeNJGjykt6azpT8bJUA-y-bol7gKjMBBydiBRJUAJJXYt6k2y7C4CCdCLMY4cWzERtYMkHbtTNvYlqO2M8fAVCS5hheKKVV0aoBcR3rFEdRiWSH1wcwAWsZummN8ODL2Js3gauyMRwxlCHaod6ZzxyaQqk6jW18GmFWNJgg1Gh4dYnEjNwDQNePbKNoTlluXfJXlDAlxOxdZeiuFmKVoEbV1A86BuqFweJ35mVjNvKaaqxFTFobukRGBlX6tpycZSe8CMvrBcxcRDKcfoLafgI10tQ-uocgEOH5pF08rXBOTgzkHht7ng8fgQlYnPLQPZ7a3KOgkpUmalzcICszUk81EB4qUEzk8dsiMeyxxlkeyYlbCgnYDLIKxRhzpSsB4qzsHxDSkobXIsxafx4u_uzteuigaFqAWEt9uPF0RkfIJhUICOBpzlIp2cMmmtdghMuVKxv-nWXxEeRRYnDjOWzSAWnygPMe0OJvdo3emexiBvHAwW4-Ck52zh7YDOOdnYZQYhQhIEek5CaqTRk4vsqzXJDYHBGFQnJXAwTrxaX1Lp1pXXBjuem3RY1vixRJVaoS9CxQgVkQmpHPlxkuRjJ6zFa4OyZjJCv3RCsoyAPqNdQjFU4x5MayPiYwmjFJtgsTUB0DLEusBFaoiLFttQbmSpU0udnsEg2usOgmOvJr0iABKUh_eW6d_wSXYsnoqxCh_MubeKKSkiR3iMhC5e-i2SkqkxEBTgNdlU0xmFl-2aDNAao9bJ6NgB6PMSHfzOuaABDPTS7AjgH0iEJbSmlyWY_x0yhBEuURNwjwvJa2DCgJEt8_-Bc21m8o8SlQlG7XyksDYORQ4kzWbOaPwskzGODEWmgBcc3s0mJ7rQHZ5uCpRMy8RRSpOo3H1sHrvBIG7DLHhs-f-sBSqUm8JVeulTLAXWpfJeY2dtynSEPw7ZMtMYKolRioNkYr0DFhjc6egiJumGmuVZzEWMyCjGgrEiA3UcGktcn2eO99hVEo1QDRLmdH7AJd8q6gkYkjPhdYmi2U3yQ5DRm8Gq1OlpHautjAhmtQHVDHyOg06A00MKe9pB-xGFk4FCLSbA1EyKJw7Y9mKaneZ3-UouuN2JG0ahN8Rz0jhuv39B441ogJmpg-6G6Z3g",
+                "seedNonce": "BJUMR6ea0WwxzDc081YpCHGBeMotOwEn",
+                "signature": "zFryJhUm7mft2kjBsTo9MqHKup3UfmSQ7CswfOON90l7Isk4jeGWNc-Jqgq7Kh6oTV6bf0kZfxMKoYTZ5JwADg"
+            },
+            "keyVersion": 7,
+            "signingPublicKey": "RJo8CppyjZ2k8fHRtDHbWOoHAomzFcmRajNAyDVkS10",
+            "signingSeedNonce": "c8EtZJUljOn3iOIfCw7srt2OulJ6p4YB",
+            "version": 1,
+            "wrappingSalt": "T12OfsM3-pbaFyjtRwdwwknGeKVhSTwM-NVva4ugCiM"
+        },
+        "newRoot": "AgRxLdyX7gAVGYpEnn0zbk89Qfwg-79l3AnGs-VkT7o",
+        "userId": "5F767450-693C-4C49-81AA-476DD2FBAE3C",
+        "workspaceKey": "qdS_oxV6Ev7qp_322a5mVLOStbgX0kVfoO2o7kNKvb8"
+    },
+    "settings": {
+        "envelope": {
+            "ciphertext": "fodYwpQv3HU09cSfvbw5Qu7aQXrdoBut5gL-MwDRaUD4woU28min1m9vNg",
+            "nonce": "-Ni-aYAMXXCk46IOMPmdh-0jbRGf4Fz-",
+            "settingsVersion": 5,
+            "version": 1
+        },
+        "json": "{\"version\":1,\"contacts\":{}}",
+        "userId": "5F767450-693C-4C49-81AA-476DD2FBAE3C"
+    },
+    "share": {
+        "classic": "hONfBBLad92t_BdMjbX-Q47c5Jo9muRExKrcfqEFuwxkA7iVvq6f2LkO1PpILEMbXCUeIznT0y1zAoN4t-PS00QuUx63S3ql",
+        "ctx": {
+            "granteeUserId": "5F767450-693C-4C49-81AA-476DD2FBAE3C",
+            "granterUserId": "74d7d901-fdd6-4a81-895d-5af6a4f67759",
+            "keyEpoch": 9,
+            "nodeId": "0a635dc5-e2ce-4922-9d49-2cf5703ec474",
+            "workspaceId": "c97bf847-89d4-4743-b915-a97cda6d54db"
+        },
+        "granterPublicKey": "2lpzDFMp9xrbTZQUQz7UdKxN0-VqTqnmgILerx_wIBs",
+        "hybrid": "T_xx9DJKlBrIzRlXRfRtG0n7roSwFM8ednfeuYEUo2JgIpo5EnndJUOA6GpEvQQUSEzTqdyeiYWOHo4Chy4I8B2eKUb65qwy1I0Ay3RUT69G4jD6_Ilg6WKy3-Qks79woBsCtiPw4n4Uc4SjvTWqNi65u15Lse2lrogD9eFIl42NgD-fG3iuOJjSI4qpNvc1VpJJ5nq1BkLxeqT8Rydfda9ceL-jkjQSJjAaJFM7e_1nt7V9qYPdXVjYcCLzAyQiA8pcuwv47ZRMXLCh2eEufdObK0C3gKJGJ0luUnBPWnzvikfxHd00Xcz4TSA-MZkfQHdzBU_Zcq8FFbvaydVMP1iY9OKh4reGRtfJEHBh9jATqLKDRsKv1_XhbODBNAY4siKlUyuK78xJZiXOK0_euYlGa7ostNXVLJ26S3Mjm8pcu1VAJl51GtLGxxcX0GvB53S0kEOJLgn3karvX4X51uN2xocjfFC8t53c19Ogy4Y18SjWKc8XBb6BUqcRgxz5yuvybUJYg9E86TCtCzWiRpZq_6aJWyHGkZuH71qzCiy9CT7L6HvXGaCViiMGeqltiAyT33I0rqCvFhFvRvM_bbgz6RulcP2eEyQJh3CFphZJL2ueBe6mk5T4BD4NN1Dx2FufVMg6FPAPKHBsuf9FKNclnamzdn0kYg9_K1QDUmW8RXVxkzJXfs2QW5tBVAJkucABMoF5lG5zslBKU9OH20MKumtMSPbzHXEzG4ZJJIyT6Eops1hsRnGdOd5Y_zNYzu_ix6HMzf6Y4ia0fmrGf45CwXntC9MMcdYsJCBy-pgJWjP8BlNkoqPH9oeLQCZ_QMZSck8yAD9HSwo3mbD-samwZkaVhOCdNT6oW5dfG5ta59_TGKh7gpcGfHNQab081sRNv-Sn_HkZeSp5A10YDMY5rFtVBDlaIe7gu4c7PClBidSLutl2DbAMZpDDwj80pZ0rAwpn9StY1ou7qKVezFDF7LUpsnGk17Sgj0vP0XUnrVZ1vLTArhJy7gJEvs7T1GPapXAXknlJ0xI4CdbwQPK-e0j1UwSkmKxTTe0lG-uK3xT7scx2D7F6EabclDrU1uO6p4YokEQ_9BggYraX-Ls8xdjjewejdYDI6LU06eOSPR7UWN60BHjz3MZVsKu3HmqFHoe6swSoDJMdTObZG1sVmgsA9Ppo82lluH6ISlNdWWyvnWupLPBE0K9cOOpk1i_9OLCTGNxZVJMj09BFo1lVPfQSZ2jucIpKbur4nXKZ5YYlzNnH7FKMtawW0BXJd9Cm2t-hOh6AFg9p8sN5CP1syaBEdVot-EHQowR2jENxetX2MlI-vAcBbdV-fhTt1SNUKRo1QJRqWkBAlTfDTp4OVuuLWmTT58HM4CJxD6S-lznzd6RLwZ7ESIGPf0gw7g9qpkS1EQUlXJf_CPoQS2o7uBD-K1Av_-HbB4EomKVHz43I3vucJMOapwZiA6HfMWDY1O3t3Blh0-QQTZceLopPJJD8PHPpmVnKhQRyEla2QRWKE_UBfGZbNnDxKdSQWLxxokozcYU",
+        "nodeKey": "IwNU71swCPId9E6v7jFJaRFcp-099WKvIQmnchXo0pQ"
+    }
+}

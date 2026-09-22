@@ -1,0 +1,13 @@
+[package]
+name = "hushos-bindgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The uniffi-bindgen binary pinned to the workspace's UniFFI version."
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { version = "0.32", features = ["cli"] }

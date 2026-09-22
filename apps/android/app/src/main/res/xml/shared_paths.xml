@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="opened" path="opened/" />
+    <cache-path name="links" path="links/" />
+    <files-path name="offline" path="offline/" />
+</paths>
