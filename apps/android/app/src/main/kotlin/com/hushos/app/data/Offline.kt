@@ -37,7 +37,7 @@ object Offline {
         prefs(context).edit().putString(KEY, array.toString()).apply()
     }
 
-    private fun root(context: Context) = File(context.filesDir, "offline")
+    fun root(context: Context) = File(context.filesDir, "offline")
 
     /* Where a version's plaintext lives: one folder per version, so a replaced file never shows stale bytes. */
     fun file(context: Context, item: Opened): File? {

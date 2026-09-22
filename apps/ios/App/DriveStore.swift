@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import UIKit
 import HushOSKit
 import Observation
@@ -77,13 +76,14 @@ final class DriveStore {
         }
     }
 
-    private let monitor = NWPathMonitor()
+    private var networkToken: UUID?
 
     init(vault: Vault) {
         self.vault = vault
         // The offline line follows the network, not the next failed request: back online, the lists catch up at once.
-        monitor.pathUpdateHandler = { [weak self] path in
-            let reachable = path.status == .satisfied
+        // The same process-wide watch the transfers wait on, so the line and the waits never disagree.
+        if !NetworkWatch.shared.online { offline = true }
+        networkToken = NetworkWatch.shared.observe { [weak self] reachable in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if reachable, self.offline {
@@ -94,7 +94,10 @@ final class DriveStore {
                 }
             }
         }
-        monitor.start(queue: DispatchQueue(label: "com.hushos.network"))
+    }
+
+    isolated deinit {
+        if let networkToken { NetworkWatch.shared.stop(networkToken) }
     }
 
     func loadRoot() async -> String? {

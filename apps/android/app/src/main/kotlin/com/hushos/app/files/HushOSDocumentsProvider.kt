@@ -195,17 +195,23 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (!file.exists()) vault.download(id, file)
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
-        // Written by another app: the bytes land in the cache file and go up as a new version when it closes.
-        if (mode.contains("r")) vault.download(id, file) else file.delete()
+        // Written by another app: the bytes land in a file of their own and go up as a new version when it closes.
+        // Never the version's read copy: if the upload fails, a later read must not show edits the server never got.
+        val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
+        if (mode.contains("r")) {
+            if (!file.exists()) vault.download(id, file)
+            file.copyTo(edit, overwrite = true)
+        }
         val handler = Handler(Looper.getMainLooper())
-        ParcelFileDescriptor.open(file, ParcelFileDescriptor.parseMode(mode), handler) { error ->
-            if (error != null) return@open
+        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
+            if (error != null) { edit.delete(); return@open }
             Thread {
                 runCatching {
                     val fresh = vault.resolve(id)
-                    vault.upload(file, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(file, fresh.metadata.mime))
+                    vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
                     context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
                 }
+                edit.delete()
             }.start()
         }
     }

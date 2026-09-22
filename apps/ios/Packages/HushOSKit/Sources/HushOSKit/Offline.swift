@@ -80,7 +80,15 @@ extension Vault {
             let folder = destination.deletingLastPathComponent()
             let earlier = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).first { $0.pathExtension != "part" }
             let moved = earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
-            if !moved { try await download(item.id, to: destination, progress: progress) }
+            if !moved {
+                do {
+                    try await download(item.id, to: destination, progress: progress)
+                } catch {
+                    // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
+                    if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }
+                    throw error
+                }
+            }
         }
         // Older versions of the same file go; only the current one is kept.
         let versions = destination.deletingLastPathComponent().deletingLastPathComponent()

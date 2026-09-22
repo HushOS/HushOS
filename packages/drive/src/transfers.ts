@@ -187,12 +187,22 @@ export function isOffline() {
     return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
-/* Resolves when the browser is back online; at once when it is not known to be offline. */
-export function onlineAgain(): Promise<void> {
-    if (!isOffline() || typeof window === 'undefined') return Promise.resolve();
-    return new Promise((resolve) =>
-        window.addEventListener('online', () => resolve(), { once: true }),
-    );
+/*
+ * Resolves when `offline` says the network is back: at the browser's online
+ * event, or after OFFLINE_RECHECK_MS at the latest, so an injected check (or a
+ * browser whose flag is wrong) is looked at again rather than trusted forever.
+ */
+export function onlineAgain(offline: () => boolean = isOffline): Promise<void> {
+    if (!offline()) return Promise.resolve();
+    return new Promise((resolve) => {
+        const done = () => {
+            clearTimeout(timer);
+            if (typeof window !== 'undefined') window.removeEventListener('online', done);
+            resolve();
+        };
+        const timer = setTimeout(done, OFFLINE_RECHECK_MS);
+        if (typeof window !== 'undefined') window.addEventListener('online', done, { once: true });
+    });
 }
 
 export function backoffDelay(attempt: number, random = Math.random) {
@@ -706,7 +716,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             waiting ? OFFLINE_RECHECK_MS : backoffDelay(attempt, options.random),
         );
         u.backoff.add(timer);
-        if (waiting) void onlineAgain().then(retry);
+        if (waiting) void onlineAgain(offline).then(retry);
         emit();
     }
 

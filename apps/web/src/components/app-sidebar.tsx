@@ -21,10 +21,10 @@ import {
     billingQueryOptions,
     catalogueQueryOptions,
     formatGiB,
+    formatSpace,
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
-import { formatBytes } from '@/lib/drive';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useRouter } from '@tanstack/react-router';
 import {
@@ -253,9 +253,4 @@ export function AppSidebar({
             <SidebarRail />
         </Sidebar>
     );
-}
-
-/* Space in the unit that fits, written like the quota beside it: "2 GiB", "1.6 KiB", never "2.0 GiB" next to "2 GiB". */
-function formatSpace(bytes: string | number) {
-    return Number(bytes) >= 1_073_741_824 ? formatGiB(bytes) : formatBytes(bytes);
 }

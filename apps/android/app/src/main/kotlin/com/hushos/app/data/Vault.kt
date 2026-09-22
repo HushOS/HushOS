@@ -330,7 +330,15 @@ class Vault(private val context: Context, val api: DriveApi) {
         if (!destination.exists()) {
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
             val earlier = destination.parentFile?.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
-            if (earlier == null || !earlier.renameTo(destination)) download(item.id, destination, null, progress)
+            if (earlier == null || !earlier.renameTo(destination)) {
+                try {
+                    download(item.id, destination, null, progress)
+                } catch (error: Exception) {
+                    // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
+                    if (!Offline.isKept(context, item.id)) File(Offline.root(context), item.id).deleteRecursively()
+                    throw error
+                }
+            }
         }
         // Older versions of the same file go; only the current one is kept.
         destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }

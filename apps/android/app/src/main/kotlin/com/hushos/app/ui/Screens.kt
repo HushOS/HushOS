@@ -143,6 +143,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var sortKey by rememberSaveable { mutableStateOf(prefs.getString("sortKey", "name") ?: "name") }
     var sortAscending by rememberSaveable { mutableStateOf(prefs.getBoolean("sortAscending", true)) }
     var sortMenu by remember { mutableStateOf(false) }
+    // A tag filter belongs to the folder it was set in; opening another folder starts unfiltered.
+    var filteredIn by rememberSaveable { mutableStateOf(folderId) }
+    LaunchedEffect(folderId) { if (filteredIn != folderId) { filteredIn = folderId; tagFilter = null } }
     val listState = rememberLazyListState()
     // A new order starts at the top, once the list holds it; scrolling earlier would still follow the anchored row.
     var sortSeen by remember { mutableStateOf(sortKey to sortAscending) }
@@ -268,10 +271,14 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                 }
             }
         }
-        PullToRefreshBox(isRefreshing = state.busy, onRefresh = { folderId?.let { model.refresh(it) } }) {
+        // The spinner follows the refresh, not every write: an upload waiting out a dead network must not look like a stuck pull.
+        PullToRefreshBox(isRefreshing = folderId != null && folderId in state.loading, onRefresh = { folderId?.let { model.refresh(it) } }) {
             if (query.isBlank() && folderId != null && state.folders.containsKey(folderId) && items.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Nothing here yet. Add files with the button, or from the Files app.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
+                    // A filter that hides everything says so, rather than calling a full folder empty.
+                    val filteredBy = state.tags.tags.firstOrNull { it.id == tagFilter }?.name
+                    Text(if (filteredBy != null && unfiltered.isNotEmpty()) "Nothing tagged $filteredBy in this folder." else "Nothing here yet. Add files with the button, or from the Files app.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
                 }
             } else if (query.isBlank() && (folderId == null || !state.folders.containsKey(folderId)) && state.unreachable && folderId !in state.loading) {
                 // Nothing on this phone for this folder and no network to fetch it: say so instead of a blank sheet.
@@ -404,7 +411,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
             }
             androidx.compose.material3.TextButton(onClick = { managingTags = true }) { Text("Manage") }
         }
-        PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshRecents() }) {
+        PullToRefreshBox(isRefreshing = "recents" in state.loading, onRefresh = { model.refreshRecents() }) {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (query.isBlank() && tagFilter == null && state.offline.isNotEmpty()) {
                     // Kept files first, the way Dropbox lists Offline on Home: they open without the network.

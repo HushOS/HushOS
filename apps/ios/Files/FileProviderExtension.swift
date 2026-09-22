@@ -101,10 +101,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             do {
                 let vault = try requireVault()
                 let rootId = try await vault.rootId()
-                // Decrypted into the extension's own temporary directory; Files moves it into place.
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("downloads", isDirectory: true)
+                // Decrypted into the extension's own temporary directory; Files moves it into place. The path is the
+                // item's and its version's, so when Files asks again after a failure the partial is continued, not orphaned.
+                let item = try await vault.resolve(itemIdentifier.rawValue)
+                let directory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("downloads/\(item.id)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let file = directory.appendingPathComponent(UUID().uuidString)
+                let file = directory.appendingPathComponent("content")
                 try await vault.download(itemIdentifier.rawValue, to: file) { fraction in
                     progress.completedUnitCount = Int64(fraction * 100)
                 }

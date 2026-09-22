@@ -1714,27 +1714,52 @@ export function FolderView({ folderId }: { folderId: string }) {
 }
 
 const SORT_STORAGE = 'hushos.folder-sort';
+const sortListeners = new Set<() => void>();
+/* Set by a choice this session, so the order applies even where storage is blocked. */
+let sortChosen: string | null = null;
 
-/* The order folder lists use, remembered in this browser; a missing or blocked store falls back to name. */
+function readSort() {
+    if (sortChosen !== null) return sortChosen;
+    try {
+        return window.localStorage.getItem(SORT_STORAGE) ?? '';
+    } catch {
+        return '';
+    }
+}
+
+function parseSort(raw: string): SortOrder {
+    try {
+        const saved = JSON.parse(raw || 'null') as SortOrder | null;
+        if (saved && ['name', 'modified', 'size'].includes(saved.key)) return saved;
+    } catch {
+        /* Unreadable: the default order. */
+    }
+    return DEFAULT_SORT;
+}
+
+/*
+ * The order folder lists use, remembered in this browser. The server snapshot is
+ * the default, so the rendered markup and the first client render agree; the saved
+ * order takes over right after hydration.
+ */
 function useSortOrder() {
-    const [order, setOrder] = useState<SortOrder>(() => {
-        try {
-            const saved = JSON.parse(
-                window.localStorage.getItem(SORT_STORAGE) ?? 'null',
-            ) as SortOrder | null;
-            if (saved && ['name', 'modified', 'size'].includes(saved.key)) return saved;
-        } catch {
-            /* No storage here: the default order. */
-        }
-        return DEFAULT_SORT;
-    });
+    const raw = useSyncExternalStore(
+        (listener) => {
+            sortListeners.add(listener);
+            return () => sortListeners.delete(listener);
+        },
+        readSort,
+        () => '',
+    );
+    const order = useMemo(() => parseSort(raw), [raw]);
     const update = (next: SortOrder) => {
-        setOrder(next);
+        sortChosen = JSON.stringify(next);
         try {
-            window.localStorage.setItem(SORT_STORAGE, JSON.stringify(next));
+            window.localStorage.setItem(SORT_STORAGE, sortChosen);
         } catch {
             /* Not remembered, still applied. */
         }
+        for (const listener of sortListeners) listener();
     };
     return [order, update] as const;
 }

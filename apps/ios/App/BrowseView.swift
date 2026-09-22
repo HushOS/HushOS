@@ -50,6 +50,12 @@ struct FolderView: View {
 
     private var selectedItems: [Opened] { children.filter { selection.contains($0.id) } }
 
+    /* The active tag when it is what empties the list: the folder has items, none carry it. */
+    private var filteredOutTag: Tag? {
+        guard let tagFilter, let items = store.folders[folderId], !items.isEmpty else { return nil }
+        return store.tags.tags.first { $0.id == tagFilter }
+    }
+
     private var children: [Opened] {
         let needle = query.trimmingCharacters(in: .whitespaces)
         var items: [Opened]
@@ -68,8 +74,15 @@ struct FolderView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }.listRowBackground(Color.clear)
             }
             if loaded && children.isEmpty {
-                ContentUnavailableView("Nothing here yet", systemImage: "folder", description: Text("Add files from the button above, or from the Files app."))
-                    .listRowBackground(Color.clear)
+                // A filter that hides everything says so, rather than calling a full folder empty.
+                Group {
+                    if let tag = filteredOutTag {
+                        ContentUnavailableView("Nothing tagged \(tag.name)", systemImage: "line.3.horizontal.decrease", description: Text("Nothing in this folder carries this tag."))
+                    } else {
+                        ContentUnavailableView("Nothing here yet", systemImage: "folder", description: Text("Add files from the button above, or from the Files app."))
+                    }
+                }
+                .listRowBackground(Color.clear)
             }
             Section {
                 ForEach(children) { item in

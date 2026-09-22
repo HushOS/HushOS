@@ -336,7 +336,8 @@ struct LinkBrowserView: View {
 
     private func openFile(_ item: Opened) async {
         guard let linkVault else { return }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("links/\(item.id)", isDirectory: true)
+        // Per version: a replaced file is fetched anew, and a resumed partial never mixes two versions.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("links/\(item.id)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(item.name)
         if !FileManager.default.fileExists(atPath: file.path) {

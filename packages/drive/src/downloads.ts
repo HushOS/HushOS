@@ -8,7 +8,7 @@ import {
     type FolderListing,
     type Rpc,
 } from './client';
-import { OFFLINE_RECHECK_MS, backoffDelay, isOffline, onlineAgain } from './transfers';
+import { backoffDelay, isOffline, onlineAgain } from './transfers';
 
 /*
  * The download engine. A file is fetched from its presigned URL one chunk at a
@@ -340,10 +340,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (result.retryable && offline()) {
                     // No network at all: wait for one, and do not count the try.
                     attempt--;
-                    await Promise.race([
-                        onlineAgain(),
-                        new Promise((resolve) => setTimeout(resolve, OFFLINE_RECHECK_MS)),
-                    ]);
+                    await onlineAgain(offline);
                     continue;
                 }
                 if (!result.retryable || attempt >= maxAttempts) throw new Error(result.message);

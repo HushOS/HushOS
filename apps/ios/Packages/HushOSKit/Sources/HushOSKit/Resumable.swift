@@ -111,20 +111,36 @@ public enum Resumable {
     }
 }
 
-/* One path monitor for the process, read from any thread. */
-final class NetworkWatch: @unchecked Sendable {
-    static let shared = NetworkWatch()
+/* One path monitor for the process, read from any thread; the app's offline line and every transfer ask it. */
+public final class NetworkWatch: @unchecked Sendable {
+    public static let shared = NetworkWatch()
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
     private var satisfied = true
+    private var observers: [UUID: @Sendable (Bool) -> Void] = [:]
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            self.lock.withLock { self.satisfied = path.status == .satisfied }
+            let online = path.status == .satisfied
+            let handlers = self.lock.withLock { () -> [@Sendable (Bool) -> Void] in
+                self.satisfied = online
+                return Array(self.observers.values)
+            }
+            for handler in handlers { handler(online) }
         }
-        monitor.start(queue: DispatchQueue(label: "com.hushos.resumable"))
+        monitor.start(queue: DispatchQueue(label: "com.hushos.network"))
     }
 
-    var online: Bool { lock.withLock { satisfied } }
+    public var online: Bool { lock.withLock { satisfied } }
+
+    /* Calls `handler` on every change of path, from the monitor's queue; returns a token for `stop`. */
+    @discardableResult
+    public func observe(_ handler: @escaping @Sendable (Bool) -> Void) -> UUID {
+        let token = UUID()
+        lock.withLock { observers[token] = handler }
+        return token
+    }
+
+    public func stop(_ token: UUID) { _ = lock.withLock { observers.removeValue(forKey: token) } }
 }

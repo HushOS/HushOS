@@ -299,7 +299,8 @@ fun LinkBrowser(origin: String, url: String, close: () -> Unit) {
     fun openFile(item: Opened) {
         val v = vault.getOrNull() ?: return
         scope.launch {
-            val file = File(context.cacheDir, "links/${item.id}/${item.name}")
+            // Per version: a replaced file is fetched anew, and a resumed partial never mixes two versions.
+            val file = File(context.cacheDir, "links/${item.id}/${item.node.currentVersion?.id ?: "none"}/${item.name}")
             if (!file.exists()) {
                 downloading = item.id
                 val ok = runCatching { withContext(Dispatchers.IO) { v.download(item, file) } }.onFailure { failure = it.message }.isSuccess
