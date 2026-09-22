@@ -41,7 +41,7 @@ The same four tabs as iOS: Home (search, type chips, tags row and manager with p
 
 ## Running on a real phone (added 2026-09-22 evening)
 
-- Enable Developer options and USB debugging on the phone, plug it in, accept the debugging prompt, then `bun run android:device` (builds the debug APK and `adb install -r`s it). The debug APK also sideloads from `apps/android/app/build/outputs/apk/debug/app-debug.apk`.
+- Enable Developer options and USB debugging on the phone, plug it in, accept the debugging prompt, then `bun run android:device` (builds the shrunk release APK, 6.6 MB against 77 MB for debug, and `adb install -r`s it). The release build type is signed with the debug key until a release key exists; `bun run android:release` just builds it, to sideload from `apps/android/app/build/outputs/apk/release/app-release.apk`. R8 needs the keep rules in `app/proguard-rules.pro` (JNA and the generated `com.hushos.core` bindings are reached by name).
 - A real phone defaults to `https://hushos.com` (`defaultOrigin()` in `DriveViewModel.kt` checks the build fingerprint); the emulator keeps `http://localhost:5173` through `adb reverse`.
 
 ## The mirror and the catalogue (added 2026-09-22 night)

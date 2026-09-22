@@ -20,8 +20,17 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the debug key until a release key exists, so a shrunk build installs on a phone for testing.
+            signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    // JNA ships x86 and mips loaders too; phones and the emulator are arm64 and x86_64.
+    packaging {
+        jniLibs.excludes += listOf("**/x86/**", "**/mips/**", "**/mips64/**", "**/armeabi/**", "**/armeabi-v7a/**")
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 
     buildFeatures {
@@ -34,7 +43,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
-    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
 dependencies {
