@@ -36,7 +36,9 @@ struct FolderView: View {
     @State private var showingPhotos = false
     @State private var action: NodeAction?
     @State private var preview: URL?
-    @State private var sortByDate = false
+    // How this drive's lists are ordered, kept across launches; folders always come first.
+    @AppStorage("files.sortKey") private var sortKey = SortKey.name
+    @AppStorage("files.sortAscending") private var sortAscending = true
     @State private var query = ""
     @State private var tagFilter: String?
     @State private var pendingUploads: [(url: URL, name: String, type: UTType?)] = []
@@ -54,8 +56,7 @@ struct FolderView: View {
         if !needle.isEmpty {
             items = store.everything.filter { $0.name.localizedCaseInsensitiveContains(needle) }.sorted(by: Opened.byName)
         } else {
-            items = store.folders[folderId] ?? []
-            if sortByDate { items.sort { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) } }
+            items = sortKey.sort(store.folders[folderId] ?? [], ascending: sortAscending)
         }
         if let tagFilter { items = items.filter { store.tags.nodes(with: tagFilter).contains($0.id) } }
         return items
@@ -126,6 +127,24 @@ struct FolderView: View {
                                     }
                                 }
                             }
+                        }
+                    }
+                    if query.isEmpty {
+                        // The order, where the drives put it: a small line at the head of the list.
+                        Menu {
+                            ForEach(SortKey.allCases, id: \.self) { key in
+                                Button {
+                                    if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
+                                } label: {
+                                    if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(sortKey.label)
+                                Image(systemName: sortAscending ? "arrow.up" : "arrow.down").font(.caption2.weight(.semibold))
+                            }
+                            .font(.subheadline.weight(.medium)).textCase(nil)
                         }
                     }
                 }
@@ -202,13 +221,8 @@ struct FolderView: View {
                     Button("Upload Files", systemImage: "doc.badge.plus") { showingImporter = true }
                     // A picker inside a menu never presents; a button and a modifier do.
                     Button("Upload Photos", systemImage: "photo.badge.plus") { showingPhotos = true }
-                    Divider()
-                    Picker("Sort", selection: $sortByDate) {
-                        Label("Name", systemImage: "textformat").tag(false)
-                        Label("Date", systemImage: "calendar").tag(true)
-                    }
                 } label: {
-                    Image(systemName: "plus").font(.title2.weight(.semibold)).frame(width: 56, height: 56)
+                    Image(systemName: "plus").font(.title3.weight(.semibold)).frame(width: 50, height: 50)
                 }
                 .buttonStyle(.glassProminent)
                 .clipShape(Circle())
@@ -343,5 +357,40 @@ struct KeepBothSheet: View {
             }
         }
         .onAppear { for name in clashing { names[name] = DriveStore.freeName(name, among: taken) } }
+    }
+}
+
+/* What a folder list is ordered by. Folders come first whichever key is chosen, as every drive does it. */
+enum SortKey: String, CaseIterable {
+    case name, modified, size
+
+    var label: String {
+        switch self {
+        case .name: return "Name"
+        case .modified: return "Modified"
+        case .size: return "Size"
+        }
+    }
+
+    func sort(_ items: [Opened], ascending: Bool) -> [Opened] {
+        items.sorted { a, b in
+            if a.isFolder != b.isFolder { return a.isFolder }
+            let before: Bool
+            switch self {
+            case .name:
+                let order = a.name.localizedStandardCompare(b.name)
+                if order == .orderedSame { return a.id < b.id }
+                before = order == .orderedAscending
+            case .modified:
+                let x = a.modified ?? .distantPast, y = b.modified ?? .distantPast
+                if x == y { return Opened.byName(a, b) }
+                before = x < y
+            case .size:
+                let x = a.size ?? 0, y = b.size ?? 0
+                if x == y { return Opened.byName(a, b) }
+                before = x < y
+            }
+            return ascending ? before : !before
+        }
     }
 }

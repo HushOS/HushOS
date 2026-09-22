@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import UIKit
 import HushOSKit
 import Observation
@@ -76,8 +77,24 @@ final class DriveStore {
         }
     }
 
+    private let monitor = NWPathMonitor()
+
     init(vault: Vault) {
         self.vault = vault
+        // The offline line follows the network, not the next failed request: back online, the lists catch up at once.
+        monitor.pathUpdateHandler = { [weak self] path in
+            let reachable = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if reachable, self.offline {
+                    self.offline = false
+                    await self.sync()
+                } else if !reachable {
+                    self.offline = true
+                }
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.hushos.network"))
     }
 
     func loadRoot() async -> String? {
@@ -106,7 +123,10 @@ final class DriveStore {
 
     /* Pulls what changed since the cursor and redraws the lists it touched. */
     func sync() async {
-        guard let touched = try? await vault.sync(), !touched.isEmpty else { return }
+        guard let touched = try? await vault.sync() else { return }
+        // The feed answered: whatever the last request said, the server is reachable now.
+        offline = false
+        if touched.isEmpty { return }
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
             if let children = try? await vault.children(of: id) { folders[id] = children }
         }
@@ -129,7 +149,6 @@ final class DriveStore {
             await sync()
             let children = try await vault.children(of: id)
             folders[id] = children
-            offline = false
             for child in children { names[child.id] = child.name }
         } catch {
             report(error)

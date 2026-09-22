@@ -75,10 +75,12 @@ fun Vault.buildCatalogue() {
     if (catalogueState == CatalogueState.BUILDING || catalogueState == CatalogueState.READY) return
     val workspaceId = loadWorkspace().workspaceId
     catalogueState = CatalogueState.BUILDING
+    val started = System.currentTimeMillis()
     try {
         // One workspace per device: another account's tree is not kept beside this one.
         for (other in mirror.workspaces()) if (other != workspaceId) mirror.clear(other)
-        pullFeed(workspaceId)
+        // No network: the tree already on this phone opens as it was; the next sync catches up.
+        try { pullFeed(workspaceId) } catch (error: Unreachable) { if (mirror.cursor(workspaceId) == 0) throw error }
         var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
         if (orphans.isNotEmpty()) {
             // A row without its parent is a page this device missed: start over once.
@@ -87,8 +89,10 @@ fun Vault.buildCatalogue() {
             parentsFirst(mirror.rows(workspaceId)).let { ordered = it.first }
         }
         catalogueChildren.clear()
+        val pulled = System.currentTimeMillis()
         file(ordered)
         catalogueState = CatalogueState.READY
+        android.util.Log.i("HushOS", "catalogue: ${ordered.size} rows, feed ${pulled - started} ms, open ${System.currentTimeMillis() - pulled} ms")
     } catch (error: Exception) {
         catalogueState = CatalogueState.FAILED
         throw error

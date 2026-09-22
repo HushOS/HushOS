@@ -65,6 +65,11 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ToggleFloatingActionButton
 import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -125,7 +130,12 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var movingMany by rememberSaveable { mutableStateOf(false) }
     val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
-    val unfiltered = if (query.isBlank()) folderId?.let { state.folders[it] } ?: emptyList()
+    // How this drive's lists are ordered, kept across launches; folders always come first.
+    val prefs = LocalContext.current.getSharedPreferences("files", android.content.Context.MODE_PRIVATE)
+    var sortKey by rememberSaveable { mutableStateOf(prefs.getString("sortKey", "name") ?: "name") }
+    var sortAscending by rememberSaveable { mutableStateOf(prefs.getBoolean("sortAscending", true)) }
+    var sortMenu by remember { mutableStateOf(false) }
+    val unfiltered = if (query.isBlank()) sortItems(folderId?.let { state.folders[it] } ?: emptyList(), sortKey, sortAscending)
         else state.everything.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     val items = tagFilter?.let { id -> unfiltered.filter { it.id in state.tags.nodesWith(id) } } ?: unfiltered
     Scaffold(
@@ -150,11 +160,15 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                     title = { Text(current?.name ?: "Files") },
                     navigationIcon = { if (current != null) IconButton(onClick = { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
                     scrollBehavior = scroll,
+                    // Scrolling (or pulling to refresh) must not tint the bar: the sheet stays one colour.
+                    colors = TopAppBarDefaults.topAppBarColors(scrolledContainerColor = MaterialTheme.colorScheme.surface),
                 )
             }
         },
         floatingActionButton = {
+            // The menu pads its button a second time; pull it back to the usual 16dp from the edges.
             FloatingActionButtonMenu(
+                modifier = Modifier.offset(x = 16.dp, y = 16.dp),
                 expanded = fabOpen,
                 button = {
                     ToggleFloatingActionButton(checked = fabOpen, onCheckedChange = { fabOpen = it }) {
@@ -189,6 +203,26 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 8.dp))
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (tag in state.tags.tags) TagPill(tag, selected = tagFilter == tag.id) { tagFilter = if (tagFilter == tag.id) null else tag.id }
+            }
+        }
+        if (query.isBlank()) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The order, where the drives put it: a small line at the head of the list.
+            Box {
+                TextButton(onClick = { sortMenu = true }) {
+                    Text(sortLabel(sortKey))
+                    Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.padding(start = 4.dp).size(16.dp))
+                }
+                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                    for (key in listOf("name", "modified", "size")) DropdownMenuItem(
+                        text = { Text(sortLabel(key)) },
+                        trailingIcon = { if (key == sortKey) Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.size(16.dp)) },
+                        onClick = {
+                            if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
+                            prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
+                            sortMenu = false
+                        },
+                    )
+                }
             }
         }
         state.clipboard?.let { (clip, cut) ->
@@ -334,7 +368,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
             androidx.compose.material3.TextButton(onClick = { managingTags = true }) { Text("Manage") }
         }
         PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshRecents() }) {
-            if (rows.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (rows.isEmpty() && "recents" !in state.loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(if (query.isBlank()) "Files you add or change show up here." else "No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
             }
             LazyColumn(Modifier.fillMaxSize()) {
@@ -580,4 +614,17 @@ fun TrashScreen(model: DriveViewModel, state: DriveState) {
             dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Cancel") } },
         )
     }
+}
+
+fun sortLabel(key: String) = when (key) { "modified" -> "Modified"; "size" -> "Size"; else -> "Name" }
+
+/* Orders a folder's items by `key`; folders come first whichever key is chosen, as every drive does it. */
+fun sortItems(items: List<Opened>, key: String, ascending: Boolean): List<Opened> {
+    val byName = compareBy(String.CASE_INSENSITIVE_ORDER) { it: Opened -> it.name }.thenBy { it.id }
+    val byKey: Comparator<Opened> = when (key) {
+        "modified" -> compareBy<Opened> { it.modifiedMillis ?: Long.MIN_VALUE }.then(byName)
+        "size" -> compareBy<Opened> { it.size ?: 0L }.then(byName)
+        else -> byName
+    }
+    return items.sortedWith(compareBy<Opened> { !it.isFolder }.then(if (ascending) byKey else byKey.reversed()))
 }

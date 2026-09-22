@@ -90,7 +90,10 @@ extension Vault {
         do {
             // One workspace per device: another account's tree is not kept beside this one.
             for other in mirror.workspaces() where other != workspaceId { mirror.clear(other) }
-            _ = try await pullFeed(workspaceId)
+            do { _ = try await pullFeed(workspaceId) } catch DriveAPIError.transport(let message) {
+                // No network: the tree already on this phone opens as it was; the next sync catches up.
+                if mirror.cursor(workspaceId) == 0 { throw DriveAPIError.transport(message) }
+            }
             var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
             if !orphans.isEmpty {
                 // A row without its parent is a page this device missed: start over once.

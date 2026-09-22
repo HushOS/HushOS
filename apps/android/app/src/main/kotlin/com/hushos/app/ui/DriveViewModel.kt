@@ -89,7 +89,27 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private var vault: Vault? = null
     private val thumbnailTasks = HashSet<String>()
 
+    private val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
+    private val network = object : android.net.ConnectivityManager.NetworkCallback() {
+        // The offline line follows the network, not the next failed request: back online, the lists catch up at once.
+        override fun onAvailable(network: android.net.Network) {
+            if (!state.value.unreachable) return
+            _state.update { it.copy(unreachable = false) }
+            viewModelScope.launch { sync() }
+        }
+        override fun onLost(network: android.net.Network) {
+            // A switch from Wi-Fi to mobile loses one network while the other is already up: only no network at all is offline.
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(500)
+                if (connectivity.activeNetwork == null) _state.update { it.copy(unreachable = true) }
+            }
+        }
+    }
+
     init {
+        // Started without a network: say so at once rather than after the first request fails.
+        if (connectivity.activeNetwork == null) _state.update { it.copy(unreachable = true) }
+        runCatching { connectivity.registerDefaultNetworkCallback(network) }.onFailure { android.util.Log.w("HushOS", "network callback", it) }
         viewModelScope.launch {
             val user = withContext(Dispatchers.IO) { runCatching { Auth.currentUser(context) } }
             when {
@@ -133,6 +153,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() = _state.update { it.copy(error = null) }
 
+    override fun onCleared() {
+        runCatching { connectivity.unregisterNetworkCallback(network) }
+        super.onCleared()
+    }
+
     private fun begin(kind: String, name: String): String {
         val id = java.util.UUID.randomUUID().toString()
         _state.update { it.copy(transfers = it.transfers + TransferItem(id, kind, name, 0f)) }
@@ -155,7 +180,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun <T> io(block: (Vault) -> T): T? {
         val vault = vault ?: return null
         return try {
-            withContext(Dispatchers.IO) { block(vault) }.also { if (state.value.unreachable) _state.update { it.copy(unreachable = false) } }
+            withContext(Dispatchers.IO) { block(vault) }
         } catch (error: NotAuthenticated) {
             sessionLost()
             null
@@ -186,6 +211,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Pulls what changed since the cursor and redraws the lists it touched. */
     private suspend fun sync() {
         val touched = io { it.sync() } ?: return
+        // The feed answered: whatever the last request said, the server is reachable now.
+        if (state.value.unreachable) _state.update { it.copy(unreachable = false) }
         if (touched.isEmpty()) return
         redraw(state.value.folders.filter { (id, children) -> id in touched || children.any { it.id in touched } }.keys)
         // A kept file replaced elsewhere is fetched again, so the offline copy is the current one.
