@@ -119,7 +119,14 @@ class Vault(private val context: Context, val api: DriveApi) {
     @Synchronized
     fun loadWorkspace(): WorkspaceView {
         workspace?.let { return it }
-        val view = api.workspace()
+        // Kept sealed in the mirror, so a start without network still opens the drive.
+        val key = "workspace:${api.session.userId}"
+        val json = try {
+            api.workspaceJson().also { mirror.putDocument(key, it.toString()) }
+        } catch (error: Unreachable) {
+            mirror.document(key)?.let { JSONObject(it) } ?: throw error
+        }
+        val view = api.workspace(json)
         val grant = view.grant ?: throw ApiError(404, "No workspace grant")
         workspaceKey = workspaceOpen(api.session.userId, unlockAccount(), grant.grant)
         workspace = view

@@ -105,9 +105,18 @@ extension Vault {
     public func tags() async throws -> (registry: TagRegistry, version: Int) {
         let workspace = try await loadWorkspace()
         guard let key = workspaceKeyData() else { throw DriveAPIError.server(500, "Workspace not opened") }
-        guard let document = try await api.document(workspaceId: workspace.workspaceId, kind: Self.tagsKind) else {
-            return (.empty, 0)
+        // Kept sealed in the mirror, so the registry reads without network too.
+        struct Cached: Codable { let envelope: String?; let version: Int }
+        let cacheKey = "tags:\(workspace.workspaceId)"
+        let document: DocumentView?
+        do {
+            document = try await api.document(workspaceId: workspace.workspaceId, kind: Self.tagsKind)
+            if let data = try? JSONEncoder().encode(Cached(envelope: document?.envelope, version: document?.version ?? 0)) { mirror?.putDocument(cacheKey, data) }
+        } catch DriveAPIError.transport(let message) {
+            guard let data = mirror?.document(cacheKey), let cached = try? JSONDecoder().decode(Cached.self, from: data) else { throw DriveAPIError.transport(message) }
+            document = cached.envelope.map { DocumentView(kind: Self.tagsKind, version: cached.version, envelope: $0, updatedAt: "") }
         }
+        guard let document else { return (.empty, 0) }
         let json = try documentOpen(
             ctx: DocumentContext(workspaceId: workspace.workspaceId, kind: Self.tagsKind, version: UInt64(document.version)),
             workspaceKey: key, envelope: try base64urlDecode(value: document.envelope)

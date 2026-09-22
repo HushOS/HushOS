@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -135,6 +136,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var sortKey by rememberSaveable { mutableStateOf(prefs.getString("sortKey", "name") ?: "name") }
     var sortAscending by rememberSaveable { mutableStateOf(prefs.getBoolean("sortAscending", true)) }
     var sortMenu by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val listScope = rememberCoroutineScope()
     val unfiltered = if (query.isBlank()) sortItems(folderId?.let { state.folders[it] } ?: emptyList(), sortKey, sortAscending)
         else state.everything.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     val items = tagFilter?.let { id -> unfiltered.filter { it.id in state.tags.nodesWith(id) } } ?: unfiltered
@@ -174,6 +177,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                         if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
                                         prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
                                         sortMenu = false
+                                        // A new order starts at the top; the list would otherwise follow the row it was anchored to.
+                                        listScope.launch { listState.scrollToItem(0) }
                                     },
                                 )
                             }
@@ -241,8 +246,13 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Nothing here yet. Add files with the button, or from the Files app.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
                 }
+            } else if (query.isBlank() && (folderId == null || !state.folders.containsKey(folderId)) && state.unreachable && folderId !in state.loading) {
+                // Nothing on this phone for this folder and no network to fetch it: say so instead of a blank sheet.
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("This folder has not been opened on this phone yet. It will load when you are back online.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
+                }
             }
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(items, key = { it.id }) { item ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (picked.isNotEmpty()) androidx.compose.material3.Checkbox(checked = item.id in picked, onCheckedChange = { picked = if (it) picked + item.id else picked - item.id }, modifier = Modifier.padding(start = 8.dp))
@@ -368,9 +378,6 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
             androidx.compose.material3.TextButton(onClick = { managingTags = true }) { Text("Manage") }
         }
         PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshRecents() }) {
-            if (rows.isEmpty() && "recents" !in state.loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(if (query.isBlank()) "Files you add or change show up here." else "No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
-            }
             LazyColumn(Modifier.fillMaxSize()) {
                 if (query.isBlank() && tagFilter == null && state.offline.isNotEmpty()) {
                     // Kept files first, the way Dropbox lists Offline on Home: they open without the network.
@@ -389,6 +396,10 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
                 }
                 item { Text(heading, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
                 if ("recents" in state.loading && rows.isEmpty()) item(key = "loading") { androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
+                // The empty word sits in the list under its heading, never over the rows above it.
+                if (rows.isEmpty() && "recents" !in state.loading) item(key = "empty") {
+                    Text(if (query.isBlank()) "Files you add or change show up here." else "No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp))
+                }
                 items(rows, key = { it.id }) { item ->
                     NodeRow(model, state, item,
                         onClick = { if (!item.isFolder) scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } } },

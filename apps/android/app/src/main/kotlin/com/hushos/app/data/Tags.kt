@@ -88,7 +88,16 @@ private const val TAGS_KIND = "tags"
 /* The registry as the workspace holds it, with the version the next write is based on. */
 fun Vault.tags(): Pair<TagRegistry, Int> {
     val ws = workspaceId
-    val document = api.document(ws, TAGS_KIND) ?: return TagRegistry.empty() to 0
+    // Kept sealed in the mirror, so the registry reads without network too.
+    val key = "tags:$ws"
+    val document = try {
+        api.document(ws, TAGS_KIND).also { fetched ->
+            mirror.putDocument(key, org.json.JSONObject().put("envelope", fetched?.first ?: org.json.JSONObject.NULL).put("version", fetched?.second ?: 0).toString())
+        }
+    } catch (error: Unreachable) {
+        val cached = mirror.document(key)?.let { org.json.JSONObject(it) } ?: throw error
+        if (cached.isNull("envelope")) null else cached.getString("envelope") to cached.getInt("version")
+    } ?: return TagRegistry.empty() to 0
     val json = documentOpen(DocumentContext(ws, TAGS_KIND, document.second.toULong()), workspaceKey(), base64urlDecode(document.first))
     return TagRegistry.parse(json) to document.second
 }

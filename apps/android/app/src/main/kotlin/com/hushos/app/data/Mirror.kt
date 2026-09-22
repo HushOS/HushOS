@@ -25,6 +25,19 @@ class Mirror(context: Context) : SQLiteOpenHelper(context, "mirror.db", null, 1)
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
 
+    /* Sealed documents the app needs before it can ask the server: the workspace view, the tags registry. */
+    override fun onOpen(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, json TEXT NOT NULL)")
+    }
+
+    fun document(key: String): String? = readableDatabase.rawQuery("SELECT json FROM documents WHERE key = ?", arrayOf(key)).use {
+        if (it.moveToFirst()) it.getString(0) else null
+    }
+
+    fun putDocument(key: String, json: String) {
+        writableDatabase.insertWithOnConflict("documents", null, ContentValues().apply { put("key", key); put("json", json) }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
     /* The last change sequence applied for this workspace; 0 when nothing has been. */
     fun cursor(workspaceId: String): Int = readableDatabase.rawQuery("SELECT cursor FROM cursors WHERE workspace_id = ?", arrayOf(workspaceId)).use {
         if (it.moveToFirst()) it.getInt(0) else 0
@@ -62,7 +75,7 @@ class Mirror(context: Context) : SQLiteOpenHelper(context, "mirror.db", null, 1)
     /* Forgets everything about `workspaceId`, or every workspace when none is named. */
     fun clear(workspaceId: String? = null) {
         val db = writableDatabase
-        if (workspaceId == null) { db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null) }
+        if (workspaceId == null) { db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null); db.delete("documents", null, null) }
         else { db.delete("nodes", "workspace_id = ?", arrayOf(workspaceId)); db.delete("cursors", "workspace_id = ?", arrayOf(workspaceId)) }
     }
 

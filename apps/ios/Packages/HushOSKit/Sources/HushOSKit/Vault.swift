@@ -101,7 +101,16 @@ public actor Vault {
 
     public func loadWorkspace() async throws -> WorkspaceView {
         if let workspace { return workspace }
-        let view = try await api.workspace()
+        // Kept sealed in the mirror, so a start without network still opens the drive.
+        let key = "workspace:\(session.userId)"
+        let view: WorkspaceView
+        do {
+            view = try await api.workspace()
+            if let data = try? JSONEncoder().encode(view) { mirror?.putDocument(key, data) }
+        } catch DriveAPIError.transport(let message) {
+            guard let data = mirror?.document(key), let cached = try? JSONDecoder().decode(WorkspaceView.self, from: data) else { throw DriveAPIError.transport(message) }
+            view = cached
+        }
         guard let grant = view.grant else { throw DriveAPIError.server(404, "No workspace grant") }
         workspaceKey = try workspaceOpen(userId: session.userId, accountKey: try unlockAccount(), grant: grant.grant)
         workspace = view

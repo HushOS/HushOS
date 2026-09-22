@@ -22,6 +22,16 @@ final class Mirror {
         exec("CREATE INDEX IF NOT EXISTS nodes_workspace ON nodes (workspace_id)")
         exec("CREATE TABLE IF NOT EXISTS cursors (workspace_id TEXT PRIMARY KEY, cursor INTEGER NOT NULL)")
         exec("CREATE TABLE IF NOT EXISTS thumbnails (version_id TEXT PRIMARY KEY, bytes BLOB NOT NULL)")
+        // Sealed documents the app needs before it can ask the server: the workspace view, the tags registry.
+        exec("CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, json BLOB NOT NULL)")
+    }
+
+    func document(_ key: String) -> Data? {
+        query("SELECT json FROM documents WHERE key = ?", bind: [key]) { blob($0, 0) }.first
+    }
+
+    func putDocument(_ key: String, _ json: Data) {
+        run("INSERT OR REPLACE INTO documents (key, json) VALUES (?, ?)", bind: [key, json])
     }
 
     deinit { sqlite3_close(db) }
@@ -107,6 +117,7 @@ final class Mirror {
             exec("DELETE FROM nodes")
             exec("DELETE FROM cursors")
             exec("DELETE FROM thumbnails")
+            exec("DELETE FROM documents")
         }
         exec("COMMIT")
     }

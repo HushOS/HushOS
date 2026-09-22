@@ -131,10 +131,12 @@ class DriveApi(val session: Shared.Session) {
 
     // Reads
 
-    fun workspace(): WorkspaceView = get("/workspace").let {
-        WorkspaceView(it.getString("workspaceId"), it.optInt("changeSeq"), it.optJSONObject("grant")?.let { g -> GrantView(g) },
-            it.optJSONObject("root")?.let { r -> NodeView.from(r) })
-    }
+    /* The workspace as the server serves it, so the caller can keep the bytes for a start without network. */
+    fun workspaceJson(): JSONObject = get("/workspace")
+
+    fun workspace(json: JSONObject = workspaceJson()): WorkspaceView =
+        WorkspaceView(json.getString("workspaceId"), json.optInt("changeSeq"), json.optJSONObject("grant")?.let { g -> GrantView(g) },
+            json.optJSONObject("root")?.let { r -> NodeView.from(r) })
 
     fun children(nodeId: String, workspaceId: String, after: String?): Listing =
         get("/nodes/$nodeId/children" + q("workspaceId" to workspaceId, "after" to after)).let {
