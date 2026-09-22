@@ -1,0 +1,55 @@
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 184-185,191,193,195
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_de0e5293e39e1a::t_e323a406471427 233-241
+packages/drive/src/downloads.ts
+  s_de0e5293e39e1a::t_f5ab3cd0effc07 11,103-104,129-136,340-348
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 248,258-259
+apps/android/app/src/test/kotlin/com/hushos/app/data/ResumableTest.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 1-64
+apps/android/app/src/main/kotlin/com/hushos/app/data/Resumable.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 1-100
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Resumable.swift
+  s_de0e5293e39e1a::t_c32c94bd168471 1-40,42-73,75-130
+  s_de0e5293e39e1a::t_e323a406471427 41,74
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_de0e5293e39e1a::t_e323a406471427 272-279,281
+apps/android/app/src/main/kotlin/com/hushos/app/data/Links.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 231-235
+apps/android/gradle/libs.versions.toml
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 2,20
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 450,454-458,690-697
+apps/android/app/build.gradle.kts
+  s_de0e5293e39e1a::t_a6f0b9c57cfb11 65
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_de0e5293e39e1a::t_e323a406471427 265-272,274
+packages/drive/src/downloads.test.ts
+  s_de0e5293e39e1a::t_97d95c7a3aff70 89,222,286-302
+  s_de0e5293e39e1a::t_2c6d143804b809 303-304
+packages/drive/src/transfers.test.ts
+  s_de0e5293e39e1a::t_97d95c7a3aff70 84,292,450-467
+  s_de0e5293e39e1a::t_37209406988038 468-471
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ResumableTests.swift
+  s_de0e5293e39e1a::t_c32c94bd168471 1-63
+packages/drive/src/transfers.ts
+  s_de0e5293e39e1a::t_c6b385499da0d1 193-195,689-691,705-706
+  s_de0e5293e39e1a::t_01c6d1f339a2b3 132-133,182-192,196,241,686-688,699-703,709
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "67c7584bc2d8064e794c0ea28d613030f70e43bb",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
