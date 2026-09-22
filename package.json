@@ -28,6 +28,8 @@
         "ios:open": "cd apps/ios && open HushOS.xcodeproj",
         "android:build": "cd apps/android && JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@21} ./gradlew :app:assembleDebug -q",
         "android:run": "bun run android:build && apps/android/scripts/run-emulator.sh",
+        "android:device": "bun run android:build && adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk",
+        "ios:device": "bun run ios:project && apps/ios/scripts/run-device.sh",
         "setup": "bun scripts/setup.ts",
         "infra:up": "docker compose -f compose.yaml -f compose.dev.yaml up -d --wait db mailhog minio && docker compose -f compose.yaml -f compose.dev.yaml up --no-log-prefix minio-init",
         "infra:down": "docker compose -f compose.yaml -f compose.dev.yaml stop db mailhog minio",

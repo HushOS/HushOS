@@ -44,3 +44,10 @@ Home (search pill, type chips, tags row with a manager, recent files), Files (th
 - Keep downloaded is the app's own feature (`Offline.swift`, app group container, one folder per version, an Offline section on Home): iOS Files never offers "Keep Downloaded" to third-party providers, even with `NSExtensionFileProviderSupportsPinning` and `allowsEvicting`, and `contentPolicy`'s keep-downloaded case is macOS-only. Files' "Download Now" does work through `fetchContents`.
 - The File Provider domain is kept across launches (removing it dropped Files' cache); a fresh install still registers it anew. A Photos picker inside a Menu never presents; use a button and `.photosPicker`. Transfers hold a UIKit background task so a lock or Home press does not suspend them at once.
 - Live Activity: requested, updated and ended correctly (ActivityKit log, SpringBoard aperture assertions), but the compact island content was not legible in simulator captures; check on a device.
+
+## Running on a real iPhone (added 2026-09-22 evening)
+
+- `DEVELOPMENT_TEAM=<team id> bun run ios:device` builds for the plugged-in iPhone with automatic signing and installs it through `devicectl`. Xcode must be signed in to an Apple Developer Program account: the app group and keychain sharing are not available to free accounts.
+- Entitlements come from `App/HushOS.xcconfig`, not from the XcodeGen `entitlements:` block (a target-level setting would shadow the per-SDK choice): the simulator gets `App/HushOS-Simulator.entitlements` (adds the File Provider testing mode), a device gets `App/HushOS.entitlements`. Check what a simulator build embeds by reading the binary's `__TEXT,__entitlements` section; `codesign -d --entitlements` shows nothing there.
+- On a device the Files location starts disabled: Files > Browse > the ... menu > Edit > turn HushOS on.
+- A real phone defaults to `https://hushos.com` (`AppModel.defaultOrigin` under `#if !targetEnvironment(simulator)`); the simulator keeps `http://localhost:5173`. The origin can be changed on the sign-in screen either way.

@@ -36,13 +36,11 @@ targets:
               embed: true
             - target: HushOSWidgets
               embed: true
-        entitlements:
-            path: App/HushOS.entitlements
-            properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
-                # Lets simulator debug builds enable the Files location without the manual toggle (see FilesDomain).
-                com.apple.developer.fileprovider.testing-mode: true
+        # Simulator builds swap in an entitlements file with the File Provider testing mode (see FilesDomain); a device build must not carry it.
+        configFiles:
+            Debug: App/HushOS.xcconfig
+            Release: App/HushOS.xcconfig
+        # Entitlements come from the xcconfig, not from here: a target-level setting would shadow the per-SDK choice.
         info:
             path: App/Info.plist
             properties:

@@ -38,3 +38,8 @@ The same four tabs as iOS: Home (search, type chips, tags row and manager with p
 - Keep downloaded lives in `data/Offline.kt` (private storage, one folder per version) with an Offline section on Home; the item sheet scrolls, and the action sits right under Rename so it is reachable without scrolling.
 - Every folder handed to another app through `FileProvider` must be listed in `res/xml/shared_paths.xml` (`opened/` and `links/` under cache, `offline/` under files); a missing entry crashes with "Failed to find configured root".
 - Compose dialogs shift up when the keyboard opens: read positions again after typing, and hide the keyboard with Back (not Escape, which dismisses the dialog) before tapping a dialog button.
+
+## Running on a real phone (added 2026-09-22 evening)
+
+- Enable Developer options and USB debugging on the phone, plug it in, accept the debugging prompt, then `bun run android:device` (builds the debug APK and `adb install -r`s it). The debug APK also sideloads from `apps/android/app/build/outputs/apk/debug/app-debug.apk`.
+- A real phone defaults to `https://hushos.com` (`defaultOrigin()` in `DriveViewModel.kt` checks the build fingerprint); the emulator keeps `http://localhost:5173` through `adb reverse`.

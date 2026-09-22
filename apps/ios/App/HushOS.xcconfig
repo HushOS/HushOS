@@ -1,0 +1,4 @@
+// Per-SDK settings the XcodeGen spec cannot express: the simulator gets the
+// File Provider testing-mode entitlement, a device build keeps the plain one.
+CODE_SIGN_ENTITLEMENTS = App/HushOS.entitlements
+CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = App/HushOS-Simulator.entitlements
