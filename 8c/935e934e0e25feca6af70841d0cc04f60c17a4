@@ -1,0 +1,27 @@
+apps/android/app/build.gradle.kts
+  s_de0e5293e39e1a::t_0b94351741b471 32
+  s_de0e5293e39e1a::t_4bd545eec2bae4 23,25-26,30-31,33-35
+apps/android/app/proguard-rules.pro
+  s_de0e5293e39e1a::t_0b94351741b471 4,6
+  s_de0e5293e39e1a::t_bf079d99529209 5,7
+apps/android/AGENTS.md
+  s_de0e5293e39e1a::t_02b1e6f5a16ac8 44
+package.json
+  s_de0e5293e39e1a::t_c3b00e7b6f747d 31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8c935e934e0e25feca6af70841d0cc04f60c17a4",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
