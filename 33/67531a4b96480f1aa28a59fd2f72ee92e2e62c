@@ -1,0 +1,19 @@
+apps/ios/App/Assets.xcassets/LaunchBackground.colorset/Contents.json
+  s_de0e5293e39e1a::t_fe41a8eff080b6 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3367531a4b96480f1aa28a59fd2f72ee92e2e62c",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
