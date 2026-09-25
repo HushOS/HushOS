@@ -224,8 +224,11 @@ struct TransferRow: View {
                 if let message = item.message { Text(message).font(prominent ? .subheadline : .caption).foregroundStyle(.red).lineLimit(3) }
             }
             Spacer(minLength: 0)
-            Text(item.failed ? "Failed" : item.done ? "Done" : item.waiting ? (offline ? "Waiting" : "Queued") : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
-                .font((prominent ? Font.footnote : Font.caption).monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing)
+            // A finished row says how it ended with its icon (and a failure with its reason); only what is still moving gets words here.
+            if !item.done {
+                Text(item.waiting ? (offline ? "Waiting" : "Queued") : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
+                    .font((prominent ? Font.footnote : Font.caption).monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing)
+            }
             if item.canRetry {
                 Button { retry(item) } label: { Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold)) }
                     .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Retry \(item.name)")
@@ -280,7 +283,11 @@ enum TransferSummary {
 
     static func headline(_ transfers: [DriveStore.TransferItem], offline: Bool) -> String {
         let running = transfers.filter { !$0.done }
-        if running.isEmpty { return transfers.contains(where: \.failed) ? "Some transfers failed" : "Done" }
+        // How it ended, in words, as the web's panel says it: a bare "Done" read as a button.
+        if running.isEmpty {
+            if transfers.contains(where: \.failed) { return "Some transfers failed" }
+            return transfers.count == 1 ? "1 transfer finished" : "\(transfers.count) transfers finished"
+        }
         if running.allSatisfy(\.waiting) { return offline ? "Waiting for a network" : "Queued" }
         let uploads = running.filter { $0.kind == .upload }.count
         if uploads == running.count { return uploads == 1 ? "Uploading" : "Uploading \(uploads) files" }

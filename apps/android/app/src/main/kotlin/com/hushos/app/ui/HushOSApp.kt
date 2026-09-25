@@ -165,7 +165,8 @@ private fun OfflineBanner() {
 private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean, close: () -> Unit, collapsed: Boolean, toggle: () -> Unit) {
     val running = transfers.filter { !it.done }
     val headline = when {
-        running.isEmpty() -> if (transfers.any { it.failed }) "Some transfers failed" else "Done"
+        // How it ended, in words, as the web's panel says it: a bare "Done" read as a button.
+        running.isEmpty() -> if (transfers.any { it.failed }) "Some transfers failed" else if (transfers.size == 1) "1 transfer finished" else "${transfers.size} transfers finished"
         running.all { it.waiting } -> if (offline) "Waiting for a network" else "Queued"
         running.all { it.kind == "upload" } -> if (running.size == 1) "Uploading" else "Uploading ${running.size} files"
         running.size == 1 -> when (running[0].kind) { "copy" -> "Copying"; "keep" -> "Keeping downloaded"; "rotate" -> "Rotating keys"; else -> "Downloading" }
@@ -201,7 +202,8 @@ private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean, close
                             // The reason, in the server's words where it refused: what to do next is in it.
                             item.message?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, maxLines = 3, modifier = Modifier.padding(top = 2.dp)) }
                         }
-                        Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.waiting) (if (offline) "Waiting" else "Queued") else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
+                        // A finished row says how it ended with its icon (and a failure with its reason); only what is still moving gets words here.
+                        if (!item.done) Text(if (item.waiting) (if (offline) "Waiting" else "Queued") else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         item.cancel?.let { cancel ->
                             IconButton(onClick = cancel, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Cancel ${item.name}", modifier = Modifier.size(18.dp)) }
