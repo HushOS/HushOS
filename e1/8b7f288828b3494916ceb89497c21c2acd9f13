@@ -1,0 +1,31 @@
+apps/ios/App/BackgroundTransfers.swift
+  s_de0e5293e39e1a::t_3f348abeeae570 152,154-157,159-162,171-173
+  s_de0e5293e39e1a::t_41e8686e22426e 151,153,158,163-170,376-400
+apps/ios/App/DriveStore.swift
+  s_de0e5293e39e1a::t_3f348abeeae570 46,48-49,75,79-80,83,87,89-91,93-97,99-101,147-152,245-248,328-329,338-343,348-352,373,384,386-387,390-391,414,420-422,441,444-446,448-450,571
+  s_de0e5293e39e1a::t_188e64d8072675 50-51,88,92,98,102-146,593
+apps/ios/App/MainView.swift
+  s_de0e5293e39e1a::t_9e07c3c4f9e974 53-56,188
+  s_de0e5293e39e1a::t_bd24eb2b8357ef 113-114
+  s_de0e5293e39e1a::t_53300b5c31f1fb 52
+  s_de0e5293e39e1a::t_b6e5e0e11eacf3 13-14,111-112,164,170
+  s_de0e5293e39e1a::t_188e64d8072675 64,73,104,106,110
+  s_de0e5293e39e1a::t_b41a250c8ccb4c 51
+  s_de0e5293e39e1a::t_1ad86ac9cc9bab 57-63,65-66,72,74-75,101-103,105,142-162,165-169,171-173,180-181,183,186-187,189-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e18b7f288828b3494916ceb89497c21c2acd9f13",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
