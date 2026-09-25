@@ -20,6 +20,8 @@ import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +54,11 @@ fun mimeOf(item: Opened): String? = item.metadata.mime ?: android.webkit.MimeTyp
 /* One node in a list: a thumbnail or a type icon, the name, size and date. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () -> Unit, onLongClick: () -> Unit, note: String? = null) {
+fun NodeRow(
+    model: DriveViewModel, state: DriveState, item: Opened, onClick: () -> Unit, onLongClick: () -> Unit, note: String? = null,
+    /* Picked while selecting: the row takes the selection tint and its icon becomes a check, as Drive and Files do. */
+    selected: Boolean = false,
+) {
     LaunchedEffect(item.id) { model.thumbnail(item) }
     val thumbnail = state.thumbnails[item.id]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
@@ -75,10 +81,15 @@ fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () 
             }
         },
         leadingContent = {
-            if (bitmap != null) {
+            if (selected) {
+                Box(Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.primary), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
+                }
+            } else if (bitmap != null) {
                 Image(bitmap.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop,
                     modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)))
-            } else {
+            } else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                // Every leading image takes the same 40dp slot (thumbnail, icon or the selection check), so names never shift.
                 val mime = mimeOf(item) ?: ""
                 Icon(
                     when {
@@ -104,6 +115,9 @@ fun NodeRow(model: DriveViewModel, state: DriveState, item: Opened, onClick: () 
                 else CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
             }
         },
+        colors = androidx.compose.material3.ListItemDefaults.colors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+        ),
         modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
     )
 }

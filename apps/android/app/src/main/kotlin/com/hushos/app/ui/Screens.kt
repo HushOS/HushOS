@@ -290,18 +290,15 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             }
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(items, key = { it.id }) { item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (picked.isNotEmpty()) androidx.compose.material3.Checkbox(checked = item.id in picked, onCheckedChange = { picked = if (it) picked + item.id else picked - item.id }, modifier = Modifier.padding(start = 8.dp))
-                        Box(Modifier.weight(1f)) {
-                            NodeRow(model, state, item,
-                                onClick = {
-                                    if (picked.isNotEmpty()) picked = if (item.id in picked) picked - item.id else picked + item.id
-                                    else if (item.isFolder) { query = ""; stack.add(item) }
-                                    else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } }
-                                },
-                                onLongClick = { if (picked.isEmpty()) selected = item else picked = picked + item.id })
-                        }
-                    }
+                    // No checkbox column: while selecting, a tap toggles and a picked row shows its tint and check.
+                    NodeRow(model, state, item,
+                        onClick = {
+                            if (picked.isNotEmpty()) picked = if (item.id in picked) picked - item.id else picked + item.id
+                            else if (item.isFolder) { query = ""; stack.add(item) }
+                            else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } }
+                        },
+                        onLongClick = { if (picked.isEmpty()) selected = item else picked = if (item.id in picked) picked - item.id else picked + item.id },
+                        selected = item.id in picked)
                 }
             }
         }
