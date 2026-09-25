@@ -40,10 +40,19 @@ struct MainView: View {
                 .overlay(alignment: .bottom) {
                     VStack(spacing: 8) {
                         // Above the add button, which sits over this corner on Files and would cover Undo.
-                        if let notice = store.notice { NoticeBar(notice: notice, dismiss: { store.notice = nil }).padding(.bottom, store.transfers.isEmpty ? 70 : 0) }
-                        if !store.transfers.isEmpty { TransferPanel(transfers: store.transfers) }
+                        if let notice = store.notice { NoticeBar(notice: notice, dismiss: { store.notice = nil }) }
+                        let queued = BackgroundTransfers.shared.records.map { record in
+                            DriveStore.TransferItem(
+                                kind: record.kind == .upload ? .upload : .keep, name: record.name,
+                                fraction: BackgroundTransfers.shared.fraction(of: record),
+                                done: record.state == .done || record.state == .failed, failed: record.state == .failed,
+                                waiting: record.state == .waiting, queuedId: record.state == .done ? nil : record.id
+                            )
+                        }
+                        if !(queued + store.transfers).isEmpty { TransferPanel(transfers: queued + store.transfers, offline: store.offline) }
                     }
-                    .padding(.bottom, 64)
+                    // Above the tab bar and the add button, which sits over this corner on Files.
+                    .padding(.bottom, 134)
                     .animation(.snappy, value: store.notice?.id)
                 }
                 // While the app is on screen the lists follow the server; in the background nothing polls.
@@ -72,10 +81,12 @@ struct MainView: View {
 /* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
 struct TransferPanel: View {
     let transfers: [DriveStore.TransferItem]
+    var offline = false
 
     private var headline: String {
         let running = transfers.filter { !$0.done }
         if running.isEmpty { return transfers.contains(where: \.failed) ? "Some transfers failed" : "Done" }
+        if running.allSatisfy(\.waiting) { return offline ? "Waiting for a network" : "Queued" }
         let uploads = running.filter { $0.kind == .upload }.count
         if uploads == running.count { return uploads == 1 ? "Uploading" : "Uploading \(uploads) files" }
         return running.count == 1 ? verb(running[0].kind) : "\(running.count) transfers"
@@ -105,10 +116,14 @@ struct TransferPanel: View {
                         .foregroundStyle(item.failed ? Color.red : item.done ? Color.green : Color.accentColor)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(item.name).font(.footnote).lineLimit(1)
-                        if !item.done, item.kind != .rotate { ProgressView(value: item.fraction) }
+                        if !item.done, !item.waiting, item.kind != .rotate { ProgressView(value: item.fraction) }
                     }
-                    Text(item.failed ? "Failed" : item.done ? "Done" : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
+                    Text(item.failed ? "Failed" : item.done ? "Done" : item.waiting ? (offline ? "Waiting" : "Queued") : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing)
+                    if let queuedId = item.queuedId {
+                        Button { Task { await BackgroundTransfers.shared.cancel(queuedId) } } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
+                            .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Cancel \(item.name)")
+                    }
                 }
             }
         }

@@ -74,6 +74,9 @@ targets:
                 ITSAppUsesNonExemptEncryption: false
                 NSFileProviderDomainUsageDescription: HushOS keeps your encrypted files available in the Files app.
                 NSSupportsLiveActivities: true
+                # Background transfers: iOS runs this task with a network to start uploads and keeps queued offline.
+                BGTaskSchedulerPermittedIdentifiers: [com.hushos.app.transfers.start]
+                UIBackgroundModes: [processing, fetch]
         settings:
             base:
                 PRODUCT_BUNDLE_IDENTIFIER: com.hushos.app

@@ -151,10 +151,24 @@ extension Vault {
      * `replacing`. Chunks are read from the file one at a time, encrypted here
      * and PUT to the store; a thumbnail, when given, rides after the last chunk.
      */
-    public func upload(
-        fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
-        thumbnail: Data? = nil, progress: @Sendable (Double) -> Void = { _ in }
-    ) async throws -> Opened {
+    /* What an upload settles before its first byte: the node (new, or the one replaced), the sealed version, the server's upload. */
+    private struct Begun {
+        let workspaceId: String
+        let uploadId: String
+        let nodeId: String
+        let parentId: String
+        let nodeKey: Data
+        let content: Content
+        let chunkCount: UInt64
+        let chunkBytes: UInt64
+        let plaintextSize: UInt64
+        let urls: [Int: PartUrl]
+        /* The metadata to show once it lands: a replacement's own, with the new size and date. */
+        let final: NodeMetadata
+        let replacing: Bool
+    }
+
+    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnailBytes: UInt32) async throws -> Begun {
         _ = try await loadWorkspace()
         let workspace = Target(workspaceId: try await workspaceId(of: parentId))
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
@@ -164,19 +178,19 @@ extension Vault {
         let objectId = newId()
         let contentKey = try randomBytes(length: 32)
         let contentNonce = try randomBytes(length: 16)
-        let thumbnailBytes = UInt32(thumbnail?.count ?? 0)
 
         let nodeId: String
         let nodeKey: Data
         var nodeInput: [String: Any]
-        let metadata: NodeMetadata
+        let final: NodeMetadata
         if let replacing {
             nodeId = replacing.id
             guard let key = self.nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
             nodeKey = key
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
-            metadata = replacing.metadata
+            // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
+            final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified)
         } else {
             let parent = try await resolve(parentId)
             guard let parentKey = self.nodeKey(parent.id) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
@@ -185,8 +199,8 @@ extension Vault {
             nodeKey = try randomBytes(length: 32)
             let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: nodeId, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
             let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: nodeKey)
-            metadata = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified)
-            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: metadata)
+            final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified)
+            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)
             nodeInput = ["existing": false, "id": nodeId, "parentId": parent.id, "keyEpoch": epochs.from,
                          "parentKeyEpoch": parent.node.keyEpoch, "keyEnvelope": base64urlEncode(bytes: wrapped),
                          "metadataEnvelope": base64urlEncode(bytes: sealed)]
@@ -208,57 +222,169 @@ extension Vault {
         ])
         var urls: [Int: PartUrl] = [:]
         for part in begun.parts { urls[part.partNumber] = part }
+        return Begun(
+            workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
+            content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
+            urls: urls, final: final, replacing: replacing != nil
+        )
+    }
+
+    /* One part's sealed bytes: the chunk's ciphertext, and on the last the thumbnail trailer. */
+    private func sealPart(_ begun: Begun, index: UInt64, from handle: FileHandle, thumbnail: Data?) throws -> Data {
+        let length = chunkLength(plaintextSize: begun.plaintextSize, index: index)
+        try handle.seek(toOffset: index * begun.chunkBytes)
+        let plaintext = try handle.read(upToCount: Int(length)) ?? Data()
+        if UInt64(plaintext.count) != length { throw DriveAPIError.server(500, "The file changed while uploading.") }
+        var sealed = try chunkEncrypt(content: begun.content, index: index, plaintext: plaintext)
+        if index == begun.chunkCount - 1, let thumbnail, begun.content.thumbnailBytes > 0 {
+            sealed.append(try thumbnailEncrypt(content: begun.content, thumbnail: thumbnail))
+        }
+        return sealed
+    }
+
+    /* Completes on the server with every part's ETag; a replacement's metadata is sealed again with its new size and date. */
+    private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing: Bool,
+                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String]) async throws -> Opened {
+        // Built here, not passed in: a dictionary of Any made in this call can be handed to the API; a parameter could not.
+        let parts: [[String: Any]] = etags.keys.sorted().map { ["partNumber": $0, "etag": etags[$0]!] }
+        let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
+        guard var node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
+        if replacing {
+            var key = knownKey ?? self.nodeKey(nodeId)
+            if key == nil { _ = try await resolve(nodeId); key = self.nodeKey(nodeId) }
+            guard let nodeKey = key else { throw DriveAPIError.server(500, "Node not opened") }
+            let sealed = try metadataSeal(
+                ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
+                nodeKey: nodeKey, metadata: final
+            )
+            node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed))
+            return adopt(node, nodeKey: nodeKey, metadata: final)
+        }
+        if let knownKey { return adopt(node, nodeKey: knownKey, metadata: final) }
+        // Finished by another launch: the node key comes from the parent's, which the tree opens.
+        _ = try await resolve(parentId)
+        return try open(node)
+    }
+
+    public func upload(
+        fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
+        thumbnail: Data? = nil, progress: @Sendable (Double) -> Void = { _ in }
+    ) async throws -> Opened {
+        let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0))
+        var urls = begun.urls
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
-        var etags: [[String: Any]] = []
+        var etags: [Int: String] = [:]
         do {
-            for index in 0 ..< layout.chunkCount {
+            for index in 0 ..< begun.chunkCount {
                 try Task.checkCancellation()
                 let partNumber = Int(index) + 1
                 if urls[partNumber] == nil {
-                    let more = try await api.partUrls(uploadId: begun.upload.id, workspaceId: workspace.workspaceId, from: partNumber, count: 64)
+                    let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
                     for part in more.parts { urls[part.partNumber] = part }
                 }
                 guard let part = urls[partNumber], let url = URL(string: part.url) else {
                     throw DriveAPIError.server(500, "No URL for part \(partNumber)")
                 }
-                let length = chunkLength(plaintextSize: plaintextSize, index: index)
-                try handle.seek(toOffset: index * layout.chunkBytes)
-                let plaintext = try handle.read(upToCount: Int(length)) ?? Data()
-                if UInt64(plaintext.count) != length { throw DriveAPIError.server(500, "The file changed while uploading.") }
-                var sealed = try chunkEncrypt(content: content, index: index, plaintext: plaintext)
-                if index == layout.chunkCount - 1, let thumbnail, thumbnailBytes > 0 {
-                    sealed.append(try thumbnailEncrypt(content: content, thumbnail: thumbnail))
-                }
+                let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)
                 // A part the network dropped is sent again; an expired address is fetched fresh first.
                 var partURL = url
                 let etag = try await Resumable.run(onExpired: {
-                    let more = try await api.partUrls(uploadId: begun.upload.id, workspaceId: workspace.workspaceId, from: partNumber, count: 64)
+                    let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
                     for part in more.parts { urls[part.partNumber] = part }
                     if let fresh = urls[partNumber].flatMap({ URL(string: $0.url) }) { partURL = fresh }
                 }) {
                     try await api.putPart(partURL, data: sealed)
                 }
-                etags.append(["partNumber": partNumber, "etag": etag])
-                progress(Double(index + 1) / Double(layout.chunkCount))
+                etags[partNumber] = etag
+                progress(Double(index + 1) / Double(begun.chunkCount))
             }
         } catch {
-            await api.abortUpload(uploadId: begun.upload.id, workspaceId: workspace.workspaceId)
+            await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
             throw error
         }
-        let completed = try await api.completeUpload(uploadId: begun.upload.id, workspaceId: workspace.workspaceId, parts: etags)
-        guard var node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
-        var final = metadata
-        if replacing != nil {
-            // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
-            final = NodeMetadata(name: metadata.name, mime: mime ?? metadata.mime, size: plaintextSize, modified: modified)
-            let sealed = try metadataSeal(
-                ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
-                nodeKey: nodeKey, metadata: final
+        return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
+                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags)
+    }
+
+    // MARK: - Uploads another process sends
+
+    /*
+     * An upload split for a background transfer: sealed here (the server's upload
+     * begun, every part encrypted into `directory` as `part-N`), sent by whoever
+     * holds the parts (the system's background session), finished here. No key is
+     * kept between the two: parts are ciphertext, and finishing needs only ETags.
+     */
+    public struct SealedUpload: Codable, Sendable, Equatable {
+        public let uploadId: String
+        public let workspaceId: String
+        public let nodeId: String
+        public let parentId: String
+        public let partCount: Int
+        public let replacing: Bool
+        /* The metadata to show once it lands (stored field by field: the core's type is not Codable). */
+        public let name: String
+        public let mime: String?
+        public let size: UInt64?
+        public let modified: String?
+        /* Presigned PUT addresses by part number; refreshed when they expire. */
+        public var urls: [Int: String]
+    }
+
+    public func sealUpload(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
+                           thumbnail: Data?, into directory: URL) async throws -> SealedUpload {
+        let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0))
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? handle.close() }
+            for index in 0 ..< begun.chunkCount {
+                try Task.checkCancellation()
+                let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)
+                try sealed.write(to: directory.appendingPathComponent("part-\(index + 1)"), options: .atomic)
+            }
+            var urls = begun.urls
+            if urls.count < Int(begun.chunkCount) {
+                var from = urls.count + 1
+                while from <= Int(begun.chunkCount) {
+                    let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: from, count: 64)
+                    for part in more.parts { urls[part.partNumber] = part }
+                    from += max(more.parts.count, 1)
+                }
+            }
+            return SealedUpload(
+                uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
+                partCount: Int(begun.chunkCount), replacing: begun.replacing,
+                name: begun.final.name, mime: begun.final.mime, size: begun.final.size, modified: begun.final.modified,
+                urls: urls.mapValues(\.url)
             )
-            node = try await api.rename(nodeId: nodeId, workspaceId: workspace.workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed))
+        } catch {
+            await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+            throw error
         }
-        return adopt(node, nodeKey: nodeKey, metadata: final)
+    }
+
+    /* Fresh addresses for parts whose address expired. */
+    public func partAddresses(for sealed: SealedUpload, parts: [Int]) async throws -> [Int: String] {
+        var fresh: [Int: String] = [:]
+        for part in parts.sorted() where fresh[part] == nil {
+            let more = try await api.partUrls(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, from: part, count: 64)
+            for url in more.parts { fresh[url.partNumber] = url.url }
+        }
+        return fresh
+    }
+
+    public func finishUpload(_ sealed: SealedUpload, etags: [Int: String]) async throws -> Opened {
+        try await complete(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, nodeId: sealed.nodeId, parentId: sealed.parentId,
+                                  replacing: sealed.replacing,
+                                  final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified),
+                                  nodeKey: nil, etags: etags)
+    }
+
+    public func abortUpload(_ sealed: SealedUpload) async {
+        await api.abortUpload(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId)
     }
 
     // MARK: - Changes

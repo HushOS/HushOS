@@ -41,6 +41,10 @@ final class DriveStore {
         var fraction: Double
         var done = false
         var failed = false
+        /* Queued and waiting for a network (or to be sealed); shown without a bar. */
+        var waiting = false
+        /* A background transfer, which the panel can cancel. */
+        var queuedId: UUID? = nil
     }
     var transfers: [TransferItem] = []
     /* Files being fetched to open, by node id, with progress: a spinner on the row, not a banner. */
@@ -80,6 +84,16 @@ final class DriveStore {
 
     init(vault: Vault) {
         self.vault = vault
+        // The background queue shares this vault, and a landed transfer redraws the lists.
+        BackgroundTransfers.shared.vault = vault
+        BackgroundTransfers.shared.onLanded = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.sync()
+                for id in self.folders.keys { await self.refresh(folder: id) }
+                self.offlineVersion += 1
+            }
+        }
         // The offline line follows the network, not the next failed request: back online, the lists catch up at once.
         // The same process-wide watch the transfers wait on, so the line and the waits never disagree.
         if !NetworkWatch.shared.online { offline = true }
@@ -311,7 +325,10 @@ final class DriveStore {
 
     /* Keep downloaded on or off: the local copy comes or goes, and Files follows through the extension. */
     func setKeptDownloaded(_ item: Opened, _ keep: Bool) async {
-        if keep {
+        if keep, let parent = item.node.parentId, await ownDrive(parent) {
+            // Queued like an upload: fetched by iOS, whether or not the app is open.
+            BackgroundTransfers.shared.keep(item)
+        } else if keep {
             let ticket = begin(.keep, item.name)
             let ok = await perform(in: nil) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
             finish(ticket, failed: !ok)
@@ -474,6 +491,12 @@ final class DriveStore {
                 }
             }
             _ = index
+            if await ownDrive(folder) {
+                // Queued: sealed and handed to iOS, which sends it even if the app is closed; the panel shows it.
+                BackgroundTransfers.shared.upload(fileURL: file.url, name: name, mime: mime, folderId: folder, replacingId: replacing?.id)
+                continue
+            }
+            // A shared folder lives in someone else's drive: uploaded here and now, as before.
             let ticket = begin(.upload, name)
             let ok = await perform(in: folder) {
                 _ = try await vault.upload(
@@ -485,6 +508,12 @@ final class DriveStore {
             try? FileManager.default.removeItem(at: file.url)
             if !ok { break }
         }
+    }
+
+    /* Whether a folder is in this account's own drive, where the background queue can finish without the app. */
+    func ownDrive(_ folderId: String) async -> Bool {
+        guard let mine = try? await vault.workspaceId(), let theirs = try? await vault.workspaceId(of: folderId) else { return false }
+        return mine == theirs
     }
 
     /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */

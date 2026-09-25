@@ -56,6 +56,7 @@ final class AppModel {
     }
 
     func signOut() async {
+        await BackgroundTransfers.shared.cancelAll()
         await Auth.signOut()
         await FilesDomain.remove()
         user = nil
