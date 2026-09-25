@@ -88,7 +88,8 @@ data class DriveState(
  */
 class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private val context: Context get() = getApplication()
-    private val _state = MutableStateFlow(DriveState(origin = Shared.origin(application) ?: defaultOrigin()))
+    // The saved origin is read with the session below, off the main thread (the store's first open is Keystore work).
+    private val _state = MutableStateFlow(DriveState(origin = defaultOrigin()))
     val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
     private val thumbnailTasks = HashSet<String>()
@@ -118,11 +119,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val user = withContext(Dispatchers.IO) { runCatching { Auth.currentUser(context) } }
             when {
                 user.isSuccess && user.getOrNull() != null -> signedIn(user.getOrNull()!!)
-                user.isFailure && Shared.session(context) != null -> {
-                    val session = Shared.session(context)!!
+                user.isFailure && withContext(Dispatchers.IO) { Shared.session(context) } != null -> {
+                    val session = withContext(Dispatchers.IO) { Shared.session(context) }!!
                     signedIn(SessionUser(session.userId, "", "", 0uL))
                 }
                 else -> _state.update { it.copy(gate = Gate.SIGNED_OUT) }
+            withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
             }
         }
     }

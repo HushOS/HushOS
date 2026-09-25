@@ -27,13 +27,23 @@ object Shared {
     data class Session(val origin: String, val token: String, val userId: String)
     data class Device(val bundle: RememberedDevice, val deviceKey: ByteArray)
 
-    private fun prefs(context: Context): SharedPreferences {
-        val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        return EncryptedSharedPreferences.create(
-            context, FILE, key,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+    @Volatile private var opened: SharedPreferences? = null
+
+    /*
+     * Opened once per process. Each open does Keystore work, and the Keystore service
+     * answers one caller at a time: opening it on every read made the main thread wait
+     * behind a background upload's reads, long enough for Android to call the app frozen.
+     */
+    private fun prefs(context: Context): SharedPreferences = opened ?: synchronized(this) {
+        opened ?: run {
+            val app = context.applicationContext
+            val key = MasterKey.Builder(app).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            EncryptedSharedPreferences.create(
+                app, FILE, key,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            ).also { opened = it }
+        }
     }
 
     /* A store that cannot be opened (a lost keyset, a wiped file) reads as signed out rather than failing every caller. */
