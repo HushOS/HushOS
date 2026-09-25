@@ -1,0 +1,28 @@
+apps/ios/App/RecentsView.swift
+  s_de0e5293e39e1a::t_9917c9218a26db 38-39,63-69,106-110,120-135
+  s_de0e5293e39e1a::t_10c3c594840769 136-137
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_de0e5293e39e1a::t_9917c9218a26db 194-196
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_206815feffb8c3 424
+  s_de0e5293e39e1a::t_c2db6f62ec319e 31
+  s_de0e5293e39e1a::t_26b3e7c8ea0d74 377,425-432,451-460
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_615b77e70259bd 609-616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "270938f9867f916e23bf5fa816a73a87162ea55c",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
