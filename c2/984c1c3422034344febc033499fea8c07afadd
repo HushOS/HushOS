@@ -1,0 +1,37 @@
+apps/android/gradle/libs.versions.toml
+  s_de0e5293e39e1a::t_2d1ae033ba1588 3,21
+apps/android/app/src/main/AndroidManifest.xml
+  s_de0e5293e39e1a::t_2d1ae033ba1588 2-3,6-9,51-55
+  s_de0e5293e39e1a::t_a153ad124c7047 56
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_75ca0ed38d44f6 51-57,77-78,143-187,200-203,608-613,640-643,672
+  s_de0e5293e39e1a::t_7a2f13c871dd47 471-472
+  s_de0e5293e39e1a::t_26b3e7c8ea0d74 653-659
+  s_de0e5293e39e1a::t_718e2232ba3267 127
+  s_de0e5293e39e1a::t_80912197361265 660
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_de0e5293e39e1a::t_75ca0ed38d44f6 55-56,68
+  s_de0e5293e39e1a::t_2d1ae033ba1588 1-54,57-67,69-158
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_de0e5293e39e1a::t_481835eaa45c36 117,122-123
+  s_de0e5293e39e1a::t_5cfc14c2e904ab 141
+  s_de0e5293e39e1a::t_75ca0ed38d44f6 13-15,121,149,153,173,175,177-179
+apps/android/app/build.gradle.kts
+  s_de0e5293e39e1a::t_2d1ae033ba1588 65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c2984c1c3422034344febc033499fea8c07afadd",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
