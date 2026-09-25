@@ -1,0 +1,21 @@
+scripts/setup.ts
+  s_de0e5293e39e1a::t_1c90ad1168d220 48-61
+  s_de0e5293e39e1a::t_f24b994bfe9c8b 12,47,62-65
+  s_de0e5293e39e1a::t_ccbe0b140b81f6 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bd01d11c29a6f86f4aba50b6e19ee17cf023131f",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
