@@ -36,6 +36,7 @@ import com.hushos.app.data.Vault
 import com.hushos.app.data.VersionListView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -54,6 +55,12 @@ data class TransferItem(
     val waiting: Boolean = false,
     /* Stops a queued transfer; null for the ones that run in the app. */
     val cancel: (() -> Unit)? = null,
+    /* Why a transfer failed (the server's words for a refusal). */
+    val message: String? = null,
+    /* Clears a failed row; it stays until then, until the panel is closed, or until another transfer starts. */
+    val dismiss: (() -> Unit)? = null,
+    /* Sends a failed upload again from the copy it kept; null when there is nothing to send. */
+    val retry: (() -> Unit)? = null,
 )
 
 data class DriveState(
@@ -76,6 +83,8 @@ data class DriveState(
     val transfers: List<TransferItem> = emptyList(),
     /* Uploads and keeps in the background queue (see TransferQueue), as the panel shows them. */
     val queued: List<TransferItem> = emptyList(),
+    /* The add menu is open: the transfer panel steps aside, since it would cover the menu's items. */
+    val addMenuOpen: Boolean = false,
     /* Files being fetched to open, by node id, with progress: a ring on the row, not a banner. */
     val opening: Map<String, Float> = emptyMap(),
     val notice: Notice? = null,
@@ -145,38 +154,90 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private var queueWatch: kotlinx.coroutines.Job? = null
     private val landed = HashSet<java.util.UUID>()
+    /* Finished jobs the panel no longer shows: succeeded ones after a moment, failed ones once dismissed. */
+    private val hiddenWork = MutableStateFlow(emptySet<java.util.UUID>())
+    /* The queue as last seen, for the failed jobs' kept copies. */
+    private var lastInfos: List<androidx.work.WorkInfo> = emptyList()
+    /* Files a failed upload into a shared folder kept for its retry, by row. */
+    private val stagedCopies = HashMap<String, File>()
 
     /*
      * The background queue as the panel shows it, and what a finished job changes:
-     * a landed upload or keep redraws the lists; once nothing is left to run, the
-     * finished jobs are cleared after a moment.
+     * a landed upload or keep redraws the lists. Once nothing is left to run, the
+     * succeeded jobs leave the panel after a moment; a failed one stays with its
+     * reason until it is dismissed or another transfer starts. WorkManager can only
+     * prune every finished job at once, so that waits until none is left to read.
      */
     private fun watchQueue() {
         if (queueWatch != null) return
         val work = androidx.work.WorkManager.getInstance(context)
         queueWatch = viewModelScope.launch {
-            work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG).collect { infos ->
-                val items = infos.filter { it.state != androidx.work.WorkInfo.State.CANCELLED }.map { info ->
+            kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork) { infos, hidden -> infos to hidden }.collectLatest { (infos, hidden) ->
+                lastInfos = infos
+                val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
+                viewModelScope.launch(Dispatchers.IO) { com.hushos.app.data.TransferQueue.sweep(context, inUse) }
+                val shown = infos.filter { it.state != androidx.work.WorkInfo.State.CANCELLED && it.id !in hidden }
+                val items = shown.map { info ->
                     val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
                     val file = tag("file:")
                     val finished = info.state.isFinished
+                    val failed = info.state == androidx.work.WorkInfo.State.FAILED
+                    val kept = failed && info.outputData.getString("file")?.let { File(it).exists() } == true
                     TransferItem(
                         id = info.id.toString(), kind = tag("kind:") ?: "upload", name = tag("name:") ?: "File",
                         fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
-                        done = finished, failed = info.state == androidx.work.WorkInfo.State.FAILED,
+                        done = finished, failed = failed,
                         waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
                         cancel = if (finished) null else ({ com.hushos.app.data.TransferQueue.cancel(context, info.id, file) }),
+                        message = if (failed) info.outputData.getString("message") ?: "The transfer failed." else null,
+                        dismiss = if (failed) ({ forgetQueued(listOf(info.id)) }) else null,
+                        retry = if (kept) ({ retryQueued(info) }) else null,
                     )
                 }
                 _state.update { it.copy(queued = items) }
                 val newlyLanded = infos.filter { it.state == androidx.work.WorkInfo.State.SUCCEEDED && landed.add(it.id) }
-                if (newlyLanded.isNotEmpty()) { sync(); refreshOffline(); state.value.folders.keys.forEach { refresh(it) } }
+                // Its own coroutine: the next queue update must not cancel the refresh halfway.
+                if (newlyLanded.isNotEmpty()) viewModelScope.launch { sync(); refreshOffline(); state.value.folders.keys.forEach { refresh(it) } }
                 if (infos.isNotEmpty() && infos.all { it.state.isFinished }) {
-                    kotlinx.coroutines.delay(4000)
-                    work.pruneWork()
+                    if (shown.isNotEmpty()) kotlinx.coroutines.delay(4000)
+                    if (shown.none { it.state == androidx.work.WorkInfo.State.FAILED }) work.pruneWork()
+                    else hiddenWork.update { it + infos.filter { info -> info.state == androidx.work.WorkInfo.State.SUCCEEDED }.map { info -> info.id } }
                 }
             }
         }
+    }
+
+    /* Takes queued rows off the panel; a failed upload's kept copy goes with its row. */
+    private fun forgetQueued(ids: Collection<java.util.UUID>) {
+        if (ids.isEmpty()) return
+        lastInfos.filter { it.id in ids && it.state == androidx.work.WorkInfo.State.FAILED }
+            .forEach { com.hushos.app.data.TransferQueue.discard(it.outputData.getString("file")) }
+        hiddenWork.update { it + ids }
+    }
+
+    /* Queues a failed upload again from its copy; the failed row makes way for the new one. */
+    private fun retryQueued(info: androidx.work.WorkInfo) {
+        hiddenWork.update { it + info.id }
+        if (!com.hushos.app.data.TransferQueue.retryUpload(context, info.outputData)) notify("The file to upload is gone. Pick it again.")
+    }
+
+    /* Takes in-app rows off the panel, and the copies failed ones kept. */
+    private fun removeTransfers(which: (TransferItem) -> Boolean) {
+        val gone = state.value.transfers.filter(which)
+        gone.forEach { stagedCopies.remove(it.id)?.delete() }
+        _state.update { s -> s.copy(transfers = s.transfers.filterNot(which)) }
+    }
+
+    /* A new transfer replaces the failures still on show: the panel is about what is happening now. */
+    private fun clearFailures() {
+        forgetQueued(state.value.queued.filter { it.failed }.map { java.util.UUID.fromString(it.id) })
+        removeTransfers { it.failed }
+    }
+
+    /* The panel's close: once nothing is running, every finished row goes, failures included. */
+    fun closeTransfers() {
+        forgetQueued(state.value.queued.filter { it.done }.map { java.util.UUID.fromString(it.id) })
+        removeTransfers { it.done }
     }
 
     /* Whether a folder is in this account's own drive, where the background queue can reach it without the app. */
@@ -186,6 +247,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val mine = vault.item(root)?.node?.workspaceId ?: return false
         return folderId == root || vault.item(folderId)?.node?.workspaceId == mine
     }
+
+    fun addMenu(open: Boolean) = _state.update { it.copy(addMenuOpen = open) }
 
     fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
 
@@ -231,14 +294,27 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         s.copy(transfers = s.transfers.map { if (it.id == id) it.copy(fraction = fraction, name = name ?: it.name) else it })
     }
 
-    private fun finish(id: String, failed: Boolean = false) {
-        _state.update { s -> s.copy(transfers = s.transfers.map { if (it.id == id) it.copy(done = true, failed = failed, fraction = if (failed) it.fraction else 1f) else it }) }
-        // Finished rows linger so the result is seen, then go once everything is done.
+    private fun finish(id: String, failed: Boolean = false, message: String? = null, retry: (() -> Unit)? = null) {
+        _state.update { s ->
+            s.copy(transfers = s.transfers.map {
+                if (it.id != id) it
+                else it.copy(
+                    done = true, failed = failed, fraction = if (failed) it.fraction else 1f,
+                    message = if (failed) message ?: "The transfer failed." else null,
+                    dismiss = if (failed) ({ drop(id) }) else null,
+                    retry = if (failed) retry else null,
+                )
+            })
+        }
+        // Finished rows linger so the result is seen, then go once everything is done; a failure stays with its reason.
         viewModelScope.launch {
             kotlinx.coroutines.delay(4000)
-            _state.update { s -> if (s.transfers.all { it.done }) s.copy(transfers = emptyList()) else s }
+            _state.update { s -> if (s.transfers.all { it.done }) s.copy(transfers = s.transfers.filter { it.failed }) else s }
         }
     }
+
+    /* Takes a row off the panel: a failure dismissed, or a kept copy that only failed for being offline. */
+    private fun drop(id: String) = removeTransfers { it.id == id }
 
     private suspend fun <T> quietly(block: (Vault) -> T): T? {
         val vault = vault ?: return null
@@ -253,7 +329,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun <T> io(block: (Vault) -> T): T? {
+    /* With `failure`, a transfer's reason goes to its row in the panel instead of the error dialog. */
+    private suspend fun <T> io(failure: ((String) -> Unit)? = null, block: (Vault) -> T): T? {
         val vault = vault ?: return null
         return try {
             withContext(Dispatchers.IO) { block(vault) }
@@ -263,9 +340,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         } catch (error: Unreachable) {
             // No network: say so at the top rather than interrupting; kept files still open.
             _state.update { it.copy(unreachable = true) }
+            failure?.invoke(error.message ?: "Could not reach HushOS.")
             null
         } catch (error: Exception) {
-            _state.update { it.copy(error = error.message ?: error.toString()) }
+            val message = error.message ?: error.toString()
+            if (failure != null) failure(message) else _state.update { it.copy(error = message) }
             null
         }
     }
@@ -325,8 +404,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 kept.filter { entry -> vault?.item(entry.id)?.let { !Offline.hasVersion(context, it) && it.node.trashedAt == null } ?: true }
             }
             val tickets = stale.associate { it.id to begin("keep", it.name) }
-            val failed = io { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } } ?: ids.toSet()
-            tickets.forEach { (id, ticket) -> finish(ticket, failed = id in failed) }
+            var reason: String? = null
+            val failed = io({ reason = it }) { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } } ?: ids.toSet()
+            // Offline, the banner already says why; a row per kept file would only repeat it.
+            tickets.forEach { (id, ticket) ->
+                if (id in failed && state.value.unreachable) drop(ticket)
+                else finish(ticket, failed = id in failed, message = reason ?: "Couldn't update the downloaded copy.")
+            }
             refreshingKept.removeAll(ids.toSet())
             refreshOffline()
         }
@@ -416,9 +500,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean {
         val revoked = io { it.revokeShare(share, item); true } ?: return false
+        clearFailures()
         val ticket = begin("rotate", "Rotating keys for ${item.name}")
-        val ok = io { vault -> vault.rotate(item) { count -> progress(ticket, 0f, "Rotating keys · $count sealed") }; true } ?: false
-        finish(ticket, failed = !ok)
+        var reason: String? = null
+        val ok = io({ reason = it }) { vault -> vault.rotate(item) { count -> progress(ticket, 0f, "Rotating keys · $count sealed") }; true } ?: false
+        finish(ticket, failed = !ok, message = reason)
         _state.update { it.copy(folders = emptyMap()) }
         item.node.parentId?.let { refresh(it) }
         return revoked && ok
@@ -465,11 +551,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun write(folder: String?, block: (Vault) -> Unit): Boolean {
+    private suspend fun write(folder: String?, failure: ((String) -> Unit)? = null, block: (Vault) -> Unit): Boolean {
         _state.update { it.copy(busy = true) }
-        val ok = io { block(it); true } ?: false
-        // Offline the write did not happen: say so plainly rather than failing without a word.
-        if (!ok && state.value.unreachable) notify("You're offline, so that didn't happen. Try again once you're connected.")
+        val ok = io(failure) { block(it); true } ?: false
+        // Offline the write did not happen: say so plainly rather than failing without a word (a transfer's row says it).
+        if (!ok && failure == null && state.value.unreachable) notify("You're offline, so that didn't happen. Try again once you're connected.")
         // The catalogue answers listings, so pull the feed first: the write is in it already.
         if (ok) sync()
         if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
@@ -492,6 +578,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val (all, cut) = state.value.clipboard ?: return@launch
         if (!canPaste(folder)) return@launch
         _state.update { it.copy(clipboard = null) }
+        clearFailures()
         // What is already here stays as it is; only the rest comes over.
         val items = all.filter { it.node.parentId != folder }
         val targetWorkspace = io { it.item(folder)?.node?.workspaceId } ?: items.first().node.workspaceId
@@ -499,11 +586,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val sameDrive = item.node.workspaceId == targetWorkspace
             if (cut && sameDrive) { move(item, folder).join(); continue }
             val ticket = begin("copy", item.name)
-            if (sameDrive) finish(ticket, failed = !write(folder) { it.copy(item.id, folder) })
+            var reason: String? = null
+            if (sameDrive) finish(ticket, failed = !write(folder, { reason = it }) { it.copy(item.id, folder) }, message = reason)
             else {
                 // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                val ok = write(folder) { vault -> vault.copyAcross(item.id, folder) { fraction -> progress(ticket, fraction) } }
-                finish(ticket, failed = !ok)
+                val ok = write(folder, { reason = it }) { vault -> vault.copyAcross(item.id, folder) { fraction -> progress(ticket, fraction) } }
+                finish(ticket, failed = !ok, message = reason)
                 if (ok && cut) trash(item).join()
             }
         }
@@ -595,6 +683,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun upload(uris: List<Uri>, folder: String, onConflict: Conflict = Conflict.KEEP_BOTH, renames: Map<String, String> = emptyMap()) = viewModelScope.launch {
         val existing = (state.value.folders[folder] ?: emptyList()).filter { !it.isFolder }
         val taken = existing.map { it.name.lowercase() }.toSet()
+        clearFailures()
         for ((index, uri) in uris.withIndex()) {
             val staged = withContext(Dispatchers.IO) { stage(uri) } ?: continue
             val clash = existing.firstOrNull { it.name.equals(staged.second, ignoreCase = true) }
@@ -611,16 +700,30 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 continue
             }
             // A shared folder lives in someone else's drive: uploaded here and now, as before.
-            val ticket = begin("upload", name)
-            val ok = write(folder) { vault ->
-                vault.upload(staged.first, name, staged.third, folder, replacing, vault.makeThumbnail(staged.first, staged.third)) { fraction ->
-                    progress(ticket, fraction)
-                }
-            }
-            finish(ticket, failed = !ok)
-            staged.first.delete()
-            if (!ok) break
+            if (!uploadNow(staged.first, name, staged.third, folder, replacing)) break
         }
+    }
+
+    /* Uploads a staged file here and now; a failure keeps the file, so its row can send it again. */
+    private suspend fun uploadNow(file: File, name: String, mime: String?, folder: String, replacing: Opened?): Boolean {
+        val ticket = begin("upload", name)
+        var reason: String? = null
+        val ok = write(folder, { reason = it }) { vault ->
+            vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime)) { fraction -> progress(ticket, fraction) }
+        }
+        if (ok) {
+            file.delete()
+            finish(ticket)
+        } else {
+            stagedCopies[ticket] = file
+            finish(ticket, failed = true, message = reason, retry = {
+                // The copy moves to the new row, so taking this one off must not delete it.
+                stagedCopies.remove(ticket)
+                drop(ticket)
+                viewModelScope.launch { if (file.exists()) uploadNow(file, name, mime, folder, replacing) else notify("The file to upload is gone. Pick it again.") }
+            })
+        }
+        return ok
     }
 
     private fun stage(uri: Uri): Triple<File, String, String?>? {
@@ -637,13 +740,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Decrypts to a cache file named as the user sees it; the FileProvider hands it to viewers and the share sheet. */
     /* Keep downloaded on or off: the local copy comes or goes. */
     fun setKeptDownloaded(item: Opened, keep: Boolean) = viewModelScope.launch {
+        if (keep) clearFailures()
         if (keep && item.node.parentId != null && ownDrive(item.node.parentId)) {
             // Queued like an upload: kept once there is a network, whether or not the app is open.
             com.hushos.app.data.TransferQueue.keep(context, item.id, item.name)
         } else if (keep) {
             val ticket = begin("keep", item.name)
-            val ok = io { vault -> vault.keepDownloaded(item) { fraction -> progress(ticket, fraction) }; true } ?: false
-            finish(ticket, failed = !ok)
+            var reason: String? = null
+            val ok = io({ reason = it }) { vault -> vault.keepDownloaded(item) { fraction -> progress(ticket, fraction) }; true } ?: false
+            finish(ticket, failed = !ok, message = reason)
         } else Offline.forget(context, item.id)
         _state.update { it.copy(offline = Offline.entries(context)) }
     }

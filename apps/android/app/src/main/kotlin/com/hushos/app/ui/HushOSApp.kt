@@ -1,6 +1,9 @@
 package com.hushos.app.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -16,6 +19,9 @@ import androidx.compose.material3.IconButton
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.CloudDownload
@@ -40,6 +46,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -86,6 +93,8 @@ private enum class Tab(val label: String) { HOME("Home"), FILES("Files"), SHARED
 @Composable
 private fun Main(model: DriveViewModel, state: DriveState) {
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    // Here rather than in the panel, which leaves the screen while the add menu is open.
+    var transfersCollapsed by rememberSaveable { mutableStateOf(false) }
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -119,8 +128,10 @@ private fun Main(model: DriveViewModel, state: DriveState) {
                     ) { Text(notice.text, maxLines = 2) }
                 }
                 val all = state.queued + state.transfers
+                // A new batch after the panel has closed starts unfolded, as the web's does.
+                LaunchedEffect(all.isEmpty()) { if (all.isEmpty()) transfersCollapsed = false }
                 // Above the add button, which sits over this corner on Files.
-                if (all.isNotEmpty()) Box(Modifier.padding(bottom = 72.dp)) { TransferPanel(all, offline = state.unreachable) }
+                if (all.isNotEmpty() && !state.addMenuOpen) Box(Modifier.padding(bottom = 72.dp)) { TransferPanel(all, offline = state.unreachable, close = model::closeTransfers, collapsed = transfersCollapsed, toggle = { transfersCollapsed = !transfersCollapsed }) }
             }
         },
     ) { padding ->
@@ -144,9 +155,14 @@ private fun OfflineBanner() {
     }
 }
 
-/* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
+/*
+ * Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended.
+ * Failures come first, since they are why the panel is still up; past about four rows the list scrolls.
+ * Once nothing is running, the header's cross closes it. Folded, it keeps the header and one bar for the lot.
+ * A failed upload that kept its file offers a retry, and the header retries them all at once.
+ */
 @Composable
-private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean) {
+private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean, close: () -> Unit, collapsed: Boolean, toggle: () -> Unit) {
     val running = transfers.filter { !it.done }
     val headline = when {
         running.isEmpty() -> if (transfers.any { it.failed }) "Some transfers failed" else "Done"
@@ -160,22 +176,42 @@ private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(headline, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 if (transfers.size > 1) Text("${transfers.count { it.done }} of ${transfers.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val retries = transfers.mapNotNull { it.retry }
+                if (running.isEmpty() && retries.size > 1) IconButton(onClick = { retries.forEach { it() } }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Outlined.Refresh, "Retry all failed", modifier = Modifier.size(18.dp))
+                }
+                IconButton(onClick = toggle, modifier = Modifier.size(32.dp)) {
+                    Icon(if (collapsed) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, if (collapsed) "Expand transfers" else "Collapse transfers", modifier = Modifier.size(20.dp))
+                }
+                if (running.isEmpty()) IconButton(onClick = close, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Close transfers", modifier = Modifier.size(18.dp)) }
             }
-            for (item in transfers.takeLast(4)) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-                    Icon(
-                        when { item.failed -> Icons.Outlined.ErrorOutline; item.done -> Icons.Outlined.CheckCircle; item.kind == "upload" -> Icons.Outlined.CloudUpload; item.kind == "copy" -> Icons.Outlined.ContentCopy; item.kind == "rotate" -> Icons.Outlined.Key; else -> Icons.Outlined.CloudDownload },
-                        null,
-                        tint = if (item.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                    )
-                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                        Text(item.name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                        if (!item.done && !item.waiting && item.kind != "rotate") LinearProgressIndicator(progress = { item.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
-                    }
-                    Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.waiting) (if (offline) "Waiting" else "Queued") else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    item.cancel?.let { cancel ->
-                        IconButton(onClick = cancel, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Cancel ${item.name}", modifier = Modifier.size(18.dp)) }
+            val moving = running.filter { !it.waiting && it.kind != "rotate" }
+            if (collapsed && moving.isNotEmpty()) LinearProgressIndicator(progress = { moving.map { it.fraction }.average().toFloat() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
+            if (!collapsed) Column(Modifier.heightIn(max = 232.dp).verticalScroll(rememberScrollState())) {
+                for (item in transfers.sortedByDescending { it.failed }) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                        Icon(
+                            when { item.failed -> Icons.Outlined.ErrorOutline; item.done -> Icons.Outlined.CheckCircle; item.kind == "upload" -> Icons.Outlined.CloudUpload; item.kind == "copy" -> Icons.Outlined.ContentCopy; item.kind == "rotate" -> Icons.Outlined.Key; else -> Icons.Outlined.CloudDownload },
+                            null,
+                            tint = if (item.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                            Text(item.name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                            if (!item.done && !item.waiting && item.kind != "rotate") LinearProgressIndicator(progress = { item.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                            // The reason, in the server's words where it refused: what to do next is in it.
+                            item.message?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, maxLines = 3, modifier = Modifier.padding(top = 2.dp)) }
+                        }
+                        Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.waiting) (if (offline) "Waiting" else "Queued") else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item.cancel?.let { cancel ->
+                            IconButton(onClick = cancel, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Cancel ${item.name}", modifier = Modifier.size(18.dp)) }
+                        }
+                        item.retry?.let { retry ->
+                            IconButton(onClick = retry, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Refresh, "Retry ${item.name}", modifier = Modifier.size(18.dp)) }
+                        }
+                        item.dismiss?.let { dismiss ->
+                            IconButton(onClick = dismiss, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Dismiss ${item.name}", modifier = Modifier.size(18.dp)) }
+                        }
                     }
                 }
             }

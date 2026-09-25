@@ -47,6 +47,37 @@ object TransferQueue {
         val dir = File(context.filesDir, "queue/$id").also { it.mkdirs() }
         val file = File(dir, "content")
         if (!staged.renameTo(file)) { staged.copyTo(file, overwrite = true); staged.delete() }
+        return enqueueUpload(context, id, file, name, mime, folderId, replacingId)
+    }
+
+    /*
+     * Queues a failed upload again from the copy it kept, as a new job; `failed` is
+     * the job's output, which carries its inputs. False when the copy is gone.
+     */
+    fun retryUpload(context: Context, failed: androidx.work.Data): Boolean {
+        val file = failed.getString("file")?.let(::File)?.takeIf { it.exists() } ?: return false
+        enqueueUpload(context, UUID.randomUUID(), file, failed.getString("name") ?: file.name, failed.getString("mime"), failed.getString("folder") ?: return false, failed.getString("replacing"))
+        return true
+    }
+
+    /* Removes the copy a failed upload kept for a retry. */
+    fun discard(file: String?) {
+        file?.let { File(it).parentFile?.deleteRecursively() }
+    }
+
+    /*
+     * Copies no job refers to any more: WorkManager forgets finished jobs on its own
+     * after a day, and a failed upload's copy would outlive it. Young folders are left
+     * alone, since a copy lands before its job is queued.
+     */
+    fun sweep(context: Context, inUse: Set<String>) {
+        val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
+        File(context.filesDir, "queue").listFiles()?.forEach { dir ->
+            if (dir.path !in inUse && dir.lastModified() < cutoff) dir.deleteRecursively()
+        }
+    }
+
+    private fun enqueueUpload(context: Context, id: UUID, file: File, name: String, mime: String?, folderId: String, replacingId: String?): UUID {
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
             .setId(id)
             .setConstraints(constraints())
@@ -94,11 +125,17 @@ object TransferQueue {
 /* A vault for a job: the tree opened from the mirror, so a folder or file can be found without the app. */
 private fun jobVault(context: Context): Vault? = Vault.fromShared(context)?.also { runCatching { it.buildCatalogue() } }
 
-/* What to do after a failure: try again later for anything the network caused, give up otherwise. */
-private fun CoroutineWorker.outcome(error: Exception): androidx.work.ListenableWorker.Result = when {
-    error is NotAuthenticated -> androidx.work.ListenableWorker.Result.failure(workDataOf("message" to "Sign in to HushOS again to finish this."))
-    Resumable.retryable(error) -> androidx.work.ListenableWorker.Result.retry()
-    else -> androidx.work.ListenableWorker.Result.failure(workDataOf("message" to (error.message ?: "The transfer failed.")))
+/*
+ * What to do after a failure: try again later for anything the network caused, give up otherwise.
+ * A failure carries `inputs` along, so the panel can queue the same work again.
+ */
+private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY): androidx.work.ListenableWorker.Result = when {
+    Resumable.retryable(error) && error !is NotAuthenticated -> androidx.work.ListenableWorker.Result.retry()
+    else -> androidx.work.ListenableWorker.Result.failure(
+        androidx.work.Data.Builder().putAll(inputs)
+            .putString("message", if (error is NotAuthenticated) "Sign in to HushOS again to finish this." else error.message ?: "The transfer failed.")
+            .build(),
+    )
 }
 
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -110,7 +147,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val file = File(inputData.getString("file") ?: return Result.failure())
         if (!file.exists()) return Result.failure(workDataOf("message" to "The file to upload is gone."))
         runCatching { setForeground(getForegroundInfo()) }
-        val vault = jobVault(applicationContext) ?: return Result.failure(workDataOf("message" to "Sign in to HushOS to upload."))
+        val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         return withContext(Dispatchers.IO) {
             try {
                 val folder = inputData.getString("folder")!!
@@ -129,9 +166,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 file.parentFile?.deleteRecursively()
                 Result.success()
             } catch (error: Exception) {
-                val result = outcome(error)
-                if (result is Result.Failure) file.parentFile?.deleteRecursively()
-                result
+                // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
+                outcome(error, inputData)
             }
         }
     }

@@ -82,6 +82,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -115,6 +116,10 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val folderId = current?.id ?: state.rootId
     val floor = if (start != null) 1 else 0
     var fabOpen by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(fabOpen) {
+        model.addMenu(fabOpen)
+        onDispose { if (fabOpen) model.addMenu(false) }
+    }
     var newFolder by rememberSaveable { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<Opened?>(null) }
     val context = LocalContext.current
