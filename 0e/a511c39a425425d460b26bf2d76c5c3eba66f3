@@ -1,0 +1,44 @@
+apps/ios/App/HushOSApp.swift
+  s_de0e5293e39e1a::t_dc8809be75ac2f 1,7-8,11-15,22-26,49-58
+  s_de0e5293e39e1a::t_8723b26cc152d7 59
+apps/ios/App/AppModel.swift
+  s_de0e5293e39e1a::t_d56f3999b72035 59
+apps/ios/project.yml
+  s_de0e5293e39e1a::t_dc8809be75ac2f 77-79
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_de0e5293e39e1a::t_109ca169329202 326-330,359-360,381-382
+  s_de0e5293e39e1a::t_461551474abcc8 247-250,278,300,380,383
+  s_de0e5293e39e1a::t_08cf2d9a7e1145 154-171,185,192-193,202-203,225-246,251-275,280,284,290,294,301,304,307-325,331-358,361,363-365,367-379,384-387
+apps/ios/App/BackgroundTransfers.swift
+  s_de0e5293e39e1a::t_b631acfbcd5d9a 70,209-217
+  s_de0e5293e39e1a::t_dc8809be75ac2f 69,170-171,173-176
+  s_de0e5293e39e1a::t_aa061ad9e46f83 223-224
+  s_de0e5293e39e1a::t_826cbef849ce3f 1-68,71-150,157-169,172,177-208,218-222,225-427
+  s_de0e5293e39e1a::t_d56f3999b72035 151-156
+apps/ios/App/MainView.swift
+  s_de0e5293e39e1a::t_dc8809be75ac2f 44-52,84,89,119,121,123-126
+  s_de0e5293e39e1a::t_481835eaa45c36 43,54-55
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_de0e5293e39e1a::t_6ed68e23e56ee1 121-189
+apps/ios/App/DriveStore.swift
+  s_de0e5293e39e1a::t_dc8809be75ac2f 44-47,87-96,328-331,494-499,513-516
+  s_de0e5293e39e1a::t_ee9fb99cdfe607 517-518
+apps/ios/App/Info.plist
+  s_de0e5293e39e1a::t_d56f3999b72035 5-8,51-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0ea511c39a425425d460b26bf2d76c5c3eba66f3",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
