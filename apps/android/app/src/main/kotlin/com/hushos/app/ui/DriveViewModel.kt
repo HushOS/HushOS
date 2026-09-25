@@ -48,7 +48,13 @@ enum class Gate { CHECKING, SIGNED_OUT, SIGNED_IN }
 data class Notice(val id: Long, val text: String, val undo: (() -> Unit)? = null)
 
 /* A transfer in flight or just finished, with its own bar, as the web's panel shows them. */
-data class TransferItem(val id: String, val kind: String, val name: String, val fraction: Float, val done: Boolean = false, val failed: Boolean = false)
+data class TransferItem(
+    val id: String, val kind: String, val name: String, val fraction: Float, val done: Boolean = false, val failed: Boolean = false,
+    /* Queued and waiting for a network (or its next try); shown without a bar. */
+    val waiting: Boolean = false,
+    /* Stops a queued transfer; null for the ones that run in the app. */
+    val cancel: (() -> Unit)? = null,
+)
 
 data class DriveState(
     val gate: Gate = Gate.CHECKING,
@@ -68,6 +74,8 @@ data class DriveState(
     val clipboard: Pair<List<Opened>, Boolean>? = null,
     val billing: BillingSummary? = null,
     val transfers: List<TransferItem> = emptyList(),
+    /* Uploads and keeps in the background queue (see TransferQueue), as the panel shows them. */
+    val queued: List<TransferItem> = emptyList(),
     /* Files being fetched to open, by node id, with progress: a ring on the row, not a banner. */
     val opening: Map<String, Float> = emptyMap(),
     val notice: Notice? = null,
@@ -116,6 +124,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         if (connectivity.activeNetwork == null) _state.update { it.copy(unreachable = true) }
         runCatching { connectivity.registerDefaultNetworkCallback(network) }.onFailure { android.util.Log.w("HushOS", "network callback", it) }
         viewModelScope.launch {
+            withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
             val user = withContext(Dispatchers.IO) { runCatching { Auth.currentUser(context) } }
             when {
                 user.isSuccess && user.getOrNull() != null -> signedIn(user.getOrNull()!!)
@@ -124,7 +133,6 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     signedIn(SessionUser(session.userId, "", "", 0uL))
                 }
                 else -> _state.update { it.copy(gate = Gate.SIGNED_OUT) }
-            withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
             }
         }
     }
@@ -132,6 +140,51 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private fun signedIn(user: SessionUser) {
         vault = Vault.fromShared(context)
         _state.update { it.copy(gate = Gate.SIGNED_IN, user = user) }
+        watchQueue()
+    }
+
+    private var queueWatch: kotlinx.coroutines.Job? = null
+    private val landed = HashSet<java.util.UUID>()
+
+    /*
+     * The background queue as the panel shows it, and what a finished job changes:
+     * a landed upload or keep redraws the lists; once nothing is left to run, the
+     * finished jobs are cleared after a moment.
+     */
+    private fun watchQueue() {
+        if (queueWatch != null) return
+        val work = androidx.work.WorkManager.getInstance(context)
+        queueWatch = viewModelScope.launch {
+            work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG).collect { infos ->
+                val items = infos.filter { it.state != androidx.work.WorkInfo.State.CANCELLED }.map { info ->
+                    val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
+                    val file = tag("file:")
+                    val finished = info.state.isFinished
+                    TransferItem(
+                        id = info.id.toString(), kind = tag("kind:") ?: "upload", name = tag("name:") ?: "File",
+                        fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
+                        done = finished, failed = info.state == androidx.work.WorkInfo.State.FAILED,
+                        waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
+                        cancel = if (finished) null else ({ com.hushos.app.data.TransferQueue.cancel(context, info.id, file) }),
+                    )
+                }
+                _state.update { it.copy(queued = items) }
+                val newlyLanded = infos.filter { it.state == androidx.work.WorkInfo.State.SUCCEEDED && landed.add(it.id) }
+                if (newlyLanded.isNotEmpty()) { sync(); refreshOffline(); state.value.folders.keys.forEach { refresh(it) } }
+                if (infos.isNotEmpty() && infos.all { it.state.isFinished }) {
+                    kotlinx.coroutines.delay(4000)
+                    work.pruneWork()
+                }
+            }
+        }
+    }
+
+    /* Whether a folder is in this account's own drive, where the background queue can reach it without the app. */
+    private fun ownDrive(folderId: String): Boolean {
+        val vault = vault ?: return false
+        val root = state.value.rootId ?: return false
+        val mine = vault.item(root)?.node?.workspaceId ?: return false
+        return folderId == root || vault.item(folderId)?.node?.workspaceId == mine
     }
 
     fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
@@ -144,6 +197,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun signOut() {
+        // Queued transfers belong to the account signing out: stopped, and their copies removed.
+        androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
+        File(context.filesDir, "queue").deleteRecursively()
+        queueWatch?.cancel(); queueWatch = null
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Auth.signOut(context) }
             vault = null
@@ -411,6 +468,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun write(folder: String?, block: (Vault) -> Unit): Boolean {
         _state.update { it.copy(busy = true) }
         val ok = io { block(it); true } ?: false
+        // Offline the write did not happen: say so plainly rather than failing without a word.
+        if (!ok && state.value.unreachable) notify("You're offline, so that didn't happen. Try again once you're connected.")
         // The catalogue answers listings, so pull the feed first: the write is in it already.
         if (ok) sync()
         if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
@@ -470,8 +529,6 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-        // Offline the write did not happen: say so plainly rather than failing without a word.
-        if (!ok && state.value.unreachable) notify("You're offline, so that didn't happen. Try again once you're connected.")
     fun dismissNotice() = _state.update { it.copy(notice = null) }
 
     private suspend fun restoreQuietly(item: Opened) {
@@ -548,6 +605,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 Conflict.REPLACE -> replacing = clash
                 Conflict.KEEP_BOTH -> name = renames[name] ?: freeName(name, taken)
             }
+            if (ownDrive(folder)) {
+                // Queued: it waits for a network and finishes even if the app is closed; the panel shows it.
+                com.hushos.app.data.TransferQueue.upload(context, staged.first, name, staged.third, folder, replacing?.id)
+                continue
+            }
+            // A shared folder lives in someone else's drive: uploaded here and now, as before.
             val ticket = begin("upload", name)
             val ok = write(folder) { vault ->
                 vault.upload(staged.first, name, staged.third, folder, replacing, vault.makeThumbnail(staged.first, staged.third)) { fraction ->
@@ -574,7 +637,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Decrypts to a cache file named as the user sees it; the FileProvider hands it to viewers and the share sheet. */
     /* Keep downloaded on or off: the local copy comes or goes. */
     fun setKeptDownloaded(item: Opened, keep: Boolean) = viewModelScope.launch {
-        if (keep) {
+        if (keep && item.node.parentId != null && ownDrive(item.node.parentId)) {
+            // Queued like an upload: kept once there is a network, whether or not the app is open.
+            com.hushos.app.data.TransferQueue.keep(context, item.id, item.name)
+        } else if (keep) {
             val ticket = begin("keep", item.name)
             val ok = io { vault -> vault.keepDownloaded(item) { fraction -> progress(ticket, fraction) }; true } ?: false
             finish(ticket, failed = !ok)
@@ -583,6 +649,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshOffline() = _state.update { it.copy(offline = Offline.entries(context)) }
+
+    /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
+    fun item(id: String): Opened? = vault?.item(id)
+
+    fun forgetOffline(id: String) {
+        Offline.forget(context, id)
+        refreshOffline()
+    }
 
     suspend fun download(item: Opened, version: VersionListView? = null): Uri? {
         if (version == null) Offline.localCopy(context, item)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) }
@@ -595,6 +669,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             true
         } ?: false
         _state.update { it.copy(opening = it.opening - item.id) }
+        if (!ok && state.value.unreachable) notify("You're offline. Keep a file downloaded to open it without a connection.")
         return if (ok) FileProvider.getUriForFile(context, "${context.packageName}.shared", file) else null
     }
 }
@@ -605,12 +680,3 @@ internal fun defaultOrigin(): String {
     val emulator = fingerprint.contains("generic") || fingerprint.contains("emulator") || android.os.Build.PRODUCT.lowercase().contains("sdk")
     return if (emulator) BuildConfig.DEFAULT_ORIGIN else "https://hushos.com"
 }
-        if (!ok && state.value.unreachable) notify("You're offline. Keep a file downloaded to open it without a connection.")
-    /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
-    fun item(id: String): Opened? = vault?.item(id)
-
-    fun forgetOffline(id: String) {
-        Offline.forget(context, id)
-        refreshOffline()
-    }
-

@@ -10,6 +10,9 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.IconButton
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -111,11 +114,13 @@ private fun Main(model: DriveViewModel, state: DriveState) {
                 state.notice?.let { notice ->
                     Snackbar(
                         // Above the add button, which sits over this corner on Files and would cover Undo.
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty()) 76.dp else 4.dp),
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty() && state.queued.isEmpty()) 76.dp else 0.dp),
                         action = notice.undo?.let { undo -> { TextButton(onClick = { model.dismissNotice(); undo() }, colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.inversePrimary)) { Text("Undo") } } },
                     ) { Text(notice.text, maxLines = 2) }
                 }
-                if (state.transfers.isNotEmpty()) TransferPanel(state.transfers)
+                val all = state.queued + state.transfers
+                // Above the add button, which sits over this corner on Files.
+                if (all.isNotEmpty()) Box(Modifier.padding(bottom = 72.dp)) { TransferPanel(all, offline = state.unreachable) }
             }
         },
     ) { padding ->
@@ -133,18 +138,19 @@ private fun Main(model: DriveViewModel, state: DriveState) {
 /* A quiet line at the top while the server is out of reach; kept files still open. */
 @Composable
 private fun OfflineBanner() {
+    // A little room below, so the screen under it never starts flush against the line.
     Surface(color = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.fillMaxWidth().statusBarsPadding()) {
         Text("You're offline. Showing what's on this phone.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
     }
 }
 
-    // A little room below, so the screen under it never starts flush against the line.
 /* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
 @Composable
-private fun TransferPanel(transfers: List<TransferItem>) {
+private fun TransferPanel(transfers: List<TransferItem>, offline: Boolean) {
     val running = transfers.filter { !it.done }
     val headline = when {
         running.isEmpty() -> if (transfers.any { it.failed }) "Some transfers failed" else "Done"
+        running.all { it.waiting } -> if (offline) "Waiting for a network" else "Queued"
         running.all { it.kind == "upload" } -> if (running.size == 1) "Uploading" else "Uploading ${running.size} files"
         running.size == 1 -> when (running[0].kind) { "copy" -> "Copying"; "keep" -> "Keeping downloaded"; "rotate" -> "Rotating keys"; else -> "Downloading" }
         else -> "${running.size} transfers"
@@ -164,10 +170,13 @@ private fun TransferPanel(transfers: List<TransferItem>) {
                     )
                     Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                         Text(item.name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                        if (!item.done && item.kind != "rotate") LinearProgressIndicator(progress = { item.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                        if (!item.done && !item.waiting && item.kind != "rotate") LinearProgressIndicator(progress = { item.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
                     }
-                    Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
+                    Text(if (item.failed) "Failed" else if (item.done) "Done" else if (item.waiting) (if (offline) "Waiting" else "Queued") else if (item.kind == "rotate") "" else "${(item.fraction * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    item.cancel?.let { cancel ->
+                        IconButton(onClick = cancel, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.Close, "Cancel ${item.name}", modifier = Modifier.size(18.dp)) }
+                    }
                 }
             }
         }
