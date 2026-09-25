@@ -4,7 +4,7 @@ import { judgeObject, selectOrphans } from './jobs';
 /*
  * The two decisions that delete or downgrade bytes at the store, checked at
  * their edges. Everything around them is glue over the repository and the
- * store, exercised against MinIO by hand and by the repository tests.
+ * store, exercised against the local Garage by hand and by the repository tests.
  */
 
 const row = { ciphertextSize: 1_048_592n };

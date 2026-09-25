@@ -744,12 +744,12 @@ Any S3-compatible store works: the server uses the AWS SDK's S3 client and presi
 | `STORAGE_REGION`                                                                                                                                     | Region name the endpoint expects                                                                                              |
 | `STORAGE_BUCKET`                                                                                                                                     | One bucket per instance                                                                                                       |
 | `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY`                                                                                                 | Credentials scoped to that bucket                                                                                             |
-| `STORAGE_FORCE_PATH_STYLE`                                                                                                                           | `true` for MinIO and most self-hosted stores                                                                                  |
+| `STORAGE_FORCE_PATH_STYLE`                                                                                                                           | `true` for Garage and most self-hosted stores                                                                                 |
 | `STORAGE_REPLICA_ENDPOINT`, `STORAGE_REPLICA_REGION`, `STORAGE_REPLICA_BUCKET`, `STORAGE_REPLICA_ACCESS_KEY_ID`, `STORAGE_REPLICA_SECRET_ACCESS_KEY` | The replica bucket; all optional, and without them replication is off, the worker says so at start, and deletions do not wait |
 | `DRIVE_MAX_FILE_BYTES`                                                                                                                               | Per-file limit, default 32 GiB, reported by `capabilities`                                                                    |
 
 - The bucket needs a CORS rule allowing `PUT` and `GET` with `Range` from `APP_ORIGIN` and exposing `ETag`.
-- The Compose stack gains a MinIO service with a bootstrap step that creates the bucket and the CORS rule, so `bun run selfhost:up` works unchanged.
+- The Compose stack gains a Garage service with a bootstrap step that creates the bucket and the CORS rule, so `bun run selfhost:up` works unchanged.
 - For the hosted service, the primary is Cloudflare R2 with the EU jurisdiction restriction, so content stays in the EU, and R2 charges nothing for egress, which is what every presigned download and every replication read is.
 - The replica is Backblaze B2 in its EU region through its S3 endpoint: ingress is free and storage is the cheapest of the credible options, which is the right shape for a copy that is written once and read in an emergency.
 - Both are S3-compatible, so the choice is configuration, and the replica credentials live only on the worker.
@@ -869,7 +869,7 @@ Database backups are already an operator duty; Drive adds the bucket. Replicatio
 - Without a configured replica the primary is deleted at once, and the worker has said so at start.
 - `drive.audit-objects` samples the primary nightly and the replica weekly, and re-enqueues the copy for any miss on the replica.
 
-This works the same on R2, B2, AWS and MinIO and never lists a bucket. Provider-native replication exists only on AWS, where it requires versioning on both buckets, and on neither R2 nor B2 in the form we would need, so it is not a second code path. Replication lag is queue lag, and R2 charges nothing for the read.
+This works the same on R2, B2, AWS and Garage and never lists a bucket. Provider-native replication exists only on AWS, where it requires versioning on both buckets, and on neither R2 nor B2 in the form we would need, so it is not a second code path. Replication lag is queue lag, and R2 charges nothing for the read.
 
 The replica's credentials live only on the worker and are used by nothing but the copy and the delayed delete, so a token that can delete from the primary cannot reach the replica.
 

@@ -259,7 +259,7 @@ export async function sweepOrphans(
  * Moves objects nobody has read in a season to the provider's cheaper class,
  * and brings back the ones read since they went cold; both are a rewrite in
  * place at the store and a column here. Without a configured class it does
- * nothing, which is the case on MinIO and B2 today.
+ * nothing, which is the case on Garage and B2 today.
  */
 export async function tierObjects(
     { primary }: Stores,

@@ -16,14 +16,14 @@ const MAX_FILE_CEILING = 10_000n * 8n * 1024n * 1024n;
 
 /*
  * The primary object store, needed by the web app and the worker. Any S3-compatible
- * store works; MinIO locally, R2 for the hosted service. Nothing here is optional:
+ * store works; Garage locally, R2 for the hosted service. Nothing here is optional:
  * without a store there is no Drive.
  */
 export const storageEnv = createEnv({
     server: {
         STORAGE_ENDPOINT: endpoint,
         // Where the server itself reaches the store when that differs from the URL browsers
-        // use: the bundled MinIO is `http://minio:9000` inside Compose. Presigned URLs keep
+        // use: the bundled Garage is `http://garage:3900` inside Compose. Presigned URLs keep
         // STORAGE_ENDPOINT. Unset, the server uses STORAGE_ENDPOINT for everything.
         STORAGE_INTERNAL_ENDPOINT: endpoint.optional(),
         STORAGE_REGION: z.string().min(1).max(64).default('auto'),

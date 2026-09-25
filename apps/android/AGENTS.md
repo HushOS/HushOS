@@ -10,7 +10,7 @@ bun run android:build   # debug APK
 bun run android:run     # boots the Pixel_9_API_36 emulator if needed, installs, forwards ports, launches
 ```
 
-Toolchain on this Mac: SDK at `~/Library/Android/sdk` (platform 37, build-tools 37), NDK 27, JDK 21 at `/opt/homebrew/opt/openjdk@21`, Gradle 9.6 through the wrapper, AGP 9.4 (built-in Kotlin: do not apply `kotlin.android`). `adb reverse tcp:5173` and `tcp:9000` let the emulator reach the web dev server and MinIO on the host as localhost; the run script does it.
+Toolchain on this Mac: SDK at `~/Library/Android/sdk` (platform 37, build-tools 37), NDK 27, JDK 21 at `/opt/homebrew/opt/openjdk@21`, Gradle 9.6 through the wrapper, AGP 9.4 (built-in Kotlin: do not apply `kotlin.android`). `adb reverse tcp:5173` and `tcp:9000` let the emulator reach the web dev server and Garage on the host as localhost; the run script does it.
 
 ## How it fits together
 

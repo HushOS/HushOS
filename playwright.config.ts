@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 /*
  * Browser tests against a running HushOS: the local infrastructure (Postgres,
- * MinIO, MailHog from `bun run infra:up`) and the web dev server, started here
+ * Garage, MailHog from `bun run infra:up`) and the web dev server, started here
  * when nothing already listens on 5173. Each run registers its own account
  * through the real sign-up flow, so no fixtures live in the database.
  */

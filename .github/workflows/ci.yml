@@ -79,7 +79,7 @@ jobs:
               with:
                   bun-version: 1.4.0
             - run: bun install --frozen-lockfile
-            - name: Local infrastructure (Postgres, MailHog, MinIO) and environment
+            - name: Local infrastructure (Postgres, MailHog, Garage) and environment
               run: |
                   bun run setup
                   bun run infra:up

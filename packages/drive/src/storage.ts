@@ -27,7 +27,7 @@ import {
 } from '@hushos/env/storage';
 
 /*
- * The object store, through the S3 API every candidate speaks: MinIO locally, R2
+ * The object store, through the S3 API every candidate speaks: Garage locally, R2
  * hosted, B2 as the replica. Object keys carry no information ("ws/{ws}/{object}")
  * and the store only ever holds ciphertext. Nothing here knows about the tree.
  *
@@ -39,7 +39,7 @@ import {
 export type StoreConfig = {
     /* The endpoint presigned URLs name: what a browser can reach. */
     endpoint: string;
-    /* Where this process reaches the store, when that is a different address (Compose's `minio`). */
+    /* Where this process reaches the store, when that is a different address (Compose's `garage`). */
     internalEndpoint?: string;
     region: string;
     bucket: string;
@@ -68,7 +68,7 @@ export function createObjectStore(config: StoreConfig) {
                 accessKeyId: config.accessKeyId,
                 secretAccessKey: config.secretAccessKey,
             },
-            // R2 and MinIO reject the SDK's default CRC checksums on presigned and
+            // R2 rejects the SDK's default CRC checksums on presigned and
             // multipart requests; the object is verified by size and by decryption.
             requestChecksumCalculation: 'WHEN_REQUIRED',
             responseChecksumValidation: 'WHEN_REQUIRED',
@@ -245,8 +245,8 @@ export function createObjectStore(config: StoreConfig) {
          * one range of the source per part, each with its own digest. A verified
          * copy sends those SHA-256 digests as headers, which every store accepts
          * and a bucket under Object Lock (Backblaze) refuses to do without;
-         * clients here compute no checksums of their own, since R2 and MinIO
-         * reject the SDK's streamed ones.
+         * clients here compute no checksums of their own, since R2 rejects the
+         * SDK's streamed ones.
          */
         async copyFrom(
             source: StoreHandle,

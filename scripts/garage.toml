@@ -1,0 +1,20 @@
+# The bundled Garage for HushOS Drive: one node, one copy. The RPC secret and admin token
+# come from GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN; scripts/garage-init.ts does the rest.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+replication_factor = 1
+# One node holds the only copy, so an acknowledged write has to be on disk.
+metadata_fsync = true
+data_fsync = true
+# Drive stores ciphertext, which does not compress.
+compression_level = "none"
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+s3_region = "us-east-1"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"

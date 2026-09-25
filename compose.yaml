@@ -16,39 +16,40 @@ services:
             timeout: 5s
             retries: 10
 
-    minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    garage:
+        image: dxflrs/garage:v2.3.0
         restart: unless-stopped
-        command: server /data --console-address ":9001"
         environment:
-            MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-hushos}
-            MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:?Run bun run setup first}
-            # Browsers PUT parts and GET ranges straight from the bucket.
-            MINIO_API_CORS_ALLOW_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+            GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?Run bun run setup first}
+            GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?Run bun run setup first}
         ports:
-            - '127.0.0.1:${STORAGE_PORT:-9000}:9000'
+            - '127.0.0.1:${STORAGE_PORT:-9000}:3900'
         volumes:
-            - minio_data:/data
+            - ./scripts/garage.toml:/etc/garage.toml:ro
+            - garage_meta:/var/lib/garage/meta
+            - garage_data:/var/lib/garage/data
         healthcheck:
-            test: [CMD, mc, ready, local]
+            test: [CMD, /garage, status]
             interval: 5s
             timeout: 5s
             retries: 10
 
-    # One-shot: creates the bucket (see scripts/minio-init.sh).
-    minio-init:
-        image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    # One-shot: layout, key, bucket, CORS and lifecycle (see scripts/garage-init.ts).
+    garage-init:
+        image: oven/bun:1.4.0-slim
         depends_on:
-            minio:
+            garage:
                 condition: service_healthy
         restart: 'no'
-        entrypoint: [/bin/sh, /minio-init.sh]
+        command: [bun, /garage-init.ts]
         volumes:
-            - ./scripts/minio-init.sh:/minio-init.sh:ro
+            - ./scripts/garage-init.ts:/garage-init.ts:ro
         environment:
-            MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY_ID:-hushos}
-            MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_ACCESS_KEY:?Run bun run setup first}
+            GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?Run bun run setup first}
+            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos-drive}
+            STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:?Run bun run setup first}
             STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
+            APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
 
     migrate:
         build:
@@ -110,14 +111,14 @@ services:
             STORAGE_INTERNAL_ENDPOINT: ${STORAGE_INTERNAL_ENDPOINT:-}
             STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
             STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
-            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos-drive}
             STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
             STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
             DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
         depends_on:
             migrate:
                 condition: service_completed_successfully
-            minio-init:
+            garage-init:
                 condition: service_completed_successfully
         healthcheck:
             test:
@@ -150,7 +151,7 @@ services:
             STORAGE_INTERNAL_ENDPOINT: ${STORAGE_INTERNAL_ENDPOINT:-}
             STORAGE_REGION: ${STORAGE_REGION:-us-east-1}
             STORAGE_BUCKET: ${STORAGE_BUCKET:-hushos}
-            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos}
+            STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID:-hushos-drive}
             STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
             STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
             DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
@@ -169,9 +170,10 @@ services:
         depends_on:
             migrate:
                 condition: service_completed_successfully
-            minio-init:
+            garage-init:
                 condition: service_completed_successfully
 
 volumes:
     postgres18_data:
-    minio_data:
+    garage_meta:
+    garage_data:

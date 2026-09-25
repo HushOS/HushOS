@@ -52,7 +52,7 @@ cp .env.production.example .env
 docker compose up -d --build
 ```
 
-That runs the whole stack on [http://localhost:5173](http://localhost:5173): the bundled MinIO holds the files, the OPAQUE server setup is made on first start and kept in the database, and email goes to the web service's log, where `docker compose logs web` shows each verification link. Before other people use it, set real passwords, your public origins and a mail service in `.env`; [docs/self-hosting.md](docs/self-hosting.md) walks through every setting, the published images, backups and the object store.
+That runs the whole stack on [http://localhost:5173](http://localhost:5173): the bundled Garage holds the files, the OPAQUE server setup is made on first start and kept in the database, and email goes to the web service's log, where `docker compose logs web` shows each verification link. Before other people use it, set real passwords, your public origins and a mail service in `.env`; [docs/self-hosting.md](docs/self-hosting.md) walks through every setting, the published images, backups and the object store.
 
 ## Start locally
 
@@ -66,7 +66,7 @@ bun run db:migrate
 bun run dev
 ```
 
-Open [http://localhost:5173/app](http://localhost:5173/app). Development uses localhost directly; no hosts-file edits, certificates, or reverse proxy are required. Docker runs PostgreSQL 18, MailHog, and MinIO (the object store Drive uploads to, at `127.0.0.1:9000`); the app runs on your host with live reload. `bun run dev` does not start those containers; run `bun run infra:up` once and Docker keeps them running.
+Open [http://localhost:5173/app](http://localhost:5173/app). Development uses localhost directly; no hosts-file edits, certificates, or reverse proxy are required. Docker runs PostgreSQL 18, MailHog, and Garage (the object store Drive uploads to, at `127.0.0.1:9000`); the app runs on your host with live reload. `bun run dev` does not start those containers; run `bun run infra:up` once and Docker keeps them running.
 
 | Surface     | Local address                    | Production example            |
 | ----------- | -------------------------------- | ----------------------------- |
@@ -100,7 +100,7 @@ Postgres is published on `127.0.0.1:5433` for local tools. Change `POSTGRES_PORT
 | `bun run db:migrate`                    | Apply checked-in migrations with Drizzle Kit           |
 | `bun run db:studio`                     | Open Drizzle Studio                                    |
 | `bun run test`                          | Run every package's Vitest suite (throwaway databases) |
-| `bun run infra:up` / `infra:down`       | Start/stop local Postgres, MailHog, and MinIO          |
+| `bun run infra:up` / `infra:down`       | Start/stop local Postgres, MailHog, and Garage         |
 | `bun run selfhost:up` / `selfhost:down` | Build/start or stop the full Docker stack              |
 
 Stop the development server before switching to the full self-hosted stack, which also uses port 5173. Stop commands retain database volumes.

@@ -20,7 +20,7 @@ docker compose up -d --build
 
 That is the whole first run. The template works as it is on `http://localhost:5173`:
 
-- The bundled MinIO holds the files. The web service reaches it inside Compose; browsers reach it on `127.0.0.1:9000`.
+- The bundled [Garage](https://garagehq.deuxfleurs.fr/) holds the files. The web service reaches it inside Compose; browsers reach it on `127.0.0.1:9000`.
 - The OPAQUE server setup is made on first start and kept in the database.
 - Email goes to the web container's log (`EMAIL_ADAPTER=log`); `docker compose logs web` shows each verification link.
 
@@ -30,20 +30,20 @@ Stop any host development server using port 5173 first, or set `PORT`.
 
 Edit `.env`:
 
-1. Give `POSTGRES_PASSWORD` and `STORAGE_SECRET_ACCESS_KEY` real random values before the first start. They are baked into the database and MinIO volumes.
+1. Give `POSTGRES_PASSWORD`, `STORAGE_SECRET_ACCESS_KEY`, `GARAGE_RPC_SECRET` (`openssl rand -hex 32`) and `GARAGE_ADMIN_TOKEN` real random values before the first start. They are baked into the database and Garage volumes.
 2. Set `APP_ORIGIN` and `STORAGE_ENDPOINT` to the public HTTPS origins your proxy serves.
 3. Switch the mail adapter to `smtp`, `resend` or `ses`.
 
 ### What Compose starts
 
-| Service      | Role                                                         |
-| ------------ | ------------------------------------------------------------ |
-| `db`         | PostgreSQL 18                                                |
-| `minio`      | The object store for Drive                                   |
-| `minio-init` | One-shot bucket bootstrap                                    |
-| `migrate`    | One-shot job: waits for Postgres, runs `drizzle-kit migrate` |
-| `web`        | UI and API                                                   |
-| `worker`     | Background jobs                                              |
+| Service       | Role                                                         |
+| ------------- | ------------------------------------------------------------ |
+| `db`          | PostgreSQL 18                                                |
+| `garage`      | The object store for Drive                                   |
+| `garage-init` | One-shot bootstrap: layout, key, bucket, CORS, lifecycle     |
+| `migrate`     | One-shot job: waits for Postgres, runs `drizzle-kit migrate` |
+| `web`         | UI and API                                                   |
+| `worker`      | Background jobs                                              |
 
 The migration job must complete before the app starts. It uses `packages/db/drizzle.config.ts` and the checked-in SQL migrations. `/api/health` checks the app process; `/api/ready` checks a real database query and is the container health check.
 
@@ -527,25 +527,29 @@ Downloads are decrypted in the browser and streamed to disk through a service wo
 
 | Variable                                                                                                                                                                                 | Purpose                                                                                                                                                                                                                                                                                                                             |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STORAGE_INTERNAL_ENDPOINT`                                                                                                                                                              | Optional. Where the web and worker services reach the store when that differs from the browser's URL: `http://minio:9000` for the bundled MinIO inside Compose. Presigned URLs keep `STORAGE_ENDPOINT`.                                                                                                                             |
+| `STORAGE_INTERNAL_ENDPOINT`                                                                                                                                                              | Optional. Where the web and worker services reach the store when that differs from the browser's URL: `http://garage:3900` for the bundled Garage inside Compose. Presigned URLs keep `STORAGE_ENDPOINT`.                                                                                                                           |
 | `STORAGE_ENDPOINT`                                                                                                                                                                       | Public S3 endpoint URL the browser can reach                                                                                                                                                                                                                                                                                        |
-| `STORAGE_REGION`                                                                                                                                                                         | Region the endpoint expects (`auto` for R2, `us-east-1` for MinIO)                                                                                                                                                                                                                                                                  |
+| `STORAGE_REGION`                                                                                                                                                                         | Region the endpoint expects (`auto` for R2, `us-east-1` for the bundled Garage)                                                                                                                                                                                                                                                     |
 | `STORAGE_BUCKET`                                                                                                                                                                         | One bucket per instance                                                                                                                                                                                                                                                                                                             |
 | `STORAGE_ACCESS_KEY_ID`, `STORAGE_SECRET_ACCESS_KEY`                                                                                                                                     | Credentials scoped to that bucket                                                                                                                                                                                                                                                                                                   |
-| `STORAGE_FORCE_PATH_STYLE`                                                                                                                                                               | `true` for MinIO and most self-hosted stores, `false` for R2, B2 and S3                                                                                                                                                                                                                                                             |
+| `STORAGE_FORCE_PATH_STYLE`                                                                                                                                                               | `true` for Garage and most self-hosted stores, `false` for R2, B2 and S3                                                                                                                                                                                                                                                            |
 | `DRIVE_MAX_FILE_BYTES`                                                                                                                                                                   | Per-file upload limit; default 32 GiB, ceiling just under 80 GiB                                                                                                                                                                                                                                                                    |
 | `DRIVE_CLIENT_MINIMUMS`                                                                                                                                                                  | Optional. The oldest client version the Drive API still serves, per client name, as `web/1,cli/0.4`. Every Drive request carries `HushOS-Client: name/version`; a client below its minimum is refused with 426 and told to update (the web app tells the person to reload). Clients with no entry are served whatever their version |
 | `STORAGE_REPLICA_ENDPOINT`, `STORAGE_REPLICA_REGION`, `STORAGE_REPLICA_BUCKET`, `STORAGE_REPLICA_ACCESS_KEY_ID`, `STORAGE_REPLICA_SECRET_ACCESS_KEY`, `STORAGE_REPLICA_FORCE_PATH_STYLE` | Optional second bucket the worker copies every object to; set all or none. Only the worker receives these settings                                                                                                                                                                                                                  |
-| `STORAGE_COLD_CLASS`                                                                                                                                                                     | Optional. The provider's infrequent-access storage class as the S3 API spells it (`STANDARD_IA` on R2 and AWS). With it set, the worker moves objects nobody has read for 90 days to that class nightly and back to `STANDARD` once read again. Leave unset on MinIO and B2, which have one class. Worker only                      |
+| `STORAGE_COLD_CLASS`                                                                                                                                                                     | Optional. The provider's infrequent-access storage class as the S3 API spells it (`STANDARD_IA` on R2 and AWS). With it set, the worker moves objects nobody has read for 90 days to that class nightly and back to `STANDARD` once read again. Leave unset on Garage and B2, which have one class. Worker only                     |
 | `DRIVE_ORPHAN_SWEEP_PAUSED_UNTIL`                                                                                                                                                        | Optional ISO timestamp. Until then the worker skips the orphan sweep. Set it after restoring the database from a backup, to at least the backup's age plus a day, so objects the restored database no longer knows about are not deleted before the object audit has listed what is missing. Worker only                            |
 
-### The bundled MinIO
+### The bundled Garage
 
-The `minio` service stores data in the `minio_data` volume and listens on `127.0.0.1:9000` (change the host port with `STORAGE_PORT`). Its root credentials are `STORAGE_ACCESS_KEY_ID` and `STORAGE_SECRET_ACCESS_KEY`, and it allows browser requests from `APP_ORIGIN`.
+The `garage` service runs a single [Garage](https://garagehq.deuxfleurs.fr/) node from `scripts/garage.toml`: one copy of each object, written with fsync, in the `garage_meta` and `garage_data` volumes. Its S3 API listens on `127.0.0.1:9000` (change the host port with `STORAGE_PORT`); its RPC and admin ports are not published. On every start `garage-init` (`scripts/garage-init.ts`) assigns the node's layout the first time, imports the access key from `STORAGE_ACCESS_KEY_ID` and `STORAGE_SECRET_ACCESS_KEY`, creates `STORAGE_BUCKET`, allows browser requests from `APP_ORIGIN`, and adds the rule that aborts incomplete multipart uploads after 3 days.
 
-To use it behind a public hostname, route a second hostname such as `https://storage.hushos.example.com` to `127.0.0.1:9000` and set `STORAGE_ENDPOINT` to that URL. The web and worker services reach it inside Compose through `STORAGE_INTERNAL_ENDPOINT=http://minio:9000` while presigned URLs carry the public one.
+Garage wants a key identifier of at least 8 characters and cannot change a key's secret or reuse a deleted identifier. To rotate the secret, set a new `STORAGE_ACCESS_KEY_ID` with it; the old key stays until you delete it with `docker compose exec garage /garage key delete --yes <old id>`.
 
-Any hosted S3-compatible bucket works instead: point the `STORAGE_*` settings at it and drop the `minio` services from your Compose command.
+To use it behind a public hostname, route a second hostname such as `https://storage.hushos.example.com` to `127.0.0.1:9000` and set `STORAGE_ENDPOINT` to that URL. The web and worker services reach it inside Compose through `STORAGE_INTERNAL_ENDPOINT=http://garage:3900` while presigned URLs carry the public one. `STORAGE_REGION` stays `us-east-1`, the region `scripts/garage.toml` names.
+
+One node on one disk is not a backup. Configure the replica bucket, or back up both Garage volumes with the database.
+
+Any hosted S3-compatible bucket works instead: point the `STORAGE_*` settings at it and drop the `garage` services from your Compose command.
 
 ### After restoring the database from a backup
 
@@ -560,7 +564,7 @@ Cleanup is the application's job, and nothing at the bucket should expire object
 
 - The worker aborts abandoned multipart uploads and deletes objects through an outbox.
 - With a replica configured, a published object's primary copy is deleted only once the replica holds it, and the replica copy 30 days later, which is the window for undoing a bad purge.
-- On R2, B2 and S3, add one lifecycle rule that aborts incomplete multipart uploads after 3 days as a second layer. MinIO does not accept a rule with only that action, so the bundled store relies on the worker alone.
+- A lifecycle rule that aborts incomplete multipart uploads after 3 days is the second layer. `garage-init` sets it on the bundled Garage; on R2, B2 and S3, add it in the provider's console.
 
 ## Logs and storage allowances
 
