@@ -68,6 +68,18 @@ struct FolderView: View {
         return items
     }
 
+    /* What can be added here: new folder, files, photos, and a paste while the clipboard holds items. */
+    @ViewBuilder private var addItems: some View {
+        if let clip = store.clipboard, let first = clip.items.first, store.canPaste(into: folderId) {
+            Button(clip.items.count > 1 ? "Paste \(clip.items.count) items" : "Paste \(first.name)", systemImage: clip.cut ? "scissors" : "doc.on.clipboard") { Task { await store.paste(into: folderId) } }
+            Divider()
+        }
+        Button("New Folder", systemImage: "folder.badge.plus") { newFolderName = ""; showingNewFolder = true }
+        Button("Upload Files", systemImage: "doc.badge.plus") { showingImporter = true }
+        // A picker inside a menu never presents; a button and a modifier do.
+        Button("Upload Photos", systemImage: "photo.badge.plus") { showingPhotos = true }
+    }
+
     var body: some View {
         List {
             if !loaded && store.folders[folderId] == nil {
@@ -113,44 +125,47 @@ struct FolderView: View {
                     HStack(spacing: 16) {
                         if isRoot { Text("Files").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil) }
                         Spacer()
-                        // One control for how the list is shown: the funnel says it filters, the words say the order in force.
-                        Menu {
-                            Section("Sort by") {
-                                ForEach(SortKey.allCases, id: \.self) { key in
-                                    Button {
-                                        if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
-                                    } label: {
-                                        if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                        if selecting {
+                            Button("Done") { selecting = false; selection = [] }
+                                .font(.subheadline.weight(.semibold)).textCase(nil)
+                        } else {
+                            // Two round buttons, as Files has them: add, and everything about how the list is shown.
+                            HStack(spacing: 0) {
+                                Menu { addItems } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
+                                    .accessibilityLabel("Add")
+                                Menu {
+                                    Button("Select", systemImage: "checkmark.circle") { selecting = true }
+                                    Section("Sort by") {
+                                        ForEach(SortKey.allCases, id: \.self) { key in
+                                            Button {
+                                                if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
+                                            } label: {
+                                                if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                            Section("Tag") {
-                                // Only the tags this folder's items carry.
-                                let here = Set((store.folders[folderId] ?? []).map(\.id))
-                                let folderTags = store.tags.tags.filter { tag in !here.isDisjoint(with: store.tags.nodes(with: tag.id)) }
-                                if folderTags.isEmpty { Text("No tags in this folder") }
-                                ForEach(folderTags) { tag in
-                                    Button {
-                                        tagFilter = tagFilter == tag.id ? nil : tag.id
-                                    } label: {
-                                        if tagFilter == tag.id { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
+                                    Section("Tag") {
+                                        // Only the tags this folder's items carry.
+                                        let here = Set((store.folders[folderId] ?? []).map(\.id))
+                                        let folderTags = store.tags.tags.filter { tag in !here.isDisjoint(with: store.tags.nodes(with: tag.id)) }
+                                        if folderTags.isEmpty { Text("No tags in this folder") }
+                                        ForEach(folderTags) { tag in
+                                            Button {
+                                                tagFilter = tagFilter == tag.id ? nil : tag.id
+                                            } label: {
+                                                if tagFilter == tag.id { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
+                                            }
+                                        }
                                     }
+                                } label: {
+                                    // A filter in force shows here too, besides the line above the rows.
+                                    Image(systemName: tagFilter == nil ? "ellipsis" : "line.3.horizontal.decrease").frame(width: 44, height: 44)
                                 }
+                                .accessibilityLabel("More")
                             }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: tagFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
-                                Text(sortKey.label)
-                                Image(systemName: sortAscending ? "arrow.up" : "arrow.down").font(.caption2.weight(.semibold))
-                            }
-                            .font(.subheadline.weight(.medium)).textCase(nil)
+                            .font(.body.weight(.semibold)).textCase(nil)
+                            .glassEffect(.regular.interactive(), in: .capsule)
                         }
-                        .accessibilityLabel("Sort and filter")
-                        Button(selecting ? "Done" : "Select") {
-                            selecting.toggle()
-                            if !selecting { selection = [] }
-                        }
-                        .font(.subheadline.weight(.medium)).textCase(nil)
                     }
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -203,7 +218,7 @@ struct FolderView: View {
                 .font(.subheadline.weight(.medium))
                 .padding(.horizontal, 16).padding(.vertical, 12)
                 .glassEffect(.regular, in: .capsule)
-                .padding(.leading, 16).padding(.trailing, 92).padding(.bottom, 24)
+                .padding(.horizontal, 16).padding(.bottom, 24)
             }
         }
         .overlay(alignment: .bottom) {
@@ -232,26 +247,6 @@ struct FolderView: View {
         .sheet(isPresented: $movingMany) {
             MoveSheet(items: selectedItems).environment(store)
                 .onDisappear { selecting = false; selection = [] }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if selecting { EmptyView() } else {
-            // The drive's own "add" control: a floating glass button, not a Files toolbar item.
-            Menu {
-                    if let clip = store.clipboard, let first = clip.items.first, store.canPaste(into: folderId) {
-                        Button(clip.items.count > 1 ? "Paste \(clip.items.count) items" : "Paste \(first.name)", systemImage: clip.cut ? "scissors" : "doc.on.clipboard") { Task { await store.paste(into: folderId) } }
-                        Divider()
-                    }
-                    Button("New Folder", systemImage: "folder.badge.plus") { newFolderName = ""; showingNewFolder = true }
-                    Button("Upload Files", systemImage: "doc.badge.plus") { showingImporter = true }
-                    // A picker inside a menu never presents; a button and a modifier do.
-                    Button("Upload Photos", systemImage: "photo.badge.plus") { showingPhotos = true }
-                } label: {
-                    Image(systemName: "plus").font(.title3.weight(.semibold)).frame(width: 50, height: 50)
-                }
-                .buttonStyle(.glassProminent)
-                .clipShape(Circle())
-                .padding(.trailing, 20).padding(.bottom, 16)
-            }
         }
         .alert("New Folder", isPresented: $showingNewFolder) {
             TextField("Name", text: $newFolderName)
