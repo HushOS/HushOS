@@ -8,6 +8,8 @@ struct NodeRow: View {
     let item: Opened
     /* Takes the date's place, as the trash's "Trashed 23 Sep". */
     var note: String? = nil
+    /* Something is being done to it (a restore or a delete in the trash): a spinner until it is over. */
+    var working = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -25,7 +27,10 @@ struct NodeRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if let fraction = store.opening[item.id] {
+            if working {
+                Spacer(minLength: 8)
+                ProgressView().controlSize(.small)
+            } else if let fraction = store.opening[item.id] {
                 // Fetching to open: a small ring on the row, as the drives do, not a banner.
                 Spacer(minLength: 8)
                 ProgressView(value: fraction).progressViewStyle(.circular).controlSize(.small)

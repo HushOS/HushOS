@@ -21,6 +21,9 @@ final class DriveStore {
     var names: [String: String] = [:]
     var recents: [Opened] = []
     var trash: [(item: Opened, parentTrashed: Bool)] = []
+    /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
+    var trashWorking: Set<String> = []
+    var emptyingTrash = false
     var thumbnails: [String: Data] = [:]
     var rootId: String?
     var tags: TagRegistry = .empty
@@ -515,19 +518,47 @@ final class DriveStore {
     }
 
     func restore(_ item: Opened, parentTrashed: Bool) async {
-        let ok = await perform(in: nil) { _ = try await vault.restore(item, parentTrashed: parentTrashed) }
-        if ok {
-            await refreshTrash()
-            if let parent = item.node.parentId, folders[parent] != nil { await refresh(folder: parent) }
-        }
+        let ok = await onTrashRow(item) { _ = try await vault.restore(item, parentTrashed: parentTrashed) }
+        if ok, let parent = item.node.parentId, folders[parent] != nil { await refresh(folder: parent) }
     }
 
     func purge(_ item: Opened) async {
-        if await perform(in: nil, { try await vault.purge(item.id) }) { await refreshTrash() }
+        _ = await onTrashRow(item) { try await vault.purge(item.id) }
     }
 
+    /*
+     * A trash row's action: a spinner on the row while it runs, the row gone the moment
+     * the server agrees, then the feed pulled so the catalogue the trash reads from
+     * knows it too; without the pull the list came back as it was.
+     */
+    private func onTrashRow(_ item: Opened, _ action: () async throws -> Void) async -> Bool {
+        guard !trashWorking.contains(item.id) else { return false }
+        trashWorking.insert(item.id)
+        let ok = await perform(in: nil, action)
+        trashWorking.remove(item.id)
+        if ok {
+            trash.removeAll { $0.item.id == item.id }
+            await sync()
+            await refreshTrash()
+        }
+        return ok
+    }
+
+    /* The server empties a batch at a time, as the web asks it: again until nothing is left or nothing moves. */
     func emptyTrash() async {
-        if await perform(in: nil, { _ = try await vault.emptyTrash() }) { await refreshTrash() }
+        guard !emptyingTrash else { return }
+        emptyingTrash = true
+        defer { emptyingTrash = false }
+        var last: EmptyTrashResult?
+        while true {
+            var step: EmptyTrashResult?
+            guard await perform(in: nil, { step = try await vault.emptyTrash() }), let step else { break }
+            last = step
+            if step.remaining == 0 || step.purged == 0 { break }
+        }
+        if last?.remaining == 0 { trash = [] }
+        await sync()
+        await refreshTrash()
     }
 
     func restoreVersion(_ version: VersionListView, of item: Opened) async {

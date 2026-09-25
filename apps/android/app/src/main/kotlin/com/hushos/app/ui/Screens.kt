@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -648,9 +649,14 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
     var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
     LaunchedEffect(Unit) { model.refreshTrash() }
     Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = {
-        TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = { TextButton(enabled = state.trash.isNotEmpty(), onClick = { confirmEmpty = true }) { Text("Empty") } })
+        TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = {
+            if (state.emptyingTrash) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 16.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Text("Emptying…", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 8.dp))
+            } else TextButton(enabled = state.trash.isNotEmpty(), onClick = { confirmEmpty = true }) { Text("Empty") }
+        })
     }) { padding ->
-        PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshTrash() }, modifier = Modifier.padding(padding)) {
+        PullToRefreshBox(isRefreshing = state.refreshingTrash, onRefresh = { model.refreshTrash(pulled = true) }, modifier = Modifier.padding(padding)) {
             if (state.trash.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Items you delete stay here until you remove them.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -658,7 +664,9 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
                 items(state.trash, key = { it.item.id }) { entry ->
                     val trashed = entry.item.node.trashedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
                         ?.let { "Trashed " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(it)) }
-                    NodeRow(model, state, entry.item, onClick = { selected = entry }, onLongClick = { selected = entry }, note = trashed)
+                    // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
+                    val working = state.emptyingTrash || entry.item.id in state.trashWorking
+                    NodeRow(model, state, entry.item, onClick = { if (!working) selected = entry }, onLongClick = { if (!working) selected = entry }, note = trashed, working = working)
                 }
             }
         }

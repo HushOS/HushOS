@@ -62,6 +62,7 @@ data class GrantView(val json: JSONObject) {
 data class WorkspaceView(val workspaceId: String, val changeSeq: Int, val grant: GrantView?, val root: NodeView?)
 data class Listing(val folder: NodeView, val ancestors: List<NodeView>, val children: List<NodeView>, val nextCursor: String?)
 data class TrashEntry(val node: NodeView, val ancestors: List<NodeView>, val parentTrashed: Boolean)
+data class EmptyTrashResult(val purged: Int, val remaining: Int)
 data class TrashListing(val items: List<TrashEntry>, val nextCursor: String?)
 data class NodeChange(val kind: String, val changeSeq: Int, val node: NodeView?, val nodeId: String?)
 data class ChangeFeed(val changes: List<NodeChange>, val resync: Boolean, val nextCursor: Int, val hasMore: Boolean)
@@ -296,9 +297,9 @@ class DriveApi(val session: Shared.Session) {
         send("/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
     }
 
-    fun emptyTrash(workspaceId: String) {
-        send("/workspaces/$workspaceId/trash/empty", JSONObject())
-    }
+    /* One batch of the trash, as the server takes it; `remaining` says whether to ask again. */
+    fun emptyTrash(workspaceId: String): EmptyTrashResult =
+        send("/workspaces/$workspaceId/trash/empty", JSONObject()).let { EmptyTrashResult(it.getInt("purged"), it.getInt("remaining")) }
 
     fun restoreVersion(versionId: String, workspaceId: String): NodeView =
         NodeView.from(send("/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))

@@ -358,7 +358,10 @@ struct TrashView: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(store.trash, id: \.item.id) { entry in
-                NodeRow(item: entry.item, note: parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" })
+                // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
+                let working = store.emptyingTrash || store.trashWorking.contains(entry.item.id)
+                NodeRow(item: entry.item, note: parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" }, working: working)
+                    .disabled(working)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { Task { await store.purge(entry.item) } } label: { Label("Delete", systemImage: "trash.slash") }
                         Button { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }.tint(.green)
@@ -372,10 +375,21 @@ struct TrashView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Trash")
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await store.refreshTrash() }
+        .refreshable {
+            // A pull asks the server: the catalogue alone may not know yet.
+            await store.sync()
+            await store.refreshTrash()
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Empty", role: .destructive) { confirmEmpty = true }.disabled(store.trash.isEmpty)
+                if store.emptyingTrash {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Emptying…").font(.subheadline)
+                    }
+                } else {
+                    Button("Empty", role: .destructive) { confirmEmpty = true }.disabled(store.trash.isEmpty)
+                }
             }
         }
         .confirmationDialog("Empty the trash?", isPresented: $confirmEmpty, titleVisibility: .visible) {

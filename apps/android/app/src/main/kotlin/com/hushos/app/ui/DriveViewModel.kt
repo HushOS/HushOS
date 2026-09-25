@@ -90,6 +90,11 @@ data class DriveState(
     val notice: Notice? = null,
     val error: String? = null,
     val busy: Boolean = false,
+    /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
+    val trashWorking: Set<String> = emptySet(),
+    val emptyingTrash: Boolean = false,
+    /* A pull on the trash list, the only thing its refresh ring stands for. */
+    val refreshingTrash: Boolean = false,
     /* The last request could not reach the server; what is on the phone is shown. */
     val unreachable: Boolean = false,
     /* Folder ids (and "recents") being fetched right now. */
@@ -438,8 +443,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(loading = it.loading - "recents") }
     }
 
-    fun refreshTrash() = viewModelScope.launch {
+    fun refreshTrash(pulled: Boolean = false) = viewModelScope.launch {
+        if (pulled) { _state.update { it.copy(refreshingTrash = true) }; sync() }
         io { it.trash() }?.let { trash -> _state.update { it.copy(trash = trash) } }
+        _state.update { it.copy(refreshingTrash = false) }
+    }
+
+    /* A trash row's action: a ring on the row while it runs, and the row gone the moment the server agrees. */
+    private suspend fun onTrashRow(entry: TrashItem, action: (Vault) -> Unit): Boolean {
+        val id = entry.item.id
+        if (id in state.value.trashWorking) return false
+        _state.update { it.copy(trashWorking = it.trashWorking + id) }
+        val ok = write(null, block = action)
+        _state.update { s -> s.copy(trashWorking = s.trashWorking - id, trash = if (ok) s.trash.filter { it.item.id != id } else s.trash) }
+        if (ok) refreshTrash()
+        return ok
     }
 
     fun refreshTags() = viewModelScope.launch {
@@ -634,10 +652,24 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         return ok
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {
-        if (write(null) { it.restore(entry) }) { refreshTrash(); entry.item.node.parentId?.let { if (state.value.folders.containsKey(it)) refresh(it) } }
+        if (onTrashRow(entry) { it.restore(entry) }) entry.item.node.parentId?.let { if (state.value.folders.containsKey(it)) refresh(it) }
     }
-    fun purge(entry: TrashItem) = viewModelScope.launch { if (write(null) { it.purge(entry.item.id) }) refreshTrash() }
-    fun emptyTrash() = viewModelScope.launch { if (write(null) { it.emptyTrash() }) refreshTrash() }
+    fun purge(entry: TrashItem) = viewModelScope.launch { onTrashRow(entry) { it.purge(entry.item.id) } }
+
+    /* The server empties a batch at a time, as the web asks it: again until nothing is left or nothing moves. */
+    fun emptyTrash() = viewModelScope.launch {
+        if (state.value.emptyingTrash) return@launch
+        _state.update { it.copy(emptyingTrash = true) }
+        var result: com.hushos.app.data.EmptyTrashResult? = null
+        do {
+            var step: com.hushos.app.data.EmptyTrashResult? = null
+            if (!write(null) { step = it.emptyTrash() }) break
+            result = step
+        } while (result != null && result.remaining > 0 && result.purged > 0)
+        if (result?.remaining == 0) _state.update { it.copy(trash = emptyList()) }
+        refreshTrash().join()
+        _state.update { it.copy(emptyingTrash = false) }
+    }
     fun restoreVersion(version: VersionListView, item: Opened) = viewModelScope.launch { write(item.node.parentId) { it.restoreVersion(version, item.id) } }
 
     suspend fun versions(item: Opened): List<VersionListView> = io { it.versions(item.id) } ?: emptyList()

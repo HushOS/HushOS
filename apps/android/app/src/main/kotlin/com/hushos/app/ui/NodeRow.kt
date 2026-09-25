@@ -58,6 +58,8 @@ fun NodeRow(
     model: DriveViewModel, state: DriveState, item: Opened, onClick: () -> Unit, onLongClick: () -> Unit, note: String? = null,
     /* Picked while selecting: the row takes the selection tint and its icon becomes a check, as Drive and Files do. */
     selected: Boolean = false,
+    /* Something is being done to it (a restore or a delete in the trash): a ring until it is over. */
+    working: Boolean = false,
 ) {
     LaunchedEffect(item.id) { model.thumbnail(item) }
     val thumbnail = state.thumbnails[item.id]
@@ -109,8 +111,9 @@ fun NodeRow(
             }
         },
         trailingContent = {
+            if (working) CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
             // Fetching to open: a small ring on the row, as the drives do, not a banner.
-            state.opening[item.id]?.let { fraction ->
+            else state.opening[item.id]?.let { fraction ->
                 if (fraction > 0f) CircularProgressIndicator(progress = { fraction }, modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
                 else CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
             }

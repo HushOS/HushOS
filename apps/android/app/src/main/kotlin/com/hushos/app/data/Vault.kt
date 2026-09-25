@@ -610,7 +610,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         forget(id)
     }
 
-    fun emptyTrash() = api.emptyTrash(workspaceId)
+    fun emptyTrash(): EmptyTrashResult = api.emptyTrash(workspaceId)
 
     fun restoreVersion(version: VersionListView, id: String): Opened {
         val item = resolve(id)
