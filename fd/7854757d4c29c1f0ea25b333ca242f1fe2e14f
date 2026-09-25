@@ -1,0 +1,28 @@
+apps/web/src/lib/api.server.ts
+  s_de0e5293e39e1a::t_5f966640aa672c 18,223,1395
+  s_de0e5293e39e1a::t_6b3b9e938e1548 224-226
+packages/db/src/drive.ts
+  s_de0e5293e39e1a::t_5f966640aa672c 759,768,777
+  s_de0e5293e39e1a::t_72cd89e0322359 744-758,760-761,763-764,775-776,778,803
+  s_de0e5293e39e1a::t_6b3b9e938e1548 804-807
+packages/db/src/drive.trash.test.ts
+  s_de0e5293e39e1a::t_6b3b9e938e1548 47-50,57-59,144-150
+  s_de0e5293e39e1a::t_8904e9a4c70028 1-46,51-56,60-116,118-119,123-126,129-131,133-137,139-143,151-158
+  s_de0e5293e39e1a::t_c7927433bb81b6 117,120-122,127-128,132,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fd7854757d4c29c1f0ea25b333ca242f1fe2e14f",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
