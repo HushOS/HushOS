@@ -606,3 +606,11 @@ internal fun defaultOrigin(): String {
     return if (emulator) BuildConfig.DEFAULT_ORIGIN else "https://hushos.com"
 }
         if (!ok && state.value.unreachable) notify("You're offline. Keep a file downloaded to open it without a connection.")
+    /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
+    fun item(id: String): Opened? = vault?.item(id)
+
+    fun forgetOffline(id: String) {
+        Offline.forget(context, id)
+        refreshOffline()
+    }
+

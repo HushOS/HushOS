@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -373,6 +374,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
     var tagged by remember { mutableStateOf<List<Opened>>(emptyList()) }
     var managingTags by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Opened?>(null) }
+    var forgetting by remember { mutableStateOf<com.hushos.app.data.Offline.Entry?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { model.refreshRecents(); model.refreshTags(); model.refreshOffline() }
@@ -419,11 +421,15 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
                         androidx.compose.material3.ListItem(
                             headlineContent = { Text(entry.name) },
                             supportingContent = { Text(entry.size?.let { formatBytes(it) } ?: "Kept downloaded") },
-                            leadingContent = { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary) },
-                            modifier = Modifier.clickable {
-                                val file = com.hushos.app.data.Offline.file(context, entry)
-                                if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime)
-                            },
+                            leadingContent = { Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)) } },
+                            // The same menu as any other row: a kept file is still a file (share, rename, remove the download).
+                            modifier = Modifier.combinedClickable(
+                                onClick = {
+                                    val file = com.hushos.app.data.Offline.file(context, entry)
+                                    if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime)
+                                },
+                                onLongClick = { model.item(entry.id)?.let { selected = it } ?: run { forgetting = entry } },
+                            ),
                         )
                     }
                 }
@@ -442,6 +448,16 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
         }
     }
     selected?.let { item -> ItemActions(model, state, item) { selected = null } }
+    // A kept file this device cannot name in the tree (not opened yet): the one thing it can still do.
+    forgetting?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { forgetting = null },
+            title = { Text(entry.name) },
+            text = { Text("Remove the downloaded copy from this phone? The file stays in HushOS.") },
+            confirmButton = { TextButton(onClick = { model.forgetOffline(entry.id); forgetting = null }) { Text("Remove download") } },
+            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
+        )
+    }
     if (managingTags) TagManagerSheet(model, state) { managingTags = false }
 }
 

@@ -191,6 +191,9 @@ extension Vault {
         return (catalogueChildren[folderId] ?? []).compactMap { opened[$0] }.filter { $0.node.trashedAt == nil }.sorted(by: Opened.byName)
     }
 
+    /* One opened item by id, when this device knows it (the catalogue opens the whole drive). */
+    public func openedItem(_ id: String) -> Opened? { opened[id] }
+
     /* Everything opened in this workspace, for search. */
     public func catalogueAll() -> [Opened] {
         guard catalogueState == .ready, let ws = workspace?.workspaceId else { return [] }

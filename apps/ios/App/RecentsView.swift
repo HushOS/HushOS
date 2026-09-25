@@ -35,6 +35,8 @@ struct HomeView: View {
     @State private var managingTags = false
     @State private var action: NodeAction?
     @State private var preview: URL?
+    /* The opened items behind the Offline rows, so each gets the full menu. */
+    @State private var offlineItems: [String: Opened] = [:]
     @FocusState private var searching: Bool
 
     private var rows: [Opened] {
@@ -58,21 +60,15 @@ struct HomeView: View {
                     // Kept files first, the way Dropbox lists Offline on Home: they open without the network.
                     Section {
                         ForEach(offline) { entry in
-                            Button {
-                                if let item = store.everything.first(where: { $0.id == entry.id }) { open(item) }
-                                else { preview = Offline.file(for: entry) }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(entry.name).lineLimit(1)
-                                        Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
-                                            .font(.footnote).foregroundStyle(.secondary)
-                                    }
+                            // The same menu as any other row: a kept file is still a file. One the tree has not opened
+                            // on this device can at least drop its download.
+                            if let item = offlineItems[entry.id] {
+                                offlineRow(entry).nodeActions(item, action: $action, store: store)
+                            } else {
+                                offlineRow(entry).contextMenu {
+                                    Button("Remove Download", systemImage: "icloud.slash", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 }
                                 }
                             }
-                            .buttonStyle(.plain)
-                            .swipeActions { Button("Remove", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 } }
                         }
                     } header: {
                         VStack(alignment: .leading, spacing: 12) {
@@ -107,6 +103,11 @@ struct HomeView: View {
             .nodeActionSheets(action: $action, store: store)
             .quickLookPreview($preview)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
+            .task(id: "\(store.offlineVersion)-\(store.catalogueVersion)") {
+                var found: [String: Opened] = [:]
+                for entry in offline { if let item = await store.vault.openedItem(entry.id) { found[entry.id] = item } }
+                offlineItems = found
+            }
             .task {
                 _ = await store.loadRoot()
                 await store.refreshRecents()
@@ -114,6 +115,24 @@ struct HomeView: View {
                 loaded = true
             }
         }
+    }
+
+    private func offlineRow(_ entry: Offline.Entry) -> some View {
+        Button {
+            if let item = offlineItems[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { open(item) }
+            else { preview = Offline.file(for: entry) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name).lineLimit(1)
+                    Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .swipeActions { Button("Remove", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 } }
     }
 
     private var offline: [Offline.Entry] {
