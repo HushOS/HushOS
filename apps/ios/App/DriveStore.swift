@@ -544,6 +544,71 @@ final class DriveStore {
         return ok
     }
 
+    /* The folders above `item`, nearest first, as far as the catalogue knows them. */
+    private func ancestors(of item: Opened) async -> [Opened] {
+        var chain: [Opened] = []
+        var cursor = item.node.parentId
+        while let id = cursor, chain.count < 256, let parent = await vault.item(id) {
+            chain.append(parent)
+            cursor = parent.node.parentId
+        }
+        return chain
+    }
+
+    /*
+     * Restores several trash rows. Shallowest first, so a folder comes back before
+     * what was trashed inside it; a row whose trashed folders all came back in this
+     * batch goes home, one whose folder is still in the trash goes to the top.
+     */
+    func restoreMany(_ entries: [(item: Opened, parentTrashed: Bool)]) async {
+        var chains: [String: [Opened]] = [:]
+        for entry in entries { chains[entry.item.id] = await ancestors(of: entry.item) }
+        let ordered = entries.sorted { (chains[$0.item.id]?.count ?? 0) < (chains[$1.item.id]?.count ?? 0) }
+        var back: Set<String> = []
+        var failed = 0
+        var toTop = 0
+        trashWorking.formUnion(entries.map(\.item.id))
+        for entry in ordered {
+            let trashedAbove = (chains[entry.item.id] ?? []).filter { $0.node.trashedAt != nil }
+            let home = trashedAbove.allSatisfy { back.contains($0.id) }
+            let ok = await perform(in: nil, failed: { _ in }) { _ = try await vault.restore(entry.item, parentTrashed: !home) }
+            trashWorking.remove(entry.item.id)
+            if ok {
+                back.insert(entry.item.id)
+                if !home { toTop += 1 }
+                trash.removeAll { $0.item.id == entry.item.id }
+            } else {
+                failed += 1
+            }
+        }
+        await sync()
+        await refreshTrash()
+        folders.removeAll()
+        let restored = entries.count - failed
+        var text = failed > 0 ? "Restored \(restored) of \(entries.count); \(failed) could not be restored" : restored == 1 ? "1 item restored" : "\(restored) items restored"
+        if toTop > 0 { text += toTop == 1 ? ". One went to the top: its folder is still in the trash." : ". \(toTop) went to the top: their folders are still in the trash." }
+        notify(text)
+    }
+
+    /* Deletes several trash rows forever; what sits inside a picked folder goes with it, so it is not asked for twice. */
+    func purgeMany(_ entries: [(item: Opened, parentTrashed: Bool)]) async {
+        let picked = Set(entries.map(\.item.id))
+        var inside: Set<String> = []
+        for entry in entries where await ancestors(of: entry.item).contains(where: { picked.contains($0.id) }) { inside.insert(entry.item.id) }
+        let tops = entries.filter { !inside.contains($0.item.id) }
+        var failed = 0
+        trashWorking.formUnion(picked)
+        for entry in tops {
+            let ok = await perform(in: nil, failed: { _ in }) { try await vault.purge(entry.item.id) }
+            trashWorking.remove(entry.item.id)
+            if ok { trash.removeAll { $0.item.id == entry.item.id } } else { failed += 1 }
+        }
+        trashWorking.subtract(picked)
+        await sync()
+        await refreshTrash()
+        notify(failed > 0 ? "\(failed) of \(tops.count) could not be deleted" : entries.count == 1 ? "1 item deleted forever" : "\(entries.count) items deleted forever")
+    }
+
     /* The server empties a batch at a time, as the web asks it: again until nothing is left or nothing moves. */
     func emptyTrash() async {
         guard !emptyingTrash else { return }

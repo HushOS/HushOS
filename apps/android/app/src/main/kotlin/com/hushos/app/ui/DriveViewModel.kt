@@ -656,6 +656,65 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun purge(entry: TrashItem) = viewModelScope.launch { onTrashRow(entry) { it.purge(entry.item.id) } }
 
+    /* The folders above `id`, nearest first, as far as the catalogue knows them. */
+    private fun ancestors(vault: Vault, id: String): List<Opened> {
+        val chain = ArrayList<Opened>()
+        var cursor = vault.item(id)?.node?.parentId
+        while (cursor != null && chain.size < 256) {
+            val parent = vault.item(cursor) ?: break
+            chain.add(parent)
+            cursor = parent.node.parentId
+        }
+        return chain
+    }
+
+    /*
+     * Restores several trash rows. Shallowest first, so a folder comes back before
+     * what was trashed inside it; a row whose trashed folders all came back in this
+     * batch goes home, one whose folder is still in the trash goes to the top.
+     */
+    fun restoreMany(entries: List<TrashItem>) = viewModelScope.launch {
+        val vault = vault ?: return@launch
+        val chains = withContext(Dispatchers.IO) { entries.associate { it.item.id to ancestors(vault, it.item.id) } }
+        val ordered = entries.sortedBy { chains[it.item.id]?.size ?: 0 }
+        val back = HashSet<String>()
+        var failed = 0
+        var toTop = 0
+        _state.update { it.copy(trashWorking = it.trashWorking + entries.map { e -> e.item.id }) }
+        for (entry in ordered) {
+            val home = chains[entry.item.id].orEmpty().filter { it.node.trashedAt != null }.all { it.id in back }
+            val ok = write(null, { }) { it.restore(entry.copy(parentTrashed = !home)) }
+            _state.update { s -> s.copy(trashWorking = s.trashWorking - entry.item.id, trash = if (ok) s.trash.filter { it.item.id != entry.item.id } else s.trash) }
+            if (ok) { back.add(entry.item.id); if (!home) toTop++ } else failed++
+        }
+        sync()
+        refreshTrash().join()
+        _state.update { it.copy(folders = emptyMap()) }
+        val restored = entries.size - failed
+        var text = if (failed > 0) "Restored $restored of ${entries.size}; $failed could not be restored" else if (restored == 1) "1 item restored" else "$restored items restored"
+        if (toTop > 0) text += if (toTop == 1) ". One went to the top: its folder is still in the trash." else ". $toTop went to the top: their folders are still in the trash."
+        notify(text)
+    }
+
+    /* Deletes several trash rows forever; what sits inside a picked folder goes with it, so it is not asked for twice. */
+    fun purgeMany(entries: List<TrashItem>) = viewModelScope.launch {
+        val vault = vault ?: return@launch
+        val picked = entries.map { it.item.id }.toSet()
+        val inside = withContext(Dispatchers.IO) { entries.filter { e -> ancestors(vault, e.item.id).any { it.id in picked } }.map { it.item.id }.toSet() }
+        val tops = entries.filter { it.item.id !in inside }
+        var failed = 0
+        _state.update { it.copy(trashWorking = it.trashWorking + picked) }
+        for (entry in tops) {
+            val ok = write(null, { }) { it.purge(entry.item.id) }
+            _state.update { s -> s.copy(trashWorking = s.trashWorking - entry.item.id, trash = if (ok) s.trash.filter { it.item.id != entry.item.id } else s.trash) }
+            if (!ok) failed++
+        }
+        _state.update { it.copy(trashWorking = it.trashWorking - picked) }
+        sync()
+        refreshTrash().join()
+        notify(if (failed > 0) "$failed of ${tops.size} could not be deleted" else if (entries.size == 1) "1 item deleted forever" else "${entries.size} items deleted forever")
+    }
+
     /* The server empties a batch at a time, as the web asks it: again until nothing is left or nothing moves. */
     fun emptyTrash() = viewModelScope.launch {
         if (state.value.emptyingTrash) return@launch

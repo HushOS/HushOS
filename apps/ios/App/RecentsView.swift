@@ -350,6 +350,11 @@ struct TrashView: View {
     @Environment(DriveStore.self) private var store
     @State private var loaded = false
     @State private var confirmEmpty = false
+    /* Picking rows to restore or delete together, as Files picks them. */
+    @State private var selecting = false
+    @State private var selection: Set<String> = []
+    @State private var confirmDelete = false
+    private var picked: [(item: Opened, parentTrashed: Bool)] { store.trash.filter { selection.contains($0.item.id) } }
 
     var body: some View {
         List {
@@ -360,7 +365,22 @@ struct TrashView: View {
             ForEach(store.trash, id: \.item.id) { entry in
                 // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
                 let working = store.emptyingTrash || store.trashWorking.contains(entry.item.id)
-                NodeRow(item: entry.item, note: parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" }, working: working)
+                let note = parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" }
+                if selecting {
+                    Button {
+                        if selection.contains(entry.item.id) { selection.remove(entry.item.id) } else { selection.insert(entry.item.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: selection.contains(entry.item.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(selection.contains(entry.item.id) ? Color.accentColor : Color.secondary)
+                            NodeRow(item: entry.item, note: note, working: working)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(working)
+                } else {
+                NodeRow(item: entry.item, note: note, working: working)
                     .disabled(working)
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { Task { await store.purge(entry.item) } } label: { Label("Delete", systemImage: "trash.slash") }
@@ -370,6 +390,7 @@ struct TrashView: View {
                         Button("Restore", systemImage: "arrow.uturn.backward") { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } }
                         Button("Delete Now", systemImage: "trash.slash", role: .destructive) { Task { await store.purge(entry.item) } }
                     }
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -380,9 +401,60 @@ struct TrashView: View {
             await store.sync()
             await store.refreshTrash()
         }
+        .navigationBarBackButtonHidden(selecting)
+        .onChange(of: store.trash.map(\.item.id)) { _, ids in
+            // Rows restored or deleted, here or elsewhere, leave the selection.
+            selection.formIntersection(ids)
+            if ids.isEmpty { selecting = false }
+        }
+        .overlay(alignment: .bottom) {
+            if selecting {
+                // The same bar Files shows while selecting: what is picked, and what can be done with it.
+                HStack(spacing: 18) {
+                    Text("\(selection.count) selected").font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    // Once acted on, select mode ends, as in Files, and the notice says how it went.
+                    Button { let entries = picked; selecting = false; selection = []; Task { await store.restoreMany(entries) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash.slash") }
+                }
+                .labelStyle(.titleAndIcon)
+                .font(.subheadline.weight(.medium))
+                .disabled(selection.isEmpty || !store.trashWorking.isEmpty)
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .glassEffect(.regular, in: .capsule)
+                .padding(.horizontal, 16).padding(.bottom, 16)
+            }
+        }
+        .confirmationDialog(
+            selection.count == 1 ? "Delete this item forever?" : "Delete \(selection.count) items forever?",
+            isPresented: $confirmDelete, titleVisibility: .visible
+        ) {
+            Button(selection.count == 1 ? "Delete Forever" : "Delete \(selection.count) Items Forever", role: .destructive) {
+                let entries = picked
+                selecting = false
+                selection = []
+                Task { await store.purgeMany(entries) }
+            }
+        } message: {
+            Text("This cannot be undone.")
+        }
         .toolbar {
+            if selecting {
+                ToolbarItem(placement: .topBarLeading) {
+                    let all = !store.trash.isEmpty && selection.count == store.trash.count
+                    Button(all ? "Deselect All" : "Select All") {
+                        selection = all ? [] : Set(store.trash.map(\.item.id))
+                    }
+                }
+            } else if !store.trash.isEmpty, !store.emptyingTrash {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Select", systemImage: "checkmark.circle") { selecting = true }
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
-                if store.emptyingTrash {
+                if selecting {
+                    Button("Done") { selecting = false; selection = [] }.fontWeight(.semibold)
+                } else if store.emptyingTrash {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Emptying…").font(.subheadline)

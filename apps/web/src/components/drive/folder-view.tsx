@@ -248,7 +248,7 @@ function NodeName({
 }
 
 /* Whether the primary pointer is a finger: taps then toggle selection instead of replacing it. */
-function useCoarsePointer() {
+export function useCoarsePointer() {
     return useSyncExternalStore(
         (onChange) => {
             const query = window.matchMedia('(pointer: coarse)');

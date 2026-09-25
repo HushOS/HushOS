@@ -36,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -647,9 +649,26 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
 fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    // Rows picked to restore or delete together; a long press starts it, as in Files.
+    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmMany by rememberSaveable { mutableStateOf(false) }
+    val ids = state.trash.map { it.item.id }.toSet()
+    // Rows restored or deleted, here or elsewhere, leave the selection.
+    LaunchedEffect(ids) { picked = picked intersect ids }
+    val chosen = state.trash.filter { it.item.id in picked }
+    BackHandler(enabled = picked.isNotEmpty()) { picked = emptySet() }
     LaunchedEffect(Unit) { model.refreshTrash() }
     Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = {
-        TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = {
+        if (picked.isNotEmpty()) TopAppBar(
+            title = { Text("${picked.size} selected") },
+            navigationIcon = { IconButton(onClick = { picked = emptySet() }) { Icon(Icons.Outlined.Close, "Done") } },
+            actions = {
+                val busy = state.trashWorking.isNotEmpty()
+                if (picked.size < state.trash.size) IconButton(enabled = !busy, onClick = { picked = ids }) { Icon(Icons.Outlined.Checklist, "Select all") }
+                IconButton(enabled = !busy, onClick = { model.restoreMany(chosen); picked = emptySet() }) { Icon(Icons.Outlined.Restore, "Restore") }
+                IconButton(enabled = !busy, onClick = { confirmMany = true }) { Icon(Icons.Outlined.DeleteForever, "Delete forever") }
+            },
+        ) else TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = {
             if (state.emptyingTrash) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 16.dp)) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 Text("Emptying…", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 8.dp))
@@ -666,7 +685,13 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
                         ?.let { "Trashed " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(it)) }
                     // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
                     val working = state.emptyingTrash || entry.item.id in state.trashWorking
-                    NodeRow(model, state, entry.item, onClick = { if (!working) selected = entry }, onLongClick = { if (!working) selected = entry }, note = trashed, working = working)
+                    val toggle = { picked = if (entry.item.id in picked) picked - entry.item.id else picked + entry.item.id }
+                    NodeRow(
+                        model, state, entry.item,
+                        onClick = { if (!working) { if (picked.isNotEmpty()) toggle() else selected = entry } },
+                        onLongClick = { if (!working) toggle() },
+                        note = trashed, working = working, selected = entry.item.id in picked,
+                    )
                 }
             }
         }
@@ -678,6 +703,15 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
             text = { Text(if (entry.parentTrashed) "Its folder is in the trash too; restoring puts it at the top level." else "Restore it, or delete it forever.") },
             confirmButton = { TextButton(onClick = { model.restore(entry); selected = null }) { Text("Restore") } },
             dismissButton = { TextButton(onClick = { model.purge(entry); selected = null }) { Text("Delete forever", color = MaterialTheme.colorScheme.error) } },
+        )
+    }
+    if (confirmMany) {
+        AlertDialog(
+            onDismissRequest = { confirmMany = false },
+            title = { Text(if (chosen.size == 1) "Delete “${chosen[0].item.name}” forever?" else "Delete ${chosen.size} items forever?") },
+            text = { Text("This cannot be undone.") },
+            confirmButton = { TextButton(onClick = { model.purgeMany(chosen); confirmMany = false; picked = emptySet() }) { Text("Delete forever", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmMany = false }) { Text("Cancel") } },
         )
     }
     if (confirmEmpty) {
