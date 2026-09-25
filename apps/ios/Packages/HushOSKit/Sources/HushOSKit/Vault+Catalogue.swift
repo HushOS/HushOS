@@ -207,10 +207,10 @@ extension Vault {
             .sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }.prefix(limit).map { $0 }
     }
 
-    /* Trashed rows, with whether their parent is trashed too. */
+    /* Trashed rows, with whether their parent is trashed too; newest first, as the server lists them. */
     public func catalogueTrash() -> [(item: Opened, parentTrashed: Bool)]? {
         guard catalogueState == .ready, let ws = workspace?.workspaceId else { return nil }
-        return opened.values.filter { $0.node.workspaceId == ws && $0.node.trashedAt != nil }.map { item in
+        return opened.values.filter { $0.node.workspaceId == ws && $0.node.trashedAt != nil }.sorted(by: Opened.byTrashed).map { item in
             (item, item.node.parentId.flatMap { opened[$0]?.node.trashedAt } != nil)
         }
     }

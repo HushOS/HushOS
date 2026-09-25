@@ -345,4 +345,10 @@ extension Opened {
         if a.isFolder != b.isFolder { return a.isFolder }
         return a.name.localizedStandardCompare(b.name) == .orderedAscending
     }
+
+    /* Newest in the trash first, as the server lists it; the id breaks ties so the order holds between loads. */
+    public static func byTrashed(_ a: Opened, _ b: Opened) -> Bool {
+        let (x, y) = (a.node.trashedAt ?? "", b.node.trashedAt ?? "")
+        return x != y ? x > y : a.id < b.id
+    }
 }

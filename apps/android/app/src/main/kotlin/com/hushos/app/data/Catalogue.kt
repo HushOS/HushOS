@@ -175,9 +175,11 @@ fun Vault.catalogueRecents(limit: Int): List<Opened>? {
     return catalogueAll().filter { !it.isFolder && it.node.currentVersion != null }.sortedByDescending { it.modifiedMillis ?: 0L }.take(limit)
 }
 
+/* Trashed rows, newest first, as the server lists them; the id breaks ties so the order holds between loads. */
 fun Vault.catalogueTrash(): List<TrashItem>? {
     if (catalogueState != CatalogueState.READY) return null
     val ws = workspaceId
     return opened.values.filter { it.node.workspaceId == ws && it.node.trashedAt != null }
+        .sortedWith(compareByDescending<Opened> { it.node.trashedAt }.thenBy { it.id })
         .map { item -> TrashItem(item, item.node.parentId?.let { opened[it]?.node?.trashedAt } != null) }
 }
