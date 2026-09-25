@@ -122,7 +122,9 @@ class DriveApi(val session: Shared.Session) {
         val connection = open(path, method)
         connection.doOutput = true
         connection.setRequestProperty("Content-Type", "application/json")
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        // Writing the body is the first thing to touch the network: no network there is Unreachable too, not
+        // a raw "unable to resolve host" for the error dialog.
+        try { connection.outputStream.use { it.write(body.toString().toByteArray()) } } catch (error: java.io.IOException) { throw Unreachable() }
         return finish(connection)
     }
 

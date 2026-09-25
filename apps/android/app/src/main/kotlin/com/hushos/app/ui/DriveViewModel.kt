@@ -468,6 +468,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+        // Offline the write did not happen: say so plainly rather than failing without a word.
+        if (!ok && state.value.unreachable) notify("You're offline, so that didn't happen. Try again once you're connected.")
     fun dismissNotice() = _state.update { it.copy(notice = null) }
 
     private suspend fun restoreQuietly(item: Opened) {
@@ -601,3 +603,4 @@ internal fun defaultOrigin(): String {
     val emulator = fingerprint.contains("generic") || fingerprint.contains("emulator") || android.os.Build.PRODUCT.lowercase().contains("sdk")
     return if (emulator) BuildConfig.DEFAULT_ORIGIN else "https://hushos.com"
 }
+        if (!ok && state.value.unreachable) notify("You're offline. Keep a file downloaded to open it without a connection.")
