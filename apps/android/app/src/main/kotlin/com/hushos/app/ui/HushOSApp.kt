@@ -65,7 +65,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
             }
             if (state.unreachable) OfflineBanner()
             // The banner took the status bar's height; the screens below must not pad for it again.
-            Box(if (state.unreachable) Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars) else Modifier.weight(1f)) { Main(model, state) }
+            Box(if (state.unreachable) Modifier.weight(1f).consumeWindowInsets(WindowInsets.statusBars).padding(top = 4.dp) else Modifier.weight(1f)) { Main(model, state) }
         }
     }
     state.error?.let { message ->
@@ -138,6 +138,7 @@ private fun OfflineBanner() {
     }
 }
 
+    // A little room below, so the screen under it never starts flush against the line.
 /* Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended. */
 @Composable
 private fun TransferPanel(transfers: List<TransferItem>) {

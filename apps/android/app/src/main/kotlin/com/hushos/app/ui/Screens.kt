@@ -137,7 +137,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var movingMany by rememberSaveable { mutableStateOf(false) }
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
+    // Per folder: a bar hidden by scrolling one folder must not stay hidden in the next, where an empty
+    // list cannot scroll to bring it (and its back arrow) back.
+    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior(androidx.compose.runtime.key(folderId) { rememberTopAppBarState() })
     // How this drive's lists are ordered, kept across launches; folders always come first.
     val prefs = LocalContext.current.getSharedPreferences("files", android.content.Context.MODE_PRIVATE)
     var sortKey by rememberSaveable { mutableStateOf(prefs.getString("sortKey", "name") ?: "name") }
@@ -146,7 +148,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // A tag filter belongs to the folder it was set in; opening another folder starts unfiltered.
     var filteredIn by rememberSaveable { mutableStateOf(folderId) }
     LaunchedEffect(folderId) { if (filteredIn != folderId) { filteredIn = folderId; tagFilter = null } }
-    val listState = rememberLazyListState()
+    val listState = androidx.compose.runtime.key(folderId) { rememberLazyListState() }
     // A new order starts at the top, once the list holds it; scrolling earlier would still follow the anchored row.
     var sortSeen by remember { mutableStateOf(sortKey to sortAscending) }
     LaunchedEffect(sortKey, sortAscending) {
