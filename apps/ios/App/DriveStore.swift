@@ -43,8 +43,12 @@ final class DriveStore {
         var failed = false
         /* Queued and waiting for a network (or to be sealed); shown without a bar. */
         var waiting = false
-        /* A background transfer, which the panel can cancel. */
+        /* A background transfer, which the panel can cancel, or dismiss once it failed. */
         var queuedId: UUID? = nil
+        /* Why it failed, in the server's words where it refused. */
+        var message: String? = nil
+        /* A failed upload that kept its file, so it can go again. */
+        var canRetry = false
     }
     var transfers: [TransferItem] = []
     /* Files being fetched to open, by node id, with progress: a spinner on the row, not a banner. */
@@ -68,16 +72,82 @@ final class DriveStore {
         activity.update(title: title, fraction: running.map(\.fraction).reduce(0, +) / Double(max(running.count, 1)))
     }
 
-    func finish(_ id: UUID, failed: Bool = false) {
+    func finish(_ id: UUID, failed: Bool = false, message: String? = nil) {
         guard let index = transfers.firstIndex(where: { $0.id == id }) else { return }
         transfers[index].done = true
         transfers[index].failed = failed
-        if !failed { transfers[index].fraction = 1 }
-        // Finished rows linger so the result is seen, then go once everything is done.
+        if failed { transfers[index].message = message ?? "The transfer failed." } else { transfers[index].fraction = 1 }
+        // Finished rows linger so the result is seen, then go once everything is done; a failure stays with its reason.
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
-            if transfers.allSatisfy(\.done) { transfers.removeAll() }
+            if transfers.allSatisfy(\.done) { transfers.removeAll { !$0.failed } }
         }
+    }
+
+    /* Takes a row off the panel: a failure dismissed, or a kept copy that only failed for being offline. */
+    func dismiss(_ id: UUID) { removeRows { $0.id == id } }
+
+    /* A new transfer replaces the failures still on show: the panel is about what is happening now. */
+    func clearFailures() {
+        removeRows(where: \.failed)
+        BackgroundTransfers.shared.clearFailed()
+    }
+
+    /* The panel's close: once nothing is running, every finished row goes, failures included. */
+    func closeTransfers() {
+        removeRows(where: \.done)
+        BackgroundTransfers.shared.clearFinished()
+    }
+
+    /* Rows off the panel, and the files failed uploads kept for their retry. */
+    private func removeRows(where which: (TransferItem) -> Bool) {
+        for item in transfers where which(item) {
+            if let upload = pendingUploads.removeValue(forKey: item.id) { try? FileManager.default.removeItem(at: upload.url) }
+        }
+        transfers.removeAll(where: which)
+    }
+
+    /* A failed upload into a shared folder: what it needs to go again, kept until its row goes. */
+    private struct PendingUpload {
+        let url: URL
+        let name: String
+        let mime: String?
+        let folder: String
+        let replacing: Opened?
+    }
+    private var pendingUploads: [UUID: PendingUpload] = [:]
+
+    /* Sends a failed upload again from the file it kept; the failed row makes way for the new one. */
+    func retry(_ id: UUID) {
+        guard let upload = pendingUploads.removeValue(forKey: id) else { return }
+        transfers.removeAll { $0.id == id }
+        Task { _ = await uploadNow(upload) }
+    }
+
+    /* Uploads a picked file here and now; a failure keeps the file, so its row can send it again. */
+    private func uploadNow(_ upload: PendingUpload) async -> Bool {
+        let ticket = begin(.upload, upload.name)
+        var why: String?
+        let ok = await perform(in: upload.folder, failed: { why = $0 }) {
+            _ = try await vault.upload(
+                fileURL: upload.url, name: upload.name, mime: upload.mime, in: upload.folder, replacing: upload.replacing,
+                thumbnail: Thumbnails.make(for: upload.url, mime: upload.mime)
+            ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+        }
+        finish(ticket, failed: !ok, message: why)
+        if ok {
+            try? FileManager.default.removeItem(at: upload.url)
+        } else if FileManager.default.fileExists(atPath: upload.url.path), let index = transfers.firstIndex(where: { $0.id == ticket }) {
+            pendingUploads[ticket] = upload
+            transfers[index].canRetry = true
+        }
+        return ok
+    }
+
+    /* What a failed transfer's row says. */
+    private func reason(_ error: Error) -> String {
+        if case DriveAPIError.transport = error { return "Could not reach HushOS. Check your connection." }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private var networkToken: UUID?
@@ -172,7 +242,10 @@ final class DriveStore {
             for entry in kept where await vault.keptVersionMissing(entry.id) { tickets[entry.id] = begin(.keep, entry.name) }
             let rows = tickets
             let failed = await vault.refreshOffline(ids) { id, fraction in Task { @MainActor in if let ticket = rows[id] { self.progress(ticket, fraction) } } }
-            for (id, ticket) in rows { finish(ticket, failed: failed.contains(id)) }
+            // Offline, the banner already says why; a row per kept file would only repeat it.
+            for (id, ticket) in rows {
+                if failed.contains(id) && offline { dismiss(ticket) } else { finish(ticket, failed: failed.contains(id), message: "Couldn't update the downloaded copy.") }
+            }
             refreshingKept.subtract(ids)
             offlineVersion += 1
         }
@@ -252,7 +325,8 @@ final class DriveStore {
 
     // MARK: Writes
 
-    private func perform(_ title: String? = nil, in folder: String?, _ work: () async throws -> Void) async -> Bool {
+    /* With `failed`, a transfer's reason goes to its row in the panel instead of the alert. */
+    private func perform(_ title: String? = nil, in folder: String?, failed: ((String) -> Void)? = nil, _ work: () async throws -> Void) async -> Bool {
         busy = true
         defer { busy = false }
         do {
@@ -261,9 +335,19 @@ final class DriveStore {
             FilesDomain.signal(folderId: folder)
             return true
         } catch {
-            report(error)
+            if let failed, !isSessionEnd(error) {
+                if case DriveAPIError.transport = error { offline = true }
+                failed(reason(error))
+            } else {
+                report(error)
+            }
             return false
         }
+    }
+
+    private func isSessionEnd(_ error: Error) -> Bool {
+        if case DriveAPIError.notAuthenticated = error { return true }
+        return false
     }
 
     func createFolder(named name: String, in folder: String) async {
@@ -286,6 +370,7 @@ final class DriveStore {
     func paste(into folder: String) async {
         guard let clip = clipboard, canPaste(into: folder) else { return }
         clipboard = nil
+        clearFailures()
         let cut = clip.cut
         // What is already here stays as it is; only the rest comes over.
         let items = clip.items.filter { $0.node.parentId != folder }
@@ -296,13 +381,14 @@ final class DriveStore {
             } else {
                 _ = index
                 let ticket = begin(.copy, item.name)
+                var why: String?
                 if targetWorkspace == item.node.workspaceId {
-                    let ok = await perform(in: folder) { _ = try await vault.copy(item.id, to: folder) }
-                    finish(ticket, failed: !ok)
+                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copy(item.id, to: folder) }
+                    finish(ticket, failed: !ok, message: why)
                 } else {
                     // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                    let ok = await perform(in: folder) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
-                    finish(ticket, failed: !ok)
+                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                    finish(ticket, failed: !ok, message: why)
                     if ok && cut { await trash(item) }
                 }
             }
@@ -325,13 +411,15 @@ final class DriveStore {
 
     /* Keep downloaded on or off: the local copy comes or goes, and Files follows through the extension. */
     func setKeptDownloaded(_ item: Opened, _ keep: Bool) async {
+        if keep { clearFailures() }
         if keep, let parent = item.node.parentId, await ownDrive(parent) {
             // Queued like an upload: fetched by iOS, whether or not the app is open.
             BackgroundTransfers.shared.keep(item)
         } else if keep {
             let ticket = begin(.keep, item.name)
-            let ok = await perform(in: nil) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
-            finish(ticket, failed: !ok)
+            var why: String?
+            let ok = await perform(in: nil, failed: { why = $0 }) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+            finish(ticket, failed: !ok, message: why)
         } else {
             Offline.forget(item.id)
         }
@@ -350,13 +438,17 @@ final class DriveStore {
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     func revokeAndRotate(_ share: ShareView, for item: Opened) async throws {
         try await vault.revokeShare(share, for: item)
+        clearFailures()
         let ticket = begin(.rotate, "Rotating keys for \(item.name)")
         holdBackground(); activity.start(kind: "rotate", title: "Rotating keys for \(item.name)")
-        defer {
+        defer { releaseBackground(); activity.finish(title: "Keys rotated") }
+        do {
+            _ = try await vault.rotate(item) { count in Task { @MainActor in self.progress(ticket, 0, name: "Rotating keys · \(count) sealed") } }
             finish(ticket)
-            releaseBackground(); activity.finish(title: "Keys rotated")
+        } catch {
+            finish(ticket, failed: true, message: reason(error))
+            throw error
         }
-        _ = try await vault.rotate(item) { count in Task { @MainActor in self.progress(ticket, 0, name: "Rotating keys · \(count) sealed") } }
         folders.removeAll()
         if let parent = item.node.parentId { await refresh(folder: parent) }
     }
@@ -476,6 +568,7 @@ final class DriveStore {
     /* Files picked from the document or photo picker, each uploaded in turn with its thumbnail. `renames` names the kept-both ones. */
     func upload(_ files: [(url: URL, name: String, type: UTType?)], to folder: String, onConflict: Conflict = .keepBoth, renames: [String: String] = [:]) async {
         let existing = (folders[folder] ?? []).filter { !$0.isFolder }
+        clearFailures()
         holdBackground(); activity.start(kind: "upload", title: files.count > 1 ? "Uploading \(files.count) files" : "Uploading \(files.first?.name ?? "")")
         defer { releaseBackground(); activity.finish(title: files.count > 1 ? "\(files.count) files uploaded" : "\(files.first?.name ?? "File") uploaded") }
         for (index, file) in files.enumerated() {
@@ -497,16 +590,7 @@ final class DriveStore {
                 continue
             }
             // A shared folder lives in someone else's drive: uploaded here and now, as before.
-            let ticket = begin(.upload, name)
-            let ok = await perform(in: folder) {
-                _ = try await vault.upload(
-                    fileURL: file.url, name: name, mime: mime, in: folder, replacing: replacing,
-                    thumbnail: Thumbnails.make(for: file.url, mime: mime)
-                ) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
-            }
-            finish(ticket, failed: !ok)
-            try? FileManager.default.removeItem(at: file.url)
-            if !ok { break }
+            if !(await uploadNow(PendingUpload(url: file.url, name: name, mime: mime, folder: folder, replacing: replacing))) { break }
         }
     }
 

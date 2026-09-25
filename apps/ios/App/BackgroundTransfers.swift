@@ -148,6 +148,29 @@ final class BackgroundTransfers {
         save()
     }
 
+    /* Takes a failed transfer off the panel, and the file it kept for a retry. */
+    func dismiss(_ id: UUID) {
+        remove { $0.id == id && $0.state == .failed }
+    }
+
+    /* A new transfer starts: the failures on show make way. */
+    func clearFailed() {
+        remove { $0.state == .failed }
+    }
+
+    /* The panel's close: what has landed or failed goes. */
+    func clearFinished() {
+        remove { $0.state == .done || $0.state == .failed }
+    }
+
+    private func remove(where which: (Record) -> Bool) {
+        let gone = records.filter(which)
+        guard !gone.isEmpty else { return }
+        for record in gone { try? FileManager.default.removeItem(at: folder(record.id)) }
+        records.removeAll(where: which)
+        save()
+    }
+
     /* Signing out: every transfer belongs to the account leaving, so all of them stop and their files go. */
     func cancelAll() async {
         for id in records.map(\.id) { await cancel(id) }
@@ -350,7 +373,31 @@ final class BackgroundTransfers {
             Task { await vault.abortUpload(sealed) }
         }
         update(id) { $0.state = .failed; $0.message = message }
-        try? FileManager.default.removeItem(at: folder(id))
+        // An upload that failed before it was sealed still has its file: that stays for a retry, the rest goes.
+        let content = folder(id).appendingPathComponent("content")
+        if FileManager.default.fileExists(atPath: content.path) {
+            for item in (try? FileManager.default.contentsOfDirectory(at: folder(id), includingPropertiesForKeys: nil)) ?? [] where item.lastPathComponent != "content" {
+                try? FileManager.default.removeItem(at: item)
+            }
+        } else {
+            try? FileManager.default.removeItem(at: folder(id))
+        }
+    }
+
+    /* Whether a failed upload kept its file, so it can be sent again. */
+    func canRetry(_ record: Record) -> Bool {
+        record.kind == .upload && record.state == .failed
+            && FileManager.default.fileExists(atPath: folder(record.id).appendingPathComponent("content").path)
+    }
+
+    /* Sends a failed upload again from the file it kept: sealed anew, since the server dropped the first attempt. */
+    func retry(_ id: UUID) {
+        guard let record = records.first(where: { $0.id == id }), canRetry(record) else { return }
+        update(id) {
+            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil
+        }
+        save()
+        Task { await pump() }
     }
 
     private func update(_ id: UUID, _ change: (inout Record) -> Void) {
