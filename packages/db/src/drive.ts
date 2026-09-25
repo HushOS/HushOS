@@ -741,19 +741,41 @@ export async function restoreNode(input: {
     });
 }
 
-/* Every node with its own `trashed_at`, newest first, with its chain for context. */
+/*
+ * A trash page's cursor: where the last row stood in the order, as the microseconds
+ * of its `trashed_at` and its id, "1790320010367123.<uuid>". Microseconds because
+ * that is what Postgres keeps: a millisecond cursor would skip or repeat rows
+ * trashed within the same millisecond.
+ */
+export const TRASH_CURSOR_PATTERN =
+    '^[0-9]{1,18}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+
+export function parseTrashCursor(cursor: string): { micros: bigint; id: string } | null {
+    if (!new RegExp(TRASH_CURSOR_PATTERN).test(cursor)) return null;
+    const [micros, id] = cursor.split('.') as [string, string];
+    return { micros: BigInt(micros), id };
+}
+
+const trashedMicros = sql`(extract(epoch from ${driveNodes.trashedAt}) * 1000000)::bigint`;
+
+/* Every node with its own `trashed_at`, newest first (the id breaking ties), with its chain for context. */
 export async function listTrash(input: { workspaceId: string; after?: string; limit?: number }) {
+    const after = input.after === undefined ? null : parseTrashCursor(input.after);
+    if (input.after !== undefined && !after) throw new TypeError('Malformed trash cursor');
     return db.transaction(async (tx) => {
         const limit = Math.min(input.limit ?? PAGE_SIZE, PAGE_SIZE);
         const ids = await tx
-            .select({ id: driveNodes.id, trashedAt: driveNodes.trashedAt })
+            .select({ id: driveNodes.id, micros: sql<string>`${trashedMicros}::text` })
             .from(driveNodes)
             .where(
                 and(
                     eq(driveNodes.workspaceId, input.workspaceId),
                     sql`${driveNodes.trashedAt} is not null`,
                     isNull(driveNodes.purgedAt),
-                    input.after ? gt(driveNodes.id, input.after) : undefined,
+                    // Keyset on the order itself: older, or as old with a later id.
+                    after
+                        ? sql`(${trashedMicros} < ${after.micros.toString()}::bigint or (${trashedMicros} = ${after.micros.toString()}::bigint and ${driveNodes.id} > ${after.id}::uuid))`
+                        : undefined,
                 ),
             )
             .orderBy(desc(driveNodes.trashedAt), asc(driveNodes.id))
@@ -778,7 +800,11 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
                 parentTrashed: ancestors.some((ancestor) => ancestor.trashedAt !== null),
             });
         }
-        return { items, nextCursor: ids.length > limit ? page.at(-1)! : null };
+        const last = ids[limit - 1];
+        return {
+            items,
+            nextCursor: ids.length > limit && last ? `${last.micros}.${last.id}` : null,
+        };
     });
 }
 

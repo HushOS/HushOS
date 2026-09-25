@@ -15,7 +15,7 @@ import {
 } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
-import { growthRepository } from '@hushos/db';
+import { driveRepository, growthRepository } from '@hushos/db';
 import { CLIENT_HEADER, checkClient, parseMinimums } from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
@@ -220,6 +220,10 @@ const nodeEnvelopesSchema = {
     metadataEnvelope: metadataEnvelopeSchema,
 };
 const cursorSchema = t.Optional(uuidSchema);
+/* The trash pages on its own order, so its cursor is the last row's place in it, not an id. */
+const trashCursorSchema = t.Optional(
+    t.String({ maxLength: 64, pattern: driveRepository.TRASH_CURSOR_PATTERN }),
+);
 const linkTokenSchema = t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' });
 const linkSaltSchema = t.String({ minLength: 22, maxLength: 22, pattern: '^[A-Za-z0-9_-]+$' });
 // 104 or 136 bytes: 139 or 182 Base64url characters; the server checks the exact lengths.
@@ -1388,7 +1392,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
     )
     .get(
         '/drive/workspaces/:id/trash',
-        { params: t.Object({ id: uuidSchema }), query: t.Object({ after: cursorSchema }) },
+        { params: t.Object({ id: uuidSchema }), query: t.Object({ after: trashCursorSchema }) },
         async ({ request, sessionToken, params, query }) =>
             drive.listTrash((await driveUser(request, sessionToken)).id, params.id, query.after),
     )
