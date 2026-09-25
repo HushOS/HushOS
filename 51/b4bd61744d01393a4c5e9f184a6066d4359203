@@ -1,0 +1,21 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_de0e5293e39e1a::t_4b4ba9f3d794e7 168-169,205-206
+apps/ios/App/MainView.swift
+  s_de0e5293e39e1a::t_4b4ba9f3d794e7 227-231,286-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "51b4bd61744d01393a4c5e9f184a6066d4359203",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
