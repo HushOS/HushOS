@@ -1,0 +1,22 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Shared.kt
+  s_de0e5293e39e1a::t_718e2232ba3267 30-46
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_718e2232ba3267 91-92,122
+  s_de0e5293e39e1a::t_27efdd19505893 123,127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "995babceb4be9962af2bcbe90d403902368f195e",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
