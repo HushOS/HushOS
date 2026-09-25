@@ -68,6 +68,41 @@ struct FolderView: View {
         return items
     }
 
+    /* Add, and everything about how the list is shown: in the root's header capsule (44pt buttons), or a folder's navigation bar (sized by the bar). */
+    @ViewBuilder private var folderMenus: some View {
+        Menu { addItems } label: { Image(systemName: "plus").frame(width: isRoot ? 44 : nil, height: isRoot ? 44 : nil) }
+            .accessibilityLabel("Add")
+        Menu {
+            Button("Select", systemImage: "checkmark.circle") { selecting = true }
+            Section("Sort by") {
+                ForEach(SortKey.allCases, id: \.self) { key in
+                    Button {
+                        if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
+                    } label: {
+                        if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
+                    }
+                }
+            }
+            Section("Tag") {
+                // Only the tags this folder's items carry.
+                let here = Set((store.folders[folderId] ?? []).map(\.id))
+                let folderTags = store.tags.tags.filter { tag in !here.isDisjoint(with: store.tags.nodes(with: tag.id)) }
+                if folderTags.isEmpty { Text("No tags in this folder") }
+                ForEach(folderTags) { tag in
+                    Button {
+                        tagFilter = tagFilter == tag.id ? nil : tag.id
+                    } label: {
+                        if tagFilter == tag.id { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
+                    }
+                }
+            }
+        } label: {
+            // A filter in force shows here too, besides the line above the rows.
+            Image(systemName: tagFilter == nil ? "ellipsis" : "line.3.horizontal.decrease").frame(width: isRoot ? 44 : nil, height: isRoot ? 44 : nil)
+        }
+        .accessibilityLabel("More")
+    }
+
     /* What can be added here: new folder, files, photos, and a paste while the clipboard holds items. */
     @ViewBuilder private var addItems: some View {
         if let clip = store.clipboard, let first = clip.items.first, store.canPaste(into: folderId) {
@@ -122,49 +157,20 @@ struct FolderView: View {
                 }
             } header: {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 16) {
-                        if isRoot { Text("Files").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil) }
-                        Spacer()
-                        if selecting {
-                            Button("Done") { selecting = false; selection = [] }
-                                .font(.subheadline.weight(.semibold)).textCase(nil)
-                        } else {
-                            // Two round buttons, as Files has them: add, and everything about how the list is shown.
-                            HStack(spacing: 0) {
-                                Menu { addItems } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
-                                    .accessibilityLabel("Add")
-                                Menu {
-                                    Button("Select", systemImage: "checkmark.circle") { selecting = true }
-                                    Section("Sort by") {
-                                        ForEach(SortKey.allCases, id: \.self) { key in
-                                            Button {
-                                                if sortKey == key { sortAscending.toggle() } else { sortKey = key; sortAscending = key == .name }
-                                            } label: {
-                                                if sortKey == key { Label(key.label, systemImage: sortAscending ? "arrow.up" : "arrow.down") } else { Text(key.label) }
-                                            }
-                                        }
-                                    }
-                                    Section("Tag") {
-                                        // Only the tags this folder's items carry.
-                                        let here = Set((store.folders[folderId] ?? []).map(\.id))
-                                        let folderTags = store.tags.tags.filter { tag in !here.isDisjoint(with: store.tags.nodes(with: tag.id)) }
-                                        if folderTags.isEmpty { Text("No tags in this folder") }
-                                        ForEach(folderTags) { tag in
-                                            Button {
-                                                tagFilter = tagFilter == tag.id ? nil : tag.id
-                                            } label: {
-                                                if tagFilter == tag.id { Label(tag.name, systemImage: "checkmark") } else { Text(tag.name) }
-                                            }
-                                        }
-                                    }
-                                } label: {
-                                    // A filter in force shows here too, besides the line above the rows.
-                                    Image(systemName: tagFilter == nil ? "ellipsis" : "line.3.horizontal.decrease").frame(width: 44, height: 44)
-                                }
-                                .accessibilityLabel("More")
+                    // At the root the title and its controls share a row; in a folder they sit in the navigation bar, as in Files.
+                    if isRoot {
+                        HStack(spacing: 16) {
+                            Text("Files").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil)
+                            Spacer()
+                            if selecting {
+                                Button("Done") { selecting = false; selection = [] }
+                                    .font(.subheadline.weight(.semibold)).textCase(nil)
+                            } else {
+                                // Two round buttons, as Files has them: add, and everything about how the list is shown.
+                                HStack(spacing: 0) { folderMenus }
+                                    .font(.body.weight(.semibold)).textCase(nil)
+                                    .glassEffect(.regular.interactive(), in: .capsule)
                             }
-                            .font(.body.weight(.semibold)).textCase(nil)
-                            .glassEffect(.regular.interactive(), in: .capsule)
                         }
                     }
                     HStack(spacing: 8) {
@@ -191,10 +197,21 @@ struct FolderView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .contentMargins(.top, isRoot ? 0 : 12, for: .scrollContent)
+        .contentMargins(.top, isRoot ? 0 : 4, for: .scrollContent)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(isRoot ? .hidden : .visible, for: .navigationBar)
+        .toolbar {
+            if !isRoot {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if selecting {
+                        Button("Done") { selecting = false; selection = [] }.fontWeight(.semibold)
+                    } else {
+                        folderMenus
+                    }
+                }
+            }
+        }
         .navigationDestination(for: Opened.self) { folder in
             FolderView(folderId: folder.id, title: folder.name)
         }
