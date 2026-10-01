@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.DeleteForever
@@ -382,9 +383,13 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
     var tagged by remember { mutableStateOf<List<Opened>>(emptyList()) }
     var managingTags by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Opened?>(null) }
-    var forgetting by remember { mutableStateOf<com.hushos.app.data.Offline.Entry?>(null) }
+    var showingOffline by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    if (showingOffline) {
+        OfflineScreen(model, state) { showingOffline = false }
+        return
+    }
     LaunchedEffect(Unit) { model.refreshRecents(); model.refreshTags(); model.refreshOffline() }
     val base = when {
         tagFilter != null -> tagged.filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
@@ -423,21 +428,14 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
         PullToRefreshBox(isRefreshing = "recents" in state.loading, onRefresh = { model.refreshRecents() }) {
             LazyColumn(Modifier.fillMaxSize()) {
                 if (query.isBlank() && tagFilter == null && state.offline.isNotEmpty()) {
-                    // Kept files first, the way Dropbox lists Offline on Home: they open without the network.
-                    item(key = "offline-heading") { Text("Offline", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
-                    items(state.offline, key = { "offline-" + it.id }) { entry ->
+                    // One row into the kept files, not the files themselves: however many are kept, Recent stays in view.
+                    item(key = "offline") {
                         androidx.compose.material3.ListItem(
-                            headlineContent = { Text(entry.name) },
-                            supportingContent = { Text(entry.size?.let { formatBytes(it) } ?: "Kept downloaded") },
+                            headlineContent = { Text("Offline") },
+                            supportingContent = { Text(offlineSummary(state.offline)) },
                             leadingContent = { Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)) } },
-                            // The same menu as any other row: a kept file is still a file (share, rename, remove the download).
-                            modifier = Modifier.combinedClickable(
-                                onClick = {
-                                    val file = com.hushos.app.data.Offline.file(context, entry)
-                                    if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime)
-                                },
-                                onLongClick = { model.item(entry.id)?.let { selected = it } ?: run { forgetting = entry } },
-                            ),
+                            trailingContent = { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            modifier = Modifier.clickable { showingOffline = true },
                         )
                     }
                 }
@@ -456,6 +454,49 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
         }
     }
     selected?.let { item -> ItemActions(model, state, item) { selected = null } }
+    if (managingTags) TagManagerSheet(model, state) { managingTags = false }
+}
+
+/* "3 files · 1.2 GB", the size left out when an entry never recorded one. */
+private fun offlineSummary(entries: List<com.hushos.app.data.Offline.Entry>): String {
+    val count = if (entries.size == 1) "1 file" else "${entries.size} files"
+    val sizes = entries.mapNotNull { it.size }
+    return if (sizes.size == entries.size) "$count · ${formatBytes(sizes.sum())}" else count
+}
+
+/* The files kept on this phone, newest first: they open without the network. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OfflineScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
+    var selected by remember { mutableStateOf<Opened?>(null) }
+    var forgetting by remember { mutableStateOf<com.hushos.app.data.Offline.Entry?>(null) }
+    val context = LocalContext.current
+    BackHandler(onBack = onBack)
+    LaunchedEffect(Unit) { model.refreshOffline() }
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(title = { Text("Offline") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } })
+        if (state.offline.isEmpty()) {
+            Text("Files you keep downloaded open here without the network.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp))
+        }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(state.offline, key = { it.id }) { entry ->
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text(entry.name) },
+                    supportingContent = { Text(entry.size?.let { formatBytes(it) } ?: "Kept downloaded") },
+                    leadingContent = { Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)) } },
+                    // The same menu as any other row: a kept file is still a file (share, rename, remove the download).
+                    modifier = Modifier.combinedClickable(
+                        onClick = {
+                            val file = com.hushos.app.data.Offline.file(context, entry)
+                            if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime)
+                        },
+                        onLongClick = { model.item(entry.id)?.let { selected = it } ?: run { forgetting = entry } },
+                    ),
+                )
+            }
+        }
+    }
+    selected?.let { item -> ItemActions(model, state, item) { selected = null } }
     // A kept file this device cannot name in the tree (not opened yet): the one thing it can still do.
     forgetting?.let { entry ->
         AlertDialog(
@@ -466,7 +507,6 @@ fun HomeScreen(model: DriveViewModel, state: DriveState) {
             dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
         )
     }
-    if (managingTags) TagManagerSheet(model, state) { managingTags = false }
 }
 
 /* Every tag in the workspace: rename, recolour, delete, and how many items each names. */

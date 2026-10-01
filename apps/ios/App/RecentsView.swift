@@ -35,8 +35,6 @@ struct HomeView: View {
     @State private var managingTags = false
     @State private var action: NodeAction?
     @State private var preview: URL?
-    /* The opened items behind the Offline rows, so each gets the full menu. */
-    @State private var offlineItems: [String: Opened] = [:]
     @FocusState private var searching: Bool
 
     private var rows: [Opened] {
@@ -57,23 +55,12 @@ struct HomeView: View {
         NavigationStack {
             List {
                 if showOffline {
-                    // Kept files first, the way Dropbox lists Offline on Home: they open without the network.
+                    // One row into the kept files, not the files themselves: however many are kept, Recent stays in view.
                     Section {
-                        ForEach(offline) { entry in
-                            // The same menu as any other row: a kept file is still a file. One the tree has not opened
-                            // on this device can at least drop its download.
-                            if let item = offlineItems[entry.id] {
-                                offlineRow(entry).nodeActions(item, action: $action, store: store)
-                            } else {
-                                offlineRow(entry).contextMenu {
-                                    Button("Remove Download", systemImage: "icloud.slash", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 }
-                                }
-                            }
-                        }
+                        NavigationLink { OfflineView() } label: { offlineLink }
                     } header: {
                         VStack(alignment: .leading, spacing: 12) {
                             homeHeader
-                            sectionTitle("Offline")
                         }
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
                     }
@@ -103,11 +90,6 @@ struct HomeView: View {
             .nodeActionSheets(action: $action, store: store)
             .quickLookPreview($preview)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
-            .task(id: "\(store.offlineVersion)-\(store.catalogueVersion)") {
-                var found: [String: Opened] = [:]
-                for entry in offline { if let item = await store.vault.openedItem(entry.id) { found[entry.id] = item } }
-                offlineItems = found
-            }
             .task {
                 _ = await store.loadRoot()
                 await store.refreshRecents()
@@ -117,22 +99,14 @@ struct HomeView: View {
         }
     }
 
-    private func offlineRow(_ entry: Offline.Entry) -> some View {
-        Button {
-            if let item = offlineItems[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { open(item) }
-            else { preview = Offline.file(for: entry) }
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name).lineLimit(1)
-                    Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+    private var offlineLink: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Offline")
+                Text(OfflineView.summary(offline)).font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .buttonStyle(.plain)
-        .swipeActions { Button("Remove", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 } }
     }
 
     private var offline: [Offline.Entry] {
@@ -555,5 +529,77 @@ struct TagManagerSheet: View {
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         newName = ""
         Task { await store.editTags { registry in _ = try registry.add(name: name) } }
+    }
+}
+
+/* The files kept on this phone, newest first: they open without the network. */
+struct OfflineView: View {
+    @Environment(DriveStore.self) private var store
+    @State private var action: NodeAction?
+    @State private var preview: URL?
+    /* The opened items behind the rows, so each gets the full menu. */
+    @State private var items: [String: Opened] = [:]
+
+    /* "3 files · 1.2 GB", the size left out when an entry never recorded one. */
+    static func summary(_ entries: [Offline.Entry]) -> String {
+        let count = entries.count == 1 ? "1 file" : "\(entries.count) files"
+        let sizes = entries.compactMap(\.size)
+        guard sizes.count == entries.count else { return count }
+        return "\(count) · \(formatBytes(Int64(sizes.reduce(0, +))))"
+    }
+
+    private var entries: [Offline.Entry] {
+        _ = store.offlineVersion
+        return Offline.entries()
+    }
+
+    var body: some View {
+        List {
+            ForEach(entries) { entry in
+                // The same menu as any other row: a kept file is still a file. One the tree has not opened
+                // on this device can at least drop its download.
+                if let item = items[entry.id] {
+                    row(entry).nodeActions(item, action: $action, store: store)
+                } else {
+                    row(entry).contextMenu {
+                        Button("Remove Download", systemImage: "icloud.slash", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 }
+                    }
+                }
+            }
+        }
+        .overlay {
+            if entries.isEmpty {
+                ContentUnavailableView("Nothing kept", systemImage: "arrow.down.circle", description: Text("Files you keep downloaded open here without the network."))
+            }
+        }
+        .navigationTitle("Offline")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar(.visible, for: .navigationBar)
+        .nodeActionSheets(action: $action, store: store)
+        .quickLookPreview($preview)
+        .task(id: "\(store.offlineVersion)-\(store.catalogueVersion)") {
+            var found: [String: Opened] = [:]
+            for entry in entries { if let item = await store.vault.openedItem(entry.id) { found[entry.id] = item } }
+            items = found
+        }
+    }
+
+    private func row(_ entry: Offline.Entry) -> some View {
+        Button {
+            if let item = items[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { Task { preview = await store.download(item) } }
+            else { preview = Offline.file(for: entry) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name).lineLimit(1)
+                    Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .swipeActions { Button("Remove", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 } }
     }
 }
