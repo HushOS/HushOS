@@ -1,0 +1,26 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_16c1df55891f3d::t_e0cefc670ece24 708-711,719
+  s_16c1df55891f3d::t_6a7478f23674db 615
+  s_16c1df55891f3d::t_8b06d9fbf234c0 721
+  s_16c1df55891f3d::t_5b197966b19daa 603,713,718,724
+  s_16c1df55891f3d::t_52d1a0745cbb93 712,715,720
+  s_16c1df55891f3d::t_70784a50852202 731,734-735,738
+  s_16c1df55891f3d::t_54567b27f33936 707,714,716-717,722-723,725-728
+  s_16c1df55891f3d::t_83b47eb7d47cc1 732,739
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c13e1e0bd23f7caf78edc6727a3b47fc9a84f59c",
+  "prompts": {},
+  "sessions": {
+    "s_16c1df55891f3d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b57b313-9ad7-447b-9337-cadc4d89b30e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
