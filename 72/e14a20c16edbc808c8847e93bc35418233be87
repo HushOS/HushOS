@@ -1,0 +1,14 @@
+apps/web/src/content/security.mdx
+  h_f7ba60a6997566 247,267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "72e14a20c16edbc808c8847e93bc35418233be87",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
