@@ -244,7 +244,7 @@ Anyone who can see something through a link or a share can report it. Reporting 
         ['Who can report', 'Anyone with access through a share or a link'],
         [
             'What is sealed',
-            "The reported item's key, to each operator's X25519 and ML-KEM-768 keys together, on the reporter's device",
+            "The reported item's key, sealed on the reporter's device to each operator's X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone",
         ],
         ['What is kept', 'A snapshot of the reported tree and a hold on its stored bytes'],
         [
@@ -264,7 +264,7 @@ Nothing you do not share can be reported, because nobody but you can see it.
         ['Never', 'File names, contents, thumbnails, folder names, or any key'],
         [
             'Later, with a quantum computer',
-            'Still nothing shared between accounts: those envelopes need a lattice key it never held. Reports are sealed under X25519 alone.',
+            'Hybrid share and report envelopes still need the ML-KEM private key, even if X25519 is broken. Legacy envelopes sealed under X25519 alone, including reports to operators without an ML-KEM key, do not have that protection.',
         ],
         [
             'Always',
