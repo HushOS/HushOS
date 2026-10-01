@@ -44,6 +44,8 @@ public actor Vault {
     /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue). */
     let mirror: Mirror?
     public var catalogueState: CatalogueState = .idle
+    /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
+    var cataloguePulled = false
     var catalogueChildren: [String: Set<String>] = [:]
     /* The build in flight, so a second caller waits for it rather than returning before it is done. */
     var catalogueBuilding: Task<Bool, Never>?

@@ -35,6 +35,7 @@ extension Vault {
             cursor = page.nextCursor
             if !page.hasMore { break }
         }
+        cataloguePulled = true
         return arrived
     }
 

@@ -83,6 +83,8 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* The tree mirror on disk and the catalogue built from it (see Catalogue.kt). */
     internal val mirror = Mirror.shared(context)
     @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
+    /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
+    @Volatile internal var cataloguePulled = false
     /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
     internal val syncLock = Any()
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
@@ -346,13 +348,41 @@ class Vault(private val context: Context, val api: DriveApi) {
     }
 
     /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
-    fun refreshOffline(ids: Collection<String>, progress: (String, Float) -> Unit = { _, _ -> }): Set<String> {
-        val failed = HashSet<String>()
+    /*
+     * Brings kept copies up to the current version; returns the ones that could not be, with why.
+     * A file gone from this account's drive loses its copy: trashed, or purged and so missing from
+     * a catalogue the server sent this session (its tombstone went by once, then nothing names it).
+     * A file kept out of a share this session has not opened is left alone until it is.
+     */
+    fun refreshOffline(ids: Collection<String>, progress: (String, Float) -> Unit = { _, _ -> }): Map<String, Exception> {
+        val failed = HashMap<String, Exception>()
+        val own = workspaceId
         for (entry in Offline.entries(context).filter { it.id in ids }) {
-            val item = runCatching { resolve(entry.id) }.getOrNull()
-            if (item == null) { failed.add(entry.id); continue }
+            // Entries from before the workspace was recorded count as this drive's: kept shares were rare, and a copy
+            // wrongly dropped comes down again, while one of a purged file would stay readable here for good.
+            val mine = (entry.workspaceId ?: own) == own
+            // Only this drive's answers are proof: a share's folder asked for under this account's workspace is a 404 too.
+            val item = opened[entry.id] ?: if (!mine) null else try {
+                resolve(entry.id)
+            } catch (error: NotFound) {
+                Offline.forget(context, entry.id)
+                continue
+            } catch (error: Exception) {
+                null
+            }
+            if (item == null) {
+                if (mine && cataloguePulled) Offline.forget(context, entry.id)
+                continue
+            }
+            Offline.recordWorkspace(context, item)
             if (item.isFolder || item.node.trashedAt != null) { Offline.forget(context, entry.id); continue }
-            if (Offline.localCopy(context, item) == null && runCatching { keepDownloaded(item) { progress(entry.id, it) } }.isFailure) failed.add(entry.id)
+            if (Offline.localCopy(context, item) != null) continue
+            try {
+                keepDownloaded(item) { progress(entry.id, it) }
+            } catch (error: Exception) {
+                android.util.Log.w("HushOSOffline", "refreshing the kept copy of ${entry.id} failed", error)
+                failed[entry.id] = error
+            }
         }
         return failed
     }

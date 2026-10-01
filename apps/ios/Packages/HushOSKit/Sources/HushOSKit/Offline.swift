@@ -1,4 +1,5 @@
 import Foundation
+import os
 import HushOSCore
 
 /*
@@ -8,6 +9,8 @@ import HushOSCore
  * other drives do it. The list and the names shown offline live in the
  * group's defaults, so the Offline section on Home needs no round trip.
  */
+private let offlineLog = Logger(subsystem: "com.hushos.app", category: "offline")
+
 public enum Offline {
     public struct Entry: Codable, Sendable, Identifiable, Equatable {
         public let id: String
@@ -16,6 +19,8 @@ public enum Offline {
         public let size: UInt64?
         public let mime: String?
         public let keptAt: String
+        /* Tells a file of this account's drive from one kept out of a share; entries kept before it was recorded have none. */
+        public var workspaceId: String?
     }
 
     static let group = "group.com.hushos.app"
@@ -60,7 +65,15 @@ public enum Offline {
     static func remember(_ item: Opened) {
         var list = entries().filter { $0.id != item.id }
         list.append(Entry(id: item.id, name: item.name, versionId: item.node.currentVersion?.id ?? "", size: item.size, mime: item.metadata.mime,
-                          keptAt: ISO8601DateFormatter().string(from: Date())))
+                          keptAt: ISO8601DateFormatter().string(from: Date()), workspaceId: item.node.workspaceId))
+        write(list)
+    }
+
+    /* Fills in the workspace of an entry kept before it was recorded, once the item is open. */
+    static func recordWorkspace(_ item: Opened) {
+        var list = entries()
+        guard let index = list.firstIndex(where: { $0.id == item.id && $0.workspaceId == nil }) else { return }
+        list[index].workspaceId = item.node.workspaceId
         write(list)
     }
 
@@ -99,13 +112,44 @@ extension Vault {
     }
 
     /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
-    public func refreshOffline(_ ids: Set<String>, progress: @Sendable @escaping (String, Double) -> Void = { _, _ in }) async -> Set<String> {
-        var failed: Set<String> = []
+    /*
+     * Brings kept copies up to the current version; returns the ones that could not be, with why.
+     * A file gone from this account's drive loses its copy: trashed, or purged and so missing from
+     * a catalogue the server sent this session (its tombstone went by once, then nothing names it).
+     * A file kept out of a share this session has not opened is left alone until it is.
+     */
+    public func refreshOffline(_ ids: Set<String>, progress: @Sendable @escaping (String, Double) -> Void = { _, _ in }) async -> [String: Error] {
+        var failed: [String: Error] = [:]
+        let own = try? await workspaceId()
         for entry in Offline.entries() where ids.contains(entry.id) {
-            guard let item = try? await resolve(entry.id) else { failed.insert(entry.id); continue }
+            // Entries from before the workspace was recorded count as this drive's: kept shares were rare, and a copy
+            // wrongly dropped comes down again, while one of a purged file would stay readable here for good.
+            let mine = own != nil && (entry.workspaceId ?? own) == own
+            let item: Opened
+            if let known = opened[entry.id] {
+                item = known
+            } else if !mine {
+                // Only this drive's answers are proof: a share's folder asked for under this account's workspace is a 404 too.
+                continue
+            } else {
+                do {
+                    item = try await resolve(entry.id)
+                } catch DriveAPIError.notFound {
+                    Offline.forget(entry.id)
+                    continue
+                } catch {
+                    if cataloguePulled { Offline.forget(entry.id) }
+                    continue
+                }
+            }
+            Offline.recordWorkspace(item)
             if item.isFolder || item.node.trashedAt != nil { Offline.forget(entry.id); continue }
-            if Offline.localCopy(of: item) == nil {
-                do { try await keepDownloaded(item) { progress(entry.id, $0) } } catch { failed.insert(entry.id) }
+            if Offline.localCopy(of: item) != nil { continue }
+            do {
+                try await keepDownloaded(item) { progress(entry.id, $0) }
+            } catch {
+                offlineLog.warning("refreshing the kept copy of \(entry.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                failed[entry.id] = error
             }
         }
         return failed

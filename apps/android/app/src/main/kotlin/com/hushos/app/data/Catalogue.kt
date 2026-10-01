@@ -31,6 +31,7 @@ private fun Vault.pullFeed(workspaceId: String): List<NodeChange> {
         cursor = page.nextCursor
         if (!page.hasMore) break
     }
+    cataloguePulled = true
     return arrived
 }
 

@@ -407,17 +407,19 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val ids = kept.map { it.id }
             val vault = vault
-            // Only files whose copy is missing get a row: a rename or a tag moves nothing.
+            // Only files whose copy is missing get a row: a rename or a tag moves nothing, and a file
+            // this session cannot open yet (gone, or in a share not browsed) has nothing to fetch.
             val stale = withContext(Dispatchers.IO) {
-                kept.filter { entry -> vault?.item(entry.id)?.let { !Offline.hasVersion(context, it) && it.node.trashedAt == null } ?: true }
+                kept.filter { entry -> vault?.item(entry.id)?.let { !Offline.hasVersion(context, it) && it.node.trashedAt == null } ?: false }
             }
             val tickets = stale.associate { it.id to begin("keep", it.name) }
             var reason: String? = null
-            val failed = io({ reason = it }) { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } } ?: ids.toSet()
+            val failed = io({ reason = it }) { v -> v.refreshOffline(ids) { id, fraction -> tickets[id]?.let { progress(it, fraction) } } }
             // Offline, the banner already says why; a row per kept file would only repeat it.
             tickets.forEach { (id, ticket) ->
-                if (id in failed && state.value.unreachable) drop(ticket)
-                else finish(ticket, failed = id in failed, message = reason ?: "Couldn't update the downloaded copy.")
+                val failure = if (failed == null) reason ?: "Couldn't update the downloaded copy." else failed[id]?.let { it.message ?: "Couldn't update the downloaded copy." }
+                if (failure != null && state.value.unreachable) drop(ticket)
+                else finish(ticket, failed = failure != null, message = failure)
             }
             refreshingKept.removeAll(ids.toSet())
             refreshOffline()

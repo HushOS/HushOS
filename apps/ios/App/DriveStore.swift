@@ -240,14 +240,16 @@ final class DriveStore {
         let ids = Set(kept.map(\.id))
         refreshingKept.formUnion(ids)
         Task {
-            // Only files whose copy is missing get a row: a rename or a tag moves nothing.
+            // Only files whose copy is missing get a row: a rename or a tag moves nothing, and a file this
+            // session cannot open yet (gone, or in a share not browsed) has nothing to fetch.
             var tickets: [String: UUID] = [:]
             for entry in kept where await vault.keptVersionMissing(entry.id) { tickets[entry.id] = begin(.keep, entry.name) }
             let rows = tickets
             let failed = await vault.refreshOffline(ids) { id, fraction in Task { @MainActor in if let ticket = rows[id] { self.progress(ticket, fraction) } } }
             // Offline, the banner already says why; a row per kept file would only repeat it.
             for (id, ticket) in rows {
-                if failed.contains(id) && offline { dismiss(ticket) } else { finish(ticket, failed: failed.contains(id), message: "Couldn't update the downloaded copy.") }
+                let failure = failed[id].map { ($0 as? LocalizedError)?.errorDescription ?? "Couldn't update the downloaded copy." }
+                if failure != nil && offline { dismiss(ticket) } else { finish(ticket, failed: failure != nil, message: failure) }
             }
             refreshingKept.subtract(ids)
             offlineVersion += 1
