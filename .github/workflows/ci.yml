@@ -69,10 +69,22 @@ jobs:
             - name: The committed route tree matches the built one
               run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
 
+    # One runner per engine, side by side. Chromium (and the phone-sized Chromium for
+    # mobile.spec.ts) gates deploys; WebKit, the engine behind Safari, runs the whole
+    # suite too, but its failures do not hold a deploy until it has proved steady here.
     e2e:
-        name: Browser tests
+        name: Browser tests (${{ matrix.engine }})
         runs-on: ubuntu-latest
-        timeout-minutes: 30
+        timeout-minutes: 40
+        continue-on-error: ${{ matrix.engine == 'webkit' }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - engine: chromium
+                      projects: --project=chromium --project=mobile
+                    - engine: webkit
+                      projects: --project=webkit
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -85,10 +97,8 @@ jobs:
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
-            - name: Install Chromium for Playwright
-              run: bunx playwright install --with-deps chromium
-            # WebKit runs locally on demand: on this runner it is slow enough to
-            # blow the hook budget and its download events never fire.
+            - name: Install ${{ matrix.engine }} for Playwright
+              run: bunx playwright install --with-deps ${{ matrix.engine }}
             # Streamed, not grouped: Turborepo holds a task's output until it ends on
             # this runner, and a dev server never ends, so its log stayed empty.
             # Started here rather than by Playwright: on this runner Vite now and then
@@ -116,7 +126,7 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the dev server
-              run: bun run e2e -- --project=chromium --project=mobile
+              run: bun run e2e -- ${{ matrix.projects }}
               env:
                   TURBO_LOG_ORDER: stream
             # The whole log is in the artifact below; its end is enough to see a server
@@ -128,7 +138,7 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces
+                  name: playwright-traces-${{ matrix.engine }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
