@@ -600,7 +600,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         // so a double click opens and leaves the selection as it found it.
         let beforeDouble: Set<string> | null = null;
         let lastDown: { row: string | null; at: number } | null = null;
-        const onDown = (event: PointerEvent) => {
+        const onDown = (event: globalThis.MouseEvent) => {
             if (event.button !== 0) return;
             const target = event.target as HTMLElement;
             const pressed = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? null;
@@ -612,7 +612,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             lastDown = { row: pressed, at: event.timeStamp };
             if (
                 target.closest(
-                    'button, a, input, summary, thead, [role=menu], [role=dialog], [data-selection-bar], [data-details], section[aria-label=Transfers]',
+                    'button, a, input, summary, thead, [data-crumb-drag], [role=menu], [role=dialog], [data-selection-bar], [data-details], section[aria-label=Transfers]',
                 )
             )
                 return;
@@ -704,17 +704,39 @@ export function FolderView({ folderId }: { folderId: string }) {
                 setFocused(null);
             }
         };
-        root.addEventListener('pointerdown', onDown);
+        // WebKit drops the pointerdown of the first press after a drag and drop, sending the
+        // mousedown alone; that press starts here instead. A pointerdown and its mousedown
+        // come from the same input, a few milliseconds apart at most, and a touch sends a
+        // mousedown after its pointerup for the same tap. (A drag in WebKit ends without a
+        // pointerup, so no press can be held open between the two.)
+        let lastPointerDown = -Infinity;
+        let lastTouchUp = -Infinity;
+        const onPointerDown = (event: PointerEvent) => {
+            lastPointerDown = event.timeStamp;
+            onDown(event);
+        };
+        const onMouseDown = (event: globalThis.MouseEvent) => {
+            if (event.timeStamp - lastPointerDown < 50 || event.timeStamp - lastTouchUp < 1000)
+                return;
+            onDown(event);
+        };
+        const onPointerUp = (event: PointerEvent) => {
+            if (event.pointerType === 'touch') lastTouchUp = event.timeStamp;
+            onUp(event);
+        };
+        root.addEventListener('pointerdown', onPointerDown);
+        root.addEventListener('mousedown', onMouseDown);
         root.addEventListener('dblclick', onDouble);
         window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-        window.addEventListener('pointercancel', onUp);
+        window.addEventListener('pointerup', onPointerUp);
+        window.addEventListener('pointercancel', onPointerUp);
         return () => {
-            root.removeEventListener('pointerdown', onDown);
+            root.removeEventListener('pointerdown', onPointerDown);
+            root.removeEventListener('mousedown', onMouseDown);
             root.removeEventListener('dblclick', onDouble);
             window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onUp);
+            window.removeEventListener('pointerup', onPointerUp);
+            window.removeEventListener('pointercancel', onPointerUp);
         };
     }, []);
 
