@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_16c1df55891f3d::t_8a6c3dc213fde9 72-74,76,78-87,100-101,129,141
+playwright.config.ts
+  s_16c1df55891f3d::t_a6172dc45fec70 28-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9ca51130908965772318d8df31a05e3b4eacdf88",
+  "prompts": {},
+  "sessions": {
+    "s_16c1df55891f3d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b57b313-9ad7-447b-9337-cadc4d89b30e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
