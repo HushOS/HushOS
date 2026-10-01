@@ -1,0 +1,29 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_de0e5293e39e1a::t_316f817bee3b8d 64-65,202,295,297
+  s_de0e5293e39e1a::t_75c7d115d3fce8 842-843
+apps/ios/App/NodeActions.swift
+  s_de0e5293e39e1a::t_f1f7089baf7b67 66-74
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_de0e5293e39e1a::t_316f817bee3b8d 10,86-94,140-145,149
+apps/ios/App/DriveStore.swift
+  s_de0e5293e39e1a::t_f1f7089baf7b67 415-431,439
+  s_de0e5293e39e1a::t_1604485bc913f5 440-441
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_de0e5293e39e1a::t_316f817bee3b8d 99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a02f69ab0d0207ed030359908405219185d5128d",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
