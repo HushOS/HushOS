@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import { PASSWORD, grip, newPage, registerAccount, sampleFiles, sha256 } from './helpers';
 
 /*
@@ -162,6 +162,8 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     await page.getByPlaceholder('Reports/2026').fill('photos/inner');
     await page.keyboard.press('Enter');
     await expect(row(page, 'photos')).toBeVisible();
+    // The row lands while the dialog is still on its way out; a drag does not wait for it.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     await row(page, 'pixel.png').dragTo(row(page, 'photos'));
     await expect(page.getByText(/moved to “photos”/)).toBeVisible();
@@ -413,9 +415,22 @@ test('the transfers panel closes from its header once everything has finished, a
     // On its way: the cross asks first, and "Keep going" leaves the transfer alone.
     const big = join(dir, 'still-going.bin');
     writeFileSync(big, Buffer.alloc(24 * 1024 * 1024, 7));
+    // The store holds every part, or a fast engine finishes 24 MiB before the pause lands.
+    const held: Route[] = [];
+    const parts = (url: URL) => url.port === '9000';
+    await page
+        .context()
+        .route(parts, (route) =>
+            route.request().method() === 'PUT' ? void held.push(route) : route.continue(),
+        );
     await page.locator('input[type=file]').first().setInputFiles([big]);
     await expect(transfers(page)).toBeVisible();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
     await transfers(page).getByRole('button', { name: 'Pause all' }).click();
+    await expect(transfers(page)).toContainText(/paused/i);
+    // Paused, nothing more is sent; the parts that were held go nowhere.
+    await page.context().unroute(parts);
+    await Promise.all(held.map((route) => route.abort().catch(() => {})));
     await transfers(page).getByRole('button', { name: 'Cancel all transfers' }).click();
     await expect(page.getByRole('alertdialog')).toContainText('Cancel 1 transfer?');
     await page.getByRole('alertdialog').getByRole('button', { name: 'Keep going' }).click();

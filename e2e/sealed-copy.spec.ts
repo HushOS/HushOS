@@ -60,6 +60,8 @@ test('a sealed copy of a file and of a folder carries the records and the cipher
     await page.getByPlaceholder('Reports/2026').fill('Project');
     await page.keyboard.press('Enter');
     await expect(row(page, 'Project')).toBeVisible();
+    // The row lands while the dialog is still on its way out, and the clicks below go by position.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.locator('input[type=file]').first().setInputFiles([samples.files.markdown]);
     await expect(row(page, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText(/Uploading/)).toHaveCount(0, { timeout: 60_000 });
