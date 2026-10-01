@@ -1,0 +1,25 @@
+e2e/sealed-copy.spec.ts
+  s_16c1df55891f3d::t_81f893ad9a1413 63-64
+e2e/drive.spec.ts
+  s_16c1df55891f3d::t_c4a27b40ccf033 5
+  s_16c1df55891f3d::t_751aacb19aab2f 430-433
+  s_16c1df55891f3d::t_81f893ad9a1413 165-166
+  s_16c1df55891f3d::t_6fd9d65a350625 421-425
+  s_16c1df55891f3d::t_c7e29239dc1e5e 418-420,428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4326bfd73459244310e37b89a712da25cd163a8d",
+  "prompts": {},
+  "sessions": {
+    "s_16c1df55891f3d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b57b313-9ad7-447b-9337-cadc4d89b30e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
