@@ -63,9 +63,15 @@ struct NodeMenu: View {
         Button("Share…", systemImage: "link") { action = .link(item) }
         if !item.isFolder {
             Button("Send a copy", systemImage: "square.and.arrow.up") { action = .share(item) }
-            let kept = Offline.isKept(item.id)
-            Button(kept ? "Remove Download" : "Keep Downloaded", systemImage: kept ? "icloud.slash" : "arrow.down.circle") {
-                Task { await store.setKeptDownloaded(item, !kept) }
+            switch store.keptState(item.id) {
+            case .none:
+                Button("Keep Downloaded", systemImage: "arrow.down.circle") { Task { await store.setKeptDownloaded(item, true) } }
+            case .fetching(let queued?):
+                Button("Cancel Download", systemImage: "xmark.circle") { Task { await BackgroundTransfers.shared.cancel(queued) } }
+            case .fetching(nil):
+                Button("Downloading…", systemImage: "arrow.down.circle.dotted") {}.disabled(true)
+            case .kept:
+                Button("Remove Download", systemImage: "icloud.slash") { Task { await store.setKeptDownloaded(item, false) } }
             }
         }
         Divider()

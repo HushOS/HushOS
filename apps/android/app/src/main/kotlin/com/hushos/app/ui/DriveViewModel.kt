@@ -61,6 +61,8 @@ data class TransferItem(
     val dismiss: (() -> Unit)? = null,
     /* Sends a failed upload again from the copy it kept; null when there is nothing to send. */
     val retry: (() -> Unit)? = null,
+    /* The node a keep is fetching, so its menu can say so. */
+    val node: String? = null,
 )
 
 data class DriveState(
@@ -197,6 +199,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                         message = if (failed) info.outputData.getString("message") ?: "The transfer failed." else null,
                         dismiss = if (failed) ({ forgetQueued(listOf(info.id)) }) else null,
                         retry = if (kept) ({ retryQueued(info) }) else null,
+                        node = tag("node:"),
                     )
                 }
                 _state.update { it.copy(queued = items) }
@@ -289,9 +292,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
-    private fun begin(kind: String, name: String): String {
+    private fun begin(kind: String, name: String, node: String? = null): String {
         val id = java.util.UUID.randomUUID().toString()
-        _state.update { it.copy(transfers = it.transfers + TransferItem(id, kind, name, 0f)) }
+        _state.update { it.copy(transfers = it.transfers + TransferItem(id, kind, name, 0f, node = node)) }
         return id
     }
 
@@ -836,7 +839,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             // Queued like an upload: kept once there is a network, whether or not the app is open.
             com.hushos.app.data.TransferQueue.keep(context, item.id, item.name)
         } else if (keep) {
-            val ticket = begin("keep", item.name)
+            if (state.value.transfers.any { it.kind == "keep" && it.node == item.id && !it.done }) return@launch
+            val ticket = begin("keep", item.name, item.id)
             var reason: String? = null
             val ok = io({ reason = it }) { vault -> vault.keepDownloaded(item) { fraction -> progress(ticket, fraction) }; true } ?: false
             finish(ticket, failed = !ok, message = reason)

@@ -412,6 +412,23 @@ final class DriveStore {
         backgroundTask = .invalid
     }
 
+    /* Files being kept downloaded from a share, fetched in the foreground; the queue tracks its own. */
+    private var keeping: Set<String> = []
+
+    /*
+     * Where a file's local copy stands, for its menu. The list lives in defaults, which nothing
+     * observes, so this reads `offlineVersion` to redraw a menu when the list changes.
+     */
+    enum KeptState { case none, fetching(queued: UUID?), kept }
+    func keptState(_ id: String) -> KeptState {
+        _ = offlineVersion
+        if let record = BackgroundTransfers.shared.records.first(where: { $0.kind == .keep && $0.nodeId == id && $0.state != .done && $0.state != .failed }) {
+            return .fetching(queued: record.id)
+        }
+        if keeping.contains(id) { return .fetching(queued: nil) }
+        return Offline.isKept(id) ? .kept : .none
+    }
+
     /* Keep downloaded on or off: the local copy comes or goes, and Files follows through the extension. */
     func setKeptDownloaded(_ item: Opened, _ keep: Bool) async {
         if keep { clearFailures() }
@@ -419,6 +436,9 @@ final class DriveStore {
             // Queued like an upload: fetched by iOS, whether or not the app is open.
             BackgroundTransfers.shared.keep(item)
         } else if keep {
+            guard !keeping.contains(item.id) else { return }
+            keeping.insert(item.id)
+            defer { keeping.remove(item.id) }
             let ticket = begin(.keep, item.name)
             var why: String?
             let ok = await perform(in: nil, failed: { why = $0 }) { try await vault.keepDownloaded(item) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
 import androidx.compose.material.icons.outlined.Checklist
@@ -82,8 +83,15 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
                         }
                     }
                 }
-                val kept = Offline.isKept(context, item.id)
-                Action(if (kept) "Remove download" else "Keep downloaded", if (kept) Icons.Outlined.CloudOff else Icons.Outlined.DownloadForOffline) { model.setKeptDownloaded(item, !kept); dismiss() }
+                // A keep under way says so: offering it again would only queue the same fetch.
+                val fetching = (state.queued + state.transfers).firstOrNull { it.kind == "keep" && it.node == item.id && !it.done }
+                val cancel = fetching?.cancel
+                when {
+                    cancel != null -> Action("Cancel download", Icons.Outlined.Close) { cancel(); dismiss() }
+                    fetching != null -> Action("Downloading…", Icons.Outlined.DownloadForOffline, enabled = false) {}
+                    Offline.isKept(context, item.id) -> Action("Remove download", Icons.Outlined.CloudOff) { model.setKeptDownloaded(item, false); dismiss() }
+                    else -> Action("Keep downloaded", Icons.Outlined.DownloadForOffline) { model.setKeptDownloaded(item, true); dismiss() }
+                }
             }
             Action("Rename", Icons.Outlined.Edit) { sheet = Sheet.RENAME }
             Action("Move to…", Icons.Outlined.DriveFileMove) { sheet = Sheet.MOVE }
@@ -129,12 +137,16 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, onSelect
 }
 
 @Composable
-private fun Action(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, destructive: Boolean = false, onClick: () -> Unit) {
-    val color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+private fun Action(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, destructive: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    val color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        destructive -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
     ListItem(
         headlineContent = { Text(label, color = color) },
         leadingContent = { Icon(icon, contentDescription = null, tint = color) },
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
     )
 }
 

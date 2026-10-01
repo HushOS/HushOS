@@ -96,7 +96,7 @@ object TransferQueue {
             .setConstraints(constraints())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "name" to name))
-            .addTag(TAG).addTag("kind:$KEEP").addTag("name:$name")
+            .addTag(TAG).addTag("kind:$KEEP").addTag("name:$name").addTag("node:$nodeId")
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", ExistingWorkPolicy.KEEP, request)
     }
