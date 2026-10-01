@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_de0e5293e39e1a::t_73652767986620 37,386,389-392,431-432,434-435,437-438,457-495,497-498
+  s_de0e5293e39e1a::t_44de7c35a0da74 496,499
+apps/ios/App/RecentsView.swift
+  s_de0e5293e39e1a::t_dff2c6dffda89b 58,60,102-107,534-604
+  s_de0e5293e39e1a::t_6928b111acb9ca 605
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "67dcd0b2383e3516deaf11c0b855c70b8bfd45d8",
+  "prompts": {},
+  "sessions": {
+    "s_de0e5293e39e1a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cc9ae66-6c00-42a8-9efa-1d3a01d04093",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
