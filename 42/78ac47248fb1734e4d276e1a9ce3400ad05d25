@@ -1,0 +1,23 @@
+e2e/links.spec.ts
+  s_16c1df55891f3d::t_b4e0c570fb0ec5 88-89
+e2e/helpers.ts
+  s_16c1df55891f3d::t_b4e0c570fb0ec5 107-115
+  s_16c1df55891f3d::t_8592f2ddb445ec 100-106,116-118,142,155
+  s_16c1df55891f3d::t_05e8c668cedc32 99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4278ac47248fb1734e4d276e1a9ce3400ad05d25",
+  "prompts": {},
+  "sessions": {
+    "s_16c1df55891f3d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b57b313-9ad7-447b-9337-cadc4d89b30e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
