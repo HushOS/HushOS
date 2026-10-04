@@ -1,0 +1,33 @@
+apps/ios/App/BrowseView.swift
+  s_41ce2ed146c27c::t_9a9d046b3440cb 228-230
+  s_41ce2ed146c27c::t_81d18aef280cfa 124
+  s_41ce2ed146c27c::t_f778bbcb0b0e9d 7,18,26-31,61-62,67,75-79,120,123,127,131-133,135,137-144,149,151-152,160,162,165,169,174-190,192-207,209-227,231-250,252-278,281,287,295-297,299,304-382,384-427,429-471,473-497,499-540,542,549,594,601,621,627,632-639
+  s_41ce2ed146c27c::t_e2ff1314bd5a31 82-86,89-91,95,97-103,108-109,112,114,117-118,125-126,191,208,279-280,282-286,288-294,298,300-303
+  s_41ce2ed146c27c::t_8484c4b89e013d 498
+  s_41ce2ed146c27c::t_75cb3f06201f11 251
+  s_41ce2ed146c27c::t_a10c0fafe77ef5 383
+  s_41ce2ed146c27c::t_2835d5cd235e62 589,600
+  s_41ce2ed146c27c::t_6cd6e27ffffde8 428,472
+  s_41ce2ed146c27c::t_4cbca832d55096 640
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52ff0ca59995828cbfe7caa5972adc80f0ecef25",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
