@@ -8,6 +8,7 @@ import {
     test,
     type Browser,
     type BrowserContextOptions,
+    type Locator,
     type Page,
 } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
@@ -95,6 +96,18 @@ export async function verificationLink(email: string, pathPrefix: string) {
     throw new Error(`No verification email for ${email} arrived in Mailpit.`);
 }
 
+/*
+ * Ticks a checkbox and waits until it shows ticked. On a page the dev server is
+ * still compiling, a click can land before React listens and change nothing, so
+ * it is clicked again while it stays clear; never a second time once it ticks.
+ */
+async function check(box: Locator) {
+    await expect(async () => {
+        if ((await box.getAttribute('aria-checked')) !== 'true') await box.click();
+        await expect(box).toBeChecked({ timeout: 2_000 });
+    }).toPass({ timeout: 60_000 });
+}
+
 /* Registers a fresh account and leaves the page on the Drive root, unlocked. */
 export async function registerAccount(
     page: Page,
@@ -110,8 +123,7 @@ export async function registerAccount(
     const emailField = page.getByRole('textbox', { name: /email/i });
     await emailField.fill(email);
     await expect(emailField).toHaveValue(email);
-    await page.getByRole('checkbox').click();
-    await expect(page.getByRole('checkbox')).toBeChecked();
+    await check(page.getByRole('checkbox'));
     await page.locator('form button[type=submit]').click();
     await page.waitForURL(/\/register\/check-email/);
     // The URL changes before the router's transition commits; leaving during it
@@ -130,7 +142,7 @@ export async function registerAccount(
     // never reports it stable enough to click before the hook's budget is gone.
     await passwords.nth(1).press('Enter');
     await page.waitForURL(/\/setup\/recovery-key/, { timeout: 120_000 });
-    await page.getByRole('checkbox').click();
+    await check(page.getByRole('checkbox'));
     await page.getByRole('button', { name: /continue to hushos/i }).click();
     if (options.landsOn) {
         await page.waitForURL(options.landsOn, { timeout: 60_000 });
