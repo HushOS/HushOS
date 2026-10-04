@@ -1,0 +1,63 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_41ce2ed146c27c::t_247c550583de18 142-150
+apps/ios/App/Viewer.swift
+  s_41ce2ed146c27c::t_e7d9184c63218a 62-63
+apps/ios/App/Sharing.swift
+  s_41ce2ed146c27c::t_45721837c04c91 64-75,111-127,264-273
+  s_41ce2ed146c27c::t_d55d917c2d4132 152,373,821
+  s_41ce2ed146c27c::t_9c2c7b8c876cb5 128,274
+apps/ios/App/RecentsView.swift
+  s_41ce2ed146c27c::t_4e5ec88549a0e7 275-281
+  s_41ce2ed146c27c::t_d55d917c2d4132 300,557
+apps/ios/App/MainView.swift
+  s_41ce2ed146c27c::t_0def3eef65054f 3,7-9,11-12,16,18,20,24-25,28,31,33,37-46,53-54,57,60,63,66,74-83,86-89,104-110,112,114-118,123,132-135,137-146,148-151
+  s_41ce2ed146c27c::t_32df9ca836141e 94-103,136
+apps/ios/App/Notices.swift
+  s_41ce2ed146c27c::t_69df5fbc3fa3ab 1-23,27-73,75-106
+  s_41ce2ed146c27c::t_25be4123d62b71 24-26,74
+apps/ios/App/ActionSheets.swift
+  s_41ce2ed146c27c::t_32df9ca836141e 453-461
+  s_41ce2ed146c27c::t_d55d917c2d4132 307
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_53c11c1d08e9e0 40-45,179-181,187-197,199-253,255-280,283-287,289,295,298-300,303-313
+  s_41ce2ed146c27c::t_25be4123d62b71 118-119
+  s_41ce2ed146c27c::t_d55d917c2d4132 132,281-282
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_41ce2ed146c27c::t_52d2d3b2c7592e 213,230
+apps/ios/App/Received.swift
+  s_41ce2ed146c27c::t_f0edb1d5285e63 458
+  s_41ce2ed146c27c::t_17233aa84a3256 15,51-69,75-84,123,127-132
+  s_41ce2ed146c27c::t_53c11c1d08e9e0 268,502-507,573-578,588,591
+  s_41ce2ed146c27c::t_d55d917c2d4132 270-271
+apps/ios/App/BrowseView.swift
+  s_41ce2ed146c27c::t_25be4123d62b71 185-190,429
+  s_41ce2ed146c27c::t_57de2a10154cd6 11,14,24-57,59-60
+  s_41ce2ed146c27c::t_53c11c1d08e9e0 435
+  s_41ce2ed146c27c::t_9d0d186882663f 141-143,393,399-402
+  s_41ce2ed146c27c::t_a55d686299e995 204-208
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_41ce2ed146c27c::t_4c86f10b79bfc9 13
+  s_41ce2ed146c27c::t_247c550583de18 190-192
+  s_41ce2ed146c27c::t_1296cd3da84b3a 193-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a20ff94ac054a0f4481667e2cf2e283e3f8643f5",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
