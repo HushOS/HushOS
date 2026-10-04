@@ -1,0 +1,43 @@
+apps/ios/App/NodeRow.swift
+  s_41ce2ed146c27c::t_afea2eaae75246 54,69-70
+  s_41ce2ed146c27c::t_97363fd2f67a5d 5-9,13,17-20,25-27,29-35,49-50,55-59,65,68,71-73,82,87-94,96-104,109-145,147-238
+  s_41ce2ed146c27c::t_1d8768d562e4b4 47
+  s_41ce2ed146c27c::t_c99e40d6257bbb 60-64,66
+  s_41ce2ed146c27c::t_4bca3aef527a5a 95,146
+  s_41ce2ed146c27c::t_e340d4107261ad 21-22
+  s_41ce2ed146c27c::t_8c3717173e6781 242,244-246,248
+apps/ios/App/Theme.swift
+  s_41ce2ed146c27c::t_6f95d382a5bbe2 1-29,43-62,65-66,84-85,96,98,117-119,121-123,125,127-128,130-137,140,142-143,147-221
+  s_41ce2ed146c27c::t_2edca5cc2c3517 87,97,102,120,126,129
+  s_41ce2ed146c27c::t_6cd6e27ffffde8 91-95,108-116,269,301
+  s_41ce2ed146c27c::t_4bca3aef527a5a 222-259,262-263,270-300,302-368
+  s_41ce2ed146c27c::t_1d8768d562e4b4 67-69,71-79,81-83
+  s_41ce2ed146c27c::t_a10c0fafe77ef5 88-90,99-101,103-105
+  s_41ce2ed146c27c::t_8484c4b89e013d 124
+  s_41ce2ed146c27c::t_9a9d046b3440cb 138-139,141,144-146
+  s_41ce2ed146c27c::t_c72ad1413a8ca4 260-261,264-268
+  s_41ce2ed146c27c::t_81d18aef280cfa 80
+  s_41ce2ed146c27c::t_afea2eaae75246 30-42,64,70,86,106-107
+  s_41ce2ed146c27c::t_75e48636e08dd0 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3398ac6a19477429fac331dca2744fad9960451a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
