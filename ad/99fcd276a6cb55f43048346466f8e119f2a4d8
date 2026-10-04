@@ -1,0 +1,46 @@
+apps/ios/App/DriveStore.swift
+  s_41ce2ed146c27c::t_7efb0a6de8ff8a 732
+  s_41ce2ed146c27c::t_4cb8eb530b4442 47-50,293-311,658,679-731,733-772,894-896,931,942-943,979-1000
+  s_41ce2ed146c27c::t_fa0f1d0e06cab7 324-341,343-348,351,353-360
+  s_41ce2ed146c27c::t_183c493688156c 597-599,601
+  s_41ce2ed146c27c::t_b675c57d0c3009 607-616
+  s_41ce2ed146c27c::t_13528bfc712e58 1001
+apps/ios/App/ActionSheets.swift
+  s_41ce2ed146c27c::t_9035dff9ea1019 161-165
+  s_41ce2ed146c27c::t_fa0f1d0e06cab7 13,15-17
+  s_41ce2ed146c27c::t_efe81d22a143d7 55,57,85,153-157
+  s_41ce2ed146c27c::t_b3febb04d35988 73
+  s_41ce2ed146c27c::t_b31d29d1e307a5 380-382,388,393-395
+  s_41ce2ed146c27c::t_9d6e3d7e4cb313 480-484,498-500
+  s_41ce2ed146c27c::t_04766c5e0f7e40 206,229,231-235,244-246
+  s_41ce2ed146c27c::t_483f7433cd0a23 236-243
+  s_41ce2ed146c27c::t_c059169905fcdb 1-12,14,18-54,56,58-72,74-84,86-152,158-160,166-205,207-228,230,247-379,383-387,389-392,396-479,485-497,501-644
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_1e7208accf32f1 58
+  s_41ce2ed146c27c::t_64d4fbe2c1c352 191,196-199,201-203,224-230
+  s_41ce2ed146c27c::t_056734812f17e9 3,5-10,12,14,18,22,24,28,34-35,38,40-41,43-45,53-55,57,59-62,72-73,76-101,103,105-108,110-125,130-133,137-147,151-158,162-169,171-189,192-195,204-220,231,233,247,270-273
+  s_41ce2ed146c27c::t_e5220ba2c1a659 51-52
+  s_41ce2ed146c27c::t_e0a7f0a9e8cd87 42
+  s_41ce2ed146c27c::t_fc0074dd77ba0c 232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad99fcd276a6cb55f43048346466f8e119f2a4d8",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
