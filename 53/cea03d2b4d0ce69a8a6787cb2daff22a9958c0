@@ -1,0 +1,113 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_41ce2ed146c27c::t_4ef7e73b942dc3 102,208
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_41ce2ed146c27c::t_9201ddc9974e65 46,48,53,250,256,260,424
+  s_41ce2ed146c27c::t_cea6b64a59030e 414-416
+  s_41ce2ed146c27c::t_1e3c33a07aaf2b 314,323-334,337-343,345-376
+  s_41ce2ed146c27c::t_bfcc46f8a525b2 128,302,305-307
+  s_41ce2ed146c27c::t_ce3da43ee48ada 532
+  s_41ce2ed146c27c::t_8fbc846a155004 122,195,236,271-274,276-285,293,308-309
+  s_41ce2ed146c27c::t_23486e8314e312 419
+  s_41ce2ed146c27c::t_c5e54cf7298179 184
+  s_41ce2ed146c27c::t_ded48228ef3ff1 475-476,568
+  s_41ce2ed146c27c::t_94a0ddfb84c985 185
+  s_41ce2ed146c27c::t_0105ef21fe5158 1-8,10-24,26-45,47,49-52,54-121,123-127,129-170,172-173,175-183,186-194,196-235,237-249,251-255,257-259,261-270,275,286-292,294-301,303-304,310-313,344,377,387-388,392,421-423,425-474,477-514,516-519,521-531,533-567,569-582
+  s_41ce2ed146c27c::t_eaad64ae7ca0ab 315-322,378-386,389-391,393-413,417-418,420
+  s_41ce2ed146c27c::t_cc2b3ce9eeabb4 520
+  s_41ce2ed146c27c::t_785a0c99c0ca35 25,171,174,515
+  s_41ce2ed146c27c::t_1401c390801021 9,335-336
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_41ce2ed146c27c::t_4ef7e73b942dc3 66,71,120,180,211,243
+  s_41ce2ed146c27c::t_686b565e3decb6 60-61,67,76,80,92-93,96-98,102,116-119,135-139
+  s_41ce2ed146c27c::t_eaf52a9b5a95fb 88-89,100,140,269-284,287-288
+  s_41ce2ed146c27c::t_65954395dc28ca 141-142,289
+apps/android/app/src/main/res/values/themes.xml
+  s_41ce2ed146c27c::t_57761e2dc2bb5c 9
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_41ce2ed146c27c::t_23486e8314e312 268
+  s_41ce2ed146c27c::t_8c3717173e6781 178-179,213,215
+  s_41ce2ed146c27c::t_74abeef9904b32 315
+  s_41ce2ed146c27c::t_bfcc46f8a525b2 107,128-129,142
+  s_41ce2ed146c27c::t_3b700934aad409 144-145
+  s_41ce2ed146c27c::t_12eee70f479080 100,139-141,164-173,314
+  s_41ce2ed146c27c::t_86ef054ccf4c8e 1-99,101-106,108-127,130-138,143,146-163,174-177,180-212,214,216-267,269-313,316-354
+apps/android/app/src/main/res/xml/shared_paths.xml
+  s_41ce2ed146c27c::t_cdabdc0e8cf081 6-7
+apps/android/app/src/main/res/values-night/colors.xml
+  s_41ce2ed146c27c::t_57761e2dc2bb5c 3-4
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_41ce2ed146c27c::t_74abeef9904b32 71
+  s_41ce2ed146c27c::t_21418cce81843f 4,90
+  s_41ce2ed146c27c::t_e6bec4b86b1e60 3,53,60-61,64-67,69
+  s_41ce2ed146c27c::t_e3b12f002e2746 62-63,68
+  s_41ce2ed146c27c::t_38853ea3d71d95 87-88
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_41ce2ed146c27c::t_bfcc46f8a525b2 7-8,66,106,129,169
+  s_41ce2ed146c27c::t_23486e8314e312 115
+  s_41ce2ed146c27c::t_d41449ac9481a4 3-6,9,74,77,82,99,101-102,105,107-108,110,112,118,120-121,123,126-128,131,135-138,142,146-151,154-158,163,195-197
+  s_41ce2ed146c27c::t_1401c390801021 113-114,116
+apps/android/app/src/main/res/values/colors.xml
+  s_41ce2ed146c27c::t_57761e2dc2bb5c 3-4
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_41ce2ed146c27c::t_e7db2b651ae676 4-5,8,11-16,18,22-23,25,31,33,35-40,42-45,47-54,57-63,73-74,90-110,114-117,121-125,127,130,134-191,193-205,208-224,227-233,235-236,239,242-250
+  s_41ce2ed146c27c::t_eaf52a9b5a95fb 192
+  s_41ce2ed146c27c::t_38853ea3d71d95 76-81,84-86
+  s_41ce2ed146c27c::t_8c3717173e6781 66-67,69
+  s_41ce2ed146c27c::t_12eee70f479080 131-133
+  s_41ce2ed146c27c::t_b4f54987ecd703 75
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Theme.kt
+  s_41ce2ed146c27c::t_8e9f72ddc301ce 3-4,6-8,11,13-14,17-25,27-38,41-45,47-61,68,70-91,93-110,112-114,117-132,135-149,153-165
+  s_41ce2ed146c27c::t_23486e8314e312 62-67,111
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_41ce2ed146c27c::t_b4d0156585c68e 3-5,116,120,124-125,128,131,133,136-145,148-149,153,158-163,168-177,180,182-184,186,192-204,206-211,214
+  s_41ce2ed146c27c::t_74abeef9904b32 352-354
+  s_41ce2ed146c27c::t_61b984f3693765 263-265
+  s_41ce2ed146c27c::t_4ef7e73b942dc3 127
+  s_41ce2ed146c27c::t_785a0c99c0ca35 405
+  s_41ce2ed146c27c::t_a194f37ae31d9c 248-251,345,350,374
+  s_41ce2ed146c27c::t_429e25df99b35a 312
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_41ce2ed146c27c::t_f554154994e1b8 845
+  s_41ce2ed146c27c::t_74abeef9904b32 451-461
+  s_41ce2ed146c27c::t_b5787dc912c8a4 12,704
+  s_41ce2ed146c27c::t_6435ff3f6af066 49-50,105-112,168,285,448,450,462,464-477,480-506,557,651,700,705,846,877,895,950
+  s_41ce2ed146c27c::t_dc3813a08aee2c 553-556
+  s_41ce2ed146c27c::t_24524543ee3ff9 873-876
+  s_41ce2ed146c27c::t_c2ec44129be73a 463,558,878
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_41ce2ed146c27c::t_38853ea3d71d95 258-259,263-271
+  s_41ce2ed146c27c::t_17a34fd50f574e 46,169
+  s_41ce2ed146c27c::t_eb7003f40434ed 1-31,33-45,47-73,75-79,82-119,124-168,170-215
+  s_41ce2ed146c27c::t_8c3717173e6781 120-121,123
+  s_41ce2ed146c27c::t_1401c390801021 80-81
+  s_41ce2ed146c27c::t_bfcc46f8a525b2 74
+  s_41ce2ed146c27c::t_cea6b64a59030e 32
+  s_41ce2ed146c27c::t_7eb91ace61a1c9 122
+  s_41ce2ed146c27c::t_4ef7e73b942dc3 216-231
+  s_41ce2ed146c27c::t_db3dca70fb98c9 232-257,260-262,272
+apps/android/app/src/main/res/values-night/themes.xml
+  s_41ce2ed146c27c::t_57761e2dc2bb5c 9
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Access.kt
+  s_41ce2ed146c27c::t_78b95566d3f8c0 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53cea03d2b4d0ce69a8a6787cb2daff22a9958c0",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
