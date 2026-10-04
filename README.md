@@ -66,7 +66,7 @@ bun run db:migrate
 bun run dev
 ```
 
-Open [http://localhost:5173/app](http://localhost:5173/app). Development uses localhost directly; no hosts-file edits, certificates, or reverse proxy are required. Docker runs PostgreSQL 18, MailHog, and Garage (the object store Drive uploads to, at `127.0.0.1:9000`); the app runs on your host with live reload. `bun run dev` does not start those containers; run `bun run infra:up` once and Docker keeps them running.
+Open [http://localhost:5173/app](http://localhost:5173/app). Development uses localhost directly; no hosts-file edits, certificates, or reverse proxy are required. Docker runs PostgreSQL 18, Mailpit, and Garage (the object store Drive uploads to, at `127.0.0.1:9000`); the app runs on your host with live reload. `bun run dev` does not start those containers; run `bun run infra:up` once and Docker keeps them running.
 
 | Surface     | Local address                    | Production example            |
 | ----------- | -------------------------------- | ----------------------------- |
@@ -100,14 +100,14 @@ Postgres is published on `127.0.0.1:5433` for local tools. Change `POSTGRES_PORT
 | `bun run db:migrate`                    | Apply checked-in migrations with Drizzle Kit           |
 | `bun run db:studio`                     | Open Drizzle Studio                                    |
 | `bun run test`                          | Run every package's Vitest suite (throwaway databases) |
-| `bun run infra:up` / `infra:down`       | Start/stop local Postgres, MailHog, and Garage         |
+| `bun run infra:up` / `infra:down`       | Start/stop local Postgres, Mailpit, and Garage         |
 | `bun run selfhost:up` / `selfhost:down` | Build/start or stop the full Docker stack              |
 
 Stop the development server before switching to the full self-hosted stack, which also uses port 5173. Stop commands retain database volumes.
 
 ## Accounts and email previews
 
-Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [MailHog](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters. The dedicated `/setup/recovery-key` page then lets you save the 24-word recovery phrase or download its recovery kit. Confirm it is saved and choose “Continue to HushOS” to open the app. The QR code contains that same private phrase.
+Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [Mailpit](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters. The dedicated `/setup/recovery-key` page then lets you save the 24-word recovery phrase or download its recovery kit. Confirm it is saved and choose “Continue to HushOS” to open the app. The QR code contains that same private phrase.
 
 New accounts receive a personal workspace, its workspace key (random, generated in the browser, and granted to the account by wrapping it under the account key), and **1 GiB** allowance in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid plans grant additional entitlements through the Polar integration described in [the self-hosting guide](docs/self-hosting.md#billing-optional). Drive reserves an upload's ciphertext size against the allowance before any byte moves and counts it as used once the store has confirmed the object; see [the Drive design](docs/drive-design.md).
 
@@ -117,7 +117,7 @@ A separate background worker (`packages/jobs`, pg-boss on the same Postgres) swe
 
 Use `/recover` with access to both your email and recovery phrase to replace your password while preserving the root key and permanent identity. Recovery revokes existing sessions and replaces the recovery phrase. Account settings at `/app/account` offer password changes, recovery-key rotation, master-key rotation, and permanent deletion, each requiring fresh OPAQUE password confirmation. Password changes preserve encryption keys; recovery rotation replaces the 24 words; master-key rotation replaces the root and recovery phrase while preserving identity keys and rewrapping every workspace grant, so workspace keys never change. Security changes revoke other sessions, and rotations return you to the recovery setup page to save the new phrase. Accounts created during earlier development iterations may lack recovery/identity/workspace records; the application does not invent or overwrite their encryption keys during migration.
 
-Emails use React Email and the existing HushOS logo. `EMAIL_ADAPTER` selects `smtp`, `resend`, or `ses`; see [configuration](docs/self-hosting.md#authentication-and-email). MailHog captures local mail without sending it externally.
+Emails use React Email and the existing HushOS logo. `EMAIL_ADAPTER` selects `smtp`, `resend`, or `ses`; see [configuration](docs/self-hosting.md#authentication-and-email). Mailpit captures local mail without sending it externally.
 
 Email previews run separately from `bun run dev`:
 

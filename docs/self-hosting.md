@@ -285,8 +285,8 @@ With no `OPAQUE_SERVER_SETUP` in the environment, the web service makes one on f
 
 ### Mail in development and production
 
-- The development override runs MailHog at SMTP port 1025 with its inbox at `http://localhost:8025`. `bun run infra:up` starts it with PostgreSQL.
-- For a local full-stack preview use `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`; the override points container SMTP to `mailhog`.
+- The development override runs Mailpit at SMTP port 1025 with its inbox at `http://localhost:8025`. `bun run infra:up` starts it with PostgreSQL.
+- For a local full-stack preview use `docker compose -f compose.yaml -f compose.dev.yaml up -d --build`; the override points container SMTP to `mailpit`.
 - The base production stack has no mail capture service: configure a reachable SMTP provider, Resend, or SES, and verify your sender/domain with it.
 - Mail images use absolute URLs under `APP_ORIGIN`, which must be reachable by recipients.
 

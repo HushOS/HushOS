@@ -15,11 +15,11 @@ import * as XLSX from 'xlsx';
 
 /*
  * What every Drive test needs: an account created through the real sign-up
- * flow (the verification link comes out of MailHog), and files on disk with
+ * flow (the verification link comes out of Mailpit), and files on disk with
  * known bytes to upload and compare against after a download.
  */
 
-export const MAILHOG_URL = process.env.E2E_MAILHOG_URL ?? 'http://localhost:8025';
+export const MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? 'http://localhost:8025';
 export const PASSWORD = 'correct-horse-battery-staple-9';
 
 /*
@@ -28,6 +28,16 @@ export const PASSWORD = 'correct-horse-battery-staple-9';
  * selected, and the name button is only as wide as its content.
  */
 export const grip = { position: { x: 16, y: 12 } } as const;
+
+/*
+ * The modifier the app's own shortcuts answer to. The app reads the platform from
+ * the browser, and the WebKit project presents itself as Safari on a Mac even on
+ * Linux, where Playwright's `ControlOrMeta` would press Control; so ask the page.
+ */
+export async function shortcutModifier(page: Page) {
+    const mac = await page.evaluate(() => /mac/i.test(navigator.platform + navigator.userAgent));
+    return mac ? 'Meta' : 'Control';
+}
 
 /*
  * Sign-up sends at most twenty verification emails an hour per client address,
@@ -53,29 +63,36 @@ export async function newPage(browser: Browser, options: BrowserContextOptions =
     return (await newContext(browser, options)).newPage();
 }
 
-type MailhogMessage = { Content: { Body: string; Headers: Record<string, string[]> } };
-
-function decodeQuotedPrintable(text: string) {
-    return text
-        .replace(/=\r?\n/g, '')
-        .replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+/*
+ * Every message Mailpit holds for `email`, newest first, as sent: Mailpit has
+ * already undone the transfer encoding of the body and the encoded subject.
+ */
+async function mailTo(email: string) {
+    const query = encodeURIComponent(`to:"${email}"`);
+    const found = (await (await fetch(`${MAILPIT_URL}/api/v1/search?query=${query}`)).json()) as {
+        messages: { ID: string; Subject: string }[];
+    };
+    return Promise.all(
+        (found.messages ?? []).map(async ({ ID, Subject }) => {
+            const message = (await (await fetch(`${MAILPIT_URL}/api/v1/message/${ID}`)).json()) as {
+                Text: string;
+                HTML: string;
+            };
+            return { subject: Subject, body: `${message.Text}\n${message.HTML}` };
+        }),
+    );
 }
 
-/* Polls MailHog for the newest verification link sent to `email`. */
+/* Polls Mailpit for the newest verification link sent to `email`. */
 export async function verificationLink(email: string, pathPrefix: string) {
     for (let attempt = 0; attempt < 60; attempt++) {
-        const response = await fetch(
-            `${MAILHOG_URL}/api/v2/search?kind=to&query=${encodeURIComponent(email)}`,
-        );
-        const data = (await response.json()) as { items: MailhogMessage[] };
-        for (const message of data.items ?? []) {
-            const body = decodeQuotedPrintable(message.Content.Body);
+        for (const { body } of await mailTo(email)) {
             const match = body.match(new RegExp(`https?://[^\\s"'<>]*${pathPrefix}[^\\s"'<>]*`));
             if (match) return match[0].replace(/&amp;/g, '&');
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    throw new Error(`No verification email for ${email} arrived in MailHog.`);
+    throw new Error(`No verification email for ${email} arrived in Mailpit.`);
 }
 
 /* Registers a fresh account and leaves the page on the Drive root, unlocked. */
@@ -251,27 +268,7 @@ function crc32(buffer: Buffer) {
     return ~crc;
 }
 
-/* The subjects of every message MailHog holds for `email`, newest first. */
+/* The subjects of every message Mailpit holds for `email`, newest first. */
 export async function mailSubjects(email: string) {
-    const response = await fetch(
-        `${MAILHOG_URL}/api/v2/search?kind=to&query=${encodeURIComponent(email)}`,
-    );
-    const data = (await response.json()) as { items: MailhogMessage[] };
-    return (data.items ?? []).map((message) =>
-        decodeHeader(message.Content.Headers.Subject?.[0] ?? ''),
-    );
-}
-
-/* Mail subjects arrive RFC 2047 encoded ("=?UTF-8?Q?...?="); this undoes the Q form. */
-function decodeHeader(value: string) {
-    return value
-        .replace(/=\?UTF-8\?Q\?([^?]*)\?=/gi, (_, word: string) => {
-            const bytes: number[] = [];
-            for (const part of word.replaceAll('_', ' ').split(/(=[0-9A-F]{2})/i))
-                if (/^=[0-9A-F]{2}$/i.test(part)) bytes.push(parseInt(part.slice(1), 16));
-                else for (const char of part) bytes.push(char.charCodeAt(0));
-            return new TextDecoder().decode(Uint8Array.from(bytes));
-        })
-        .replace(/\s+/g, ' ')
-        .trim();
+    return (await mailTo(email)).map((message) => message.subject.replace(/\s+/g, ' ').trim());
 }
