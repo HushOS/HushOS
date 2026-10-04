@@ -1,0 +1,83 @@
+apps/web/src/lib/api.server.ts
+  s_41ce2ed146c27c::t_85e65d85c4ea72 1646-1674,1696-1708
+  s_41ce2ed146c27c::t_3c27e678f73f07 1675-1695
+  s_41ce2ed146c27c::t_e7c5e89bf6b5bd 1454
+apps/web/src/routes/_authenticated/app/admin/accounts/$accountId.tsx
+  s_41ce2ed146c27c::t_e4387560602a66 1,4,6,8-18,43-47,72-95,100-126,129-158,164-170,173-174,187-193,216-239,250-253,256-260,267-270,272-275,293-296,300-303,305-308,347-350,354-356
+  s_41ce2ed146c27c::t_2dee2e0b10a235 96-99
+  s_41ce2ed146c27c::t_c38ddf6cdf90f4 127-128,159-163
+  s_41ce2ed146c27c::t_7395a695f47897 2-3,5,7,19-42,48-71,171-172,175-186,194-215,240-249,254-255,261-266,271,276-292,297-299,304,309-346,351-353,357-371
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_41ce2ed146c27c::t_7551610054fd6d 31-34,71-75,101-104,126-129,138-142,176,188-191,196-197,221-222,236-239
+  s_41ce2ed146c27c::t_69ea4ddb96d835 1-2,4-5,8,14-16,26-30,35-36,38,40-70,76-85,89-90,93-94,96-100,105-119,130-132,134-137,143-175,177-180,182-183,185-186,192-195,199-220,223-235,240-241,243
+apps/web/src/routes/_authenticated/app/_drive/admin.affiliates.tsx
+  s_41ce2ed146c27c::t_82e4f31c60df29 327-329
+  s_41ce2ed146c27c::t_4de0499a6a271a 574-589
+  s_41ce2ed146c27c::t_906d01a78fb0ce 87
+  s_41ce2ed146c27c::t_e878385ecd5f68 3,8-9,80,86,89,103,109-114,116-118,120-175,182-183,194,202-206,208-252,254-283,286-315,322,415,487-498,501-505,509-510,515,529,536-537,540,548-549,552,561-562,565,573,590,600,624-625,628,634-635,638,644-645
+  s_41ce2ed146c27c::t_92198b8975ebbe 4,21-28,72,90-101,253,316-321,344-348,350-351,354-356,360-375,384-397,399,407-414,416-417,419-460,462-468,470-473,499-500,508,525-526,615
+  s_41ce2ed146c27c::t_aaa103ee0f7b0e 506-507
+apps/web/src/routes/_authenticated/app/admin/reports/index.tsx
+  s_41ce2ed146c27c::t_906d01a78fb0ce 2,68,133
+  s_41ce2ed146c27c::t_8d7c1387811c16 37,159-163
+  s_41ce2ed146c27c::t_7551610054fd6d 36,64,89-95,111
+  s_41ce2ed146c27c::t_6514c17c79fa60 87-88
+apps/web/src/components/operator.tsx
+  s_41ce2ed146c27c::t_c3bbeff5f7b2aa 2,6,24,133-134,148
+  s_41ce2ed146c27c::t_9dbd45a902d501 1,3-5,10-23,25-130
+  s_41ce2ed146c27c::t_f8624c8f06c002 7-9
+  s_41ce2ed146c27c::t_906d01a78fb0ce 131-132,135-147,149-167
+packages/auth/src/server.ts
+  s_41ce2ed146c27c::t_221b7a71588972 658-681
+  s_41ce2ed146c27c::t_85e65d85c4ea72 631-657,682-717
+packages/db/src/reports.ts
+  s_41ce2ed146c27c::t_e7c5e89bf6b5bd 1,226-227,237-241
+apps/web/src/routes/_authenticated/app/admin/workspaces.tsx
+  s_41ce2ed146c27c::t_8f103e1f8edc63 1-138
+  s_41ce2ed146c27c::t_af9eb4a6d092b5 139-156
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_41ce2ed146c27c::t_fa0d5d67431bda 70-73,121-124,127,129
+  s_41ce2ed146c27c::t_ce4c153bcc8968 99
+  s_41ce2ed146c27c::t_ae14b8e94b5a12 149
+  s_41ce2ed146c27c::t_906d01a78fb0ce 5,98
+  s_41ce2ed146c27c::t_d3b683f57463ac 250,598,865
+packages/db/src/admin.ts
+  s_41ce2ed146c27c::t_23bf4b1407d5e6 1,7-9,100-143,147-150,155-179,183-186,191-250,258-271
+  s_41ce2ed146c27c::t_1fa992ddd04faa 144-146,151-154,180-182,187-190,251-257
+packages/drive/src/server.ts
+  s_41ce2ed146c27c::t_e7c5e89bf6b5bd 1841
+packages/db/src/admin.test.ts
+  s_41ce2ed146c27c::t_1fa992ddd04faa 113-115,117,119-124,127
+  s_41ce2ed146c27c::t_55779ddb28f2a2 1-112,116,118,125-126,128-135
+apps/web/src/lib/admin.ts
+  s_41ce2ed146c27c::t_e4387560602a66 45-49
+  s_41ce2ed146c27c::t_85e65d85c4ea72 11-44
+packages/drive/src/api.ts
+  s_41ce2ed146c27c::t_3227d60bba0844 513
+apps/web/src/routes/_authenticated/app/admin/accounts/index.tsx
+  s_41ce2ed146c27c::t_fc1b298b71a35f 131-134,158-162,167,169,171-176,182-184,186-191,202-204,206-208,221-224
+  s_41ce2ed146c27c::t_6ad4f4aeed1901 1-130,135-157,163-166,168,170,177-181,185,192-201,205,209-220,225-233
+apps/web/src/lib/reports.ts
+  s_41ce2ed146c27c::t_7551610054fd6d 76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "55ff4f8b9544e5b62ae318f22e038f37c1ed811f",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
