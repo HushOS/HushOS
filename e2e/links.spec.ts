@@ -85,6 +85,8 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
         timeout: 60_000,
     });
     await visitor.keyboard.press('Escape');
+    // The next preview would open while this one is still on its way out, each with a Download.
+    await expect(dialog(visitor)).toHaveCount(0);
 
     await row(visitor, 'payload.bin').locator('button').first().click(grip);
     const [download] = await Promise.all([

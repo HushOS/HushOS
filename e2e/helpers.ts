@@ -97,6 +97,26 @@ export async function verificationLink(email: string, pathPrefix: string) {
 }
 
 /*
+ * Waits until React has hydrated an element. Pages are server rendered, and text
+ * typed into a field before then shows in the box but never reaches the form's
+ * state, so the form submits it empty. A quiet network is not proof on a slow
+ * runner: React marks the elements it owns with its props, and that is.
+ */
+async function hydrated(element: Locator) {
+    await expect
+        .poll(
+            () =>
+                element.evaluate((node) =>
+                    Object.keys(node).some((key) => key.startsWith('__reactProps$')),
+                ),
+            {
+                timeout: 60_000,
+            },
+        )
+        .toBe(true);
+}
+
+/*
  * Ticks a checkbox and waits until it shows ticked. On a page the dev server is
  * still compiling, a click can land before React listens and change nothing, so
  * it is clicked again while it stays clear; never a second time once it ticks.
@@ -116,11 +136,10 @@ export async function registerAccount(
     // `landsOn`: where the finished sign-up should arrive, when it is not an empty Drive.
     options: { viaCurrentPage?: boolean; landsOn?: RegExp } = {},
 ) {
-    // Pages are server rendered; typing before React hydrates is typing into a
-    // form that hydration then resets, so wait for the network to settle first.
     // A test that arrived at sign-up with a code in the URL stays on that page.
     if (!options.viaCurrentPage) await page.goto('/register', { waitUntil: 'networkidle' });
     const emailField = page.getByRole('textbox', { name: /email/i });
+    await hydrated(emailField);
     await emailField.fill(email);
     await expect(emailField).toHaveValue(email);
     await check(page.getByRole('checkbox'));
@@ -133,6 +152,7 @@ export async function registerAccount(
     const link = await verificationLink(email, '/register/complete');
     const url = new URL(link);
     await page.goto(url.pathname + url.search + url.hash, { waitUntil: 'networkidle' });
+    await hydrated(page.locator('input[autocomplete=name]'));
     await page.locator('input[autocomplete=name]').fill(name);
     await expect(page.locator('input[autocomplete=name]')).toHaveValue(name);
     const passwords = page.locator('input[autocomplete=new-password]');
