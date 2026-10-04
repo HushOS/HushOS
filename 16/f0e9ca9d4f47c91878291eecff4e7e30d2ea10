@@ -1,0 +1,49 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_41ce2ed146c27c::t_bdd142e73b2d5d 509-511
+  s_41ce2ed146c27c::t_afa331ea641238 111-112,555-558,588-589
+  s_41ce2ed146c27c::t_15d88d68022004 595-602
+  s_41ce2ed146c27c::t_5eef75306dff49 1062-1063,1068-1069
+  s_41ce2ed146c27c::t_9f546783aeed33 592-594,603-604,740-788,790-798,800-829
+  s_41ce2ed146c27c::t_79082312a79472 789,799
+  s_41ce2ed146c27c::t_23229e3d6db774 919-923,1055-1056,1070
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_41ce2ed146c27c::t_4a83048474ddcb 176-177
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_41ce2ed146c27c::t_4a83048474ddcb 550,559
+  s_41ce2ed146c27c::t_8c09ea669d64c7 319,322-323,331
+  s_41ce2ed146c27c::t_4c31f48b11bb4e 189-209
+  s_41ce2ed146c27c::t_5c7731b99630e0 7
+apps/android/app/src/main/res/raw/bip39_english.txt
+  s_41ce2ed146c27c::t_800e5c2f884fc8 1-2048
+apps/android/app/src/main/kotlin/com/hushos/app/data/Fingerprint.kt
+  s_41ce2ed146c27c::t_5ebf30c02a1321 1-35
+apps/android/app/src/test/kotlin/com/hushos/app/data/FingerprintTest.kt
+  s_41ce2ed146c27c::t_5ebf30c02a1321 1-27,29-31,33-39
+  s_41ce2ed146c27c::t_c06cfb14363e08 28,32
+apps/android/app/src/main/kotlin/com/hushos/app/data/Tags.kt
+  s_41ce2ed146c27c::t_e92c379cf5a1eb 22-23,45-46,50
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_41ce2ed146c27c::t_4c31f48b11bb4e 74-75,159-160,201-207
+  s_41ce2ed146c27c::t_94206d22e32d69 208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16f0e9ca9d4f47c91878291eecff4e7e30d2ea10",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
