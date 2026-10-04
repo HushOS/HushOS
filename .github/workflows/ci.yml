@@ -70,10 +70,17 @@ jobs:
               run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
 
     # Chromium and the phone-sized Chromium for mobile.spec.ts; WebKit has its own job below.
+    # Each browser's suite is split across runners that run side by side: a public repository's
+    # standard runners cost nothing, and the plan does not offer larger ones. The setup takes
+    # about two minutes on every shard, so more shards stop paying off past a few.
     e2e:
-        name: Browser tests (chromium)
+        name: Browser tests (chromium ${{ matrix.shard }}/3)
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [1, 2, 3]
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -115,7 +122,7 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the dev server
-              run: bun run e2e -- --project=chromium --project=mobile
+              run: bun run e2e -- --project=chromium --project=mobile --shard=${{ matrix.shard }}/3
               env:
                   TURBO_LOG_ORDER: stream
             # The whole log is in the artifact below; its end is enough to see a server
@@ -127,7 +134,7 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-chromium
+                  name: playwright-traces-chromium-${{ matrix.shard }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
@@ -138,9 +145,13 @@ jobs:
     # Safari. macOS runners have no Docker: the infrastructure runs natively. It does
     # not gate deploys until it has proved steady here.
     e2e-webkit:
-        name: Browser tests (webkit, macOS)
+        name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
         runs-on: macos-15
         timeout-minutes: 40
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [1, 2, 3, 4]
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -179,7 +190,7 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the dev server
-              run: bun run e2e -- --project=webkit
+              run: bun run e2e -- --project=webkit --shard=${{ matrix.shard }}/4
               env:
                   TURBO_LOG_ORDER: stream
             - name: Show the end of the server and infrastructure logs
@@ -191,7 +202,7 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-webkit
+                  name: playwright-traces-webkit-${{ matrix.shard }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
