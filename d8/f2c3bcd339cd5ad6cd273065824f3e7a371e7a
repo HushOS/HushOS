@@ -1,0 +1,41 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_41ce2ed146c27c::t_f6ea7efd3f3137 1-54,57-65
+  s_41ce2ed146c27c::t_6095f77ab44740 55-56
+apps/android/app/src/main/kotlin/com/hushos/app/data/Offline.kt
+  s_41ce2ed146c27c::t_6095f77ab44740 77-81
+  s_41ce2ed146c27c::t_66b40177758ebd 75-76
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_41ce2ed146c27c::t_6095f77ab44740 82-83,297,300,307-308
+apps/android/app/src/main/kotlin/com/hushos/app/data/Mirror.kt
+  s_41ce2ed146c27c::t_ff40f4b2248f13 85-89
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_41ce2ed146c27c::t_344cea12280ba5 44-48
+  s_41ce2ed146c27c::t_d4f53c86098c51 1-43,49-107
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_41ce2ed146c27c::t_6095f77ab44740 180-182,184-185,187,309-310,314-315,318,745-747,749
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_41ce2ed146c27c::t_4c5312cfdb3829 44-48,51-55
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_41ce2ed146c27c::t_84529ad440d6fa 109,180-181,185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d8f2c3bcd339cd5ad6cd273065824f3e7a371e7a",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
