@@ -3,7 +3,15 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { PASSWORD, grip, newPage, registerAccount, sampleFiles, sha256 } from './helpers';
+import {
+    PASSWORD,
+    grip,
+    newPage,
+    registerAccount,
+    sampleFiles,
+    sha256,
+    shortcutModifier,
+} from './helpers';
 
 /*
  * Drive, driven the way a person drives it: sign up, upload, preview, download,
@@ -195,7 +203,7 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     await expect(page.getByText('“inner” moved to “photos”')).toBeVisible();
     await expect(row(page, 'pixel.png')).toBeVisible();
 
-    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.press(`${await shortcutModifier(page)}+a`);
     const [download] = await Promise.all([page.waitForEvent('download'), page.keyboard.press('d')]);
     expect(download.suggestedFilename()).toBe('HushOS files.zip');
     const path = await download.path();

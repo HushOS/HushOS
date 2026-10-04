@@ -69,36 +69,25 @@ jobs:
             - name: The committed route tree matches the built one
               run: git diff --exit-code -- apps/web/src/routeTree.gen.ts
 
-    # One runner per engine, side by side. Chromium (and the phone-sized Chromium for
-    # mobile.spec.ts) gates deploys; WebKit, the engine behind Safari, runs the whole
-    # suite too, but its failures do not hold a deploy until it has proved steady here.
+    # Chromium and the phone-sized Chromium for mobile.spec.ts; WebKit has its own job below.
     e2e:
-        name: Browser tests (${{ matrix.engine }})
+        name: Browser tests (chromium)
         runs-on: ubuntu-latest
-        timeout-minutes: 40
-        continue-on-error: ${{ matrix.engine == 'webkit' }}
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - engine: chromium
-                      projects: --project=chromium --project=mobile
-                    - engine: webkit
-                      projects: --project=webkit
+        timeout-minutes: 30
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.0
             - run: bun install --frozen-lockfile
-            - name: Local infrastructure (Postgres, MailHog, Garage) and environment
+            - name: Local infrastructure (Postgres, Mailpit, Garage) and environment
               run: |
                   bun run setup
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
-            - name: Install ${{ matrix.engine }} for Playwright
-              run: bunx playwright install --with-deps ${{ matrix.engine }}
+            - name: Install Chromium for Playwright
+              run: bunx playwright install --with-deps chromium
             # Streamed, not grouped: Turborepo holds a task's output until it ends on
             # this runner, and a dev server never ends, so its log stayed empty.
             # Started here rather than by Playwright: on this runner Vite now and then
@@ -126,7 +115,7 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the dev server
-              run: bun run e2e -- ${{ matrix.projects }}
+              run: bun run e2e -- --project=chromium --project=mobile
               env:
                   TURBO_LOG_ORDER: stream
             # The whole log is in the artifact below; its end is enough to see a server
@@ -138,10 +127,75 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-${{ matrix.engine }}
+                  name: playwright-traces-chromium
                   path: |
                       test-results
                       scratchpad/e2e-server.log
+                  retention-days: 7
+
+    # WebKit on macOS, the build Safari ships. Linux has only WebKitGTK, which crashed
+    # pages mid sign-up and differs in drag and drop, so its results said little about
+    # Safari. macOS runners have no Docker: the infrastructure runs natively. It does
+    # not gate deploys until it has proved steady here.
+    e2e-webkit:
+        name: Browser tests (webkit, macOS)
+        runs-on: macos-15
+        timeout-minutes: 40
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.0
+            - run: bun install --frozen-lockfile
+            - name: Local infrastructure (Postgres, Mailpit, Garage) without Docker, and environment
+              run: |
+                  brew install postgresql@18 mailpit garage
+                  bun run setup
+                  scripts/infra-native.sh
+              env:
+                  HOMEBREW_NO_INSTALL_CLEANUP: 1
+                  HOMEBREW_NO_ENV_HINTS: 1
+            - name: Apply migrations
+              run: bun run db:migrate
+            - name: Install WebKit for Playwright
+              run: bunx playwright install webkit
+            - name: Start the dev server, again if it never listens
+              run: |
+                  mkdir -p scratchpad
+                  for attempt in 1 2 3; do
+                      nohup bun run dev >> scratchpad/e2e-server.log 2>&1 &
+                      for i in $(seq 1 40); do
+                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
+                          sleep 3
+                      done
+                      echo "attempt $attempt: no answer in 120 s, starting again"
+                      pkill -f 'vite --strictPort' || true
+                      pkill -f 'bun run dev' || true
+                      sleep 3
+                  done
+                  echo "the dev server never listened"
+                  exit 1
+              env:
+                  TRUSTED_PROXY_HEADER: x-forwarded-for
+                  TURBO_LOG_ORDER: stream
+            - name: Run the browser suite against the dev server
+              run: bun run e2e -- --project=webkit
+              env:
+                  TURBO_LOG_ORDER: stream
+            - name: Show the end of the server and infrastructure logs
+              if: failure()
+              run: |
+                  tail -n 60 scratchpad/e2e-server.log || true
+                  for log in "$RUNNER_TEMP"/hushos-infra/*.log; do echo "== $log"; tail -n 20 "$log"; done
+            - name: Keep traces of failures and the logs
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: playwright-traces-webkit
+                  path: |
+                      test-results
+                      scratchpad/e2e-server.log
+                      ${{ runner.temp }}/hushos-infra/*.log
                   retention-days: 7
 
     images:

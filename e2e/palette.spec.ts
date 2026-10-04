@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newContext, registerAccount, sampleFiles } from './helpers';
+import { grip, newContext, registerAccount, sampleFiles, shortcutModifier } from './helpers';
 
 /*
  * Mod+K anywhere under /app: the same palette goes places, empties the trash
@@ -28,7 +28,7 @@ test.afterAll(async () => {
 });
 
 test('goes places from any page, and the folder view lends its actions', async () => {
-    await page.keyboard.press('ControlOrMeta+k');
+    await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await expect(palette(page)).toBeVisible();
     // In a folder: its actions are offered, with the selection spelled out.
     await expect(page.getByRole('option', { name: /New folder/ })).toBeVisible();
@@ -36,11 +36,13 @@ test('goes places from any page, and the folder view lends its actions', async (
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/app\/shared\?view=by-me/);
     // Off the folder view, its actions are gone and places remain.
-    await page.keyboard.press('ControlOrMeta+k');
+    await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await expect(page.getByRole('option', { name: /New folder/ })).toHaveCount(0);
     await palette(page).fill('contacts');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/app\/contacts/);
+    // The address changes before the page commits; the next test's goto must not cut it off.
+    await expect(page.getByRole('heading', { name: 'Your fingerprint' })).toBeVisible();
 });
 
 test('empties the trash from anywhere, after asking', async () => {
@@ -60,7 +62,7 @@ test('empties the trash from anywhere, after asking', async () => {
 });
 
 test('locks this device, after asking', async () => {
-    await page.keyboard.press('ControlOrMeta+k');
+    await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await palette(page).fill('lock');
     await page.keyboard.press('Enter');
     await page.getByRole('alertdialog').getByRole('button', { name: 'Lock device' }).click();

@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 /*
  * Browser tests against a running HushOS: the local infrastructure (Postgres,
- * Garage, MailHog from `bun run infra:up`) and the web dev server, started here
+ * Garage, Mailpit from `bun run infra:up`) and the web dev server, started here
  * when nothing already listens on 5173. Each run registers its own account
  * through the real sign-up flow, so no fixtures live in the database.
  */
@@ -27,7 +27,7 @@ export default defineConfig({
     },
     // WebKit is the engine behind Safari (module worker, IndexedDB key storage, download
     // paths, and drag and drop, where it differs most). Locally it runs on demand with
-    // `--project=webkit`; CI gives it a runner of its own beside Chromium.
+    // `--project=webkit`; CI runs it on a macOS runner, the build Safari ships.
     projects: [
         { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /mobile\.spec\.ts/ },
         // A phone-sized Chromium for the layout checks in mobile.spec.ts.
