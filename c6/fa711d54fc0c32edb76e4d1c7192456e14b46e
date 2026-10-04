@@ -1,0 +1,33 @@
+CONTRIBUTING.md
+  s_16c1df55891f3d::t_01ebb2f99cfb94 21
+e2e/drive.spec.ts
+  s_16c1df55891f3d::t_6de521c0526224 206
+  s_16c1df55891f3d::t_2509c5e239f335 6-14
+playwright.config.ts
+  s_16c1df55891f3d::t_60ece1a92854d1 5
+  s_16c1df55891f3d::t_7e17be434b20a2 30
+e2e/palette.spec.ts
+  s_16c1df55891f3d::t_a035c0b14bef61 2,44-45
+  s_16c1df55891f3d::t_6de521c0526224 31,39,65
+scripts/infra-native.sh
+  s_16c1df55891f3d::t_80c4054bd9ce2e 1-72
+.github/workflows/ci.yml
+  s_16c1df55891f3d::t_60ece1a92854d1 83
+  s_16c1df55891f3d::t_a11a4bd003a57d 72,74,76,89-90,118,130-194,198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c6fa711d54fc0c32edb76e4d1c7192456e14b46e",
+  "prompts": {},
+  "sessions": {
+    "s_16c1df55891f3d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b57b313-9ad7-447b-9337-cadc4d89b30e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
