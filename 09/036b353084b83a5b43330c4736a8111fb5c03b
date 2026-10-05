@@ -1,0 +1,128 @@
+apps/ios/project.yml
+  s_41ce2ed146c27c::t_e3fa2c8dc49c24 234-236
+  s_41ce2ed146c27c::t_dbcd7ad380a94e 81
+  s_41ce2ed146c27c::t_fb37878f709a32 42-43,189-233
+  s_41ce2ed146c27c::t_c71e7bd78ce486 83-96
+apps/ios/App/HushOSApp.swift
+  s_41ce2ed146c27c::t_946aeaf78877a5 83,85-91
+  s_41ce2ed146c27c::t_309d2465562792 14-15
+  s_41ce2ed146c27c::t_55ee843bb744aa 93,96
+  s_41ce2ed146c27c::t_6f951eb9c482e1 95,97
+  s_41ce2ed146c27c::t_dbcd7ad380a94e 51
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AppLinks.swift
+  s_41ce2ed146c27c::t_44baddc2cf72ad 23-24,62-67
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_41ce2ed146c27c::t_1d9e2ec54af863 15-19,31-32,59-60,63-67
+  s_41ce2ed146c27c::t_61d57b3c78aa5f 54
+  s_41ce2ed146c27c::t_3642019e6efa15 1-14,20-30,33-53,55-58,61-62,68-91
+apps/ios/App/BackgroundAccess.swift
+  s_41ce2ed146c27c::t_309d2465562792 5,10-11,30-32,37-49,91-94,122-123,143-144
+  s_41ce2ed146c27c::t_06b84a7db5ddb2 52,54-61,64
+  s_41ce2ed146c27c::t_d92c8c081e2bba 65
+apps/ios/App/TransferNotices.swift
+  s_41ce2ed146c27c::t_17e8a304dd277f 34-35,61-62,68-69
+  s_41ce2ed146c27c::t_8e7f6702a4934b 3,12-16,23-31,40-43,47-48,51-56,63-67,85,87-92,94-98,103-105,107,110,112-113,115-117,120-128,136-152,154,160-170
+  s_41ce2ed146c27c::t_09e78fd5c26a4c 99
+  s_41ce2ed146c27c::t_16ede2e7090eb2 1-2,4-11,17-22,32-33,36-39,44-46,49-50,57-60,70-84,86,93,100-102,106,108-109,111,114,118-119,129-135,153,155-159,171-176
+apps/ios/Share/HushOSShare.entitlements
+  s_41ce2ed146c27c::t_fb37878f709a32 1-14
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_41ce2ed146c27c::t_c411c816fabfca 82
+apps/ios/App/BrowseView.swift
+  s_41ce2ed146c27c::t_946aeaf78877a5 198-212
+apps/ios/Share/Info.plist
+  s_41ce2ed146c27c::t_fb37878f709a32 1-53
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Recovery.swift
+  s_41ce2ed146c27c::t_af966321f862bb 1-9,12-26,31-33,75,139-179,182-216,219-292,302-326
+  s_41ce2ed146c27c::t_1230bfaaea406d 10-11,293-301
+  s_41ce2ed146c27c::t_2e6071563fd5e7 27-30,34-74,77-138,180-181,217-218
+  s_41ce2ed146c27c::t_f2ef32d6ff79e4 76
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Places.swift
+  s_41ce2ed146c27c::t_fb37878f709a32 10-15
+  s_41ce2ed146c27c::t_c411c816fabfca 1-9,16-37
+apps/ios/Share/SharedText.swift
+  s_41ce2ed146c27c::t_61d57b3c78aa5f 1-47
+apps/ios/App/AppModel.swift
+  s_41ce2ed146c27c::t_d262d5d67c7242 105,188
+  s_41ce2ed146c27c::t_c58aaa15306ea3 127,141
+  s_41ce2ed146c27c::t_dbcd7ad380a94e 161-166,169-187,189-193
+apps/ios/Share/ShareUploads.swift
+  s_41ce2ed146c27c::t_61d57b3c78aa5f 1-48
+apps/ios/App/Info.plist
+  s_41ce2ed146c27c::t_c71e7bd78ce486 48,53-87
+apps/ios/Share/ShareViewController.swift
+  s_41ce2ed146c27c::t_c7d76e687d5237 1-18,22-28
+  s_41ce2ed146c27c::t_fb37878f709a32 19-21
+apps/ios/Share/SaveView.swift
+  s_41ce2ed146c27c::t_c7d76e687d5237 1-166
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RecoveryTests.swift
+  s_41ce2ed146c27c::t_df33b824d70e2d 1-7,11-86,90-117
+  s_41ce2ed146c27c::t_666c6b774d35fe 89
+  s_41ce2ed146c27c::t_1230bfaaea406d 8-10
+  s_41ce2ed146c27c::t_540cfbe71fdef4 87-88
+apps/ios/App/BackgroundTransfers.swift
+  s_41ce2ed146c27c::t_08c51c23142ccc 103-104
+  s_41ce2ed146c27c::t_6f951eb9c482e1 75-80,237-238,464-474
+  s_41ce2ed146c27c::t_09e78fd5c26a4c 514,519-520,522-523
+  s_41ce2ed146c27c::t_dfe709681cfb17 236
+  s_41ce2ed146c27c::t_55ee843bb744aa 5,70-71,198,206,263,265,267,376-377,416-463,616-617
+  s_41ce2ed146c27c::t_17e8a304dd277f 481,515-518,521,524-525
+apps/ios/App/RecentsView.swift
+  s_41ce2ed146c27c::t_c58aaa15306ea3 104-109
+  s_41ce2ed146c27c::t_8a4b308905d0ca 39
+  s_41ce2ed146c27c::t_5b9ce6523166a5 110
+apps/ios/App/RecoveryView.swift
+  s_41ce2ed146c27c::t_a73b5c4b11e6de 172,389
+  s_41ce2ed146c27c::t_f7615aa4ce1b88 227,418-419,434
+  s_41ce2ed146c27c::t_809fc8368096d4 133,229,248,273,384
+  s_41ce2ed146c27c::t_288531b7d0c09d 1-63,67-68,70-132,134-171,173-190,193-206,215-226,228,230-234,236-247,249-271,274-279,281-282,284-311,313-353,357-364,366-383,385-388,390-417,420-433,435-474
+  s_41ce2ed146c27c::t_594f110cb6d133 191-192,207-214,235,280,312,354-356,365
+  s_41ce2ed146c27c::t_0ec491923c7009 283
+  s_41ce2ed146c27c::t_e984e08915a888 64-66,69
+  s_41ce2ed146c27c::t_63785e093b18c0 272
+apps/ios/App/DriveStore.swift
+  s_41ce2ed146c27c::t_c411c816fabfca 1331-1332
+  s_41ce2ed146c27c::t_946aeaf78877a5 1342-1348
+  s_41ce2ed146c27c::t_db1c418018a829 1349
+apps/ios/App/SignInView.swift
+  s_41ce2ed146c27c::t_dbcd7ad380a94e 8,120
+apps/ios/App/MainView.swift
+  s_41ce2ed146c27c::t_cf32215857c32e 113-114
+  s_41ce2ed146c27c::t_c58aaa15306ea3 115,117-125
+  s_41ce2ed146c27c::t_309d2465562792 103,116,126
+  s_41ce2ed146c27c::t_946aeaf78877a5 127-141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/BIP39Words.swift
+  s_41ce2ed146c27c::t_c61df70c38a72e 1-183
+apps/ios/App/Glyphs.swift
+  s_41ce2ed146c27c::t_baf23b20b58602 1-88
+apps/ios/Share/GetPage.js
+  s_41ce2ed146c27c::t_c7d76e687d5237 1-7
+apps/ios/App/QuickActions.swift
+  s_41ce2ed146c27c::t_63913c84dd69e9 1-40
+apps/ios/Share/SaveModel.swift
+  s_41ce2ed146c27c::t_61d57b3c78aa5f 129-133,135,138-139
+  s_41ce2ed146c27c::t_e5d5aa35238b84 235
+  s_41ce2ed146c27c::t_94829dd899849e 1-34,37-128,134,136-137,140-234,236-250,252-270
+  s_41ce2ed146c27c::t_fb37878f709a32 35-36,251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09036b353084b83a5b43330c4736a8111fb5c03b",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
