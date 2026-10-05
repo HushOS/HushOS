@@ -1,0 +1,38 @@
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_25305ad3f3a013 375-384,389
+apps/ios/App/NodeRow.swift
+  s_41ce2ed146c27c::t_25305ad3f3a013 177
+apps/ios/App/AccountView.swift
+  s_41ce2ed146c27c::t_9e34bd6b0a1c4a 696-700,726-729,741-745,750,764-765,784,812-817,894-1005,1007-1009
+  s_41ce2ed146c27c::t_4aa08ac1cf4cb9 54
+  s_41ce2ed146c27c::t_58b5315bf27c49 508-509,513-515,519,1006
+apps/ios/App/AppModel.swift
+  s_41ce2ed146c27c::t_7eb37d7ce64fea 35-68
+apps/ios/App/SignInView.swift
+  s_41ce2ed146c27c::t_128328f7c949b6 7,27-30,34,41,171-234
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RecoveryKit.swift
+  s_41ce2ed146c27c::t_c13752406d7c3e 93-131
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RecoveryCheckTests.swift
+  s_41ce2ed146c27c::t_2fbd0412b55f3d 1-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed4acbea72242394c3efee0505a55a5024762ed9",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
