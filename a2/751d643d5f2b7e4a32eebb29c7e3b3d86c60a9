@@ -1,0 +1,181 @@
+apps/design/src/components/flows/received/web.tsx
+  s_41ce2ed146c27c::t_1a04d76ac4e230 19
+  s_41ce2ed146c27c::t_4ce34b21091689 443-444,540-541
+apps/design/src/components/flows/home/android.tsx
+  s_41ce2ed146c27c::t_5477ca502f1081 122-123
+  s_41ce2ed146c27c::t_20c2585940e091 129,133,324-326
+apps/design/src/routes/actions.tsx
+  s_41ce2ed146c27c::t_99988935f526d9 16-35,38
+  s_41ce2ed146c27c::t_1f9d492e3354f8 66
+apps/design/src/components/flows/plans/native.tsx
+  s_41ce2ed146c27c::t_dea8de626f34c1 76
+  s_41ce2ed146c27c::t_c8950780e34ac6 577
+  s_41ce2ed146c27c::t_bbe8fac6a2cac2 58-72,99,215,384,433,562-573,683,736
+apps/design/src/routes/foundations.tsx
+  s_41ce2ed146c27c::t_bc4d713ce988b5 27
+  s_41ce2ed146c27c::t_43e9104b100b86 77-82,146,164-170,173-175,202-203,227,357,360,716,721-726,732,746-748
+apps/design/src/components/shared/board.tsx
+  s_41ce2ed146c27c::t_793bf62ca88124 53,67,72-79,88-95,102,108,110
+  s_41ce2ed146c27c::t_fdfb59d1bfcf02 132,141-142,157-162
+apps/design/src/components/flows/onboarding/android.tsx
+  s_41ce2ed146c27c::t_c8950780e34ac6 133
+apps/design/src/components/flows/photos/ios.tsx
+  s_41ce2ed146c27c::t_8f5ad15f928bb3 140,146
+apps/design/src/components/flows/photos/android.tsx
+  s_41ce2ed146c27c::t_a9573c4c90ecd5 121
+apps/design/src/components/shared/tags.tsx
+  s_41ce2ed146c27c::t_418166b53f1213 3,16
+apps/design/src/routes/account.tsx
+  s_41ce2ed146c27c::t_53bc084a034831 17-18,21-34
+apps/design/src/components/flows/actions/ios.tsx
+  s_41ce2ed146c27c::t_fa983b5701bd42 11,1763-1765
+  s_41ce2ed146c27c::t_761990fa85f8d2 1356-1360,1707,1709-1710
+  s_41ce2ed146c27c::t_436c13ea5e5a2f 745-747
+  s_41ce2ed146c27c::t_dea8de626f34c1 1844,1862
+  s_41ce2ed146c27c::t_c71217103c2e33 1375,1716
+  s_41ce2ed146c27c::t_5c08a1a3e3c980 1303
+  s_41ce2ed146c27c::t_1e1e4e9223e655 1439,1525
+  s_41ce2ed146c27c::t_5d8125f593a53d 28
+apps/design/src/components/flows/home/web.tsx
+  s_41ce2ed146c27c::t_20c2585940e091 27
+  s_41ce2ed146c27c::t_817893cd8375db 6
+apps/design/src/components/flows/account/ios.tsx
+  s_41ce2ed146c27c::t_c8950780e34ac6 56
+  s_41ce2ed146c27c::t_53bc084a034831 367,381-398,400
+  s_41ce2ed146c27c::t_cc2cdd814d0ffd 2-4,16,55,59-61,93,103,144-152,185,188,196-199,207-208,232,254,307,322,353,370,437,458,519,536,574
+  s_41ce2ed146c27c::t_817893cd8375db 30
+  s_41ce2ed146c27c::t_0d8bb40f8ccdde 399,401
+apps/design/src/routes/home.tsx
+  s_41ce2ed146c27c::t_bb55e132159498 69
+  s_41ce2ed146c27c::t_28c9b7cfa2641c 14,25-34,58,125,132,140,189,201,220
+apps/design/src/components/flows/actions/model.tsx
+  s_41ce2ed146c27c::t_fa983b5701bd42 24-25,49,107-108,110-113
+  s_41ce2ed146c27c::t_418166b53f1213 206-207,229-230,232
+apps/design/src/components/flows/web/details.tsx
+  s_41ce2ed146c27c::t_436c13ea5e5a2f 147
+  s_41ce2ed146c27c::t_74f3a85c135e72 10
+apps/design/src/components/flows/files/android.tsx
+  s_41ce2ed146c27c::t_90b296b284f608 263,284
+  s_41ce2ed146c27c::t_df87ac1c1bc3e3 19,326-336,519-527,738-742
+  s_41ce2ed146c27c::t_d03d778594ad20 68,71-77,80
+  s_41ce2ed146c27c::t_cc308f5796ab3e 325
+apps/design/src/lib/flows.ts
+  s_41ce2ed146c27c::t_709f08941c10a2 39
+  s_41ce2ed146c27c::t_cc8548a7f059fb 17
+apps/design/src/components/flows/transfers/ios.tsx
+  s_41ce2ed146c27c::t_dea8de626f34c1 92
+apps/design/src/routes/files.tsx
+  s_41ce2ed146c27c::t_6d581449f257da 57,84-105,120,127,134,207
+  s_41ce2ed146c27c::t_b7989ef0b6496f 221,228
+apps/design/src/components/web/web.tsx
+  s_41ce2ed146c27c::t_1e1e4e9223e655 96
+apps/design/src/routes/website.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 31-33
+  s_41ce2ed146c27c::t_a47e766fe76be1 30
+apps/design/src/components/flows/web/operator.tsx
+  s_41ce2ed146c27c::t_fd21c177c3bb8b 3-5
+apps/design/src/components/android/android.tsx
+  s_41ce2ed146c27c::t_097291b37087d0 365
+  s_41ce2ed146c27c::t_039fae9b92c880 21
+  s_41ce2ed146c27c::t_d03d778594ad20 9,105-106,108,113,185-188,205-207,210
+apps/design/src/routes/transfers.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 17-24
+apps/design/src/routes/received.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 16-23
+apps/design/src/components/shared/access.tsx
+  s_41ce2ed146c27c::t_436c13ea5e5a2f 168-186
+  s_41ce2ed146c27c::t_086ce44f0010fa 9-11,32-33,37,157-167,187-216
+apps/design/src/routes/trash.tsx
+  s_41ce2ed146c27c::t_7ae23e7118714c 227-229,389,467,470,599,751-752,1726,1792
+  s_41ce2ed146c27c::t_1e1e4e9223e655 358
+  s_41ce2ed146c27c::t_05405c8be8fe60 226
+apps/design/src/components/flows/received/ios.tsx
+  s_41ce2ed146c27c::t_4ce34b21091689 351-352,465-466,518-519
+  s_41ce2ed146c27c::t_1a04d76ac4e230 24
+apps/design/src/routes/system.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 16-27
+apps/design/src/routes/index.tsx
+  s_41ce2ed146c27c::t_b05422c2ef7f5f 10,22,24-29,40,47-48,67
+apps/design/src/routes/web.tsx
+  s_41ce2ed146c27c::t_fd21c177c3bb8b 67-71
+apps/design/src/components/flows/files/common.tsx
+  s_41ce2ed146c27c::t_c80ef288c0c69a 17
+  s_41ce2ed146c27c::t_418166b53f1213 247
+apps/design/src/components/flows/files/ios.tsx
+  s_41ce2ed146c27c::t_8f5ad15f928bb3 379
+  s_41ce2ed146c27c::t_90b296b284f608 168,170-189
+  s_41ce2ed146c27c::t_1e1e4e9223e655 735
+  s_41ce2ed146c27c::t_5639dc7ecd2b4b 9
+  s_41ce2ed146c27c::t_c8950780e34ac6 387,599-600,763-764
+apps/design/src/components/flows/transfers/android.tsx
+  s_41ce2ed146c27c::t_c8950780e34ac6 51
+apps/design/src/components/flows/account/android.tsx
+  s_41ce2ed146c27c::t_6d2539a0e53f18 2-4,18,107,117,156-162,182,187,215,218,241,251
+  s_41ce2ed146c27c::t_53bc084a034831 183-186
+apps/design/src/components/flows/actions/android.tsx
+  s_41ce2ed146c27c::t_fa983b5701bd42 11,1200-1202,1500-1502
+  s_41ce2ed146c27c::t_761990fa85f8d2 219-220,314-318,1192-1197,1484-1495
+  s_41ce2ed146c27c::t_5d8125f593a53d 25
+  s_41ce2ed146c27c::t_436c13ea5e5a2f 711-713
+  s_41ce2ed146c27c::t_c8950780e34ac6 296,1591,1609
+apps/design/src/components/flows/home/ios.tsx
+  s_41ce2ed146c27c::t_aa17c4f3388f8b 7,10
+  s_41ce2ed146c27c::t_c8950780e34ac6 240-244,269-273
+  s_41ce2ed146c27c::t_20c2585940e091 2-4,181,308
+apps/design/src/routes/preview.tsx
+  s_41ce2ed146c27c::t_fdfb59d1bfcf02 1251,1269,1295
+  s_41ce2ed146c27c::t_039fae9b92c880 24
+  s_41ce2ed146c27c::t_1e1e4e9223e655 871
+  s_41ce2ed146c27c::t_761990fa85f8d2 880-884,1142-1146
+  s_41ce2ed146c27c::t_9c7b3d2c33e4f5 121-126,1024,1253,1271,1297
+apps/design/src/routes/share.tsx
+  s_41ce2ed146c27c::t_b34ddb1451ee90 991
+  s_41ce2ed146c27c::t_1be9f995e1bf29 559-574,594
+  s_41ce2ed146c27c::t_c8950780e34ac6 595-602,992-999
+  s_41ce2ed146c27c::t_513b811b631d6d 233,689,694,1139,1146
+  s_41ce2ed146c27c::t_097291b37087d0 240-242,251,701,1161
+  s_41ce2ed146c27c::t_1f9d492e3354f8 95
+  s_41ce2ed146c27c::t_75653097f4f3ed 97-112,135
+apps/design/src/components/ios/ios.tsx
+  s_41ce2ed146c27c::t_d03d778594ad20 10,111-112,114,119,122,169-192,194-201,204
+  s_41ce2ed146c27c::t_039fae9b92c880 19
+  s_41ce2ed146c27c::t_097291b37087d0 409
+apps/design/src/routes/onboarding.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 20-35
+apps/design/src/routes/photos.tsx
+  s_41ce2ed146c27c::t_709f08941c10a2 35,140,147
+  s_41ce2ed146c27c::t_3fabe540141615 14-15,19,45,47,53,61,69,77,85,93,102,110,118,126,134,145
+  s_41ce2ed146c27c::t_c746dad327f0bb 104
+  s_41ce2ed146c27c::t_57884fdafbd9c2 155,164,173
+apps/design/src/components/flows/onboarding/ios.tsx
+  s_41ce2ed146c27c::t_dea8de626f34c1 120
+apps/design/src/components/flows/photos/shots.tsx
+  s_41ce2ed146c27c::t_793bf62ca88124 208
+apps/design/src/routes/plans.tsx
+  s_41ce2ed146c27c::t_973c6ab131c2c9 16-18
+  s_41ce2ed146c27c::t_5dea6e03872732 15
+apps/design/src/components/flows/received/android.tsx
+  s_41ce2ed146c27c::t_1a04d76ac4e230 23
+  s_41ce2ed146c27c::t_4ce34b21091689 68-69,271-272,446-447
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2751d643d5f2b7e4a32eebb29c7e3b3d86c60a9",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
