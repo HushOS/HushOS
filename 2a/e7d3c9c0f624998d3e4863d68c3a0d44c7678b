@@ -1,0 +1,26 @@
+apps/web/src/components/drive/details-panel.tsx
+  s_41ce2ed146c27c::t_60b12d553201fd 52-53,306,324,326
+apps/web/src/components/drive/info-dialog.tsx
+  s_41ce2ed146c27c::t_323848e044a28c 33,36-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ae7d3c9c0f624998d3e4863d68c3a0d44c7678b",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
