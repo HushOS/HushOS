@@ -1,0 +1,55 @@
+apps/web/package.json
+  s_41ce2ed146c27c::t_1f19562ad3d484 23
+README.md
+  s_41ce2ed146c27c::t_1f19562ad3d484 20,132
+apps/web/src/routes/__root.tsx
+  s_41ce2ed146c27c::t_1f19562ad3d484 1
+packages/emails/src/templates/verify-email.tsx
+  s_41ce2ed146c27c::t_1f19562ad3d484 24
+AGENTS.md
+  s_41ce2ed146c27c::t_1f19562ad3d484 27
+DESIGN.md
+  s_41ce2ed146c27c::t_1f19562ad3d484 136,142,148,154,159,164,169,174
+  s_41ce2ed146c27c::t_629256845315df 304
+packages/tokens/src/index.ts
+  s_41ce2ed146c27c::t_1f19562ad3d484 266
+packages/emails/src/templates/share-notice.tsx
+  s_41ce2ed146c27c::t_1f19562ad3d484 26
+apps/web/src/styles.css
+  s_41ce2ed146c27c::t_1f19562ad3d484 3,7,9,11-12,14,29
+apps/web/src/lib/og.server.tsx
+  s_41ce2ed146c27c::t_1f19562ad3d484 2,120,170-171
+bun.lock
+  s_41ce2ed146c27c::t_70c32d726045e5 29,462,464
+docs/proposed.md
+  s_41ce2ed146c27c::t_22f4ab47f8a2b5 61
+packages/emails/src/rendered/share-notice.ts
+  s_41ce2ed146c27c::t_8de49237b8df12 4,8
+packages/emails/src/rendered/verify-email.ts
+  s_41ce2ed146c27c::t_04d876352b89fc 4,8
+packages/tokens/generated/Alpine.swift
+  s_41ce2ed146c27c::t_d2ba61eb7242c0 94
+packages/tokens/generated/tokens.css
+  s_41ce2ed146c27c::t_5bb83fb13e8c5e 370
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6fe13fac1d996da67968ab08d888875741906781",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
