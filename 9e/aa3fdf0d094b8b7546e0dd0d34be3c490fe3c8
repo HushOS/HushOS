@@ -1,0 +1,25 @@
+apps/web/src/routes/support/route.tsx
+  s_41ce2ed146c27c::t_23468d215ddf52 45,123-147
+  s_41ce2ed146c27c::t_da2bdf47fe9ff7 148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9eaa3fdf0d094b8b7546e0dd0d34be3c490fe3c8",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
