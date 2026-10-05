@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_41ce2ed146c27c::t_8fc1be06770a9d 116,125,138
+  s_41ce2ed146c27c::t_9ff0bcaa8d417c 96
+  s_41ce2ed146c27c::t_8c72e8ffa1ed39 94-95,122,124,126-131
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_41ce2ed146c27c::t_8c72e8ffa1ed39 315-321,323-328
+  s_41ce2ed146c27c::t_8fc1be06770a9d 322
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_41ce2ed146c27c::t_8c72e8ffa1ed39 133-154,166-169
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_41ce2ed146c27c::t_8c72e8ffa1ed39 113-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "223d7df0d5a71fdbf4d7005bba8a790a4bb5451b",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
