@@ -1,0 +1,73 @@
+package.json
+  s_41ce2ed146c27c::t_6e1a1e8b9e1a84 32,34
+docs/release/privacy-answers.md
+  s_41ce2ed146c27c::t_9190444eb5ddfb 9-29,37-52,112-119,123-133
+  s_41ce2ed146c27c::t_d0576ba288bca9 1-8,30-36,53-111,120-122,134-142
+docs/release/apple.md
+  s_41ce2ed146c27c::t_d615da22b3eb06 1-10,16-22,26-51,59-84,93-94,100-131,137,140-164,173-202,207-221,225,228,230,232,234,237-248
+  s_41ce2ed146c27c::t_9190444eb5ddfb 11-15,23-25,52-58,85-92,95-99,132-136,138-139,165-172,203-206,222-224,226-227,229,231,233,235-236
+docs/release/google.md
+  s_41ce2ed146c27c::t_2f045fed8db60c 1-10,17-36,49-64,70-75,92-96,104-139,143,146-179
+  s_41ce2ed146c27c::t_9190444eb5ddfb 11-16,37-48,65-69,76-91,97-103,140-142,144-145
+  s_41ce2ed146c27c::t_fdd3aa5974ea91 180
+apps/ios/scripts/archive.sh
+  s_41ce2ed146c27c::t_4fd0823f0914a2 1-67
+apps/web/package.json
+  s_41ce2ed146c27c::t_4aa763978ac3e5 15-16
+docs/release/README.md
+  s_41ce2ed146c27c::t_b979e28651c149 1-4,18-81,88-89
+  s_41ce2ed146c27c::t_9190444eb5ddfb 5-17,82-87
+.gitignore
+  s_41ce2ed146c27c::t_be5fbd32570420 68-71
+  s_41ce2ed146c27c::t_6e1a1e8b9e1a84 57
+docs/release/checklist.md
+  s_41ce2ed146c27c::t_b09db28538ecfc 1-69
+docs/release/store-listing.md
+  s_41ce2ed146c27c::t_9190444eb5ddfb 7-16,146-153,168-173
+  s_41ce2ed146c27c::t_a268d9ef8d0f7c 1-6,17-145,154-167,174-187
+docs/release/signing.md
+  s_41ce2ed146c27c::t_9190444eb5ddfb 11-17
+  s_41ce2ed146c27c::t_af19a52a86f555 1-10,18-71,73-133
+  s_41ce2ed146c27c::t_aea5e835d070b8 72
+scripts/store-screenshots.sh
+  s_41ce2ed146c27c::t_51ad2d999a314f 1-59,66-144,152-154,157-170
+  s_41ce2ed146c27c::t_f1bffe4a0b7815 60-65,145-151,155-156
+apps/android/app/build.gradle.kts
+  s_41ce2ed146c27c::t_be5fbd32570420 24-26,30-37,40-41,43,45-47,60-70,80
+  s_41ce2ed146c27c::t_62b96bf1a6a160 27-29,38-39,42,44
+  s_41ce2ed146c27c::t_24cda6cf9958ce 2
+apps/web/scripts/store-graphics.tsx
+  s_41ce2ed146c27c::t_c0fa4e33ceaaf8 11-13,76
+  s_41ce2ed146c27c::t_a4ec2ad73ebe92 1-10,14-43,45-75,77-80
+  s_41ce2ed146c27c::t_425bcccae0a988 44
+scripts/release-wizard.sh
+  s_41ce2ed146c27c::t_c1a9613b9880c3 187-191,193-203,205-222,224-347,349,355-393,396-445
+  s_41ce2ed146c27c::t_c16f7caa68ae5e 204,394-395
+  s_41ce2ed146c27c::t_4e072a3d74ab12 348,350-354
+  s_41ce2ed146c27c::t_ced9a3a34ed364 1-186
+  s_41ce2ed146c27c::t_74bf6f949b4ba6 192,223
+apps/android/scripts/bundle-release.sh
+  s_41ce2ed146c27c::t_f7ffef1354169e 1-38,40-42,44
+  s_41ce2ed146c27c::t_6e1a1e8b9e1a84 39,43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f27d36005e02874059dd0d8d50d8ef9cdc8f6c42",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
