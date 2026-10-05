@@ -1,0 +1,81 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_41ce2ed146c27c::t_23d43a7a028e2e 10-11
+  s_41ce2ed146c27c::t_0dc23d4d16621a 153
+apps/ios/App/Sharing.swift
+  s_41ce2ed146c27c::t_95fcf4e66d130a 115-116,360-361
+  s_41ce2ed146c27c::t_1fc747fb2d2bad 118
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/KeptFolderTests.swift
+  s_41ce2ed146c27c::t_23d43a7a028e2e 9-81
+  s_41ce2ed146c27c::t_e944f0e20eb2af 1-8
+apps/ios/App/BrowseView.swift
+  s_41ce2ed146c27c::t_1fc747fb2d2bad 112,115,138,395
+  s_41ce2ed146c27c::t_95fcf4e66d130a 400-401
+  s_41ce2ed146c27c::t_844dcf5a7c5821 172-173
+apps/ios/App/Received.swift
+  s_41ce2ed146c27c::t_1fc747fb2d2bad 178-187,256,407-408
+apps/ios/App/BackgroundTransfers.swift
+  s_41ce2ed146c27c::t_3feffb24a42f1b 207-208
+  s_41ce2ed146c27c::t_d7f3683fa657c3 177-181,184,186-191
+  s_41ce2ed146c27c::t_2fccd6709c678a 137,146,168
+  s_41ce2ed146c27c::t_7d583d6177eb5a 182-183,185
+  s_41ce2ed146c27c::t_84e3c9d4167243 54-56,150-167,169-176,192-193,219-220,279,434-438
+apps/ios/App/RecentsView.swift
+  s_41ce2ed146c27c::t_b795c69bf5ae05 636-637
+  s_41ce2ed146c27c::t_844dcf5a7c5821 608-612
+apps/ios/App/DriveStore.swift
+  s_41ce2ed146c27c::t_04ff1a8b9f2d18 491-496,498-499,698-700,706,733-734,738-742,758,761-762,767-772,784,791-796,798-849,859,962-963,984-986,989-991
+  s_41ce2ed146c27c::t_b384f118664e79 141-146
+  s_41ce2ed146c27c::t_d7f3683fa657c3 724
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_b5cc9ef5c43cfa 116
+  s_41ce2ed146c27c::t_844dcf5a7c5821 111-115,117-119
+  s_41ce2ed146c27c::t_648d23ec15f0a3 1,92-94,108,125,393-427
+apps/ios/App/Viewer.swift
+  s_41ce2ed146c27c::t_70b83bae23552c 160,167,170
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_41ce2ed146c27c::t_47e0d4b13c003c 87-90,238
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_41ce2ed146c27c::t_c13542badd0a21 66-135,187,210,348,377
+apps/ios/App/NodeRow.swift
+  s_41ce2ed146c27c::t_70b83bae23552c 114,122-123
+  s_41ce2ed146c27c::t_95fcf4e66d130a 115-116,120
+  s_41ce2ed146c27c::t_ac2664ecb89a58 56,59-60,67,69,72,74-76,79,81-82,107,112-113,118-119,124
+  s_41ce2ed146c27c::t_b5cc9ef5c43cfa 57-58,78,80
+  s_41ce2ed146c27c::t_844dcf5a7c5821 70-71,73
+  s_41ce2ed146c27c::t_b795c69bf5ae05 97-106,108-111
+  s_41ce2ed146c27c::t_11eaab0b493687 77,117,121
+apps/ios/App/ActionSheets.swift
+  s_41ce2ed146c27c::t_94d67365718c4e 94-96,176,181,471,552
+  s_41ce2ed146c27c::t_abc23c89e293e2 460
+  s_41ce2ed146c27c::t_975063dd8d68a0 467,475,514-540,556
+  s_41ce2ed146c27c::t_dbd30e41ebd65a 541-542
+apps/ios/App/Transfers.swift
+  s_41ce2ed146c27c::t_f01fffaa336eae 59-60,63-86,117
+  s_41ce2ed146c27c::t_d3c81dd1099c1e 197,200-206
+apps/ios/App/MainView.swift
+  s_41ce2ed146c27c::t_2fccd6709c678a 92-95,102-103
+  s_41ce2ed146c27c::t_5109f6ab0109f1 80-86
+apps/ios/App/Notices.swift
+  s_41ce2ed146c27c::t_cd0df13404e60f 19-20,30-31,95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3459751260f3f8dbafe81908ab34b63140977e69",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
