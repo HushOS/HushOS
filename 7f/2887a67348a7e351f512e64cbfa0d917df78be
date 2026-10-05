@@ -1,0 +1,61 @@
+apps/web/src/components/settings.tsx
+  s_41ce2ed146c27c::t_fab7a2350b3a2c 7
+apps/web/src/content/security.mdx
+  s_41ce2ed146c27c::t_43517e80d86848 152,174
+apps/web/src/lib/contacts.ts
+  s_41ce2ed146c27c::t_c1f8d9dd160074 216,299
+apps/web/src/routes/_authenticated/app/_drive/people.tsx
+  s_41ce2ed146c27c::t_fddfff814edb02 1-52,55-57,61-65,67-98,101-103,105-111,113-126,128-191,193-216,220-292
+  s_41ce2ed146c27c::t_c37e614de32f30 218-219
+  s_41ce2ed146c27c::t_c1f8d9dd160074 53-54,58-60,66,99-100,104,112,127,192,217
+apps/web/src/components/drive/check-contact.tsx
+  s_41ce2ed146c27c::t_c1f8d9dd160074 16-18,158-159
+apps/web/src/components/ui/sidebar.tsx
+  s_41ce2ed146c27c::t_df380bf3a7ccc2 192-193
+apps/design/src/components/flows/account/web.tsx
+  s_41ce2ed146c27c::t_8fe70eca01fcb4 146,364,379
+  s_41ce2ed146c27c::t_68a7194206a7ad 170,407
+apps/design/src/routes/account.tsx
+  s_41ce2ed146c27c::t_8fe70eca01fcb4 58
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_41ce2ed146c27c::t_29e0eb48f43a80 1,3,5-7
+e2e/sharing.spec.ts
+  s_41ce2ed146c27c::t_0139d0971bf8f8 50-51,102
+  s_41ce2ed146c27c::t_97e3f76d4b82c2 9,12,179,184-187
+apps/web/src/components/user-menu.tsx
+  s_41ce2ed146c27c::t_3f894c08f98f6a 50
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_41ce2ed146c27c::t_43517e80d86848 26-27,31,43,53
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_41ce2ed146c27c::t_6814e39f9da6f9 100,102,293,296
+apps/web/src/lib/recovery-kit.ts
+  s_41ce2ed146c27c::t_43517e80d86848 69-70
+apps/web/src/components/app-sidebar.tsx
+  s_41ce2ed146c27c::t_3f894c08f98f6a 50,86-87,89,114-117,122-124,126
+e2e/contacts.spec.ts
+  s_41ce2ed146c27c::t_0139d0971bf8f8 34,36-37,50-51,53,84
+  s_41ce2ed146c27c::t_dcbd572accad82 97
+apps/web/src/routeTree.gen.ts
+  s_41ce2ed146c27c::t_dce16f01cda18c 53,279-284,415,470,529,588,643,701,1039-1045,1188,1204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f2887a67348a7e351f512e64cbfa0d917df78be",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
