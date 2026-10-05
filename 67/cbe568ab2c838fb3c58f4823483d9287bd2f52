@@ -1,0 +1,44 @@
+apps/ios/App/Sharing.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 7
+apps/ios/App/NodeActions.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 7
+apps/ios/App/AccountView.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 6
+apps/ios/App/Viewer.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 6
+apps/ios/App/Transfers.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 6
+apps/ios/App/NodeRow.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 199
+apps/ios/Widgets/HushOSWidgets.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 14
+apps/ios/App/ActionSheets.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 7
+apps/ios/App/Uploads.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 9
+apps/ios/App/Received.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 7
+apps/ios/App/SignInView.swift
+  s_41ce2ed146c27c::t_7bcb378d61713e 5,173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "67cbe568ab2c838fb3c58f4823483d9287bd2f52",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
