@@ -1,0 +1,133 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_41ce2ed146c27c::t_60d62b186e3256 150,227,231,234-235
+  s_41ce2ed146c27c::t_3d9086722ef676 61,63,181-182,243,247-252,254-258
+  s_41ce2ed146c27c::t_33d90b3d64279e 52,202-203
+  s_41ce2ed146c27c::t_eab95d75b17f56 53,83-87,89,103,174,200-201
+  s_41ce2ed146c27c::t_98e41269d6ac62 1-51,54-60,62,64-82,88,90-102,104-149,151-173,175-180,183-199,204-226,228-230,232-233,236-242,244-246,253,259-350
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_41ce2ed146c27c::t_623af41dde6075 40,65,69,71-125
+apps/android/app/src/main/kotlin/com/hushos/app/data/Places.kt
+  s_41ce2ed146c27c::t_8152c51338aea9 1-28
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_41ce2ed146c27c::t_fd6a23645e5d99 255-262
+apps/android/app/build.gradle.kts
+  s_41ce2ed146c27c::t_6372c63a2ccdc5 90-93
+apps/android/app/src/main/res/values/themes.xml
+  s_41ce2ed146c27c::t_6318aa4244a946 9-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_41ce2ed146c27c::t_6b2c97b07a57b8 480,1008
+apps/android/app/src/main/res/drawable/shortcut_upload_photos.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-5
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_41ce2ed146c27c::t_157d012b7d9265 488
+  s_41ce2ed146c27c::t_6b2c97b07a57b8 552
+apps/android/app/src/main/res/drawable/shortcut_new_folder_glyph.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-17
+apps/android/app/src/test/kotlin/com/hushos/app/data/AppLinksTest.kt
+  s_41ce2ed146c27c::t_96aa7ddcee5edd 99-116
+apps/android/app/src/main/res/values/colors.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 6-8
+apps/android/app/src/main/res/drawable/shortcut_take_photo_glyph.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_41ce2ed146c27c::t_6b2c97b07a57b8 354-362
+apps/android/app/src/main/kotlin/com/hushos/app/HushOSApplication.kt
+  s_41ce2ed146c27c::t_2210c5f4a9e7de 4,6-12
+apps/android/app/src/main/res/drawable/shortcut_upload_files.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-5
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Theme.kt
+  s_41ce2ed146c27c::t_7d449b0d369a33 152,164-166
+apps/android/app/src/main/res/drawable/shortcut_search.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-5
+apps/android/gradle/libs.versions.toml
+  s_41ce2ed146c27c::t_6372c63a2ccdc5 20,45-47
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_41ce2ed146c27c::t_c153426f43aba8 202-207,209-212,219
+  s_41ce2ed146c27c::t_3950e4eb6a2139 242-251
+apps/android/app/src/main/res/drawable/shortcut_search_glyph.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_41ce2ed146c27c::t_dbb53da13c744b 122-123
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_41ce2ed146c27c::t_3950e4eb6a2139 156-163
+  s_41ce2ed146c27c::t_2210c5f4a9e7de 374
+  s_41ce2ed146c27c::t_dbb53da13c744b 92-96
+  s_41ce2ed146c27c::t_f8928d1b33657c 292-301,303-309,311-317
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SaveToHushOS.kt
+  s_41ce2ed146c27c::t_df708806391b15 55-56
+  s_41ce2ed146c27c::t_194e6544a9cee9 1-54,57-84,87-161,164-167,169-268,270-275,277-290,292-326
+  s_41ce2ed146c27c::t_47470e9f20f036 85-86,162-163,168,269,276,291
+apps/android/app/src/main/res/drawable/shortcut_take_photo.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_41ce2ed146c27c::t_6318aa4244a946 63-64
+  s_41ce2ed146c27c::t_2210c5f4a9e7de 51-52,61-62
+apps/android/app/src/main/res/drawable/shortcut_upload_files_glyph.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_41ce2ed146c27c::t_6b2c97b07a57b8 1071
+  s_41ce2ed146c27c::t_33d90b3d64279e 728
+  s_41ce2ed146c27c::t_9324758457cf64 1359-1360
+  s_41ce2ed146c27c::t_eab95d75b17f56 667-670,692,710-727,729,731-791
+  s_41ce2ed146c27c::t_3950e4eb6a2139 634-656
+  s_41ce2ed146c27c::t_7ced3becbbfb2b 730
+  s_41ce2ed146c27c::t_5edb312dfc29fc 792
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_41ce2ed146c27c::t_36f29869f82254 221,251
+  s_41ce2ed146c27c::t_2210c5f4a9e7de 62-75,296
+apps/android/app/src/main/res/values/strings.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-9
+apps/android/app/src/main/kotlin/com/hushos/app/data/AppLinks.kt
+  s_41ce2ed146c27c::t_2393b65215a60d 24-25,48-49,93-97
+  s_41ce2ed146c27c::t_1a243aa8f89cee 98
+apps/android/app/src/main/res/drawable/shortcut_new_folder.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-5
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_41ce2ed146c27c::t_3950e4eb6a2139 13-14,43-47
+  s_41ce2ed146c27c::t_36f29869f82254 35-42
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_41ce2ed146c27c::t_36f29869f82254 32-35,37-41,126-135,138,183,188
+  s_41ce2ed146c27c::t_3332b6c362c4e9 1-31,36,42-125,136-137,139-182,184-187,189-210
+apps/android/app/src/main/AndroidManifest.xml
+  s_41ce2ed146c27c::t_6318aa4244a946 62,69-94
+  s_41ce2ed146c27c::t_3950e4eb6a2139 63-66
+  s_41ce2ed146c27c::t_2210c5f4a9e7de 10-12,60-61,110-113
+  s_41ce2ed146c27c::t_b7a6e35d7cfd72 67-68,114
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_41ce2ed146c27c::t_6b2c97b07a57b8 463
+apps/android/app/src/main/res/drawable/shortcut_upload_photos_glyph.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-17
+apps/android/app/src/main/res/xml/shortcuts.xml
+  s_41ce2ed146c27c::t_2ed5ba7255d7e5 1-57
+apps/android/app/src/main/kotlin/com/hushos/app/ShareActivity.kt
+  s_41ce2ed146c27c::t_6318aa4244a946 1-30
+apps/android/app/src/main/kotlin/com/hushos/app/data/SharedText.kt
+  s_41ce2ed146c27c::t_5d809cc6fa3a7e 1-36
+apps/android/app/src/main/kotlin/com/hushos/app/data/KitScan.kt
+  s_41ce2ed146c27c::t_7d7541bc541be0 1-34
+apps/android/app/src/main/kotlin/com/hushos/app/data/RecoveryKitText.kt
+  s_41ce2ed146c27c::t_4399a5eb34ce83 1-35
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryKitTextTest.kt
+  s_41ce2ed146c27c::t_2f17f28ca913c6 1-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e694469b84bb70e6040e9e83eb3063af527db018",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
