@@ -1,0 +1,24 @@
+apps/web/src/content/security.mdx
+  s_67ab086ac9d9a0::t_99797b5c9ddbb9 199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "06dc8ffb9f58f8d4c114f6ca098e5f5d53d5301c",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_67ab086ac9d9a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b3f20b2-8fc4-47bb-b23e-03980ad5bb15",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
