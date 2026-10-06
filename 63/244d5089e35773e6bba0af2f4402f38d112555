@@ -1,0 +1,34 @@
+scripts/store-screenshots.sh
+  s_41ce2ed146c27c::t_cd76c7b4899b44 29
+apps/web/src/components/screenshot.tsx
+  s_41ce2ed146c27c::t_31ec553ff669ab 69
+e2e/morning-zone.ts
+  s_41ce2ed146c27c::t_cd76c7b4899b44 2,29,31-33,36-43,45-50
+scripts/site-phone-shots.sh
+  s_41ce2ed146c27c::t_e1c4048f323bf8 44-58,93,101-102,157,164-165,168-169
+  s_41ce2ed146c27c::t_45ca64faa043d1 144-148
+  s_41ce2ed146c27c::t_cd76c7b4899b44 41-42
+  s_41ce2ed146c27c::t_9dd9780c9ff0b4 1-40,43,59-90,105-109,112-143,149-156,158-163,166-167,170-182
+  s_41ce2ed146c27c::t_a23530f5251055 91-92,94-100,103-104,110-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "63244d5089e35773e6bba0af2f4402f38d112555",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
