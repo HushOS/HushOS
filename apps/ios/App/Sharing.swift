@@ -335,7 +335,7 @@ struct ShareItemSheet: View {
 func describeLink(_ link: LinkView) -> String {
     [
         link.useCount == 0 ? "Not opened yet" : "Opened \(link.useCount == 1 ? "once" : "\(link.useCount) times")",
-        parseDate(link.expiresAt).map { "ends " + $0.formatted(.dateTime.day().month(.wide)) },
+        parseDate(link.expiresAt).map { "ends " + $0.formatted(.dateTime.day().month(.wide).locale(.dayMonth)) },
         link.hasPassword ? "password" : nil,
     ].compactMap { $0 }.joined(separator: " · ")
 }
@@ -410,7 +410,7 @@ private struct LinkCard: View {
         }
         UIPasteboard.general.url = url
         copied = true
-        let until = parseDate(link.expiresAt).map { " until \($0.formatted(.dateTime.day().month(.wide)))" } ?? ""
+        let until = parseDate(link.expiresAt).map { " until \($0.formatted(.dateTime.day().month(.wide).locale(.dayMonth)))" } ?? ""
         store.notify("Link copied. Anyone with it can view “\(item.name)”\(until).")
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -464,7 +464,7 @@ struct LinkOptionsSheet: View {
                 }
                 Section("Ends") {
                     if let current = parseDate(link.expiresAt) {
-                        choice("keep", current.formatted(.dateTime.day().month(.wide)))
+                        choice("keep", current.formatted(.dateTime.day().month(.wide).locale(.dayMonth)))
                     }
                     ForEach(Self.expiries, id: \.value) { option in choice(option.value, option.label) }
                 }

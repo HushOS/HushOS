@@ -125,7 +125,7 @@ private fun firstName(name: String, email: String = "") = name.trim().split(Rege
 
 /* "12 October": the day a link ends, as the web writes it. */
 private fun longDate(iso: String): String? = runCatching {
-    DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), "dMMMM")).format(Instant.parse(iso).atZone(ZoneId.systemDefault()))
+    DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.UK, "dMMMM"), Locale.UK).format(Instant.parse(iso).atZone(ZoneId.systemDefault()))
 }.getOrNull()
 
 /* "Opened 3 times · ends 12 October · password", or "Not opened yet", in the web's words. */

@@ -92,7 +92,7 @@ import java.time.format.DateTimeFormatter
 /* "3 Nov": a plan's dates, as the web writes them, never 2026-11-03. */
 private fun shortDate(iso: String?): String? = iso?.let {
     runCatching {
-        DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "dMMM"))
+        DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.UK, "dMMM"), java.util.Locale.UK)
             .format(Instant.parse(it).atZone(ZoneId.systemDefault()))
     }.getOrNull()
 }

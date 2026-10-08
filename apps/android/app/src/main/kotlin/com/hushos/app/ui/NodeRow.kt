@@ -106,7 +106,8 @@ fun whenText(millis: Long?): String? {
     val at = Instant.ofEpochMilli(millis).atZone(zone)
     val today = LocalDate.now(zone)
     val day = at.toLocalDate()
-    val pattern = { skeleton: String -> DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), skeleton)) }
+    // Day and month the en-GB way on every client ("29 Sept"), as the web writes them; the time keeps the phone's own clock.
+    val pattern = { skeleton: String -> DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(Locale.UK, skeleton), Locale.UK) }
     return when {
         day == today -> "Today, " + DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(at)
         day == today.minusDays(1) -> "Yesterday"

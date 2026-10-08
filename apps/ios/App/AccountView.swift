@@ -143,7 +143,7 @@ struct AccountView: View {
     private var planLine: String {
         guard let subscription = billing?.subscription else { return "Trash and earlier versions count too" }
         if subscription.status == "past_due" { return "Payment overdue" }
-        let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated)) } ?? ""
+        let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated).locale(.dayMonth)) } ?? ""
         return "\(subscription.cancelAtPeriodEnd ? "Ends" : "Renews") \(date) · Trash and earlier versions count too"
     }
 
@@ -332,7 +332,7 @@ struct PlansView: View {
     private func planDetail(_ subscription: BillingSubscription) -> String {
         let quota = Int64(subscription.quotaBytes).map(formatQuota) ?? ""
         if subscription.status == "past_due" { return "\(quota) · payment overdue" }
-        let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated)) } ?? ""
+        let date = parseDate(subscription.currentPeriodEnd).map { $0.formatted(.dateTime.day().month(.abbreviated).locale(.dayMonth)) } ?? ""
         return "\(quota) · \(subscription.cancelAtPeriodEnd ? "ends" : "renews") \(date)"
     }
 

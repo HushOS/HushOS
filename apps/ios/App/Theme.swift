@@ -219,13 +219,18 @@ struct SecondaryCapsuleStyle: ButtonStyle {
 }
 
 /* "Today, 14:02", "Yesterday", "29 Sept", "3 Mar 2025": how the board says when something changed. */
+/* Day and month the en-GB way on every client ("29 Sept"), as the web writes them; times keep the phone's own clock. */
+extension Locale {
+    static let dayMonth = Locale(identifier: "en_GB")
+}
+
 func changedLabel(_ date: Date?) -> String? {
     guard let date else { return nil }
     let calendar = Calendar.current
     if calendar.isDateInToday(date) { return "Today, " + date.formatted(date: .omitted, time: .shortened) }
     if calendar.isDateInYesterday(date) { return "Yesterday" }
-    if calendar.isDate(date, equalTo: .now, toGranularity: .year) { return date.formatted(.dateTime.day().month(.abbreviated)) }
-    return date.formatted(.dateTime.day().month(.abbreviated).year())
+    if calendar.isDate(date, equalTo: .now, toGranularity: .year) { return date.formatted(.dateTime.day().month(.abbreviated).locale(.dayMonth)) }
+    return date.formatted(.dateTime.day().month(.abbreviated).year().locale(.dayMonth))
 }
 
 /*
