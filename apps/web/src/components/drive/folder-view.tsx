@@ -1,6 +1,7 @@
 import {
     AccessBanner,
     AccessCell,
+    AccessMarker,
     accessSentence,
     useAccessIndex,
 } from '@/components/drive/access';
@@ -776,15 +777,26 @@ export function FolderView({ folderId }: { folderId: string }) {
                 </div>
             )}
             <div className="flex shrink-0 items-center justify-between gap-3 px-5 pt-1 pb-3 sm:gap-6 sm:px-8 sm:pb-4">
-                <FolderPath
-                    crumbs={crumbs}
-                    title={title}
-                    shared={shared}
-                    rootId={rootId}
-                    workspaceId={workspaceId}
-                    dropOver={dropOver}
-                    crumbName={crumbName}
-                />
+                <div className="flex min-w-0 items-center gap-3">
+                    <FolderPath
+                        crumbs={crumbs}
+                        title={title}
+                        shared={shared}
+                        rootId={rootId}
+                        workspaceId={workspaceId}
+                        dropOver={dropOver}
+                        crumbName={crumbName}
+                    />
+                    {/* Beside the path where there is room for both; narrower, the banner below says it. */}
+                    {inheritedFrom && (
+                        <AccessMarker
+                            access={access.get(inheritedFrom.id)!}
+                            via={inheritedFrom.id === folder?.id ? null : crumbName(inheritedFrom)}
+                            onOpen={() => setSharing(inheritedFrom)}
+                            className="max-lg:hidden"
+                        />
+                    )}
+                </div>
                 <div className="flex shrink-0 items-center gap-2">
                     <fieldset className="m-0 flex min-w-0 items-center rounded-md border border-input bg-card p-0.5">
                         <legend className="sr-only">View</legend>
@@ -814,11 +826,13 @@ export function FolderView({ folderId }: { folderId: string }) {
                 </div>
             </div>
             {inheritedFrom && (
-                <AccessBanner
-                    text={accessSentence(access.get(inheritedFrom.id)!)}
-                    action="Manage access"
-                    onAction={() => setSharing(inheritedFrom)}
-                />
+                <div className="lg:hidden">
+                    <AccessBanner
+                        text={accessSentence(access.get(inheritedFrom.id)!)}
+                        action="Manage access"
+                        onAction={() => setSharing(inheritedFrom)}
+                    />
+                </div>
             )}
             {sharedBy && (
                 <AccessBanner

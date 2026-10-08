@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link2Icon, UsersIcon } from 'lucide-react';
 import { useMemo } from 'react';
+import { cn } from 'cn';
 import { PersonAvatar } from '@/components/person-avatar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { mySharingQueryOptions } from '@/lib/drive';
 
 /*
@@ -75,6 +77,66 @@ export function AccessBanner({
                 </button>
             )}
         </div>
+    );
+}
+
+/*
+ * Who can open a folder one shared, beside its title: up to three avatars, "+N" past
+ * them, the blue link icon when a link opens it, and "via Family" when the sharing is a
+ * folder above's. The full sentence is its label and its tooltip; it opens the sharing.
+ */
+export function AccessMarker({
+    access,
+    via,
+    onOpen,
+    className,
+}: {
+    access: Access;
+    via?: string | null;
+    onOpen: () => void;
+    className?: string;
+}) {
+    const sentence = accessSentence(access) + (via ? ` Shared through “${via}”.` : '');
+    const { people, links } = access;
+    const more = people.length - 3;
+    return (
+        <Tooltip>
+            <TooltipTrigger
+                render={<button type="button" aria-label={sentence} />}
+                onClick={onOpen}
+                className={cn(
+                    'flex shrink-0 cursor-pointer items-center gap-2 rounded-full py-1 pr-2.5 pl-1 text-[13px] text-muted-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring',
+                    className,
+                )}
+            >
+                {people.length > 0 && (
+                    <span className="flex shrink-0 -space-x-1.5">
+                        {people.slice(0, 3).map((person) => (
+                            <PersonAvatar
+                                key={person.id}
+                                name={person.name}
+                                seed={person.id}
+                                size={24}
+                                className="ring-2 ring-background"
+                            />
+                        ))}
+                    </span>
+                )}
+                {more > 0 && <span className="tabular-nums">+{more}</span>}
+                {links > 0 && (
+                    <Link2Icon
+                        className="size-3.5 shrink-0 text-primary"
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                    />
+                )}
+                {people.length === 0 && links > 0 && <span>Link</span>}
+                {via && <span className="truncate">via {via}</span>}
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-72">
+                {sentence}
+            </TooltipContent>
+        </Tooltip>
     );
 }
 
