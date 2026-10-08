@@ -230,7 +230,7 @@ function LandingPage() {
                                 phoneClassName="w-[44%] max-w-48"
                             />
                         </div>
-                        <figcaption className="max-w-[70ch] text-[15px] leading-relaxed text-muted-foreground">
+                        <figcaption className="max-w-[46.4em] text-[15px] leading-relaxed text-muted-foreground">
                             Your drive in a browser and in the apps for iPhone and Android. Photos,
                             PDFs, video and Office files open right there. Deleted things wait in
                             the trash for 30 days, and replacing a file keeps the one before.
@@ -265,7 +265,7 @@ function LandingPage() {
                     >
                         <div className="flex flex-col gap-4">
                             <H2 id="how-title">How it works</H2>
-                            <p className="max-w-[44ch] text-[17px] leading-[1.6] text-muted-foreground">
+                            <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
                                 You don’t have to take our word for it. The code is public, and the
                                 security page goes through every step, in plain words first.
                             </p>
@@ -301,7 +301,7 @@ function LandingPage() {
                 >
                     <div className="flex flex-col gap-4">
                         <H2 id="self-host-title">Run it on your own server, for free.</H2>
-                        <p className="max-w-[44ch] text-[17px] leading-[1.6] text-muted-foreground">
+                        <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
                             The same HushOS that runs here can run on a machine you control, for
                             you, your family or your team. It takes four commands, and the guide
                             walks through each one.

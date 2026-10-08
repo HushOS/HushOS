@@ -141,7 +141,7 @@ function TeamsPage() {
                 >
                     <div className="flex flex-col gap-3">
                         <H2 id="coming-title">Coming soon</H2>
-                        <p className="max-w-[40ch] text-[17px] leading-[1.6] text-muted-foreground">
+                        <p className="max-w-[26.5em] text-[17px] leading-[1.6] text-muted-foreground">
                             These are planned, not for sale. If your team needs one of them, tell
                             us; it helps us decide what comes first.
                         </p>
@@ -169,7 +169,7 @@ function TeamsPage() {
                             <H2>
                                 {contact ? 'Tell us about your team.' : 'Try it with your team.'}
                             </H2>
-                            <p className="max-w-[52ch] text-[17px] text-muted-foreground">
+                            <p className="max-w-[34.5em] text-[17px] text-muted-foreground">
                                 {contact
                                     ? 'How many people, what you keep, and what you use now. We’ll write back when the team plan is ready.'
                                     : 'Start free, make a folder, and share it with the people you work with.'}

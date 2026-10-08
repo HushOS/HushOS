@@ -28,7 +28,7 @@ export function OperatorPage({
                         {title}
                     </h1>
                     {description && (
-                        <p className="max-w-[80ch] text-[13px] text-muted-foreground">
+                        <p className="max-w-[53em] text-[13px] text-muted-foreground">
                             {description}
                         </p>
                     )}
@@ -153,7 +153,7 @@ export function OperatorHeader({
                         {title}
                     </h1>
                     {description && (
-                        <p className="max-w-[80ch] text-[13px] text-muted-foreground">
+                        <p className="max-w-[53em] text-[13px] text-muted-foreground">
                             {description}
                         </p>
                     )}

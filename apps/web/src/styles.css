@@ -4,14 +4,56 @@
 @import '@fontsource-variable/geist-mono';
 @import '@hushos/tokens/tokens.css';
 
-/* Local Arial resized to Geist's metrics (measured on running text), so the swap barely moves a line. */
+/*
+ * Local Arial resized to Geist's metrics, so the swap when Geist arrives moves nothing: one face
+ * per weight band, since Arial Bold and Geist's heavy weights differ in width from the regular
+ * pair. size-adjust matches each band's width on running text (measured in Chrome against
+ * Geist Variable); ascent and descent are scaled back so every band keeps Geist's 130% line.
+ */
 @font-face {
     font-family: 'Geist Fallback';
-    src: local('Arial');
-    ascent-override: 95.64%;
-    descent-override: 28.07%;
+    font-weight: 100 449;
+    src: local('Arial'), local('ArialMT');
+    ascent-override: 98.61%;
+    descent-override: 28.94%;
     line-gap-override: 0%;
-    size-adjust: 105.08%;
+    size-adjust: 101.91%;
+}
+@font-face {
+    font-family: 'Geist Fallback';
+    font-weight: 450 549;
+    src: local('Arial'), local('ArialMT');
+    ascent-override: 96.4%;
+    descent-override: 28.29%;
+    line-gap-override: 0%;
+    size-adjust: 104.25%;
+}
+@font-face {
+    font-family: 'Geist Fallback';
+    font-weight: 550 649;
+    src: local('Arial Bold'), local('Arial-BoldMT');
+    ascent-override: 101.01%;
+    descent-override: 29.65%;
+    line-gap-override: 0%;
+    size-adjust: 99.49%;
+}
+@font-face {
+    font-family: 'Geist Fallback';
+    font-weight: 650 749;
+    src: local('Arial Bold'), local('Arial-BoldMT');
+    ascent-override: 98.85%;
+    descent-override: 29.01%;
+    line-gap-override: 0%;
+    size-adjust: 101.67%;
+}
+@font-face {
+    font-family: 'Geist Fallback';
+    font-weight: 750 900;
+    src: local('Arial Bold'), local('Arial-BoldMT');
+    ascent-override: 96.76%;
+    descent-override: 28.4%;
+    line-gap-override: 0%;
+    size-adjust: 103.86%;
 }
 
 @custom-variant dark {

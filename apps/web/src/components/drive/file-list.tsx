@@ -540,7 +540,7 @@ export function EmptyState({
             )}
             <h2 className="text-xl font-bold tracking-[-0.01em] text-balance">{title}</h2>
             {body && (
-                <p className="max-w-[38ch] text-[15px] leading-snug text-muted-foreground">
+                <p className="max-w-[25.2em] text-[15px] leading-snug text-muted-foreground">
                     {body}
                 </p>
             )}

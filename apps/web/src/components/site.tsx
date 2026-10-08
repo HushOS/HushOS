@@ -51,11 +51,15 @@ export function H2({
     );
 }
 
+/*
+ * Measures are in em, not ch: a ch is the width of the font's zero, so a ch-wide box shrank 12%
+ * while the fallback font showed and the text re-wrapped when Geist arrived. 1ch of Geist = 0.663em.
+ */
 export function Lede({ children, className }: { children: ReactNode; className?: string }) {
     return (
         <p
             className={cn(
-                'max-w-[62ch] text-[17px] leading-[1.55] text-pretty text-muted-foreground sm:text-xl',
+                'max-w-[41.1em] text-[17px] leading-[1.55] text-pretty text-muted-foreground sm:text-xl',
                 className,
             )}
         >

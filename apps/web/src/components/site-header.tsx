@@ -289,7 +289,7 @@ function FullFooter() {
                 <div className="grid grid-cols-2 gap-x-8 gap-y-9 lg:grid-cols-[1.4fr_repeat(4,1fr)]">
                     <div className="col-span-2 flex flex-col gap-3 lg:col-span-1">
                         <Brand className="w-fit" />
-                        <p className="max-w-[30ch] text-muted-foreground">
+                        <p className="max-w-[19.9em] text-muted-foreground">
                             Private storage that works like the drive you already use.
                         </p>
                     </div>

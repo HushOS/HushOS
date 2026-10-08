@@ -124,7 +124,7 @@ function ComparePage() {
                             </li>
                         ))}
                     </ul>
-                    <p className="max-w-[70ch] pt-4 text-sm leading-relaxed text-muted-foreground">
+                    <p className="max-w-[46.4em] pt-4 text-sm leading-relaxed text-muted-foreground">
                         Services change. If something here about {comparison.name} is out of date,{' '}
                         <a
                             href="https://github.com/HushOS/HushOS/issues"
