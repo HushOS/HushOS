@@ -1,4 +1,5 @@
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,6 +53,42 @@ const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 
+/*
+ * When each thing last changed, in hours before the run: a week of use rather than the one
+ * busy minute the setup takes, so Recent mixes folders and files and its dates differ. Lisbon
+ * photos land through the trip; this morning someone opened the report and the trip folder.
+ * The files carry these dates as their own, and the server's rows are set to them after setup.
+ */
+const NOW = Date.now();
+const HISTORY: Record<string, number> = {
+    'Q3 report.md': 0.1,
+    'Lisbon 2026': 1.3,
+    'Belém at sunset.jpg': 1.4,
+    Family: 2,
+    'Budget 2026.csv': 26,
+    'Lease agreement.pdf': 28,
+    'Tram 28.jpg': 30,
+    Work: 50,
+    'Trip plan.md': 54,
+    'Figures.csv': 74,
+    'Q3 planning': 75,
+    'Pastéis de nata.jpg': 76,
+    'Museu do Fado.jpg': 77,
+    'Ponte 25 de Abril.jpg': 78,
+    'Azulejos.jpg': 96,
+    'Miradouro view.jpg': 97,
+    'Sintra palace.jpg': 100,
+    'Quinta da Regaleira.jpg': 101,
+    'Jerónimos cloister.jpg': 120,
+    'Cascais coast.jpg': 122,
+    'Cascais harbour.jpg': 123,
+    Finances: 150,
+    "Grandma's lasagne.md": 170,
+    Recipes: 171,
+    'Reading list.md': 200,
+};
+const ago = (name: string) => new Date(NOW - (HISTORY[name] ?? 0) * 3_600_000);
+
 /* A one-page PDF with a title and a few lines, valid enough for any reader. */
 function simplePdf(title: string, lines: string[]) {
     const text = [
@@ -89,12 +126,14 @@ function fixtures() {
     const write = (name: string, bytes: Buffer | string) => {
         const path = join(dir, name);
         writeFileSync(path, bytes);
+        utimesSync(path, ago(name), ago(name));
         return path;
     };
     // The trip photos, under the names the demo gives them.
     const photo = (name: string, source: string) => {
         const path = join(dir, name);
         copyFileSync(join(PHOTOS, source), path);
+        utimesSync(path, ago(name), ago(name));
         return path;
     };
     return {
@@ -179,6 +218,35 @@ async function upload(p: Page, paths: string[], last: string) {
     await expect(row(p, last)).toBeVisible({ timeout: 90_000 });
     await expect(p.getByText(/Uploading/)).toHaveCount(0, { timeout: 90_000 });
 }
+/*
+ * Sets the server's change times to HISTORY. The server stamps every change with the moment it
+ * happens, so the database is the only place a week can pass; only this run's demo rows change.
+ * A client that has already built its catalogue keeps the old times, so the pictures come from
+ * fresh contexts.
+ */
+async function backdate(p: Page) {
+    await p.goto('/app', { waitUntil: 'networkidle' });
+    const rows: string[] = [];
+    for (const name of Object.keys(HISTORY)) {
+        const id = await row(p, name).getAttribute('data-node-id', { timeout: 60_000 });
+        rows.push(`('${id}'::uuid, '${ago(name).toISOString()}'::timestamptz)`);
+    }
+    const sql = `update drive_nodes n set updated_at = v.at from (values ${rows.join(', ')}) v(id, at) where n.id = v.id`;
+    execFileSync('docker', [
+        'compose',
+        '-f',
+        'compose.yaml',
+        '-f',
+        'compose.dev.yaml',
+        'exec',
+        '-T',
+        'db',
+        'sh',
+        '-c',
+        `psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "${sql}"`,
+    ]);
+}
+
 async function settle(p: Page) {
     const clear = p.getByRole('button', { name: 'Clear finished' });
     if (await clear.count()) await clear.click();
@@ -296,6 +364,7 @@ test.beforeAll(async ({ browser }) => {
     await page.keyboard.press('Escape');
     await expect(row(page, 'Family')).not.toHaveAttribute('aria-selected', 'true');
     await expect(toasts(page)).toHaveCount(0, { timeout: 30_000 });
+    await backdate(page);
 });
 test.afterAll(async () => {
     await page.context().close();
@@ -415,8 +484,8 @@ async function phoneShots(p: Page, suffix: string, scale: Scale) {
 
 test('the wide screenshots, light and dark', async ({ browser }) => {
     test.setTimeout(600_000);
-    await wideShots(page, '', 2);
     for (const [suffix, colorScheme, scale] of [
+        ['', 'light', 2],
         ['-dark', 'dark', 2],
         ['', 'light', 1.5],
         ['-dark', 'dark', 1.5],
