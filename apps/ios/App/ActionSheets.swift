@@ -450,8 +450,9 @@ struct InfoSheet: View {
                     fact("Kind", kind)
                     if let size = item.size { fact("Size", formatBytes(Int64(size))) }
                     if item.isFolder, let count = store.folders[item.id]?.count { fact("Size", count == 1 ? "1 item" : "\(count) items") }
-                    if let modified = item.modified { fact("Changed", modified.formatted(date: .long, time: .shortened)) }
-                    if let created = parseDate(item.node.createdAt) { fact("Created", created.formatted(date: .long, time: .shortened)) }
+                    // Said as the rows and the web's details say it: "Today, 11:17 AM", "Yesterday", "6 Oct".
+                    if let changed = changedLabel(item.modified) { fact("Changed", changed) }
+                    if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Created", created) }
                     if let folder = folderName, let parent = item.node.parentId {
                         // Where it is, one tap away: Files opens at that folder.
                         Button {
