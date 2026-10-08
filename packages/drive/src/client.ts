@@ -385,6 +385,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         await fileRows(changed, startedIn);
     }
 
+    /*
+     * After a change made here: pull the feed into the catalogue now rather than at the app's
+     * next poll, so Recent, search and tags show it at once. A no-op until the catalogue is built.
+     */
+    function catchUp() {
+        return catalogueWorkspace ? ingest(catalogueWorkspace) : Promise.resolve();
+    }
+
     /* The catalogue's answers: instant, or null while it is not ready. */
     function localListing(folderId: string): FolderListing | null {
         if (catalogueState.phase !== 'ready') return null;
@@ -1444,6 +1452,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         shareChangesSince,
         buildCatalogue,
         rebuildCatalogue,
+        catchUp,
         subscribeCatalogue,
         get catalogueState() {
             return catalogueState;

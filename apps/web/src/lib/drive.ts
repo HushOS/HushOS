@@ -96,6 +96,8 @@ export async function invalidateFolders(queryClient: QueryClient, ...folderIds: 
         // Whatever changed a folder may have changed how much room is used: the sidebar meter.
         queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
     ]);
+    // Recent, search and tags read the catalogue, which otherwise waits for the next feed poll.
+    void driveClient.catchUp().catch(() => {});
 }
 
 /* The name a copy takes among `taken`: the original, else "name (copy)", "name (copy 2)", and so on. */
