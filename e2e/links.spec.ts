@@ -1,6 +1,16 @@
 import { readFileSync } from 'node:fs';
-import { expect, test, type Page } from '@playwright/test';
-import { grip, newContext, registerAccount, sampleFiles, sha256 } from './helpers';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import {
+    grip,
+    newContext,
+    newFolder,
+    newLink,
+    registerAccount,
+    rotationsDone,
+    sampleFiles,
+    sha256,
+    waitForRotation,
+} from './helpers';
 
 /*
  * Links for anyone. The owner makes one for a folder, a visitor with no
@@ -21,15 +31,16 @@ const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 
+/* A link row keeps Copy link in view; its other actions are in its menu. */
+async function linkAction(link: Locator, action: string) {
+    await link.getByRole('button', { name: 'More for this link' }).click();
+    await link.page().getByRole('menuitem', { name: action }).click();
+}
+
 async function makeLink(password: string | null) {
     await row(owner, 'Public').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
-    if (password) await dialog(owner).getByLabel('Password').fill(password);
-    await dialog(owner).getByRole('button', { name: 'Create link' }).click();
-    const url = (await dialog(owner)
-        .locator('button[aria-label="Copy Link"]')
-        .textContent())!.trim();
+    const url = await newLink(owner, password ?? undefined);
     expect(url).toMatch(/\/s\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
     await dialog(owner).getByRole('button', { name: 'Done' }).first().click();
     await owner.keyboard.press('Escape');
@@ -42,10 +53,7 @@ test.beforeAll(async ({ browser }) => {
     samples = sampleFiles();
     owner = await (await newContext(browser)).newPage();
     await registerAccount(owner);
-    await owner
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Public/inner');
     await owner.keyboard.press('Enter');
     await row(owner, 'Public').getByRole('link', { name: 'Public' }).click();
@@ -76,7 +84,7 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
     // Folders inside the link open; the breadcrumb stays inside it.
     await row(visitor, 'inner').locator('button').first().click(grip);
     await expect(visitor).toHaveURL(/folder=/);
-    await expect(visitor.getByText('Nothing here.')).toBeVisible();
+    await expect(visitor.getByText('Nothing in this folder.')).toBeVisible();
     await visitor.locator('[data-crumb-id]').first().click();
     await expect(row(visitor, 'notes.md')).toBeVisible();
 
@@ -98,9 +106,9 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
 
     // Without the fragment there is no key: the page asks for it, and pasting it opens the link.
     await visitor.goto(plainUrl.split('#')[0]!);
-    await expect(visitor.getByRole('heading', { name: 'This link needs its key' })).toBeVisible();
+    await expect(visitor.getByRole('heading', { name: 'This link is incomplete' })).toBeVisible();
     await expect(visitor.getByRole('button', { name: 'Open' })).toBeDisabled();
-    await visitor.getByLabel('Key').fill(plainUrl.split('#')[1]!);
+    await visitor.getByLabel('The whole link').fill(plainUrl.split('#')[1]!);
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(visitor.getByRole('heading', { name: 'Public' })).toBeVisible({ timeout: 60_000 });
     await expect(row(visitor, 'payload.bin')).toBeVisible();
@@ -122,7 +130,7 @@ test('a password link asks first, refuses a wrong password, and opens with the r
     });
     await visitor.getByLabel('Password').fill('wrong');
     await visitor.getByRole('button', { name: 'Open' }).click();
-    await expect(visitor.getByRole('alert')).toContainText(/did not open/, { timeout: 60_000 });
+    await expect(visitor.getByRole('alert')).toContainText(/didn’t work/, { timeout: 60_000 });
     await visitor.getByLabel('Password').fill('open sesame');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(visitor.getByRole('heading', { name: 'Public' })).toBeVisible({ timeout: 60_000 });
@@ -136,8 +144,8 @@ test('a signed-in visitor keeps a copy under their own keys', async ({ browser }
     await registerAccount(linkPage);
     await linkPage.goto(plainUrl);
     await expect(row(linkPage, 'payload.bin')).toBeVisible({ timeout: 60_000 });
-    await linkPage.getByRole('button', { name: 'Save a copy to my Drive' }).click();
-    await expect(linkPage.getByText(/being saved to your Drive/)).toBeVisible({ timeout: 60_000 });
+    await linkPage.getByRole('button', { name: 'Save a copy to my files' }).click();
+    await expect(linkPage.getByText(/to your files/)).toBeVisible({ timeout: 60_000 });
     // The copy uploads from the link page, so that page stays open; a browser
     // that cannot stash the bytes (WebKit here) would lose it to a reload.
     // Their Drive, in another tab, sees the files land through the change feed.
@@ -166,20 +174,22 @@ test('a link can be shown again, given a password, and shown as a QR code, witho
     await owner.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await row(owner, 'Public').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
     const rows = dialog(owner).locator('[data-link]');
     await expect(rows).toHaveCount(2);
     // The plain link is the first made: copying it again yields the very URL shown at creation.
     await rows.first().getByRole('button', { name: 'Copy link' }).click();
     await expect(owner.getByText('Link copied')).toBeVisible();
     expect(await owner.evaluate(() => navigator.clipboard.readText())).toBe(plainUrl);
-    await rows.first().getByRole('button', { name: 'Show QR code' }).click();
+    await linkAction(rows.first(), 'Show as QR code');
     await expect(rows.first().locator('svg:has(title)')).toHaveCount(1);
 
     // A password added later applies to the same URL.
-    await rows.first().getByRole('button', { name: 'Edit link' }).click();
-    await rows.first().getByLabel('Password').fill('later on');
-    await rows.first().getByRole('button', { name: 'Save' }).click();
+    await linkAction(rows.first(), 'Password and end date');
+    const options = owner
+        .locator('[data-slot=dialog-content]')
+        .filter({ hasText: 'Password and end date' });
+    await options.getByLabel('Password', { exact: true }).fill('later on');
+    await options.getByRole('button', { name: 'Save' }).click();
     await expect(owner.getByText('Link updated')).toBeVisible();
     await expect(rows.first()).toContainText('password');
     await owner.keyboard.press('Escape');
@@ -199,7 +209,7 @@ test('a link can be shown again, given a password, and shown as a QR code, witho
     await visitor.reload();
     await visitor.getByLabel('Password').fill('later on');
     await visitor.getByRole('button', { name: 'Open' }).click();
-    await expect(visitor.getByText('Nothing here.')).toBeVisible({ timeout: 60_000 });
+    await expect(visitor.getByText('Nothing in this folder.')).toBeVisible({ timeout: 60_000 });
     await expect(visitor.locator('[data-crumb-id]')).toHaveCount(2);
     await visitor.context().close();
 
@@ -215,10 +225,10 @@ test('a link can be shown again, given a password, and shown as a QR code, witho
 test('a stopped link stops, and the Shared page lists what is left', async ({ browser }) => {
     await row(owner, 'Public').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(2);
-    await dialog(owner).getByRole('button', { name: 'Stop this link' }).first().click();
-    await expect(owner.getByText('Link stopped')).toBeVisible();
+    await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
+    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+    await expect(owner.getByText('Link turned off')).toBeVisible();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(1);
     await owner.keyboard.press('Escape');
     await owner.goto('/app/shared?view=by-me');
@@ -228,10 +238,9 @@ test('a stopped link stops, and the Shared page lists what is left', async ({ br
 
     const visitor = await (await newContext(browser)).newPage();
     await visitor.goto(plainUrl);
-    await expect(visitor.locator('[data-slot=alert-title]')).toHaveText(
-        'This link no longer works',
-        { timeout: 60_000 },
-    );
+    await expect(visitor.getByRole('heading', { name: 'This link no longer works' })).toBeVisible({
+        timeout: 60_000,
+    });
     await visitor.context().close();
 });
 
@@ -242,18 +251,17 @@ test('a link made right after stopping one opens, and a stopped link leaves no p
     await expect(row(owner, 'Public')).toBeVisible({ timeout: 60_000 });
     await row(owner, 'Public').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(1);
     // Stopping rotates the folder's key behind the dialog, which still holds the
     // node as it was opened; the next link must seal under the new key.
-    await dialog(owner).getByRole('button', { name: 'Stop this link' }).click();
+    const rotated = await rotationsDone(owner);
+    await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
+    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(0);
-    await expect(owner.getByText('Keys rotated')).toBeVisible({ timeout: 60_000 });
-    await dialog(owner).getByRole('button', { name: 'Create link' }).click();
-    const copy = dialog(owner).locator('button[aria-label="Copy Link"]');
-    await expect(copy).toBeVisible({ timeout: 60_000 });
+    await waitForRotation(owner, rotated, 60_000);
+    const url = await newLink(owner);
+    const copy = dialog(owner).locator('button[data-url]');
     await expect(dialog(owner).getByRole('alert')).toHaveCount(0);
-    const url = (await copy.textContent())!.trim();
     expect(url).toMatch(/\/s\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(1);
 
@@ -263,10 +271,11 @@ test('a link made right after stopping one opens, and a stopped link leaves no p
     await expect(row(visitor, 'inner')).toBeVisible();
     await visitor.context().close();
 
-    // Stopping the link from the list beneath takes its URL and QR code with it.
-    await dialog(owner).getByRole('button', { name: 'Stop this link' }).click();
+    // Turning the link off takes its address and QR code with it.
+    await linkAction(dialog(owner).locator('[data-link]').first(), 'Turn off link');
+    await owner.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
     await expect(dialog(owner).locator('[data-link]')).toHaveCount(0);
     await expect(copy).toHaveCount(0);
-    await expect(dialog(owner).getByRole('button', { name: 'Create link' })).toBeVisible();
+    await expect(dialog(owner).getByRole('button', { name: 'New link' })).toBeVisible();
     await owner.keyboard.press('Escape');
 });

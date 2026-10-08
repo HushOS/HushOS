@@ -46,7 +46,7 @@ export function rememberReturn(path: string, now = Date.now()) {
     try {
         window.localStorage.setItem(STORAGE, JSON.stringify({ path: safe, at: now }));
     } catch {
-        /* No storage: the person lands on Drive, as before. */
+        /* No storage: the person lands on Home instead. */
     }
 }
 
@@ -65,7 +65,7 @@ export function takeReturn(now = Date.now()): string | null {
     }
 }
 
-/* Where a finished sign-in or sign-up goes: a saved return first, then `?redirect=`, then Drive. */
+/* Where a finished sign-in or sign-up goes: a saved return first, then `?redirect=`, then Home. */
 export function returnTarget(redirect?: string | null) {
-    return takeReturn() ?? safeReturnPath(redirect) ?? '/app/drive';
+    return takeReturn() ?? safeReturnPath(redirect) ?? '/app';
 }

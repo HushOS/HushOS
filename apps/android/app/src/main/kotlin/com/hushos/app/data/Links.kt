@@ -194,7 +194,7 @@ class LinkVault(origin: String, url: String) {
         val node = fetched.node
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
         nodeKeys[node.id] = key
-        return Opened(node, metadata).also { opened[node.id] = it }
+        return openedRow(node, metadata, key).also { opened[node.id] = it }
     }
 
     private fun open(node: NodeView): Opened {
@@ -204,7 +204,7 @@ class LinkVault(origin: String, url: String) {
         val key = nodeOpen(NodeKeyContext(node.workspaceId, node.id, parentId, node.parentKeyEpoch, node.keyEpoch), parentKey, base64urlDecode(node.keyEnvelope))
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
         nodeKeys[node.id] = key
-        return Opened(node, metadata).also { opened[node.id] = it }
+        return openedRow(node, metadata, key).also { opened[node.id] = it }
     }
 
     fun children(folderId: String): List<Opened> {

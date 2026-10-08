@@ -19,6 +19,8 @@ data class Tag(val id: String, val name: String, val colour: String)
 class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, MutableList<String>>) {
     companion object {
         val PRESETS = listOf("blue", "ink", "yellow", "teal", "coral")
+        /* The presets the web offers for new tags, in its order (apps/web/src/lib/tags.ts OFFERED_COLOURS). */
+        val OFFERED = listOf("blue", "ink", "yellow", "teal", "coral")
         fun empty() = TagRegistry(mutableListOf(), mutableMapOf())
 
         fun parse(json: String): TagRegistry {
@@ -40,11 +42,12 @@ class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, Muta
     fun tagsOf(nodeId: String): List<Tag> = tags.filter { items[it.id]?.contains(nodeId) == true }
     fun nodesWith(tagId: String): List<String> = items[tagId].orEmpty()
 
-    fun add(name: String): Tag {
+    /* A new tag in `colour`, or the next colour the web offers, cycling as the web does. */
+    fun add(name: String, colour: String? = null): Tag {
         val clean = checkName(name)
         tags.firstOrNull { it.name.equals(clean, ignoreCase = true) }?.let { return it }
         if (tags.size >= 200) throw AuthFailure("A workspace can have at most 200 tags.")
-        val tag = Tag(UUID.randomUUID().toString(), clean, PRESETS[tags.size % PRESETS.size])
+        val tag = Tag(UUID.randomUUID().toString(), clean, colour ?: OFFERED[tags.size % OFFERED.size])
         tags.add(tag)
         return tag
     }

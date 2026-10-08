@@ -44,10 +44,49 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>HushOS uses the camera when you choose Take photo, and to scan your recovery kit.</string>
 	<key>NSFileProviderDomainUsageDescription</key>
 	<string>HushOS keeps your encrypted files available in the Files app.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>HushOS saves the photo you chose to your library.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>doc.badge.plus</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Upload files</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.hushos.app.upload-files</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>photo.badge.plus</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Upload photos</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.hushos.app.upload-photos</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>folder.badge.plus</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New folder</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.hushos.app.new-folder</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>magnifyingglass</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Search</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.hushos.app.search</string>
+		</dict>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>

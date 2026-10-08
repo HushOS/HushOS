@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
-import { formatGiB } from '@/lib/format';
+import { formatQuota } from '@/lib/format';
 import { getReferralLandingServerFn } from '@/lib/growth';
 import { publicOrigin } from '@/lib/social';
 
@@ -36,7 +36,7 @@ function InvitePage() {
     const { code } = Route.useParams();
     const { hasSession } = Route.useRouteContext();
     return (
-        <div className="flex min-h-svh flex-col">
+        <div className="flex min-h-svh flex-col bg-card">
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
@@ -49,10 +49,10 @@ function InvitePage() {
                                 </h1>
                                 <p className="max-w-xl text-base leading-relaxed text-pretty text-muted-foreground sm:text-lg">
                                     Private storage for your files, simple to use. Join through this
-                                    link and you both get an extra {formatGiB(landing.bonusBytes)}{' '}
+                                    link and you both get an extra {formatQuota(landing.bonusBytes)}{' '}
                                     of space, on top of what every account starts with. If you ever
                                     take a paid plan, {landing.inviter.split(' ')[0]} gets{' '}
-                                    {formatGiB(landing.paidBonusBytes)} more, at no cost to you.
+                                    {formatQuota(landing.paidBonusBytes)} more, at no cost to you.
                                 </p>
                                 <div className="flex flex-wrap gap-3">
                                     {hasSession ? (
@@ -111,7 +111,7 @@ function InvitePage() {
                             </>
                         )}
                     </div>
-                    <aside className="sheet px-6 py-6">
+                    <aside className="rounded-xl border border-rule px-6 py-6">
                         <p className="eyebrow text-muted-foreground">What you get</p>
                         <dl className="mt-2 text-sm">
                             {[
@@ -120,7 +120,7 @@ function InvitePage() {
                                 [
                                     'Storage',
                                     landing
-                                        ? `${formatGiB(landing.freeBytes)} + ${formatGiB(landing.bonusBytes)}`
+                                        ? `${formatQuota(landing.freeBytes)} + ${formatQuota(landing.bonusBytes)}`
                                         : 'Free to start',
                                 ],
                                 ['Sharing', 'With people, or by link'],

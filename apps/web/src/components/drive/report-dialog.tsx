@@ -1,8 +1,6 @@
 import type { ReportCategory } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
-import { FlagIcon } from 'lucide-react';
 import { useId, useState } from 'react';
-import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -26,9 +24,6 @@ import { driveError } from '@/lib/drive';
 import { CATEGORIES, fileReport } from '@/lib/reports';
 import { cue } from '@/lib/sounds';
 
-/* A label beside its field; stacked where the dialog is narrow. */
-const ROW = 'grid items-center gap-x-4 gap-y-1.5 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]';
-
 /*
  * Reporting something seen through a link or a share. The key to what was
  * reported is sealed on this device to the instance's operators, so a report
@@ -50,7 +45,7 @@ export function ReportDialog({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="sm:max-w-[520px]">
                 {node && (
                     <ReportForm
                         key={node.id}
@@ -99,8 +94,8 @@ function ReportForm({
                 type: 'success',
                 title: result.duplicate ? 'Already reported' : 'Report sent',
                 description: result.duplicate
-                    ? 'Your earlier report on this item is still open with the operators.'
-                    : 'The operators of this instance can now open what you reported. Nobody else can.',
+                    ? `You’ve reported “${node.name}” before. They have it; there’s nothing more to do.`
+                    : `Thank you. The people who run this HushOS can now open “${node.name}” and will look at it.`,
             });
             onDone();
         } catch (cause) {
@@ -123,81 +118,79 @@ function ReportForm({
             <DialogHeader>
                 <DialogTitle>Report “{node.name}”</DialogTitle>
                 <DialogDescription>
-                    Reporting hands the operators of this instance the key to this item
-                    {node.kind === 'folder' ? ' and everything inside it' : ''}, sealed on your
-                    device to them alone. The person who shared it is not told who reported.
+                    Reporting lets the people who run this HushOS open{' '}
+                    {node.kind === 'folder' ? 'this folder and everything inside it' : 'this file'},
+                    so they can look. Whoever shared it isn’t told who reported it.
                 </DialogDescription>
             </DialogHeader>
-            <div className="flex min-w-0 flex-col divide-y divide-rule border-y border-rule">
-                <div className={ROW}>
-                    <label htmlFor={`${id}-category`} className="eyebrow text-muted-foreground">
-                        What is it
-                    </label>
-                    <Select
-                        value={category}
-                        onValueChange={(value) => setCategory((value as ReportCategory) ?? '')}
-                        items={CATEGORIES}
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={`${id}-category`} className="text-[13px] font-semibold">
+                    What is it?
+                </label>
+                <Select
+                    value={category}
+                    onValueChange={(value) => setCategory((value as ReportCategory) ?? '')}
+                    items={CATEGORIES}
+                >
+                    <SelectTrigger
+                        id={`${id}-category`}
+                        aria-label="Category"
+                        className="w-full min-w-0 text-[15px]"
                     >
-                        <SelectTrigger
-                            id={`${id}-category`}
-                            aria-label="Category"
-                            className="w-full min-w-0"
-                        >
-                            <SelectValue placeholder="Choose a category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {CATEGORIES.map((entry) => (
-                                <SelectItem key={entry.value} value={entry.value}>
-                                    {entry.label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className={ROW}>
-                    <label
-                        htmlFor={`${id}-reason`}
-                        className="eyebrow text-muted-foreground sm:self-start sm:pt-3"
-                    >
-                        What is wrong
-                    </label>
-                    <Textarea
-                        id={`${id}-reason`}
-                        value={reason}
-                        maxLength={2000}
-                        onChange={(event) => setReason(event.target.value)}
-                        placeholder="What you saw, and where inside it if it is a folder."
-                        className="min-h-28"
-                    />
-                </div>
-                {!signedIn && (
-                    <div className={ROW}>
-                        <label htmlFor={`${id}-email`} className="eyebrow text-muted-foreground">
-                            Your email
-                        </label>
-                        <Input
-                            id={`${id}-email`}
-                            type="email"
-                            autoComplete="email"
-                            value={email}
-                            onChange={(event) => setEmail(event.target.value)}
-                            placeholder="Optional, in case the operators have questions"
-                        />
-                    </div>
-                )}
-                {error && (
-                    <p role="alert" className="py-3 text-xs text-destructive">
-                        {error}
-                    </p>
-                )}
+                        <SelectValue placeholder="Choose what it is" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {CATEGORIES.map((entry) => (
+                            <SelectItem key={entry.value} value={entry.value}>
+                                {entry.label}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
             </div>
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={`${id}-reason`} className="text-[13px] font-semibold">
+                    What’s wrong with it?
+                </label>
+                <Textarea
+                    id={`${id}-reason`}
+                    value={reason}
+                    maxLength={2000}
+                    onChange={(event) => setReason(event.target.value)}
+                    placeholder="What you saw, and where inside it"
+                    className="min-h-24 text-[15px]"
+                />
+            </div>
+            {!signedIn && (
+                <div className="flex flex-col gap-1.5">
+                    <label htmlFor={`${id}-email`} className="text-[13px] font-semibold">
+                        Your email (optional)
+                    </label>
+                    <Input
+                        id={`${id}-email`}
+                        type="email"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(event) => setEmail(event.target.value)}
+                        aria-describedby={`${id}-email-hint`}
+                        className="text-[15px]"
+                    />
+                    <p id={`${id}-email-hint`} className="text-[13px] text-muted-foreground">
+                        Only if you want to hear back.
+                    </p>
+                </div>
+            )}
+            {error && (
+                <p role="alert" className="text-[13px] text-destructive">
+                    Couldn’t send the report. {error}
+                </p>
+            )}
             <DialogFooter>
-                <Button type="button" variant="ghost" onClick={onDone}>
+                <Button type="button" variant="outline" onClick={onDone}>
                     Cancel
                 </Button>
                 <Button type="submit" disabled={pending || !category || !reason.trim()}>
-                    <FlagIcon />
-                    <PendingLabel pending={pending} idle="Send report" busy="Sealing" />
+                    {pending ? 'Sending…' : 'Send report'}
                 </Button>
             </DialogFooter>
         </form>

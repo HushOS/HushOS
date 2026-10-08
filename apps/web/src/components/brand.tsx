@@ -10,14 +10,31 @@ import {
     ContextMenuSeparator,
     ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { LOGO_SIDE, logoSvg, wordmarkSvg, WORDMARK_SIZE } from '@/lib/brand';
+import { BADGE_SIDE, badgeSvg, BRAND_WORDMARK_SIZE, brandWordmarkSvg } from '@/lib/brand';
 import { cue } from '@/lib/sounds';
 
 type Asset = 'wordmark' | 'logo';
 type Format = 'svg' | 'png';
 type Copied = { asset: Asset; format: Format };
 
-/* The wordmark: the mark on a small blue square, and the name beside it in the text face. */
+/*
+ * The logo: the white mark on the blue square, corners at 30% of the side as
+ * the board draws it and the copied logo has. Brand blue whatever the theme.
+ */
+export function LogoBadge({ className }: { className?: string }) {
+    return (
+        <span
+            className={cn(
+                'grid size-6 shrink-0 place-items-center rounded-[30%] bg-[#2c428e] text-white',
+                className,
+            )}
+        >
+            <Logo className="h-[58%] w-auto" />
+        </span>
+    );
+}
+
+/* The wordmark: the logo, and the name beside it in the text face. */
 export function Wordmark({
     className,
     compact = false,
@@ -27,9 +44,7 @@ export function Wordmark({
 }) {
     return (
         <span className={cn('flex items-center gap-2', className)}>
-            <span className="grid size-6 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground">
-                <Logo className="h-3.5 w-auto" />
-            </span>
+            <LogoBadge />
             {!compact && <span className="text-base font-bold tracking-tight">HushOS</span>}
         </span>
     );
@@ -134,7 +149,7 @@ export function Brand({
     }, [copied]);
     async function copySvg(asset: Asset) {
         try {
-            await navigator.clipboard.writeText(asset === 'logo' ? logoSvg() : wordmarkSvg());
+            await navigator.clipboard.writeText(asset === 'logo' ? badgeSvg() : brandWordmarkSvg());
             cue('success', { volume: 0.4 });
             setCopied({ asset, format: 'svg' });
         } catch {
@@ -144,8 +159,9 @@ export function Brand({
     /* The same mark rasterised on this device at twice its canvas, for places that take no SVG. */
     async function copyPng(asset: Asset) {
         try {
-            const svg = asset === 'logo' ? logoSvg() : wordmarkSvg();
-            const size = asset === 'logo' ? { width: LOGO_SIDE, height: LOGO_SIDE } : WORDMARK_SIZE;
+            const svg = asset === 'logo' ? badgeSvg() : brandWordmarkSvg();
+            const size =
+                asset === 'logo' ? { width: BADGE_SIDE, height: BADGE_SIDE } : BRAND_WORDMARK_SIZE;
             const image = new Image();
             image.decoding = 'async';
             await new Promise<void>((resolve, reject) => {
@@ -196,7 +212,7 @@ export function Brand({
                         onCopy={(asset) => void copyPng(asset)}
                         label="Copy logo"
                     >
-                        <Logo className="h-6 w-auto" />
+                        <LogoBadge />
                     </CopyTile>
                 </div>
                 <ContextMenuSeparator className="my-2" />

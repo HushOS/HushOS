@@ -4,6 +4,7 @@ import {
     createIndexedDbMirror,
     type DriveNode,
 } from '@hushos/drive/client';
+import { ROOT_LABEL } from '@hushos/drive/protocol';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
@@ -66,10 +67,15 @@ export const sharedQueryOptions = queryOptions({
 });
 
 /* What this account shares out: by account and by link. */
+/*
+ * Everything this person shares. Every share, link and revocation made here
+ * refreshes it at once, so it is kept for minutes rather than refetched on every
+ * folder that shows who can open its rows.
+ */
 export const mySharingQueryOptions = queryOptions({
     queryKey: driveKeys.mine,
     queryFn: () => driveClient.mySharing(),
-    staleTime: 15_000,
+    staleTime: 5 * 60_000,
 });
 
 export const trashQueryOptions = queryOptions({
@@ -87,6 +93,8 @@ export async function invalidateFolders(queryClient: QueryClient, ...folderIds: 
             queryClient.invalidateQueries({ queryKey: driveKeys.folder(id) }),
         ),
         queryClient.invalidateQueries({ queryKey: driveKeys.trash }),
+        // Whatever changed a folder may have changed how much room is used: the sidebar meter.
+        queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
     ]);
 }
 
@@ -152,7 +160,8 @@ export function sortNodes(nodes: DriveNode[]) {
     });
 }
 
-const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+// Counted in 1024s and labelled as people know them, as in formatQuota.
+const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 export function formatBytes(value: number | string | bigint | null | undefined) {
     if (value === null || value === undefined) return '';
     let n = Number(value);
@@ -165,18 +174,57 @@ export function formatBytes(value: number | string | bigint | null | undefined) 
     return `${unit === 0 ? n : n.toFixed(n >= 100 ? 0 : 1)} ${UNITS[unit]}`;
 }
 
-const dateFormat = new Intl.DateTimeFormat(undefined, {
-    year: 'numeric',
-    month: 'short',
+/*
+ * Dates as the phones say them: "Today, 14:08", "Yesterday", "29 Sept", and the year
+ * only when it isn't this one, "29 Sept 2025". Day and month are written the en-GB
+ * way on every client; the time keeps the person's own 12 or 24 hour clock.
+ */
+const dayFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
+const dayYearFormat = new Intl.DateTimeFormat('en-GB', {
     day: 'numeric',
+    month: 'short',
+    year: 'numeric',
 });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-export function formatWhen(iso: string | null | undefined) {
-    if (!iso) return '';
+
+function parse(iso: string | null | undefined) {
+    if (!iso) return null;
     const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return '';
-    const sameDay = date.toDateString() === new Date().toDateString();
-    return sameDay ? timeFormat.format(date) : dateFormat.format(date);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/* "29 Sept", or "29 Sept 2025" in another year: for "on", "until" and "ends". */
+export function formatDay(iso: string | null | undefined) {
+    const date = parse(iso);
+    if (!date) return '';
+    return date.getFullYear() === new Date().getFullYear()
+        ? dayFormat.format(date)
+        : dayYearFormat.format(date);
+}
+
+/* "14:08", or "2:08 pm", as the person's clock reads. */
+export function formatTime(iso: string | null | undefined) {
+    const date = parse(iso);
+    return date ? timeFormat.format(date) : '';
+}
+
+/*
+ * When something happened, for lists and facts: "Today, 14:08", "Yesterday", then
+ * a day. `lower` is for the middle of a sentence: "Added today, 14:08".
+ */
+export function formatWhen(iso: string | null | undefined, { lower = false } = {}) {
+    const date = parse(iso);
+    if (!date) return '';
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const relative =
+        date.toDateString() === now.toDateString()
+            ? `Today, ${timeFormat.format(date)}`
+            : date.toDateString() === yesterday.toDateString()
+              ? 'Yesterday'
+              : null;
+    if (!relative) return formatDay(iso);
+    return lower ? relative[0]!.toLowerCase() + relative.slice(1) : relative;
 }
 
 /* What a folder list is ordered by, as on the phone apps. */
@@ -201,13 +249,29 @@ export function sortNodesBy(nodes: DriveNode[], order: SortOrder) {
 }
 
 /* The size a file shows: what its version envelope sealed, else what its metadata says. */
+/* An item's name as the person sees it: their top folder is "My files", whatever it is stored as. */
+export function displayName(node: Pick<DriveNode, 'name' | 'parentId'>) {
+    return node.parentId === null ? ROOT_LABEL : node.name;
+}
+
 export function nodeSize(node: DriveNode) {
     if (node.kind !== 'file') return null;
     return contentSize(node) ?? node.metadata?.size ?? NaN;
 }
 
+/*
+ * A request that never reached the server fails with the browser's own words:
+ * "Failed to fetch" (Chromium), "Load failed" (Safari), "NetworkError when
+ * attempting to fetch resource." (Firefox). Said instead as what to do.
+ */
+export const OFFLINE_WORDS = 'Couldn’t reach HushOS. Check your connection, then try again.';
+export function isNetworkFailure(message: string | null | undefined) {
+    return Boolean(message && /^(failed to fetch|load failed|networkerror\b)/i.test(message));
+}
+
 export function driveError(error: unknown) {
-    return error instanceof Error ? error.message : 'Please try again.';
+    if (!(error instanceof Error)) return 'Please try again.';
+    return isNetworkFailure(error.message) ? OFFLINE_WORDS : error.message;
 }
 
 /* Where the catalogue build is, for search results and the sidebar to follow. */

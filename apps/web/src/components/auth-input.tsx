@@ -1,5 +1,4 @@
 import { useState, type ComponentProps, type ReactNode } from 'react';
-import { FormRow } from '@/components/form-rows';
 import { TextSwap } from '@/components/motion';
 import { Input } from '@/components/ui/input';
 
@@ -16,15 +15,26 @@ export function messagesOf(errors: unknown[]) {
         .join(' ');
 }
 
-/* One form row: the label, the field, and the hint or error beneath it. */
+/*
+ * One field: the label above (with an optional note and an action beside it,
+ * like "Forgot your password?"), the input, and the hint or the error beneath.
+ */
 export function AuthInput({
     label,
     hint,
     errors,
     type,
     className,
+    optional,
+    action,
     ...props
-}: ComponentProps<typeof Input> & { label: ReactNode; hint?: ReactNode; errors: unknown[] }) {
+}: ComponentProps<typeof Input> & {
+    label: ReactNode;
+    hint?: ReactNode;
+    errors: unknown[];
+    optional?: boolean;
+    action?: ReactNode;
+}) {
     const [revealed, setRevealed] = useState(false);
     const message = messagesOf(errors);
     const invalid = message.length > 0;
@@ -33,7 +43,22 @@ export function AuthInput({
         [invalid && `${props.id}-error`, hint && `${props.id}-hint`].filter(Boolean).join(' ') ||
         undefined;
     return (
-        <FormRow label={label} htmlFor={props.id} invalid={invalid}>
+        <div data-slot="form-row" data-invalid={invalid} className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[13px]">
+                    <label htmlFor={props.id} className="font-semibold">
+                        {label}
+                    </label>
+                    {/* The field isn't required, which is what a screen reader says; this is for the eye. */}
+                    {optional && (
+                        <span aria-hidden="true" className="text-muted-foreground">
+                            {' '}
+                            · optional
+                        </span>
+                    )}
+                </span>
+                {action && <span className="text-[13px]">{action}</span>}
+            </div>
             <div className="relative">
                 <Input
                     type={secret && revealed ? 'text' : type}
@@ -45,7 +70,7 @@ export function AuthInput({
                             event.currentTarget.form?.requestSubmit();
                         }
                     }}
-                    className={`${secret ? 'pr-20!' : ''} ${className ?? ''}`}
+                    className={`text-[15px] ${secret ? 'pr-16!' : ''} ${className ?? ''}`}
                     aria-invalid={invalid}
                     aria-describedby={describedBy}
                     {...props}
@@ -56,21 +81,97 @@ export function AuthInput({
                         onClick={() => setRevealed((value) => !value)}
                         aria-label={revealed ? 'Hide password' : 'Show password'}
                         aria-pressed={revealed}
-                        className="eyebrow absolute inset-y-1 right-1 flex w-14 cursor-pointer items-center justify-center rounded-xs text-primary transition-colors hover:bg-muted"
+                        className="absolute inset-y-1 right-1 flex cursor-pointer items-center rounded-sm px-2.5 text-[13px] font-semibold text-primary transition-colors hover:bg-muted"
                     >
                         <TextSwap>{revealed ? 'Hide' : 'Show'}</TextSwap>
                     </button>
                 )}
             </div>
-            {(invalid || hint) && (
+            {invalid ? (
                 <p
-                    id={invalid ? `${props.id}-error` : `${props.id}-hint`}
-                    role={invalid ? 'alert' : undefined}
-                    className={`mt-1.5 text-xs leading-relaxed animate-in fade-in duration-200 ease-out-expo ${invalid ? 'rounded-xs bg-destructive-soft px-2.5 py-1.5 text-destructive' : 'text-muted-foreground'}`}
+                    id={`${props.id}-error`}
+                    role="alert"
+                    className="text-[13px] leading-snug text-destructive animate-in fade-in duration-200 ease-out-expo"
                 >
-                    {invalid ? message : hint}
+                    {message}
                 </p>
+            ) : (
+                hint && (
+                    <p
+                        id={`${props.id}-hint`}
+                        className="text-[13px] leading-snug text-muted-foreground"
+                    >
+                        {hint}
+                    </p>
+                )
             )}
-        </FormRow>
+        </div>
+    );
+}
+
+/*
+ * How hard the password would be to guess, as it is typed. A rough guide only:
+ * length counts most, then a mix of kinds. The server's rule is the length.
+ */
+export function strength(password: string, min: number) {
+    if (password.length === 0)
+        return {
+            score: 0,
+            label: '',
+            hint: `At least ${min} characters. A few unrelated words work well.`,
+        };
+    if (password.length < min) {
+        const left = min - password.length;
+        return {
+            score: 0,
+            label: 'Too short',
+            hint: `${left} more ${left === 1 ? 'character' : 'characters'} to go.`,
+        };
+    }
+    const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9\s]/, /\s/].filter((re) =>
+        re.test(password),
+    ).length;
+    if (password.length >= 20 || (password.length >= 14 && kinds >= 3))
+        return { score: 3, label: 'Strong', hint: 'Hard to guess. Make sure you can remember it.' };
+    if (kinds >= 2)
+        return { score: 2, label: 'Good', hint: 'Longer is stronger. Another word would help.' };
+    return { score: 1, label: 'Weak', hint: 'Easy to guess. Add another word or two.' };
+}
+
+export function StrengthHint({ password, min }: { password: string; min: number }) {
+    const s = strength(password, min);
+    const fill = s.score === 3 ? 'bg-success' : s.score === 2 ? 'bg-primary' : 'bg-destructive';
+    return (
+        <div className="-mt-2 flex flex-col gap-1.5">
+            <div className="flex gap-1" aria-hidden="true">
+                {[1, 2, 3].map((step) => (
+                    <span
+                        key={step}
+                        className={`h-1 flex-1 rounded-full ${
+                            password.length > 0 &&
+                            (s.score >= step || (s.score === 0 && step === 1))
+                                ? fill
+                                : 'bg-rule'
+                        }`}
+                    />
+                ))}
+            </div>
+            <p aria-live="polite" className="text-[13px] text-muted-foreground">
+                {s.label && (
+                    <span
+                        className={`font-semibold ${
+                            s.score === 3
+                                ? 'text-success'
+                                : s.score === 0
+                                  ? 'text-destructive'
+                                  : 'text-foreground'
+                        }`}
+                    >
+                        {s.label}.{' '}
+                    </span>
+                )}
+                {s.hint}
+            </p>
+        </div>
     );
 }

@@ -54,6 +54,7 @@ target/
 # Native apps: generated bindings, native libraries and build products (regenerate with `bun run core:apple` / `core:android`, `ios:project`)
 **/.build/
 apps/ios/DerivedData/
+apps/ios/build/
 apps/ios/HushOS.xcodeproj/
 apps/ios/Packages/HushOSCore/HushOSCoreFFI.xcframework/
 apps/ios/Packages/HushOSCore/Sources/
@@ -64,3 +65,10 @@ apps/android/core/build/
 apps/android/core/src/main/jniLibs/
 apps/android/core/src/main/kotlin/com/hushos/core/hushos_core.kt
 apps/android/local.properties
+# The Play upload key and its passwords (docs/release/signing.md): never in the repository
+apps/android/keystore.properties
+*.jks
+*.keystore
+
+# Claude Code local settings and session files
+.claude/

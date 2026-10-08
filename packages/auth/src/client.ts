@@ -1,6 +1,11 @@
 import type { SecurityAction } from '@hushos/crypto';
 /* Shown on the contacts page; re-exported so the app needs no direct crypto dependency. */
-export { fingerprint, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
+export {
+    fingerprint,
+    fingerprintWords,
+    keyDigest,
+    publicKeyBytes,
+} from '@hushos/crypto/fingerprint';
 import type { IdentityKem } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';

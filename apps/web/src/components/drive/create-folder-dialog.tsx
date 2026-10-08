@@ -34,7 +34,7 @@ export function CreateFolderDialog({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent>
+            <DialogContent className="sm:max-w-[440px]">
                 <CreateFolderForm
                     parent={parent}
                     onOpenChange={onOpenChange}
@@ -94,12 +94,11 @@ function CreateFolderForm({
             <DialogHeader>
                 <DialogTitle>New folder</DialogTitle>
                 <DialogDescription>
-                    In {parent.parentId === null ? 'the top folder' : `“${parent.name}”`}. Separate
-                    names with a slash to create folders inside folders.
+                    In “{parent.parentId === null ? 'My files' : parent.name}”.
                 </DialogDescription>
             </DialogHeader>
-            <div className="flex flex-col gap-2">
-                <label htmlFor={id} className="eyebrow text-muted-foreground">
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={id} className="text-[13px] font-semibold">
                     Name
                 </label>
                 <Input
@@ -112,16 +111,17 @@ function CreateFolderForm({
                     aria-invalid={Boolean(error)}
                     aria-describedby={`${id}-hint`}
                     maxLength={2048}
+                    className="h-11 text-[15px]"
                 />
                 <p
                     id={`${id}-hint`}
                     role={error ? 'alert' : undefined}
-                    className={`text-xs leading-relaxed ${error ? 'text-destructive' : 'text-muted-foreground'}`}
+                    className={`text-[13px] leading-snug ${error ? 'text-destructive' : 'text-muted-foreground'}`}
                 >
                     {error ||
                         (segments.length > 1
                             ? `Creates ${segments.length} folders: ${segments.join(' › ')}`
-                            : 'Names stay encrypted; only you can read them.')}
+                            : 'Use a slash to make folders inside folders: Reports › 2026.')}
                 </p>
             </div>
             <DialogFooter>

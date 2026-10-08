@@ -3,15 +3,7 @@ import { dropTargetForExternal } from '@atlaskit/pragmatic-drag-and-drop/externa
 import { containsFiles } from '@atlaskit/pragmatic-drag-and-drop/external/file';
 import { preventUnhandled } from '@atlaskit/pragmatic-drag-and-drop/prevent-unhandled';
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronDownIcon, FolderUpIcon, UploadIcon } from 'lucide-react';
 import { useEffect, useImperativeHandle, useRef, useState, type Ref, type RefObject } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
 import { collectDroppedFiles, filesFromInput } from '@/lib/dropped-files';
 import { driveError } from '@/lib/drive';
@@ -20,10 +12,11 @@ import { enqueueDropped } from '@/lib/uploads';
 export type UploadPicker = { pickFiles: () => void; pickFolder: () => void };
 
 /*
- * The Upload button: files, or a whole folder. The pickers are hidden inputs, so
- * the palette and shortcuts can open them too through the handle.
+ * The pickers behind Add: files, or a whole folder. They are hidden inputs, so the
+ * Add menu, the palette, the folder's own menu and the empty state can all open
+ * them through the handle.
  */
-export function UploadMenu({
+export function UploadInputs({
     folder,
     known,
     handle,
@@ -40,7 +33,6 @@ export function UploadMenu({
         pickFolder: () => directory.current?.click(),
     }));
     async function picked(input: HTMLInputElement) {
-        // The FileList is live: copy it before clearing the input for the next pick.
         const list = Array.from(input.files ?? []);
         input.value = '';
         if (!list.length) return;
@@ -49,7 +41,7 @@ export function UploadMenu({
         } catch (error) {
             toast.add({
                 type: 'error',
-                title: 'Could not start the upload',
+                title: 'Couldn’t start the upload',
                 description: driveError(error),
             });
         }
@@ -67,27 +59,9 @@ export function UploadMenu({
                 ref={directory}
                 type="file"
                 hidden
-                // Non-standard but universal: pick a directory and get its files with paths.
                 {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
                 onChange={(event) => void picked(event.currentTarget)}
             />
-            <DropdownMenu>
-                <DropdownMenuTrigger render={<Button size="sm" />}>
-                    <UploadIcon />
-                    Upload
-                    <ChevronDownIcon className="-mr-1 size-3 opacity-60" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuItem onClick={() => files.current?.click()}>
-                        <UploadIcon />
-                        Files
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => directory.current?.click()}>
-                        <FolderUpIcon />
-                        Folder
-                    </DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>
         </>
     );
 }
@@ -138,7 +112,7 @@ export function useDropZone(
                     .catch((error: unknown) =>
                         toast.add({
                             type: 'error',
-                            title: 'Could not start the upload',
+                            title: 'Couldn’t start the upload',
                             description: driveError(error),
                         }),
                     );

@@ -125,13 +125,14 @@ extension Vault {
         let target = started.targetEpoch
         // The root's chain must be open: its parent key is what the new root key wraps under.
         if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
-        let keys = try await identityKeys()
-        let pins = try await loadSettings().contacts
+        // The identity and the pins are only needed to re-seal shares: a subtree with none never asks for them.
+        var sharing: (keys: IdentityKeys, pins: [String: ContactPin])?
         var epochs: [String: UInt64] = opened.mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
         var done = 0
         var cursor: String? = nil
         var idle = 0
+        var touched: Set<String> = [rootId]
 
         func parentKey(_ parentId: String?, at epoch: UInt64) -> Data? {
             guard let parentId else { return workspaceKeyData() }
@@ -157,6 +158,7 @@ extension Vault {
             var batch: [[String: Any]] = []
             for entry in work.nodes {
                 let node = entry.node
+                touched.insert(node.id)
                 let newParentEpoch = node.id == rootId ? node.parentKeyEpoch : target
                 guard let wrappedUnder = parentKey(node.parentId, at: node.parentKeyEpoch),
                       let wrapUnder = parentKey(node.parentId, at: newParentEpoch) else { continue }
@@ -198,8 +200,11 @@ extension Vault {
                     versions.append(["id": version.id, "contentKeyEnvelope": base64urlEncode(bytes: try versionReseal(ctx: ctx, suite: version.contentSuite, nodeKey: fresh, content: content))])
                 }
                 var shares: [[String: Any]] = []
+                if !entry.shares.isEmpty && sharing == nil {
+                    sharing = (try await identityKeys(), try await loadSettings().contacts)
+                }
                 for share in entry.shares {
-                    guard let (publicKey, kem) = trustedKeys(for: share, pins: pins) else { continue }
+                    guard let (keys, pins) = sharing, let (publicKey, kem) = trustedKeys(for: share, pins: pins) else { continue }
                     let ctx = ShareContext(workspaceId: ws, nodeId: node.id, keyEpoch: target, granteeUserId: share.granteeUserId, granterUserId: session.userId)
                     let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: publicKey, granteeKemPublicKey: kem)
                     shares.append(["id": share.id, "shareEnvelope": base64urlEncode(bytes: sealed)])
@@ -240,8 +245,11 @@ extension Vault {
             // Everything applied: continue past the batch; otherwise start over so parents come first.
             cursor = applied == work.nodes.count ? work.nextCursor : nil
         }
-        // Envelopes changed under every folder: what this device listed is stale.
-        opened.removeAll()
+        // Envelopes changed in the subtree: those items are opened again from the server, under
+        // their fresh keys. Everything else stays as it was, so lists outside it keep their rows.
+        // The catalogue holds the old rows too; the next sync rebuilds it from the feed.
+        for id in touched { opened[id] = nil }
+        catalogueState = .idle
         return done
     }
 }

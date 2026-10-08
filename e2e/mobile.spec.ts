@@ -4,7 +4,7 @@ import { grip, newPage, registerAccount, sampleFiles } from './helpers';
 /*
  * Drive at phone width. The checks are the ones a person spots by eye and a
  * desktop run never does: nothing scrolls sideways, the selection toolbar
- * stays on one line, the header's device control is not clipped, and the
+ * stays on one line, the header's search label is not clipped, and the
  * viewer still opens and closes with touch-sized controls.
  */
 
@@ -24,10 +24,9 @@ test.beforeAll(async ({ browser }) => {
         .locator('input[type=file]')
         .first()
         .setInputFiles([samples.files.markdown, samples.files.image, samples.files.binary]);
-    await expect(page.locator('section[aria-label=Transfers]')).toContainText(
-        /3 transfers finished/,
-        { timeout: 90_000 },
-    );
+    await expect(page.locator('section[aria-label=Transfers]')).toContainText(/3 files uploaded/, {
+        timeout: 90_000,
+    });
 });
 test.afterAll(async () => {
     await page.close();
@@ -42,10 +41,15 @@ async function noSidewaysScroll(p: Page) {
 
 test('the folder view fits the phone: no sideways scroll, one-line toolbar, whole header label', async () => {
     await noSidewaysScroll(page);
-    const device = page.getByRole('button', { name: /lock this device|lock device/i });
-    await expect(device).toBeVisible();
-    const clipped = await device.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
-    expect(clipped, 'device label is clipped').toBe(false);
+    // The header keeps search and the account menu on one line, the search label whole.
+    const search = page.getByRole('button', { name: 'Search' });
+    await expect(search).toBeVisible();
+    const clipped = await search.evaluate((el) => {
+        const label = el.querySelector('span');
+        return label ? label.scrollWidth > label.clientWidth + 1 : true;
+    });
+    expect(clipped, 'search label is clipped').toBe(false);
+    await expect(page.getByRole('button', { name: 'Account menu' })).toBeVisible();
 
     await row(page, 'pixel.png').locator('button').first().click(grip);
     const toolbar = page.locator('[data-selection-bar]');
@@ -73,25 +77,26 @@ test('on a touch screen taps toggle rows into the selection, and a second tap re
     await page.keyboard.press('Escape');
     await expect(page.locator('[data-selection-bar]')).toHaveCount(0);
     await row(page, 'pixel.png').locator('button').first().click(grip);
-    // With one row selected, the spot each row's mark occupies is the target that adds it.
+    // With one row selected, every row's thumbnail shows the badge that adds it.
     await expect(page.getByRole('checkbox', { name: 'Select notes.md' })).toBeVisible();
     await page.getByRole('checkbox', { name: 'Select notes.md' }).click();
     await expect(page.getByText(/^2 selected$/)).toBeVisible();
     await expect(page.getByRole('checkbox', { name: 'Select notes.md' })).toBeChecked();
     await page.getByRole('checkbox', { name: 'Select pixel.png' }).click();
     await expect(page.getByText(/^1 selected$/)).toBeVisible();
-    // The box in the Name header selects every row; pressed again it clears them and the boxes go.
-    await page.getByRole('checkbox', { name: 'Select all' }).click();
+    // Select all lives behind the bar's menu; the bar's own close button lets go of everything.
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('menuitem', { name: 'Select all' }).click();
     await expect(page.getByText(/^3 selected$/)).toBeVisible();
-    await page.getByRole('checkbox', { name: 'Select none' }).click();
+    await page.getByRole('button', { name: 'Clear selection' }).click();
     await expect(page.locator('[data-selection-bar]')).toHaveCount(0);
-    // The input stays under the pointer either way; what goes is the drawn box, back to the icon.
-    await expect(page.locator('[data-node-id] svg.lucide-square')).toHaveCount(0);
+    // With nothing selected the badges go, and the thumbnails stay.
+    await expect(page.getByRole('checkbox', { name: 'Select notes.md' })).toBeHidden();
     await row(page, 'notes.md').locator('button').first().click(grip);
     await expect(page.getByText(/^1 selected$/)).toBeVisible();
     // The rest of the actions live behind one menu, so the bar stays one line.
     await page.getByRole('button', { name: 'More actions' }).click();
-    await expect(page.getByRole('menuitem', { name: 'Versions…' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Versions' })).toBeVisible();
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(page.locator('[data-selection-bar]')).toHaveCount(0);

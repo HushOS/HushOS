@@ -3,17 +3,24 @@ import {
     recolourTag,
     removeTag,
     renameTag,
-    nextColour,
     type Tag,
     type TagColour,
 } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { PaletteIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react';
+import {
+    PaletteIcon,
+    PencilIcon,
+    PlusIcon,
+    RotateCcwIcon,
+    TagIcon,
+    Trash2Icon,
+    TriangleAlertIcon,
+} from 'lucide-react';
 import { useId, useState } from 'react';
 import { RenameTagDialog } from '@/components/drive/tag-view';
-import { TagStamp } from '@/components/drive/tag-stamp';
-import { PendingLabel, Spinner } from '@/components/motion';
+import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
+import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import {
     AlertDialog,
@@ -25,9 +32,8 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { TagColourPicker } from '@/components/drive/tag-colour';
+import { Swatch, TagColourButton, TagColourPicker } from '@/components/drive/tag-colour';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -37,7 +43,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
-import { invalidateTags, tagsQueryOptions, useTagCounts } from '@/lib/tags';
+import { invalidateTags, suggestedColour, tagsQueryOptions, useTagCounts } from '@/lib/tags';
 
 /*
  * The registry as a list: every tag, how many items on this device carry it,
@@ -72,7 +78,11 @@ export function TagsView() {
         setBusy('create');
         setError('');
         try {
-            const { registry: next } = addTag(registry.data, name, picked ?? undefined);
+            const { registry: next } = addTag(
+                registry.data,
+                name,
+                picked ?? suggestedColour(registry.data),
+            );
             if (next !== registry.data) await driveClient.saveTags(next);
             await invalidateTags(queryClient);
             setDraft('');
@@ -88,13 +98,13 @@ export function TagsView() {
     async function recolour(tag: Tag, colour: TagColour) {
         if (!registry.data) return;
         setBusy(tag.id);
-        await save(recolourTag(registry.data, tag.id, colour), 'Could not change the colour');
+        await save(recolourTag(registry.data, tag.id, colour), 'Couldn’t change the colour');
         setBusy(null);
     }
     async function remove(tag: Tag) {
         if (!registry.data) return;
         setBusy(tag.id);
-        await save(removeTag(registry.data, tag.id), 'Could not remove the tag');
+        await save(removeTag(registry.data, tag.id), 'Couldn’t remove the tag');
         setBusy(null);
         setRemoving(null);
     }
@@ -103,93 +113,85 @@ export function TagsView() {
     return (
         <div className="flex flex-col">
             <PageHeader
-                eyebrow="Drive"
                 title="Tags"
-                description="Every tag in your workspace. Tags are sealed to your workspace and never written on an item, so the people you share with never see them."
+                description="Only you see your tags. People you share with don’t."
             />
             <form
-                className="flex flex-wrap items-end gap-2 border-b border-rule px-5 py-4 sm:px-8"
+                className="flex flex-col gap-2 px-5 pb-5 sm:px-8"
                 onSubmit={(event) => {
                     event.preventDefault();
                     void create();
                 }}
                 noValidate
             >
-                {/* A floor on the width, so on a phone the colours wrap below instead of squeezing the field. */}
-                <div className="flex min-w-48 flex-1 flex-col gap-2 sm:max-w-sm">
-                    <label htmlFor={id} className="eyebrow text-muted-foreground">
+                <div className="flex max-w-md items-center gap-2">
+                    {registry.data && (
+                        <TagColourButton
+                            value={picked ?? suggestedColour(registry.data)}
+                            onChange={setPicked}
+                            disabled={busy !== null}
+                        />
+                    )}
+                    <label htmlFor={id} className="sr-only">
                         New tag
                     </label>
                     <Input
                         id={id}
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
-                        placeholder="Home, Tax, Travel…"
+                        placeholder="New tag"
                         autoComplete="off"
                         spellCheck={false}
                         maxLength={40}
-                        className="h-9"
+                        className="h-9 flex-1 pointer-coarse:h-11"
                     />
+                    <Button
+                        type="submit"
+                        variant="outline"
+                        disabled={busy !== null || !draft.trim() || !registry.data}
+                    >
+                        <PlusIcon />
+                        {busy === 'create' ? 'Adding…' : 'Add'}
+                    </Button>
                 </div>
-                {registry.data && (
-                    <TagColourPicker
-                        value={picked ?? nextColour(registry.data)}
-                        onChange={setPicked}
-                        disabled={busy !== null}
-                        className="h-9"
-                    />
-                )}
-                <Button
-                    type="submit"
-                    variant="outline"
-                    size="sm"
-                    className="h-9 w-24 justify-center"
-                    disabled={busy !== null || !draft.trim() || !registry.data}
-                >
-                    <PlusIcon />
-                    <PendingLabel pending={busy === 'create'} idle="Add" busy="Adding" />
-                </Button>
                 {error && (
-                    <p role="alert" className="w-full text-xs text-destructive">
+                    <p role="alert" className="text-[13px] text-destructive">
                         {error}
                     </p>
                 )}
             </form>
-            {registry.isPending && (
-                <div className="flex items-center justify-center py-24 text-muted-foreground">
-                    <Spinner />
-                </div>
-            )}
+            {registry.isPending && <SkeletonRows rows={4} />}
             {registry.isError && (
-                <div className="px-5 py-6 sm:px-8">
-                    <Alert variant="destructive" className="max-w-xl">
-                        <AlertTitle>The tag list could not be opened</AlertTitle>
-                        <AlertDescription>{driveError(registry.error)}</AlertDescription>
-                    </Alert>
-                </div>
+                <EmptyState
+                    icon={TriangleAlertIcon}
+                    tone="danger"
+                    title="Your tags couldn’t be opened"
+                    body={driveError(registry.error)}
+                >
+                    <Button variant="outline" onClick={() => void registry.refetch()}>
+                        <RotateCcwIcon />
+                        Try again
+                    </Button>
+                </EmptyState>
             )}
             {registry.data && tags.length === 0 && (
-                <p className="px-5 py-12 text-sm text-muted-foreground sm:px-8">
-                    No tags yet. Make one above, or select items in a folder and press T.
-                </p>
+                <EmptyState
+                    icon={TagIcon}
+                    title="No tags yet"
+                    body="Make one above, or select items in a folder and press T."
+                />
             )}
             {tags.length > 0 && (
                 <table aria-label="Tags" className="w-full table-fixed border-collapse">
                     <thead>
-                        <tr className="border-b border-rule">
-                            <th
-                                scope="col"
-                                className="eyebrow py-2.5 pl-5 text-left text-muted-foreground sm:pl-8"
-                            >
+                        <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
+                            <th scope="col" className="pl-5 text-left sm:pl-8">
                                 Tag
                             </th>
-                            <th
-                                scope="col"
-                                className="eyebrow hidden w-28 py-2.5 pr-6 text-right text-muted-foreground sm:table-cell"
-                            >
+                            <th scope="col" className="hidden w-28 pr-6 text-right sm:table-cell">
                                 Items
                             </th>
-                            <th scope="col" className="w-44 pr-5 sm:w-80 sm:pr-8">
+                            <th scope="col" className="w-36 pr-5 sm:pr-8 xl:w-[26rem]">
                                 <span className="sr-only">Actions</span>
                             </th>
                         </tr>
@@ -199,46 +201,52 @@ export function TagsView() {
                             <tr
                                 key={tag.id}
                                 data-tag-id={tag.id}
-                                className="h-[46px] border-b border-rule hover:bg-muted"
+                                className="h-14 border-b border-rule hover:bg-muted"
                             >
-                                <td className="py-2 pl-5 sm:pl-8">
+                                <td className="min-w-0 pl-5 sm:pl-8">
                                     <Link
                                         to="/app/tags/$tagId"
                                         params={{ tagId: tag.id }}
-                                        className="inline-flex items-center gap-3 text-sm hover:underline"
+                                        className="inline-flex max-w-full items-center gap-3 text-[15px] font-semibold hover:underline"
                                     >
-                                        <TagStamp name={tag.name} colour={tag.colour} />
+                                        <Swatch
+                                            colour={tag.colour}
+                                            className="size-3 rounded-full"
+                                        />
+                                        <span className="truncate">{tag.name}</span>
                                     </Link>
                                 </td>
-                                <td className="hidden py-2 pr-6 text-right text-sm text-muted-foreground tabular-nums sm:table-cell">
+                                <td className="hidden pr-6 text-right text-[13px] text-muted-foreground tabular-nums sm:table-cell">
                                     {counts.get(tag.id) ?? 0}
                                 </td>
                                 <td className="py-1.5 pr-5 text-right sm:pr-8">
                                     <div className="flex justify-end gap-1.5">
                                         <Button
                                             variant="ghost"
-                                            size="xs"
+                                            size="sm"
                                             disabled={busy !== null}
                                             onClick={() => setRenaming(tag)}
                                         >
                                             <PencilIcon />
-                                            <span className="max-sm:sr-only">Rename</span>
+                                            <span className="max-xl:sr-only">Rename tag</span>
                                         </Button>
                                         <DropdownMenu>
                                             <DropdownMenuTrigger
                                                 render={
                                                     <Button
                                                         variant="ghost"
-                                                        size="xs"
+                                                        size="sm"
                                                         disabled={busy !== null}
                                                         aria-label={`Colour of ${tag.name}`}
                                                     />
                                                 }
                                             >
                                                 <PaletteIcon />
-                                                <span className="max-sm:sr-only">Colour</span>
+                                                <span className="max-xl:sr-only">
+                                                    Change colour
+                                                </span>
                                             </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end" className="w-auto p-2">
+                                            <DropdownMenuContent align="end" className="w-auto p-3">
                                                 <TagColourPicker
                                                     value={tag.colour}
                                                     onChange={(colour) =>
@@ -250,13 +258,13 @@ export function TagsView() {
                                         </DropdownMenu>
                                         <Button
                                             variant="ghost"
-                                            size="xs"
+                                            size="sm"
                                             aria-label={`Remove ${tag.name}`}
                                             disabled={busy !== null}
                                             onClick={() => setRemoving(tag)}
                                         >
                                             <Trash2Icon />
-                                            <span className="max-sm:sr-only">Remove</span>
+                                            <span className="max-xl:sr-only">Remove tag</span>
                                         </Button>
                                     </div>
                                 </td>
@@ -288,12 +296,13 @@ export function TagsView() {
                         <AlertDialogDescription>
                             The tag comes off {removing ? (counts.get(removing.id) ?? 0) : 0}{' '}
                             {removing && (counts.get(removing.id) ?? 0) === 1 ? 'item' : 'items'}{' '}
-                            and leaves your list. The items themselves are not touched.
+                            and leaves your list. The items themselves aren’t touched.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
                         <AlertDialogAction
+                            variant="destructive"
                             disabled={busy !== null}
                             onClick={() => removing && void remove(removing)}
                         >

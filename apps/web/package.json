@@ -12,7 +12,8 @@
         "test:watch": "vitest",
         "images:optimize": "bun scripts/optimize-images.tsx",
         "brand:assets": "bun scripts/brand-assets.ts",
-        "brand:mobile": "bun scripts/mobile-brand-assets.ts"
+        "brand:mobile": "bun scripts/mobile-brand-assets.ts",
+        "store:graphics": "bun scripts/store-graphics.tsx"
     },
     "dependencies": {
         "@atlaskit/pragmatic-drag-and-drop": "3.1.0",
@@ -20,7 +21,7 @@
         "@base-ui/react": "1.8.0",
         "@elysia/cors": "2.0.0-beta.1",
         "@elysia/eden": "2.0.0-beta.5",
-        "@fontsource-variable/atkinson-hyperlegible-next": "5.3.0",
+        "@fontsource-variable/geist": "5.3.0",
         "@fontsource-variable/geist-mono": "5.3.0",
         "@hushos/auth": "workspace:*",
         "@hushos/billing": "workspace:*",
@@ -29,6 +30,7 @@
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@hushos/shared": "workspace:*",
+        "@hushos/tokens": "workspace:*",
         "@hushos/utils": "workspace:*",
         "@mdx-js/react": "^3.1.1",
         "@mdx-js/rollup": "^3.1.1",

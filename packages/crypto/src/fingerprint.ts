@@ -1,3 +1,4 @@
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { CryptoError } from './errors';
 
 /*
@@ -17,6 +18,28 @@ export async function fingerprint(encryptionPublicKey: Uint8Array) {
         byte.toString(16).padStart(2, '0'),
     ).join('');
     return hex.match(/.{4}/g)!.join(' ');
+}
+
+export const FINGERPRINT_WORDS = 12;
+
+/*
+ * The same fingerprint as words, for reading aloud: its first 132 bits taken
+ * eleven at a time, most significant first, each naming a word in the BIP-39
+ * English list. A plain index, not a mnemonic: no checksum, and the last 28
+ * bits of the fingerprint are not shown. 132 bits is far past what anyone could
+ * forge a matching key for. Every client must draw the same words from the
+ * same fingerprint, so this mapping never changes without a new version.
+ */
+export function fingerprintWords(fingerprint: string) {
+    const hex = fingerprint.replaceAll(' ', '');
+    if (!/^[0-9a-f]{40}$/.test(hex)) throw new CryptoError('Invalid fingerprint.');
+    let bits = BigInt(`0x${hex}`) >> 28n;
+    const words: string[] = [];
+    for (let index = 0; index < FINGERPRINT_WORDS; index++) {
+        words.unshift(wordlist[Number(bits & 2047n)]!);
+        bits >>= 11n;
+    }
+    return words;
 }
 
 /* SHA-256 of a public key, as hex: what a pin keeps of a contact's ML-KEM key instead of 1184 bytes. */

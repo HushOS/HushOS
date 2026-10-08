@@ -33,7 +33,11 @@ data class BillingSummary(val enabled: Boolean, val planName: String?, val perio
  * documents provider can open the account key afterwards.
  */
 object Auth {
-    private class Reply(val body: JSONObject, val cookie: String?)
+    /* The two sign-in failures a person can act on, in the words the board settles on. */
+    const val MISMATCH = "That email and password don’t match. Check them and try again."
+    const val UNREACHABLE = "We couldn’t reach HushOS. Check your connection, then try again."
+
+    private class Reply(val body: JSONObject, val cookie: String?, val enrollment: String? = null)
 
     private fun post(origin: String, path: String, body: JSONObject, cookie: String? = null): Reply {
         val connection = URL(origin + path).openConnection() as HttpURLConnection
@@ -53,30 +57,88 @@ object Auth {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             text = stream?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (error: java.io.IOException) {
-            throw AuthFailure("Could not reach HushOS. Check your connection.")
+            throw AuthFailure(UNREACHABLE)
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
-        if (status !in 200..299) throw AuthFailure(parsed.optString("message").ifEmpty { "Please try again." })
+        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
         var token: String? = null
+        var enrollment: String? = null
         for (header in connection.headerFields["Set-Cookie"].orEmpty()) {
             val pair = header.split(";")[0].trim()
             if (pair.startsWith("hushos-session=") || pair.startsWith("__Host-hushos-session=")) token = pair.substringAfter("=")
+            if (pair.startsWith("hushos-enrollment=") || pair.startsWith("__Host-hushos-enrollment=")) enrollment = pair.substringAfter("=").ifEmpty { null }
         }
-        return Reply(parsed, token)
+        return Reply(parsed, token, enrollment)
+    }
+
+    /*
+     * Account recovery, as the web's /recover: the server emails a link; the link proves the
+     * address (and leaves an enrollment token, kept here in memory only); the 24 words open
+     * the account key; a new password registers again and seals it; a new phrase replaces the
+     * old one, signed with the old phrase's key so the server knows the words were right.
+     */
+    fun requestRecoveryEmail(origin: String, email: String): String =
+        post(origin, "/api/auth/recover/email", JSONObject().put("email", email)).body.optString("message")
+
+    /* The email link's token: the address it was sent to, and the enrollment the next steps need. */
+    data class RecoveryEnrollment(val email: String, val token: String)
+
+    fun verifyRecoveryLink(origin: String, verifyToken: String): RecoveryEnrollment {
+        val reply = post(origin, "/api/auth/register/verify", JSONObject().put("token", verifyToken))
+        val enrollment = reply.body.optJSONObject("enrollment") ?: throw AuthFailure("This link didn’t work.")
+        if (enrollment.optString("purpose") != "recover") throw AuthFailure("This link belongs to a different account flow. Request a new link.")
+        return RecoveryEnrollment(enrollment.getString("email"), reply.enrollment ?: throw AuthFailure("This link didn’t work."))
+    }
+
+    /* Resets the password with the phrase; returns the new phrase to save. The caller signs in with the new password. */
+    fun recover(origin: String, enrollment: RecoveryEnrollment, phrase: String, password: String): String {
+        val cookie = (if (origin.startsWith("https:")) "__Host-hushos-enrollment" else "hushos-enrollment") + "=" + enrollment.token
+        val registration = opaqueStartRegistration(password)
+        val challenge = post(origin, "/api/auth/recover/start", JSONObject().put("registrationRequest", registration.request), cookie).body
+        val userId = challenge.getString("userId")
+        val current = recoveryEnvelope(challenge.getJSONObject("recovery"))
+        val credentialVersion = challenge.getLong("credentialVersion").toULong()
+        // The phrase opens the account key (and is refused when it isn't this account's).
+        val accountKey = try {
+            com.hushos.core.recoveryOpen(userId, phrase, current)
+        } catch (error: com.hushos.core.CoreException) {
+            // The web's words for a phrase that isn't this account's (or is an older kit's).
+            val said = error.message?.substringAfter(": ")?.takeIf { it.isNotBlank() }
+            throw AuthFailure(if (said == null || said.startsWith("The recovery phrase does not match")) "These words didn’t open your account. Check you used your newest kit." else said)
+        }
+        val registered = opaqueFinishRegistration(password, registration.state, challenge.getString("registrationResponse"))
+        val sealed = accountSeal(userId, registered.exportKey, accountKey, current.keyVersion, credentialVersion + 1uL)
+        val next = com.hushos.core.recoveryCreate(userId, accountKey, current.recoveryVersion + 1uL, current.keyVersion)
+        val attempt = challenge.getString("attemptToken")
+        val signature = com.hushos.core.recoveryResetSign(userId, phrase, current, attempt, credentialVersion, registered.record, sealed, next.envelope)
+        try {
+            post(origin, "/api/auth/recover/finish", JSONObject().put("userId", userId).put("attemptToken", attempt)
+                .put("credentialVersion", credentialVersion.toLong()).put("registrationRecord", registered.record)
+                .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
+                    .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
+                    .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
+                .put("recovery", json(next.envelope)).put("signature", signature), cookie)
+        } catch (error: AuthFailure) {
+            // The server may have committed before the reply was lost: say so, as the web does.
+            throw AuthFailure("${error.message} If it keeps failing, try signing in with your new password first: the reset may already have been applied.")
+        }
+        return next.phrase
     }
 
     fun signIn(context: Context, origin: String, email: String, password: String): SessionUser {
         val start = opaqueStartLogin(password)
         val started = post(origin, "/api/auth/login/start", JSONObject().put("email", email).put("startLoginRequest", start.request)).body
-        val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("Unexpected reply from HushOS.") }
-        val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("Unexpected reply from HushOS.") }
-        val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw AuthFailure("Unable to sign in. Check your email and password.")
+        val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
+        val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
+        val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw AuthFailure(MISMATCH)
         val finished = post(origin, "/api/auth/login/finish", JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request))
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
+        // Another account's data on this phone goes before this one's session exists.
+        AccountStore.of(context).claim(user.id)
         Shared.writeOrigin(context, origin)
-        Shared.writeSession(context, Shared.Session(origin, token, user.id))
+        Shared.writeSession(context, Shared.Session(origin, token, user.id, user.email))
         val envelope = AccountKeyEnvelope(
             envelopeJson.getInt("envelopeVersion").toUInt(), envelopeJson.getLong("keyVersion").toULong(), envelopeJson.getLong("credentialVersion").toULong(),
             envelopeJson.getString("wrappingSalt"), envelopeJson.getString("wrappingNonce"), envelopeJson.getString("encryptedKey"),
@@ -128,11 +190,11 @@ object Auth {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             text = stream?.bufferedReader()?.use { it.readText() } ?: ""
         } catch (error: java.io.IOException) {
-            throw AuthFailure("Could not reach HushOS. Check your connection.")
+            throw AuthFailure(UNREACHABLE)
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
         if (status == 401) throw NotAuthenticated()
-        if (status !in 200..299) throw AuthFailure(parsed.optString("message").ifEmpty { "Please try again." })
+        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
         return parsed
     }
 
@@ -236,6 +298,16 @@ object Auth {
         call(context, "/api/auth/profile", JSONObject().put("name", name)).optJSONObject("user")?.let(SessionUser::from)
             ?: throw AuthFailure("HushOS returned no account.")
 
+    /* The recovery key as the server keeps it (for the kit file) and whether its phrase was confirmed as saved. */
+    fun recoveryBackup(context: Context): Pair<JSONObject, Boolean> = call(context, "/api/auth/recovery-key").let {
+        (it.optJSONObject("recovery") ?: throw AuthFailure("This account has no recovery key.")) to it.optBoolean("confirmed")
+    }
+
+    /* Marks the phrase as saved, as the web does after its check; the server refuses an older phrase's version. */
+    fun confirmRecovery(context: Context, recoveryVersion: Long) {
+        call(context, "/api/auth/recovery-key/confirm", JSONObject().put("recoveryVersion", recoveryVersion))
+    }
+
     fun storage(context: Context): StorageAllowance = call(context, "/api/auth/storage").getJSONObject("storage").let {
         StorageAllowance(it.getString("quotaBytes").toLong(), it.getString("usedBytes").toLong())
     }
@@ -278,13 +350,17 @@ object Auth {
         call(context, "/api/auth/delete/finish", JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request))
         Shared.clearSession(context)
         Shared.clearDevice(context)
+        AccountStore.of(context).wipe()
     }
 
+    /* Ends the session on the server, then removes it, the remembered account key and every file of the account from this phone. */
     fun signOut(context: Context) {
         Shared.session(context)?.let { session ->
             val cookieName = if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session"
             runCatching { post(session.origin, "/api/auth/logout", JSONObject(), "$cookieName=${session.token}") }
         }
         Shared.clearSession(context)
+        Shared.clearDevice(context)
+        AccountStore.of(context).wipe()
     }
 }

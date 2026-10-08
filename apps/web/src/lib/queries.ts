@@ -10,7 +10,7 @@ export const storageQueryOptions = queryOptions({
     retry: false,
 });
 
-export { formatGiB, formatMoney, formatSpace } from '@/lib/format';
+export { formatQuota, formatMoney, formatSpace } from '@/lib/format';
 export { billingQueryOptions, catalogueQueryOptions, localeHintQueryOptions } from '@/lib/billing';
 
 /* Whether this server sells plans; false on self-hosted instances, so billing UI never shows. */

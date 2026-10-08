@@ -9,10 +9,15 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .notAuthenticated: return "Sign in to HushOS to see your files."
+        // Out of room, in the app's own words: the server's mention plans, which the app never points to
+        // (App Review 3.1.3(f)). Android says the same.
+        case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
         case .server(_, let message), .notFound(let message): return message
-        case .transport: return "Could not reach HushOS. Check your connection."
+        case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
+
+    public static let noRoom = "This doesn’t fit in your storage. Free up space to upload it."
 }
 
 /*
@@ -22,10 +27,12 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
  */
 public final class DriveAPI: Sendable {
     public let session: SharedKeychain.Session
-    private let http = URLSession(configuration: .ephemeral)
+    private let http: URLSession
 
-    public init(session: SharedKeychain.Session) {
+    /* `configuration` is for tests, which answer with a stub URLProtocol instead of a server. */
+    public init(session: SharedKeychain.Session, configuration: URLSessionConfiguration = .ephemeral) {
         self.session = session
+        self.http = URLSession(configuration: configuration)
     }
 
     private var cookieName: String {
@@ -149,6 +156,13 @@ public final class DriveAPI: Sendable {
         try await perform(try mutation("/workspaces/\(workspaceId)/epochs", body: ["count": count]), as: EpochRange.self)
     }
 
+    /* The drive's top folder, made once; when two devices race, the server keeps one and returns it to both. */
+    public func createRoot(workspaceId: String, root: [String: Any]) async throws -> (created: Bool, root: NodeView) {
+        struct Reply: Decodable { let created: Bool; let root: NodeView }
+        let reply = try await perform(try mutation("/workspaces/\(workspaceId)/root", body: root), as: Reply.self)
+        return (reply.created, reply.root)
+    }
+
     public func createFolders(workspaceId: String, folders: [[String: Any]]) async throws -> [NodeView] {
         try await perform(try mutation("/folders", body: ["workspaceId": workspaceId, "folders": folders]), as: FoldersResponse.self).nodes
     }
@@ -187,8 +201,19 @@ public final class DriveAPI: Sendable {
         _ = try await perform(try mutation("/nodes/\(nodeId)", method: "DELETE", body: ["workspaceId": workspaceId]), as: Purged.self)
     }
 
+    /* Removes every file's earlier version now, a batch at a time; the same shape as emptying the trash. */
+    public func discardSuperseded(workspaceId: String) async throws -> EmptyTrashResult {
+        try await perform(try mutation("/workspaces/\(workspaceId)/versions/discard-superseded", body: [:]), as: EmptyTrashResult.self)
+    }
+
     public func emptyTrash(workspaceId: String) async throws -> EmptyTrashResult {
         try await perform(try mutation("/workspaces/\(workspaceId)/trash/empty", body: [:]), as: EmptyTrashResult.self)
+    }
+
+    /* Deletes an earlier version now rather than after its 30 days; the current one is never touched. */
+    public func discardVersion(_ versionId: String, workspaceId: String) async throws {
+        struct Done: Decodable {}
+        _ = try await perform(try mutation("/versions/\(versionId)", method: "DELETE", body: ["workspaceId": workspaceId]), as: Done.self)
     }
 
     public func restoreVersion(_ versionId: String, workspaceId: String) async throws -> NodeView {

@@ -27,34 +27,78 @@ await Promise.all(
 );
 
 await Promise.all([
-    // iOS icon: monochrome, the ink mark on the sheet; iOS rounds it. Dark and tinted variants beside it.
-    write(ios, 'AppIcon.appiconset/icon.png', logoSvg('#1c2848', '#fcfbf7', 0, 0.8), 1024),
-    // Dark: the mark on a transparent ground, so iOS's own dark backing shows through; tinted and the
-    // clear/glass style take a white mark on black and colour or frost it themselves.
-    write(ios, 'AppIcon.appiconset/icon-dark.png', logoSvg('#dfe3f2', undefined, 0, 0.8), 1024),
+    // iOS icon (Alpine): the cream mark on Hush blue, as the web's apple-touch icon; iOS rounds it.
+    write(ios, 'AppIcon.appiconset/icon.png', logoSvg('#ffffff', '#2c428e', 0, 0.8), 1024),
+    // Dark: the mark in dark-scheme primary on a transparent ground, so iOS's own dark backing shows
+    // through; tinted takes a white mark on black and colours it itself.
+    write(ios, 'AppIcon.appiconset/icon-dark.png', logoSvg('#aab8f4', undefined, 0, 0.8), 1024),
     write(ios, 'AppIcon.appiconset/icon-tinted.png', logoSvg('#ffffff', '#000000', 0, 0.8), 1024),
+    // The mark in the Files sign-in sheet and the Live Activity, which cannot read the app's catalog.
+    write(
+        ios,
+        '../../FilesUI/Assets.xcassets/BrandMark.imageset/BrandMark.png',
+        logoSvg('#ffffff', '#2c428e', 0, 0.8),
+        192,
+    ),
+    write(
+        ios,
+        '../../Widgets/Assets.xcassets/BrandMark.imageset/BrandMark.png',
+        logoSvg('#ffffff', '#2c428e', 0, 0.8),
+        192,
+    ),
     // Android adaptive icon: foreground mark inside the safe circle, colour background, monochrome mark.
-    write(android, 'drawable/icon_foreground.png', logoSvg('#1c2848', undefined, 0, 0.55), 1024),
-    write(android, 'drawable/icon_background.png', logoSvg('#fcfbf7', '#fcfbf7'), 1024),
+    write(android, 'drawable/icon_foreground.png', logoSvg('#ffffff', undefined, 0, 0.55), 1024),
+    write(android, 'drawable/icon_background.png', logoSvg('#2c428e', '#2c428e'), 1024),
     write(android, 'drawable/icon_monochrome.png', logoSvg('#ffffff', undefined, 0, 0.55), 1024),
-    // Android's splash shows the icon in a 240dp circle whose safe zone is the inner two thirds:
-    // a black mark on white, and at night a white mark on black.
-    write(android, 'drawable/splash_mark.png', logoSvg('#000000', undefined, 0, 0.5), 432),
-    write(android, 'drawable-night/splash_mark.png', logoSvg('#ffffff', undefined, 0, 0.5), 432),
-    // Launch screen: a 160-point mark, centred by the system; black on white, white on black at night.
+    // The splash on both phones is the mark alone in Hush blue on the app's own ground, so it fades
+    // straight into the first screen. Android shows it in a 240dp circle whose safe zone is the
+    // inner two thirds; the ground colour is `splash` in res/values*/colors.xml.
+    write(android, 'drawable/splash_mark.png', logoSvg('#2c428e', undefined, 0, 0.5), 432),
+    write(android, 'drawable-night/splash_mark.png', logoSvg('#aab8f4', undefined, 0, 0.5), 432),
+    // iOS: a 160-point mark, centred by the system on the same ground (LaunchBackground, below).
     ...[1, 2, 3].flatMap((scale) => [
         write(
             ios,
             `SplashMark.imageset/splash-icon@${scale}x.png`,
-            logoSvg('#000000', undefined, 0, 0.8),
+            logoSvg('#2c428e', undefined, 0, 0.8),
             160 * scale,
         ),
         write(
             ios,
             `SplashMark.imageset/splash-icon-dark@${scale}x.png`,
-            logoSvg('#ffffff', undefined, 0, 0.8),
+            logoSvg('#aab8f4', undefined, 0, 0.8),
             160 * scale,
         ),
     ]),
 ]);
+// The launch screen's ground: Alpine's ground colour, light and dark (packages/tokens), written in
+// the shape oxfmt keeps.
+const components = (hex: string) => {
+    const byte = (at: number) => `0x${hex.slice(at, at + 2).toUpperCase()}`;
+    return `{ "alpha": "1.000", "blue": "${byte(5)}", "green": "${byte(3)}", "red": "${byte(1)}" }`;
+};
+await Bun.write(
+    new URL('LaunchBackground.colorset/Contents.json', ios),
+    `{
+    "colors": [
+        {
+            "color": {
+                "color-space": "srgb",
+                "components": ${components('#f3f4f8')}
+            },
+            "idiom": "universal"
+        },
+        {
+            "appearances": [{ "appearance": "luminosity", "value": "dark" }],
+            "color": {
+                "color-space": "srgb",
+                "components": ${components('#0e111a')}
+            },
+            "idiom": "universal"
+        }
+    ],
+    "info": { "author": "xcode", "version": 1 }
+}
+`,
+);
 console.log('wrote the iOS asset catalog images and the Android drawables');

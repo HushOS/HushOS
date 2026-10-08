@@ -122,6 +122,13 @@ final class Mirror {
         exec("COMMIT")
     }
 
+    /* An account leaving the phone: every row goes, and the file is compacted so none lingers in free pages or the WAL. */
+    func wipe() {
+        clear()
+        exec("VACUUM")
+        exec("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
     /* Whether any row of this workspace is kept, without reading them. */
     func hasRows(_ workspaceId: String) -> Bool {
         !query("SELECT 1 FROM nodes WHERE workspace_id = ? LIMIT 1", bind: [workspaceId]) { _ in true }.isEmpty

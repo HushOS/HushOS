@@ -73,7 +73,7 @@ export const reportKeys = {
     one: (reportId: string) => ['reports', 'one', reportId] as const,
 };
 export const reportsQueryOptions = (filter: {
-    status?: ReportStatus | 'all';
+    status?: ReportStatus | 'all' | 'held';
     category?: ReportCategory;
 }) =>
     queryOptions({

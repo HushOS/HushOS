@@ -1,6 +1,7 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
 import {
-    ChevronsUpDownIcon,
+    CircleHelpIcon,
     CreditCardIcon,
     GiftIcon,
     KeyRoundIcon,
@@ -10,13 +11,22 @@ import {
     SettingsIcon,
     Volume2Icon,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useStore } from 'zustand';
 import type { NavItem } from '@/components/app-sidebar';
-import { openDeviceDialog } from '@/components/device-control';
+import { lockDevice, openDeviceDialog } from '@/components/device-control';
 import { TextSwap } from '@/components/motion';
 import { ThemeRadioItems } from '@/components/theme-toggle';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+    AlertDialog,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
 import {
     DropdownMenu,
     DropdownMenuCheckboxItem,
@@ -30,16 +40,17 @@ import {
 import { authClient } from '@/lib/auth-client';
 import { forgetSession } from '@/lib/session';
 import { useBillingEnabled } from '@/lib/queries';
+import { helpContactQueryOptions } from '@/lib/social';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
 
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
 /* The account's own pages. They live in the account menu; the command palette lists them too. */
 export const account: NavItem[] = [
-    { to: '/app/account', label: 'Settings', icon: SettingsIcon, active: under('/app/account') },
+    { to: '/app/account', label: 'Account', icon: SettingsIcon, active: under('/app/account') },
     {
         to: '/app/billing',
-        label: 'Billing',
+        label: 'Plan and storage',
         icon: CreditCardIcon,
         active: under('/app/billing'),
         billing: true,
@@ -73,7 +84,7 @@ export function Avatar({ name, className = '' }: { name: string; className?: str
     return (
         <span
             aria-hidden="true"
-            className={`grid size-7 shrink-0 place-items-center rounded-full bg-accent text-xs font-semibold text-accent-foreground ${className}`}
+            className={`grid size-7 shrink-0 place-items-center rounded-full bg-avatar1 text-xs font-bold text-on-avatar1 ${className}`}
         >
             {initials(name)}
         </span>
@@ -81,70 +92,35 @@ export function Avatar({ name, className = '' }: { name: string; className?: str
 }
 
 /*
- * The account menu: identity, the account's pages, appearance, sounds, lock and
- * sign out. It is the one place preferences live inside the app, so the trigger
- * can sit anywhere (sidebar footer, mobile bar) and the menu stays the same.
+ * The account menu, opened from the avatar at the top right: identity, the
+ * account's pages, Help, appearance, sounds, lock and sign out. It is the one
+ * place preferences live inside the app.
  */
-export function UserMenu({
-    user,
-    trigger,
-    side = 'top',
-    align = 'start',
-}: {
-    user: { id: string; name: string; email: string };
-    trigger: ReactNode;
-    side?: 'top' | 'bottom' | 'right';
-    align?: 'start' | 'end';
-}) {
-    const router = useRouter();
+export function UserMenu({ user }: { user: { id: string; name: string; email: string } }) {
     const soundsEnabled = useSoundsEnabled();
     const billing = useBillingEnabled();
+    const { data: contact } = useQuery(helpContactQueryOptions);
     const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
     const restoring = useStore(authClient.store, (state) => state.restoring);
-    const [pending, setPending] = useState(false);
-    const [error, setError] = useState('');
-    async function signOut() {
-        setPending(true);
-        setError('');
-        try {
-            await authClient.logout();
-            forgetSession(router.options.context.queryClient, false);
-            await router.navigate({ to: '/login' });
-            // Clearing before leaving would refetch queries the old page still holds.
-            router.options.context.queryClient.clear();
-        } catch {
-            cue('error');
-            setError('Your account is locked, but sign-out could not finish. Please try again.');
-        } finally {
-            setPending(false);
-        }
-    }
+    const [signingOut, setSigningOut] = useState(false);
     return (
-        <div className="relative">
+        <>
             <DropdownMenu>
                 <DropdownMenuTrigger
                     aria-label="Account menu"
-                    disabled={pending}
-                    className="w-full cursor-pointer rounded-md text-left"
+                    title={user.name}
+                    className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-expanded:bg-muted"
                 >
-                    {trigger}
+                    <Avatar name={user.name} className="size-8" />
                 </DropdownMenuTrigger>
-                <DropdownMenuContent
-                    side={side}
-                    align={align}
-                    sideOffset={8}
-                    className="w-(--anchor-width) min-w-64"
-                >
+                <DropdownMenuContent side="bottom" align="end" sideOffset={6} className="w-66">
                     <DropdownMenuGroup>
-                        <DropdownMenuLabel className="flex items-center gap-3 px-2 py-2">
-                            <Avatar name={user.name} />
-                            <span className="min-w-0">
-                                <span className="block truncate text-sm font-semibold text-foreground">
-                                    {user.name}
-                                </span>
-                                <span className="block truncate text-xs font-normal text-muted-foreground">
-                                    {user.email}
-                                </span>
+                        <DropdownMenuLabel className="flex flex-col gap-0.5 px-2 py-2">
+                            <span className="truncate text-sm font-semibold text-foreground">
+                                {user.name}
+                            </span>
+                            <span className="truncate text-[13px] font-normal text-muted-foreground">
+                                {user.email}
                             </span>
                         </DropdownMenuLabel>
                     </DropdownMenuGroup>
@@ -157,6 +133,13 @@ export function UserMenu({
                                     <item.icon aria-hidden="true" /> {item.label}
                                 </DropdownMenuItem>
                             ))}
+                        {contact && (
+                            <DropdownMenuItem
+                                render={<a href={`mailto:${contact}`} aria-label="Help" />}
+                            >
+                                <CircleHelpIcon aria-hidden="true" /> Help
+                            </DropdownMenuItem>
+                        )}
                     </DropdownMenuGroup>
                     <DropdownMenuSeparator />
                     <ThemeRadioItems />
@@ -169,49 +152,105 @@ export function UserMenu({
                         <Volume2Icon aria-hidden="true" /> Interface sounds
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
-                    {/* The header's device control owns the dialogs; this only opens them. */}
+                    {/* The device control owns the lock and unlock dialogs; this only opens them. */}
                     <DropdownMenuItem disabled={restoring} onClick={openDeviceDialog}>
                         {unlocked ? (
                             <LockKeyholeIcon aria-hidden="true" />
                         ) : (
                             <LockKeyholeOpenIcon aria-hidden="true" />
                         )}
-                        {unlocked ? 'Lock this device' : 'Unlock this device'}
+                        {unlocked ? 'Lock on this browser' : 'Unlock on this browser'}
                     </DropdownMenuItem>
-                    <DropdownMenuItem
-                        variant="destructive"
-                        disabled={pending}
-                        onClick={() => void signOut()}
-                    >
+                    <DropdownMenuItem variant="destructive" onClick={() => setSigningOut(true)}>
                         <LogOutIcon aria-hidden="true" />
-                        <TextSwap>{pending ? 'Signing out…' : 'Sign out'}</TextSwap>
+                        Sign out
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
-            {error && (
-                <Alert variant="destructive" className="absolute bottom-full left-0 z-50 mb-2 w-72">
-                    <AlertDescription>{error}</AlertDescription>
-                </Alert>
-            )}
-        </div>
+            <SignOutDialog open={signingOut} onOpenChange={setSigningOut} unlocked={unlocked} />
+        </>
     );
 }
 
-/* The sidebar-footer trigger: avatar, name, email and a disclosure chevron. */
-export function ProfileTrigger({ user }: { user: { name: string; email: string } }) {
+/* Sign out asks first, and offers the lighter choice: lock, which keeps the session. */
+function SignOutDialog({
+    open,
+    onOpenChange,
+    unlocked,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    unlocked: boolean;
+}) {
+    const router = useRouter();
+    const [pending, setPending] = useState(false);
+    const [failed, setFailed] = useState(false);
+    async function signOut() {
+        setPending(true);
+        setFailed(false);
+        try {
+            await authClient.logout();
+            forgetSession(router.options.context.queryClient, false);
+            await router.navigate({ to: '/login' });
+            // Clearing before leaving would refetch queries the old page still holds.
+            router.options.context.queryClient.clear();
+        } catch {
+            cue('error');
+            setFailed(true);
+        } finally {
+            setPending(false);
+        }
+    }
     return (
-        <span className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-card group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
-            <Avatar name={user.name} />
-            <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-                <span className="block truncate text-sm font-semibold text-foreground">
-                    {user.name}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
-            </span>
-            <ChevronsUpDownIcon
-                className="size-4 text-muted-foreground group-data-[collapsible=icon]:hidden"
-                aria-hidden="true"
-            />
-        </span>
+        <AlertDialog
+            open={open}
+            onOpenChange={(next) => {
+                if (pending) return;
+                if (!next) setFailed(false);
+                onOpenChange(next);
+            }}
+        >
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Sign out of HushOS?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        You’ll need your email and password to get back in.
+                        {unlocked &&
+                            ' To hide your files without signing out, lock HushOS on this browser instead.'}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                {failed && (
+                    <Alert variant="destructive">
+                        <AlertDescription>
+                            HushOS is locked here, but signing out didn’t finish. Check your
+                            connection and try again.
+                        </AlertDescription>
+                    </Alert>
+                )}
+                <AlertDialogFooter>
+                    <Button variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
+                        Cancel
+                    </Button>
+                    {unlocked && (
+                        <Button
+                            variant="outline"
+                            disabled={pending}
+                            onClick={() => {
+                                onOpenChange(false);
+                                void lockDevice();
+                            }}
+                        >
+                            <LockKeyholeIcon aria-hidden="true" />
+                            Lock instead
+                        </Button>
+                    )}
+                    <Button variant="destructive" disabled={pending} onClick={() => void signOut()}>
+                        <TextSwap>
+                            {pending ? 'Signing out…' : failed ? 'Try again' : 'Sign out'}
+                        </TextSwap>
+                    </Button>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     );
 }

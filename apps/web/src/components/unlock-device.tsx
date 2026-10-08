@@ -1,10 +1,8 @@
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
-import { FormActions, FormNote, FormTable } from '@/components/form-rows';
-import { PendingLabel } from '@/components/motion';
+import { AuthNote } from '@/components/auth-layout';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
@@ -13,16 +11,19 @@ import { cue } from '@/lib/sounds';
 const unlockFields = z.object({ password: z.string().min(1, 'Enter your password.').max(128) });
 
 /*
- * Unlocks the account key on this device without leaving the page. Signing in
- * again runs OPAQUE for the known email, which is exactly what unlocking is.
+ * Unlocks HushOS on this browser without leaving the page. Signing in again
+ * runs OPAQUE for the known email, which is exactly what unlocking is.
  */
 export function UnlockDevice({
     user,
     onUnlocked,
+    onCancel,
     className,
 }: {
     user: { email: string };
     onUnlocked?: () => void | Promise<void>;
+    /* In a dialog: Cancel beside Unlock. */
+    onCancel?: () => void;
     className?: string;
 }) {
     const [pending, setPending] = useState(false);
@@ -57,11 +58,13 @@ export function UnlockDevice({
             aria-busy={pending}
             noValidate
         >
-            <FormTable className="border-0">
+            <div className="flex flex-col gap-4">
+                {error && <AuthNote tone="danger">{error}</AuthNote>}
                 <form.Field name="password">
                     {(field) => (
                         <AuthInput
                             label="Password"
+                            hint={user.email}
                             id="unlock-password"
                             name={field.name}
                             type="password"
@@ -76,18 +79,22 @@ export function UnlockDevice({
                         />
                     )}
                 </form.Field>
-                {error && <FormNote tone="destructive">{error}</FormNote>}
-                <FormActions
-                    action={
-                        <Button type="submit" size="lg" disabled={pending}>
-                            <PendingLabel pending={pending} idle="Unlock" busy="Unlocking…" />
-                            <ArrowRightIcon aria-hidden="true" />
+                <div className="flex justify-end gap-2">
+                    {onCancel && (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={pending}
+                            onClick={onCancel}
+                        >
+                            Cancel
                         </Button>
-                    }
-                >
-                    <span className="truncate">{user.email}</span>
-                </FormActions>
-            </FormTable>
+                    )}
+                    <Button type="submit" size={onCancel ? 'default' : 'lg'} disabled={pending}>
+                        {pending ? 'Unlocking…' : 'Unlock'}
+                    </Button>
+                </div>
+            </div>
         </form>
     );
 }

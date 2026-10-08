@@ -1,467 +1,404 @@
-import type { SecurityAction, SessionUser } from '@hushos/auth/protocol';
-import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
-import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { ArrowRightIcon, ChevronRightIcon, PencilIcon, TriangleAlertIcon } from 'lucide-react';
-import { useState } from 'react';
-import { z } from 'zod';
-import { AccountSecurityForm, securityLabels } from '@/components/account-security-form';
-import { ProfileNameForm } from '@/components/profile-name-form';
-import { AuthInput } from '@/components/auth-input';
+import { createFileRoute, getRouteApi, Link, useRouter } from '@tanstack/react-router';
+import { ChevronDownIcon, LockKeyholeIcon, LockKeyholeOpenIcon } from 'lucide-react';
+import { useState, useSyncExternalStore } from 'react';
+import { useStore } from 'zustand';
+import {
+    ChangePasswordDialog,
+    DeleteAccountDialog,
+    NewKeyDialog,
+} from '@/components/account-dialogs';
 import { CopyValue } from '@/components/copy-value';
-import { FormActions, FormNote, FormTable } from '@/components/form-rows';
-import { Collapse, PendingLabel } from '@/components/motion';
+import { openDeviceDialog } from '@/components/device-control';
 import { PageHeader } from '@/components/page-header';
-import { Button } from '@/components/ui/button';
+import { Done, Segmented, Setting, SettingsGroup } from '@/components/settings';
+import { useTheme } from '@/components/theme-provider';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
-import { cue } from '@/lib/sounds';
+import { useBillingEnabled } from '@/lib/queries';
+import { forgetSession } from '@/lib/session';
+import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
+import type { Theme } from '@/lib/theme';
 
 export const Route = createFileRoute('/_authenticated/app/account')({
-    head: () => ({ meta: [{ title: 'Account settings · HushOS' }] }),
+    head: () => ({ meta: [{ title: 'Account · HushOS' }] }),
     component: AccountPage,
 });
 
-const rowLabel = 'w-28 shrink-0 text-sm text-muted-foreground';
-
-function Row({ label, value, copy }: { label: string; value: string; copy?: boolean }) {
-    return (
-        <div className="flex min-h-[46px] flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
-            <dt className={rowLabel}>{label}</dt>
-            <dd
-                className={`min-w-0 flex-1 wrap-anywhere ${copy ? 'font-mono text-[13px]' : 'text-sm'}`}
-            >
-                {copy ? <CopyValue value={value} label={label} /> : value}
-            </dd>
-        </div>
-    );
-}
-
-/* An editable row: the whole row is the control, and the blue pencil says so. */
-function EditableRow({
-    label,
-    value,
-    disabled,
-    onEdit,
-}: {
-    label: string;
-    value: string;
-    disabled?: boolean;
-    onEdit: () => void;
-}) {
-    return (
-        <button
-            type="button"
-            disabled={disabled}
-            onClick={onEdit}
-            aria-label={`Edit ${label.toLowerCase()}`}
-            className="flex min-h-[46px] w-full cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
-        >
-            <span className={rowLabel}>{label}</span>
-            <span className="flex min-w-0 flex-1 items-center justify-between gap-4 text-sm">
-                <span className="truncate">{value}</span>
-                <PencilIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-            </span>
-        </button>
-    );
-}
-
-const box = 'divide-y divide-rule overflow-hidden rounded-md border border-rule';
-
-function Section({
-    id,
-    title,
-    description,
-    children,
-}: {
-    id: string;
-    title: string;
-    description: string;
-    children: React.ReactNode;
-}) {
-    return (
-        <section aria-labelledby={id} className="flex flex-col gap-4">
-            <div>
-                <h2 id={id} className="text-lg font-bold">
-                    {title}
-                </h2>
-                <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                    {description}
-                </p>
-            </div>
-            <div className={box}>{children}</div>
-        </section>
-    );
-}
-
-/* What an action is for on the left, the button that starts it on the right. */
-function ActionRow({
-    title,
-    description,
-    tone = 'default',
-    children,
-}: {
-    title: string;
-    description: string;
-    tone?: 'default' | 'destructive';
-    children: React.ReactNode;
-}) {
-    return (
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-4 py-3.5">
-            <div className="min-w-0 flex-1 basis-64">
-                <p
-                    className={`flex items-center gap-2 text-sm font-medium ${tone === 'destructive' ? 'text-destructive' : ''}`}
-                >
-                    {tone === 'destructive' && (
-                        <TriangleAlertIcon className="size-3.5" aria-hidden="true" />
-                    )}
-                    {title}
-                </p>
-                <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                    {description}
-                </p>
-            </div>
-            <div className="flex flex-wrap gap-2">{children}</div>
-        </div>
-    );
-}
-
 /*
- * A security action: its row opens into an inline form, using the same
- * collapse as the delete confirmation so every section moves alike.
+ * Account: somewhere people come rarely and want to leave quickly. Name and
+ * password, the recovery phrase, what this browser does, and, folded away,
+ * the heavy things: resetting sharing keys, the account ID, deleting the
+ * account. Each of those asks once, in a dialog.
  */
-function SecurityRow({
-    action,
-    user,
-    title,
-    description,
-    open,
-    disabled,
-    before,
-    onOpen,
-    onClose,
-    onSuccess,
-    onPending,
-}: {
-    action: SecurityAction;
-    user: SessionUser;
-    title: string;
-    description: string;
-    open: boolean;
-    disabled: boolean;
-    /* A sibling action that shares the row. */
-    before?: React.ReactNode;
-    onOpen: () => void;
-    onClose: () => void;
-    onSuccess: () => void;
-    onPending: (pending: boolean) => void;
-}) {
-    return (
-        <>
-            <Collapse open={!open}>
-                <ActionRow title={title} description={description}>
-                    {before}
-                    <Button variant="outline" size="sm" disabled={disabled} onClick={onOpen}>
-                        {securityLabels[action]} <ArrowRightIcon aria-hidden="true" />
-                    </Button>
-                </ActionRow>
-            </Collapse>
-            <Collapse open={open}>
-                <AccountSecurityForm
-                    user={user}
-                    action={action}
-                    onCancel={onClose}
-                    onPending={onPending}
-                    onSuccess={onSuccess}
-                />
-            </Collapse>
-        </>
-    );
-}
+
+const themes = [
+    { value: 'light', label: 'Light' },
+    { value: 'dark', label: 'Dark' },
+    { value: 'system', label: 'Same as this computer' },
+] as const satisfies readonly { value: Theme; label: string }[];
 
 function AccountPage() {
     const { user } = Route.useRouteContext();
-    const router = useRouter();
-    const [securityAction, setSecurityAction] = useState<SecurityAction | null>(null);
-    const [securityPending, setSecurityPending] = useState(false);
-    const [securitySuccess, setSecuritySuccess] = useState('');
-    const [editingName, setEditingName] = useState(false);
-    const [nameSuccess, setNameSuccess] = useState('');
-    const [confirming, setConfirming] = useState(false);
-    const [pending, setPending] = useState(false);
-    const [error, setError] = useState('');
-    /* One inline form at a time: opening any of them closes the others. */
-    function openSecurity(action: SecurityAction) {
-        setSecurityAction(action);
-        setSecuritySuccess('');
-        setEditingName(false);
-        setNameSuccess('');
-        setConfirming(false);
-    }
-    const deleteFields = z.object({
-        email: z
-            .string()
-            .trim()
-            .refine(
-                (value) => value.toLowerCase() === user.email.toLowerCase(),
-                'Enter your account email to confirm.',
-            ),
-        password: z.string().min(1, 'Enter your password.').max(128),
-    });
-    const form = useForm({
-        defaultValues: { email: '', password: '' },
-        validationLogic: revalidateLogic(),
-        validators: { onDynamic: deleteFields },
-        onSubmit: async ({ value }) => {
-            setPending(true);
-            setError('');
-            try {
-                await authClient.deleteAccount(value.password);
-                form.reset();
-                router.options.context.queryClient.clear();
-                await router.invalidate();
-                await router.navigate({ to: '/account-deleted', replace: true });
-            } catch (error) {
-                cue('error');
-                setError(authError(error));
-            } finally {
-                setPending(false);
-            }
-        },
-    });
+    const [dialog, setDialog] = useState<
+        'password' | 'recovery-key' | 'master-key' | 'delete' | null
+    >(null);
+    const [passwordChanged, setPasswordChanged] = useState(false);
+    const [advanced, setAdvanced] = useState(false);
+    const close = (open: boolean) => !open && setDialog(null);
     return (
-        <div className="flex flex-col">
-            <PageHeader
-                eyebrow="Account"
-                title="Account settings"
-                description="Manage your password, encryption keys, and account."
-            />
-            <div className="flex max-w-3xl flex-col gap-10 px-5 py-6 sm:px-8 sm:py-8">
-                <Section
-                    id="profile-title"
-                    title="You"
-                    description="Your name, email, and password."
-                >
-                    <Collapse open={Boolean(nameSuccess)}>
-                        <output className="block">
-                            <FormNote>{nameSuccess}</FormNote>
-                        </output>
-                    </Collapse>
-                    <Collapse open={!editingName}>
-                        <EditableRow
-                            label="Name"
-                            value={user.name}
-                            disabled={securityPending || pending}
-                            onEdit={() => {
-                                setEditingName(true);
-                                setNameSuccess('');
-                                setSecurityAction(null);
-                                setSecuritySuccess('');
-                                setConfirming(false);
-                            }}
-                        />
-                    </Collapse>
-                    <Collapse open={editingName}>
-                        <ProfileNameForm
-                            user={user}
-                            onCancel={() => setEditingName(false)}
-                            onPending={setSecurityPending}
-                            onSuccess={() => {
-                                setEditingName(false);
-                                setNameSuccess('Name updated.');
-                            }}
-                        />
-                    </Collapse>
-                    <dl>
-                        <Row label="Email" value={user.email} />
-                    </dl>
-                    <Collapse open={Boolean(securitySuccess)}>
-                        <output className="block">
-                            <FormNote>{securitySuccess}</FormNote>
-                        </output>
-                    </Collapse>
-                    <SecurityRow
-                        action="password"
-                        user={user}
-                        title="Password"
-                        description="The password you use to sign in and unlock your account key on this device."
-                        open={securityAction === 'password'}
-                        disabled={securityPending || pending}
-                        onOpen={() => openSecurity('password')}
-                        onClose={() => setSecurityAction(null)}
-                        onPending={setSecurityPending}
-                        onSuccess={() => {
-                            setSecurityAction(null);
-                            setSecuritySuccess(
-                                'Password changed. Other sessions have been signed out.',
-                            );
-                        }}
-                    />
-                </Section>
-                <Section
-                    id="recovery-title"
-                    title="If you forget your password"
-                    description="Your 24 words are the only way to reset a forgotten password without losing your account key. Review them any time this device is unlocked."
-                >
-                    <SecurityRow
-                        action="recovery-key"
-                        user={user}
-                        title="Recovery phrase"
-                        description="Rotating it makes 24 new words; the old ones stop working."
-                        open={securityAction === 'recovery-key'}
-                        disabled={securityPending || pending}
-                        before={
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                render={<Link to="/app/recovery-key" />}
-                                nativeButton={false}
-                            >
-                                View recovery phrase <ArrowRightIcon aria-hidden="true" />
+        <div className="flex flex-col pb-10">
+            <PageHeader title="Account" />
+            <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">
+                <SettingsGroup title="You" description="Your name, email and password.">
+                    <NameSetting name={user.name} />
+                    <Setting label="Email">
+                        <span className="text-muted-foreground wrap-anywhere">{user.email}</span>
+                    </Setting>
+                    <Setting
+                        label="Password"
+                        action={
+                            <Button variant="outline" onClick={() => setDialog('password')}>
+                                Change password
                             </Button>
                         }
-                        onOpen={() => openSecurity('recovery-key')}
-                        onClose={() => setSecurityAction(null)}
-                        onPending={setSecurityPending}
-                        onSuccess={() => setSecurityAction(null)}
-                    />
-                </Section>
-                <details className="group flex flex-col">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xs select-none [&::-webkit-details-marker]:hidden">
-                        <ChevronRightIcon
-                            className="size-4 text-muted-foreground transition-transform group-open:rotate-90"
-                            aria-hidden="true"
-                        />
-                        <h2 className="text-lg font-bold">Advanced</h2>
-                    </summary>
-                    <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                        Your master key, your account ID, and deleting the account.
-                    </p>
-                    <div className={`${box} mt-4`}>
-                        <SecurityRow
-                            action="master-key"
-                            user={user}
-                            title="Master key"
-                            description="The root key that protects your account’s private keys. Rotating it also creates a new recovery phrase."
-                            open={securityAction === 'master-key'}
-                            disabled={securityPending || pending}
-                            onOpen={() => openSecurity('master-key')}
-                            onClose={() => setSecurityAction(null)}
-                            onPending={setSecurityPending}
-                            onSuccess={() => setSecurityAction(null)}
-                        />
-                        <dl>
-                            <Row label="Account ID" value={user.id} copy />
-                        </dl>
-                        <Collapse open={!confirming}>
-                            <ActionRow
-                                tone="destructive"
-                                title="Permanently delete account"
-                                description="This deletes your profile, personal workspace, storage allowance, encryption-key bundles, and all sessions. Your recovery phrase cannot restore a deleted account."
-                            >
-                                <Button
-                                    variant="destructive-outline"
-                                    size="sm"
-                                    disabled={securityPending}
-                                    onClick={() => {
-                                        setConfirming(true);
-                                        setSecurityAction(null);
-                                        setSecuritySuccess('');
-                                        setEditingName(false);
-                                        setNameSuccess('');
-                                    }}
-                                >
-                                    Delete account… <ArrowRightIcon aria-hidden="true" />
+                        below={
+                            passwordChanged && (
+                                <Done>Password changed. Your other devices are signed out.</Done>
+                            )
+                        }
+                    >
+                        <span aria-hidden="true" className="tracking-[0.2em] text-muted-foreground">
+                            ••••••••••
+                        </span>
+                    </Setting>
+                </SettingsGroup>
+
+                <SettingsGroup
+                    title="If you forget your password"
+                    description="Your recovery phrase is the only way back in."
+                >
+                    <Setting
+                        label="Recovery phrase"
+                        action={
+                            <>
+                                <Button variant="ghost" onClick={() => setDialog('recovery-key')}>
+                                    Make a new phrase
                                 </Button>
-                            </ActionRow>
-                        </Collapse>
-                        <Collapse open={confirming}>
-                            <form
-                                onSubmit={(event) => {
-                                    event.preventDefault();
-                                    void form.handleSubmit();
-                                }}
-                                noValidate
-                                aria-busy={pending}
-                            >
-                                <FormTable className="border-0">
-                                    <form.Field name="email">
-                                        {(field) => (
-                                            <AuthInput
-                                                label="Email"
-                                                hint="Type your account email to confirm."
-                                                id="delete-email"
-                                                name={field.name}
-                                                type="email"
-                                                autoComplete="off"
-                                                placeholder={user.email}
-                                                value={field.state.value}
-                                                onChange={(event) =>
-                                                    field.handleChange(event.target.value)
-                                                }
-                                                onBlur={field.handleBlur}
-                                                errors={field.state.meta.errors}
-                                                disabled={pending}
-                                                required
-                                            />
-                                        )}
-                                    </form.Field>
-                                    <form.Field name="password">
-                                        {(field) => (
-                                            <AuthInput
-                                                label="Password"
-                                                id="delete-password"
-                                                name={field.name}
-                                                type="password"
-                                                autoComplete="current-password"
-                                                value={field.state.value}
-                                                onChange={(event) =>
-                                                    field.handleChange(event.target.value)
-                                                }
-                                                onBlur={field.handleBlur}
-                                                errors={field.state.meta.errors}
-                                                disabled={pending}
-                                                required
-                                                maxLength={128}
-                                            />
-                                        )}
-                                    </form.Field>
-                                    {error && <FormNote tone="destructive">{error}</FormNote>}
-                                    <FormActions
-                                        action={
-                                            <Button
-                                                variant="destructive"
-                                                size="lg"
-                                                type="submit"
-                                                disabled={pending}
-                                            >
-                                                <PendingLabel
-                                                    pending={pending}
-                                                    idle="Delete forever"
-                                                    busy="Deleting…"
-                                                />
-                                                <TriangleAlertIcon aria-hidden="true" />
-                                            </Button>
-                                        }
-                                    >
-                                        <button
-                                            type="button"
-                                            className="text-link"
-                                            disabled={pending}
-                                            onClick={() => {
-                                                setConfirming(false);
-                                                form.reset();
-                                                setError('');
-                                            }}
-                                        >
-                                            Cancel
-                                        </button>
-                                    </FormActions>
-                                </FormTable>
-                            </form>
-                        </Collapse>
+                                <Link
+                                    to="/app/recovery-key"
+                                    className={buttonVariants({ variant: 'outline' })}
+                                >
+                                    View
+                                </Link>
+                            </>
+                        }
+                    >
+                        <span className="text-muted-foreground">24 words</span>
+                    </Setting>
+                </SettingsGroup>
+
+                <BrowserSettings />
+
+                <SettingsGroup
+                    title="Advanced"
+                    description="Rarely needed."
+                    action={
+                        <button
+                            type="button"
+                            aria-expanded={advanced}
+                            aria-controls="advanced-settings"
+                            onClick={() => setAdvanced((value) => !value)}
+                            className="flex h-9 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+                        >
+                            {advanced ? 'Hide' : 'Show'}
+                            <ChevronDownIcon
+                                className={`size-4 transition-transform ${advanced ? 'rotate-180' : ''}`}
+                                aria-hidden="true"
+                            />
+                        </button>
+                    }
+                >
+                    <div id="advanced-settings" hidden={!advanced}>
+                        <Setting
+                            label="Sharing keys"
+                            action={
+                                <Button variant="outline" onClick={() => setDialog('master-key')}>
+                                    Reset sharing keys
+                                </Button>
+                            }
+                            below={
+                                <p className="text-[13px] text-muted-foreground">
+                                    Only if you think someone saw your password or recovery phrase.
+                                    You get a new recovery phrase and your other devices are signed
+                                    out. Files, shares and links stay as they are.
+                                </p>
+                            }
+                        >
+                            <span className="text-muted-foreground">
+                                Used to share with people and links
+                            </span>
+                        </Setting>
+                        <Setting label="Account ID">
+                            <span className="font-mono text-sm">
+                                <CopyValue value={user.id} label="Account ID" />
+                            </span>
+                        </Setting>
+                        <Setting
+                            label="Delete account"
+                            action={
+                                <Button variant="destructive" onClick={() => setDialog('delete')}>
+                                    Delete account
+                                </Button>
+                            }
+                        >
+                            <span className="text-muted-foreground">
+                                Every file, every earlier version and the account. It can’t be
+                                undone.
+                            </span>
+                        </Setting>
                     </div>
-                </details>
+                </SettingsGroup>
             </div>
+
+            <AboutLine />
+
+            <ChangePasswordDialog
+                user={user}
+                open={dialog === 'password'}
+                onOpenChange={close}
+                onChanged={() => setPasswordChanged(true)}
+            />
+            <NewKeyDialog
+                user={user}
+                action="recovery-key"
+                open={dialog === 'recovery-key'}
+                onOpenChange={close}
+            />
+            <NewKeyDialog
+                user={user}
+                action="master-key"
+                open={dialog === 'master-key'}
+                onOpenChange={close}
+            />
+            <DeleteAccountDialog open={dialog === 'delete'} onOpenChange={close} />
         </div>
+    );
+}
+
+const root = getRouteApi('__root__');
+const noSubscription = () => () => {};
+
+/*
+ * The foot: which HushOS this is, and on a self-hosted one, which server, so a
+ * person with accounts on two knows where they are.
+ */
+function AboutLine() {
+    const release = root.useLoaderData()?.release ?? null;
+    const selfHosted = !useBillingEnabled();
+    // The server renders without a host; the browser fills it in after hydrating.
+    const host = useSyncExternalStore(
+        noSubscription,
+        () => window.location.host,
+        () => '',
+    );
+    const parts = [
+        release ? `HushOS ${release.slice(0, 7)}` : 'HushOS',
+        selfHosted && host ? `Server ${host}` : null,
+    ].filter(Boolean);
+    return (
+        <p className="mt-10 px-5 font-mono text-xs text-muted-foreground sm:px-8">
+            {parts.join(' · ')}
+        </p>
+    );
+}
+
+/* The name, edited in place: the one profile field the server lets you change. */
+function NameSetting({ name }: { name: string }) {
+    const router = useRouter();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(name);
+    const [saved, setSaved] = useState(false);
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function save() {
+        const value = draft.trim();
+        if (!value) {
+            setError('Enter your name.');
+            return;
+        }
+        if (value.length > 100) {
+            setError('Use no more than 100 characters.');
+            return;
+        }
+        setPending(true);
+        setError('');
+        try {
+            await authClient.updateProfile(value);
+            cue('success');
+            // The name lives in the cached session; forget it so the guard refetches.
+            forgetSession(router.options.context.queryClient);
+            await router.invalidate();
+            setEditing(false);
+            setSaved(true);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    return (
+        <form
+            noValidate
+            onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+            }}
+        >
+            <Setting
+                label={editing ? <label htmlFor="settings-name">Name</label> : 'Name'}
+                action={
+                    editing ? (
+                        <>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                disabled={pending}
+                                onClick={() => {
+                                    setEditing(false);
+                                    setError('');
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button type="submit" disabled={pending}>
+                                {pending ? 'Saving…' : 'Save name'}
+                            </Button>
+                        </>
+                    ) : (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            aria-label="Edit name"
+                            onClick={() => {
+                                setDraft(name);
+                                setSaved(false);
+                                setEditing(true);
+                            }}
+                        >
+                            Edit
+                        </Button>
+                    )
+                }
+                below={
+                    editing ? (
+                        <p
+                            className={`text-[13px] ${error ? 'text-destructive' : 'text-muted-foreground'}`}
+                            role={error ? 'alert' : undefined}
+                        >
+                            {error || 'Shown to people you share with.'}
+                        </p>
+                    ) : (
+                        saved && <Done>Name saved.</Done>
+                    )
+                }
+            >
+                {editing ? (
+                    <Input
+                        id="settings-name"
+                        autoComplete="name"
+                        maxLength={100}
+                        // oxlint-disable-next-line jsx-a11y/no-autofocus -- the field Edit just opened
+                        autoFocus
+                        value={draft}
+                        disabled={pending}
+                        aria-invalid={Boolean(error)}
+                        onChange={(event) => setDraft(event.target.value)}
+                        className="text-[15px]"
+                    />
+                ) : (
+                    <span className="wrap-anywhere">{name}</span>
+                )}
+            </Setting>
+        </form>
+    );
+}
+
+/* What this browser does: how it looks, whether it makes sounds, and locking it. */
+function BrowserSettings() {
+    const { theme, setTheme, contrast, setContrast, isPending, error } = useTheme();
+    const sounds = useSoundsEnabled();
+    const restoring = useStore(authClient.store, (state) => state.restoring);
+    const { user } = Route.useRouteContext();
+    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
+    return (
+        <SettingsGroup title="On this browser" description="These stay on this browser only.">
+            <Setting
+                label="Appearance"
+                below={
+                    error && (
+                        <p role="alert" className="text-[13px] text-destructive">
+                            {error}
+                        </p>
+                    )
+                }
+            >
+                <Segmented
+                    label="Appearance"
+                    options={themes}
+                    value={theme}
+                    disabled={isPending}
+                    onChange={setTheme}
+                />
+            </Setting>
+            <Setting
+                label={<label htmlFor="settings-contrast">High contrast</label>}
+                action={
+                    <Switch
+                        id="settings-contrast"
+                        checked={contrast}
+                        disabled={isPending}
+                        onCheckedChange={setContrast}
+                    />
+                }
+            >
+                <span className="text-muted-foreground">
+                    Darker text and stronger edges. It also turns on when this computer asks for
+                    more contrast.
+                </span>
+            </Setting>
+            <Setting
+                label={<label htmlFor="settings-sounds">Interface sounds</label>}
+                action={
+                    <Switch
+                        id="settings-sounds"
+                        checked={sounds}
+                        onCheckedChange={setSoundsEnabled}
+                    />
+                }
+            >
+                <span className="text-muted-foreground">
+                    Short sounds when you copy, unlock or save something
+                </span>
+            </Setting>
+            <Setting
+                label="Lock"
+                action={
+                    <Button variant="outline" disabled={restoring} onClick={openDeviceDialog}>
+                        {unlocked ? <LockKeyholeIcon /> : <LockKeyholeOpenIcon />}
+                        {unlocked ? 'Lock on this browser' : 'Unlock on this browser'}
+                    </Button>
+                }
+            >
+                <span className="text-muted-foreground">
+                    {unlocked
+                        ? 'Ask for your password before showing your files here'
+                        : 'Locked. Your password opens your files here again.'}
+                </span>
+            </Setting>
+        </SettingsGroup>
     );
 }

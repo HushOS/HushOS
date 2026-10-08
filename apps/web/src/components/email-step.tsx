@@ -1,18 +1,51 @@
 import type { SignupIntent } from '@hushos/auth/protocol';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
-import { ArrowRightIcon } from 'lucide-react';
-import { useState } from 'react';
+import { MailIcon } from 'lucide-react';
+import { useState, useSyncExternalStore } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
-import { AuthActions, AuthFields, AuthLayout, AuthNote, Stamp } from '@/components/auth-layout';
+import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { ConsentField } from '@/components/consent-field';
-import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
 import { getOfferLandingServerFn, getReferralLandingServerFn } from '@/lib/growth';
+import { pickCurrency } from '@/lib/currency';
+import { currenciesOf, priceOf } from '@/lib/plans';
+import {
+    catalogueQueryOptions,
+    formatMoney,
+    formatQuota,
+    localeHintQueryOptions,
+} from '@/lib/queries';
 import { cue } from '@/lib/sounds';
+
+/*
+ * The first step of signing up and of resetting a password: an email, and a
+ * link sent to it. The address is kept for this tab only, so "Check your
+ * inbox" can name it and send another link; it never goes in the URL.
+ */
+
+type Sent = { email: string; purpose: 'register' | 'recover'; intent?: SignupIntent };
+const SENT_KEY = 'hushos-link-sent';
+
+function rememberSent(sent: Sent) {
+    try {
+        sessionStorage.setItem(SENT_KEY, JSON.stringify(sent));
+    } catch {
+        /* Without storage the inbox page just says "your inbox". */
+    }
+}
+function readSent(): string | null {
+    try {
+        return sessionStorage.getItem(SENT_KEY);
+    } catch {
+        return null;
+    }
+}
+const noSubscription = () => () => {};
 
 export function EmailStep({
     purpose,
@@ -52,44 +85,62 @@ export function EmailStep({
                         getOfferLandingServerFn({ data: { slug: code } }),
                     ]);
                     if (!referral && !offer) {
-                        setError(
-                            'That code is not one we know. Check it with whoever gave it to you, or leave it out.',
-                        );
+                        form.setFieldMeta('code', (meta) => ({
+                            ...meta,
+                            errorMap: {
+                                ...meta.errorMap,
+                                onSubmit:
+                                    'We don’t recognise that code. Check it, or leave it empty.',
+                            },
+                        }));
                         return;
                     }
                     signup = { ...intent, referral: code, source: 'referral' };
                 }
-                await authClient.requestEmail(value.email.trim(), purpose, signup);
+                const email = value.email.trim();
+                await authClient.requestEmail(email, purpose, signup);
+                rememberSent({ email, purpose, intent: signup });
                 form.reset();
                 cue('success');
                 await router.navigate({
                     to: purpose === 'register' ? '/register/check-email' : '/recover/check-email',
                 });
-            } catch (error) {
+            } catch (cause) {
                 cue('error');
-                setError(authError(error));
+                setError(authError(cause));
             } finally {
                 setPending(false);
             }
         },
     });
+    const register = purpose === 'register';
     return (
         <AuthLayout
-            purpose={purpose}
-            title={purpose === 'register' ? 'Create your account' : 'Recover your account'}
-            stamp={purpose === 'register' ? 'Step 1 of 2' : 'Step 1 of 2'}
+            title={register ? 'Create your account' : 'Reset your password'}
             description={
-                purpose === 'register'
-                    ? 'Start with your email. We’ll send a link to confirm it’s yours before anything else is set up.'
-                    : 'Confirm your email first. Then use your 24-word recovery phrase to choose a new password.'
+                register
+                    ? 'We’ll email you a link to confirm it’s you.'
+                    : 'You’ll need your recovery kit, or the 24 words on it. We’ll email you a link to start.'
             }
             footer={
-                <>
-                    <Stamp tone="warning">Password stays on this device</Stamp>
-                    <Stamp>Keys wrapped in your browser</Stamp>
-                </>
+                register ? (
+                    <>
+                        Already have an account?{' '}
+                        <Link to="/login" className={authLink}>
+                            Sign in
+                        </Link>
+                    </>
+                ) : (
+                    <>
+                        Remembered it?{' '}
+                        <Link to="/login" className={authLink}>
+                            Sign in
+                        </Link>
+                    </>
+                )
             }
         >
+            {register && intent?.plan && <ChosenPlan id={intent.plan} />}
             <form
                 onSubmit={(event) => {
                     event.preventDefault();
@@ -99,6 +150,7 @@ export function EmailStep({
                 noValidate
             >
                 <AuthFields>
+                    {error && <AuthNote tone="danger">{error}</AuthNote>}
                     <form.Field name="email">
                         {(field) => (
                             <AuthInput
@@ -107,7 +159,7 @@ export function EmailStep({
                                 name={field.name}
                                 type="email"
                                 autoComplete="email"
-                                placeholder="you@example.com"
+                                placeholder="name@example.com"
                                 value={field.state.value}
                                 onChange={(event) => field.handleChange(event.target.value)}
                                 onBlur={field.handleBlur}
@@ -118,19 +170,21 @@ export function EmailStep({
                             />
                         )}
                     </form.Field>
-                    {purpose === 'register' && (
+                    {register && (
                         <form.Field name="code">
                             {(field) => (
                                 <AuthInput
                                     label="Code"
-                                    hint="Optional. An invite from a friend, or an offer from a creator’s page."
+                                    optional
+                                    hint="From a friend or an offer. A friend’s code gives you both more space."
                                     id="code"
                                     name={field.name}
                                     type="text"
                                     autoComplete="off"
                                     autoCapitalize="none"
                                     spellCheck={false}
-                                    placeholder="e.g. k7m2p4qz"
+                                    placeholder="k7m2p4qz"
+                                    className="font-mono"
                                     value={field.state.value}
                                     onChange={(event) => field.handleChange(event.target.value)}
                                     onBlur={field.handleBlur}
@@ -143,7 +197,7 @@ export function EmailStep({
                             )}
                         </form.Field>
                     )}
-                    {purpose === 'register' && (
+                    {register && (
                         <form.Field name="agree">
                             {(field) => (
                                 <ConsentField
@@ -156,31 +210,13 @@ export function EmailStep({
                             )}
                         </form.Field>
                     )}
-                    {error && <AuthNote tone="destructive">{error}</AuthNote>}
                     <AuthActions
                         action={
                             <Button size="lg" type="submit" disabled={pending}>
-                                <PendingLabel pending={pending} idle="Send link" busy="Sending…" />
-                                <ArrowRightIcon aria-hidden="true" />
+                                {pending ? 'Sending…' : 'Send link'}
                             </Button>
                         }
-                    >
-                        {purpose === 'register' ? (
-                            <span>
-                                Already have an account?{' '}
-                                <Link to="/login" className="text-link">
-                                    Sign in
-                                </Link>
-                            </span>
-                        ) : (
-                            <span>
-                                Remembered it?{' '}
-                                <Link to="/login" className="text-link">
-                                    Back to sign in
-                                </Link>
-                            </span>
-                        )}
-                    </AuthActions>
+                    />
                 </AuthFields>
             </form>
         </AuthLayout>
@@ -188,36 +224,111 @@ export function EmailStep({
 }
 
 export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
-    const steps = [
-        'Open the email from HushOS. Check your spam folder if it isn’t there.',
-        purpose === 'register'
-            ? 'Follow the link to choose your name and password.'
-            : 'Follow the link to continue with your recovery phrase.',
-        'You can close this tab. The link opens a fresh page.',
-    ];
+    // Rendered on the server without storage; the address arrives once the page hydrates.
+    const raw = useSyncExternalStore(noSubscription, readSent, () => null);
+    let sent: Sent | null = null;
+    try {
+        const parsed = raw ? (JSON.parse(raw) as Sent) : null;
+        sent = parsed?.purpose === purpose ? parsed : null;
+    } catch {
+        sent = null;
+    }
+    const [resent, setResent] = useState(false);
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function resend() {
+        if (!sent) return;
+        setPending(true);
+        setError('');
+        try {
+            await authClient.requestEmail(sent.email, sent.purpose, sent.intent);
+            cue('success');
+            setResent(true);
+        } catch (cause) {
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
     return (
         <AuthLayout
-            purpose={purpose}
+            icon={<MailIcon strokeWidth={1.9} aria-hidden="true" />}
             title="Check your inbox"
-            stamp="Link sent"
-            description="We’ve sent a verification link. It’s valid for 30 minutes and only works once."
-            footer={
-                <Link to={purpose === 'register' ? '/register' : '/recover'} className="text-link">
-                    Use another email or request a new link
-                </Link>
+            description={
+                <>
+                    We sent a link to{' '}
+                    {sent ? (
+                        <span className="font-semibold text-foreground">{sent.email}</span>
+                    ) : (
+                        'your email'
+                    )}
+                    . Open it to {purpose === 'register' ? 'carry on' : 'reset your password'}. It
+                    works once, for 30 minutes.
+                </>
             }
         >
-            <ol className="flex flex-col">
-                {steps.map((step, index) => (
-                    <li
-                        key={step}
-                        className="grid grid-cols-[1.75rem_minmax(0,1fr)] border-b border-rule py-3 text-sm leading-relaxed last:border-b-0"
+            {resent && sent && <AuthNote tone="success">New link sent to {sent.email}.</AuthNote>}
+            {error && <AuthNote tone="danger">{error}</AuthNote>}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                <Link to={purpose === 'register' ? '/register' : '/recover'} className={authLink}>
+                    Use another email
+                </Link>
+                {sent && (
+                    <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => void resend()}
+                        className="cursor-pointer font-semibold underline underline-offset-4 hover:text-primary disabled:opacity-60"
                     >
-                        <span className="text-muted-foreground tabular-nums">{index + 1}</span>
-                        <span>{step}</span>
-                    </li>
-                ))}
-            </ol>
+                        {pending ? 'Sending…' : 'Send a new link'}
+                    </button>
+                )}
+            </div>
+            <p className="text-[13px] text-muted-foreground">
+                Not there? Check your spam folder. You can close this tab; the link opens a new
+                page.
+            </p>
         </AuthLayout>
+    );
+}
+
+/*
+ * The plan picked on the pricing page, said once at the top of sign-up: what it
+ * is, what it costs, and that paying comes after the account exists.
+ */
+function ChosenPlan({ id }: { id: string }) {
+    const { data: catalogue } = useQuery(catalogueQueryOptions);
+    const { data: hint } = useQuery(localeHintQueryOptions);
+    const plan = catalogue?.plans.find((candidate) => candidate.id === id);
+    if (!catalogue || !plan) return null;
+    const currencies = currenciesOf(catalogue.plans);
+    const currency = pickCurrency({
+        hint,
+        available: currencies,
+        fallback: currencies[0] ?? plan.currency,
+    });
+    const price = priceOf(plan, currency);
+    const name = plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+    return (
+        <div className="flex items-start justify-between gap-4 rounded-md bg-accent px-4 py-3 text-accent-foreground">
+            <span className="flex flex-col gap-0.5">
+                <span className="text-[15px] font-bold">
+                    {name} · {formatQuota(plan.quotaBytes)}
+                </span>
+                <span className="text-sm">
+                    {plan.interval === 'year'
+                        ? `${formatMoney(Math.round(price.amount / 12), price.currency)} a month, billed ${formatMoney(price.amount, price.currency)} yearly.`
+                        : `${formatMoney(price.amount, price.currency)} a month.`}{' '}
+                    You pay after your account is set up.
+                </span>
+            </span>
+            <Link
+                to="/pricing"
+                className="shrink-0 text-sm font-semibold underline underline-offset-2"
+            >
+                Change
+            </Link>
+        </div>
     );
 }

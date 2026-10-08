@@ -78,7 +78,8 @@ function describe(amounts: Record<string, number>) {
 console.log(`Seeding ${environment} organisation${update ? ' (updating existing products)' : ''}`);
 for (const tier of tiers) {
     const storage =
-        tier.quota >= 1024n * GIB ? `${tier.quota / (1024n * GIB)} TiB` : `${tier.quota / GIB} GiB`;
+        // Counted in 1024s and labelled GB and TB, as the app shows sizes.
+        tier.quota >= 1024n * GIB ? `${tier.quota / (1024n * GIB)} TB` : `${tier.quota / GIB} GB`;
     for (const interval of ['month', 'year'] as const) {
         const name = `${tier.name} (${interval === 'month' ? 'monthly' : 'yearly'})`;
         const amounts = Object.fromEntries(

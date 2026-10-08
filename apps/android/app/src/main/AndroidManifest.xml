@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Scanning a recovery kit's code, asked for only when Scan your kit is chosen. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <application
         android:name=".HushOSApplication"
@@ -16,7 +19,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.HushOS"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <activity
             android:name=".MainActivity"
@@ -28,11 +31,67 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- hushos://s/<token>#<secret>, hushos://app/drive?folder=<id>, hushos://node/<id>: the same places as the web links. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="hushos" />
+            </intent-filter>
+            <!--
+                The server's own links, verified against its /.well-known/assetlinks.json: share
+                links and the app's pages. /app/billing and /app/admin are left out on purpose,
+                so they stay in the browser. Scheme and host come from the build type's default
+                origin (build.gradle.kts), so they always match the server the app signs in to;
+                debug builds answer the dev server over http and skip verification.
+            -->
+            <intent-filter android:autoVerify="${appLinkVerify}">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${appLinkScheme}" />
+                <data android:host="${appLinkHost}" />
+                <data android:pathPrefix="/s/" />
+                <data android:path="/app" />
+                <data android:path="/app/" />
+                <data android:pathPrefix="/app/drive" />
+                <data android:pathPrefix="/app/shared" />
+                <data android:pathPrefix="/app/trash" />
+                <!-- The emailed recovery link: recovery carries on in the app. -->
+                <data android:path="/recover/complete" />
+            </intent-filter>
+            <!-- Long-press the icon: Upload files, Upload photos, New folder, Search. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!--
+            Save to HushOS in the share sheet: files of any kind, one or many, and text (a
+            browser's page is a link, saved as a small file). Its own task, so it never
+            brings the app's screens up over the app that shared.
+        -->
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true"
+            android:label="Save to HushOS"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.HushOS.Share">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
 
@@ -47,6 +106,11 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
+
+        <!-- Retry on a "didn’t finish" notification. -->
+        <receiver
+            android:name="com.hushos.app.data.RetryReceiver"
+            android:exported="false" />
 
         <!-- WorkManager's foreground service, declared as data sync for the queued transfers. -->
         <service

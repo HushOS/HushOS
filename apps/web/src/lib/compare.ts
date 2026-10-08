@@ -6,41 +6,80 @@
  * an advertisement, and people can tell. Facts about other services were
  * checked against their own pages in September 2026 and can change; the
  * `checked` date is shown on the page.
+ *
+ * Every answer starts with a short answer that can be read at a glance, and
+ * keeps the detail under it. The short answer only ever restates what the
+ * detail (or the answer as it was first written) already says.
  */
+
+export type Answer = {
+    /* The answer at a glance: "Yes.", "Up to 15 GB.". */
+    short: string;
+    /* The rest of what is true, when there is more to say. */
+    detail?: string;
+};
 
 export type Comparison = {
     slug: string;
     name: string;
+    /* Whose own pages the facts were checked against: "Google". */
+    maker: string;
     /* One line under the title. */
     summary: string;
     checked: string;
-    rows: { topic: string; hushos: string; other: string }[];
+    rows: { topic: string; hushos: Answer; other: Answer }[];
     /* Where the other service is the better choice, plainly. */
     theirs: string[];
     /* Where HushOS is different, plainly. */
     ours: string[];
-    /* How to bring files across. */
-    switching: string;
+    /* How to bring files across, in three steps. */
+    switching: string[];
 };
 
 const HUSHOS = {
-    locked: 'No, never. Every file and its name is locked on your device before upload. We cannot read either.',
-    password: 'Never sent to us, not even in a scrambled form. It is checked on your device.',
-    sharing:
-        'With people you choose, locked for each of them on your device in a way built to hold up against the computers of the future; or by a link with an optional password and end date. Stopping a share really stops it, even for what they had already seen.',
-    open: 'Yes, all of it: the app and the server. Anyone can read it or run it.',
-    selfHost: 'Yes, for free, with a Docker Compose guide.',
-    free: '2 GiB, and more for every friend you invite.',
-    apps: 'A web app that installs on any phone or computer, like an app.',
-    company:
-        'HushOS, incorporated in Delaware, United States; servers and storage in the European Union.',
-    ads: 'None. Paid for by people who buy more storage, and by nothing else.',
-};
+    locked: {
+        short: 'No, never.',
+        detail: 'Every file and its name is locked on your device before upload. We cannot read either.',
+    },
+    password: {
+        short: 'Never sent to us.',
+        detail: 'Not even in a scrambled form. It is checked on your device.',
+    },
+    sharing: {
+        short: 'With people, or by link.',
+        detail: 'Locked on your device for each person you choose, in a way built to hold up against the computers of the future. Links can have a password and an end date. Stopping a share really stops it, even for what they had already seen.',
+    },
+    open: {
+        short: 'Yes, all of it.',
+        detail: 'The app and the server. Anyone can read it or run it.',
+    },
+    selfHost: {
+        short: 'Yes, for free.',
+        detail: 'With a Docker Compose guide.',
+    },
+    free: {
+        short: '2 GB.',
+        detail: 'And more for every friend you invite.',
+    },
+    apps: {
+        short: 'A web app.',
+        detail: 'It installs on any phone or computer, like an app.',
+    },
+    company: {
+        short: 'HushOS, United States.',
+        detail: 'Incorporated in Delaware. The hosted service keeps its servers and storage in the European Union.',
+    },
+    ads: {
+        short: 'Storage plans, nothing else.',
+        detail: 'No advertising. Paid for by people who buy more storage.',
+    },
+} satisfies Record<string, Answer>;
 
 export const comparisons: Comparison[] = [
     {
         slug: 'google-drive',
         name: 'Google Drive',
+        maker: 'Google',
         summary:
             'Google Drive is the drive most people already have. It is generous and everywhere, and Google can read everything in it.',
         checked: '2026-09-14',
@@ -48,47 +87,65 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'Yes. Files are encrypted on Google’s servers with Google’s keys. Client-side encryption exists only on some Workspace business plans, set up by an administrator.',
+                other: {
+                    short: 'Yes.',
+                    detail: 'Files are encrypted on Google’s servers with Google’s keys. Client-side encryption exists only on some Workspace business plans, set up by an administrator.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'Sent to Google to sign in, as with any Google account.',
+                other: {
+                    short: 'Sent to Google.',
+                    detail: 'To sign in, as with any Google account.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With people or by link, with viewer, commenter and editor roles. Google can read what you share.',
+                other: {
+                    short: 'With people, or by link.',
+                    detail: 'With viewer, commenter and editor roles. Google can read what you share.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: 'Up to 15 GB, shared across Drive, Gmail and Photos.',
+                other: {
+                    short: 'Up to 15 GB.',
+                    detail: 'Shared across Drive, Gmail and Photos.',
+                },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Web, Windows, Mac, Android and iOS, with Docs, Sheets and Slides built in.',
+                other: {
+                    short: 'Web, Windows, Mac, Android and iOS.',
+                    detail: 'With Docs, Sheets and Slides built in.',
+                },
             },
             {
                 topic: 'How it is paid for',
                 hushos: HUSHOS.ads,
-                other: 'Storage plans, and Google’s advertising business more broadly.',
+                other: {
+                    short: 'Storage plans.',
+                    detail: 'And Google’s advertising business more broadly.',
+                },
             },
         ],
         theirs: [
             'You want to write documents and spreadsheets together with other people, in the browser, at the same time. Google Docs is very good at that and HushOS does not do it.',
-            'You need a lot of free space today. Fifteen gigabytes is far more than the two HushOS starts you with.',
+            'You need a lot of free space today. 15 GB is far more than the 2 GB HushOS starts you with.',
             'You live inside Gmail, Android or Chromebooks, where Drive is already there.',
         ],
         ours: [
@@ -97,12 +154,16 @@ export const comparisons: Comparison[] = [
             'The code is public, and you can run the whole thing on a machine you own.',
             'Stopping a share actually stops it: the keys change, so what was shared stays shut.',
         ],
-        switching:
-            'Download the folders you want from Google Drive (Google Takeout gives you everything at once), then drag them onto your HushOS Drive. Folders come across with their structure, and uploads pick up where they left off if you close the tab.',
+        switching: [
+            'Download the folders you want from Google Drive. Google Takeout gives you everything at once.',
+            'Drag them onto your HushOS Drive. Folders come across with their structure.',
+            'Close the tab if you need to. Uploads pick up where they left off.',
+        ],
     },
     {
         slug: 'proton-drive',
         name: 'Proton Drive',
+        maker: 'Proton',
         summary:
             'Proton Drive is the closest thing to HushOS: encrypted on your device by default, made by people who mean it. The differences are about openness and where it runs.',
         checked: '2026-09-14',
@@ -110,42 +171,63 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'No. Files, names and folder structure are encrypted on your device by default.',
+                other: {
+                    short: 'No.',
+                    detail: 'Files, names and folder structure are encrypted on your device by default.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'Never sent. Proton uses SRP, a different protocol with the same result.',
+                other: {
+                    short: 'Never sent.',
+                    detail: 'Proton uses SRP, a different protocol with the same result.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With Proton users and by link, with optional password and expiry, encrypted end to end.',
+                other: {
+                    short: 'With Proton users, or by link.',
+                    detail: 'Encrypted end to end. Links can have a password and an expiry date.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: '2 GB, rising to 5 GB after a few setup steps.',
+                other: {
+                    short: 'Up to 5 GB.',
+                    detail: '2 GB to start, rising to 5 GB after a few setup steps.',
+                },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'The apps are open source under the GPL and independently audited. The server is not.',
+                other: {
+                    short: 'The apps only.',
+                    detail: 'The apps are open source under the GPL and independently audited. The server is not.',
+                },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Web, Windows, Mac, Android and iOS, with file sync on desktop.',
+                other: {
+                    short: 'Web, Windows, Mac, Android and iOS.',
+                    detail: 'With file sync on desktop.',
+                },
             },
             {
                 topic: 'Company',
                 hushos: HUSHOS.company,
-                other: 'Proton AG, Switzerland; servers in Switzerland and the European Union.',
+                other: {
+                    short: 'Proton AG, Switzerland.',
+                    detail: 'Servers in Switzerland and the European Union.',
+                },
             },
         ],
         theirs: [
@@ -158,12 +240,16 @@ export const comparisons: Comparison[] = [
             'Sharing with people is sealed to a key you pinned and can check by fingerprint, so a swapped key is caught, and it is post-quantum: a copy of our database taken today stays shut to a quantum computer later.',
             'There is nothing to learn. One phrase to keep safe at sign-up, and then it is just a drive.',
         ],
-        switching:
-            'Download your folders from Proton Drive and drag them onto your HushOS Drive. Both services keep your files readable only by you, so the move is a plain download and upload; nothing has to be unlocked on a server in between.',
+        switching: [
+            'Download your folders from Proton Drive.',
+            'Drag them onto your HushOS Drive.',
+            'That is the whole move. Both services keep your files readable only by you, so it is a plain download and upload; nothing has to be unlocked on a server in between.',
+        ],
     },
     {
         slug: 'dropbox',
         name: 'Dropbox',
+        maker: 'Dropbox',
         summary:
             'Dropbox made syncing folders feel normal. Its personal plans are still readable by Dropbox, and its encrypted option is for businesses only.',
         checked: '2026-09-14',
@@ -171,42 +257,54 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'Yes, on personal plans. End-to-end encryption exists only for chosen team folders on Advanced, Business Plus and Enterprise plans.',
+                other: {
+                    short: 'Yes, on personal plans.',
+                    detail: 'End-to-end encryption exists only for chosen team folders on Advanced, Business Plus and Enterprise plans.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'Sent to Dropbox to sign in.',
+                other: {
+                    short: 'Sent to Dropbox.',
+                    detail: 'To sign in.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With people or by link, with passwords and expiry on paid plans. Dropbox can read what you share.',
+                other: {
+                    short: 'With people, or by link.',
+                    detail: 'Passwords and expiry on paid plans. Dropbox can read what you share.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: '2 GB.',
+                other: { short: '2 GB.' },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Web, Windows, Mac, Linux, Android and iOS, with the folder sync it is known for.',
+                other: {
+                    short: 'Web, Windows, Mac, Linux, Android and iOS.',
+                    detail: 'With the folder sync it is known for.',
+                },
             },
             {
                 topic: 'How it is paid for',
                 hushos: HUSHOS.ads,
-                other: 'Storage and team plans.',
+                other: { short: 'Storage and team plans.' },
             },
         ],
         theirs: [
@@ -219,12 +317,16 @@ export const comparisons: Comparison[] = [
             'Open source and yours to run.',
             'Password-protected links, expiry, and real revocation are included, not a paid extra.',
         ],
-        switching:
-            'Your Dropbox folder is already on your computer. Drag it, or the parts you want, onto your HushOS Drive in the browser. Large folders upload in the background and resume if interrupted.',
+        switching: [
+            'Find your Dropbox folder. It is already on your computer.',
+            'Drag it, or the parts you want, onto your HushOS Drive in the browser.',
+            'Large folders upload in the background and resume if interrupted.',
+        ],
     },
     {
         slug: 'icloud-drive',
         name: 'iCloud Drive',
+        maker: 'Apple',
         summary:
             'iCloud Drive is built into every Apple device. It can be made private, but only if you find the switch, and only for people who use Apple.',
         checked: '2026-09-14',
@@ -232,42 +334,57 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'Yes, unless you turn on Advanced Data Protection, which is off by default. With it on, iCloud Drive is end-to-end encrypted.',
+                other: {
+                    short: 'Yes, by default.',
+                    detail: 'Unless you turn on Advanced Data Protection, which is off by default. With it on, iCloud Drive is end-to-end encrypted.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'Your Apple Account password is sent to Apple to sign in.',
+                other: {
+                    short: 'Sent to Apple.',
+                    detail: 'Your Apple Account password, to sign in.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With people and by link. Shared content stays end-to-end encrypted only if everyone involved has Advanced Data Protection on.',
+                other: {
+                    short: 'With people, or by link.',
+                    detail: 'Shared content stays end-to-end encrypted only if everyone involved has Advanced Data Protection on.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: '5 GB, shared with backups and photos.',
+                other: {
+                    short: '5 GB.',
+                    detail: 'Shared with backups and photos.',
+                },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Built into iPhone, iPad and Mac; a Windows app; a web app. Nothing for Android.',
+                other: {
+                    short: 'iPhone, iPad, Mac, Windows and web.',
+                    detail: 'Built into iPhone, iPad and Mac; a Windows app; a web app. Nothing for Android.',
+                },
             },
             {
                 topic: 'How it is paid for',
                 hushos: HUSHOS.ads,
-                other: 'Storage plans and Apple hardware.',
+                other: { short: 'Storage plans and Apple hardware.' },
             },
         ],
         theirs: [
@@ -279,12 +396,16 @@ export const comparisons: Comparison[] = [
             'Sharing is private with anyone, including people with no account, through a link.',
             'Open source and yours to run.',
         ],
-        switching:
-            'On a Mac, your iCloud Drive folder is in the Finder; on Windows, in File Explorer. Drag what you want onto your HushOS Drive in the browser. On an iPhone, share files from the Files app to the HushOS web app or upload them from within it.',
+        switching: [
+            'Find your iCloud Drive folder: in the Finder on a Mac, in File Explorer on Windows.',
+            'Drag what you want onto your HushOS Drive in the browser.',
+            'On an iPhone, share files from the Files app to the HushOS web app, or upload them from within it.',
+        ],
     },
     {
         slug: 'onedrive',
         name: 'OneDrive',
+        maker: 'Microsoft',
         summary:
             'OneDrive comes with Windows and Office. Microsoft can read what is in it; the Personal Vault adds a lock screen, not encryption you hold.',
         checked: '2026-09-14',
@@ -292,42 +413,57 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'Yes. Files are encrypted on Microsoft’s servers with Microsoft’s keys. Personal Vault asks you to verify your identity again; it does not change who holds the keys.',
+                other: {
+                    short: 'Yes.',
+                    detail: 'Files are encrypted on Microsoft’s servers with Microsoft’s keys. Personal Vault asks you to verify your identity again; it does not change who holds the keys.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'Your Microsoft account password is sent to Microsoft to sign in.',
+                other: {
+                    short: 'Sent to Microsoft.',
+                    detail: 'Your Microsoft account password, to sign in.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With people or by link, with passwords and expiry on Microsoft 365 plans. Microsoft can read what you share.',
+                other: {
+                    short: 'With people, or by link.',
+                    detail: 'Passwords and expiry on Microsoft 365 plans. Microsoft can read what you share.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: '5 GB. Personal Vault holds three files on the free plan.',
+                other: {
+                    short: '5 GB.',
+                    detail: 'Personal Vault holds three files on the free plan.',
+                },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Built into Windows; apps for Mac, Android and iOS; Office opens files in place.',
+                other: {
+                    short: 'Windows, Mac, Android and iOS.',
+                    detail: 'Built into Windows. Office opens files in place.',
+                },
             },
             {
                 topic: 'How it is paid for',
                 hushos: HUSHOS.ads,
-                other: 'Microsoft 365 subscriptions and storage plans.',
+                other: { short: 'Microsoft 365 subscriptions and storage plans.' },
             },
         ],
         theirs: [
@@ -340,12 +476,16 @@ export const comparisons: Comparison[] = [
             'Your password never leaves your device, and there is no vault to remember to lock.',
             'Open source and yours to run.',
         ],
-        switching:
-            'Your OneDrive folder is in File Explorer. Drag what you want onto your HushOS Drive in the browser. Large uploads run in the background and resume if you close the tab.',
+        switching: [
+            'Find your OneDrive folder in File Explorer.',
+            'Drag what you want onto your HushOS Drive in the browser.',
+            'Close the tab if you need to. Large uploads run in the background and resume.',
+        ],
     },
     {
         slug: 'mega',
         name: 'MEGA',
+        maker: 'MEGA',
         summary:
             'MEGA gives away more encrypted storage than anyone. The service is closed, and the encryption is something you take on trust in the apps.',
         checked: '2026-09-14',
@@ -353,46 +493,61 @@ export const comparisons: Comparison[] = [
             {
                 topic: 'Can the company read your files?',
                 hushos: HUSHOS.locked,
-                other: 'No. Files are encrypted on your device by default.',
+                other: {
+                    short: 'No.',
+                    detail: 'Files are encrypted on your device by default.',
+                },
             },
             {
                 topic: 'Your password',
                 hushos: HUSHOS.password,
-                other: 'A key derived from it is sent to sign in; the password itself is not.',
+                other: {
+                    short: 'Not sent, but a key made from it is.',
+                    detail: 'A key derived from your password is sent to sign in; the password itself is not.',
+                },
             },
             {
                 topic: 'Sharing',
                 hushos: HUSHOS.sharing,
-                other: 'With MEGA users and by link, where the key travels in the link, with optional password and expiry.',
+                other: {
+                    short: 'With MEGA users, or by link.',
+                    detail: 'The key travels in the link. Links can have a password and an expiry date.',
+                },
             },
             {
                 topic: 'Free storage',
                 hushos: HUSHOS.free,
-                other: '20 GB.',
+                other: { short: '20 GB.' },
             },
             {
                 topic: 'Open source',
                 hushos: HUSHOS.open,
-                other: 'The apps are open source. The server is not.',
+                other: {
+                    short: 'The apps only.',
+                    detail: 'The apps are open source. The server is not.',
+                },
             },
             {
                 topic: 'Run it yourself',
                 hushos: HUSHOS.selfHost,
-                other: 'No.',
+                other: { short: 'No.' },
             },
             {
                 topic: 'Apps',
                 hushos: HUSHOS.apps,
-                other: 'Web, Windows, Mac, Linux, Android and iOS, with sync and a command line.',
+                other: {
+                    short: 'Web, Windows, Mac, Linux, Android and iOS.',
+                    detail: 'With sync and a command line.',
+                },
             },
             {
                 topic: 'Company',
                 hushos: HUSHOS.company,
-                other: 'MEGA, New Zealand.',
+                other: { short: 'MEGA, New Zealand.' },
             },
         ],
         theirs: [
-            'You need a lot of encrypted space for free, right now. Twenty gigabytes is ten times our free plan.',
+            'You need a lot of encrypted space for free, right now. 20 GB is ten times our free plan.',
             'You want native apps and sync on every platform today.',
         ],
         ours: [
@@ -401,8 +556,11 @@ export const comparisons: Comparison[] = [
             'Shares are sealed with a post-quantum key beside the classical one, and the security page says exactly how.',
             'A design written down and tested before it was built, with the security page explaining every claim.',
         ],
-        switching:
-            'Download your folders from MEGA and drag them onto your HushOS Drive. Both keep your files readable only by you, so nothing is exposed along the way.',
+        switching: [
+            'Download your folders from MEGA.',
+            'Drag them onto your HushOS Drive.',
+            'That is the whole move. Both keep your files readable only by you, so nothing is exposed along the way.',
+        ],
     },
 ];
 

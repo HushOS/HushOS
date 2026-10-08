@@ -2,7 +2,7 @@ import { createFileRoute, notFound } from '@tanstack/react-router';
 import { ReadingPage } from '@/components/legal-layout';
 import { Mdx } from '@/components/mdx';
 import { formatDate, posts } from '@/lib/content';
-import { postBodies } from '@/lib/post-bodies';
+import { postBodies, postHeadings } from '@/lib/post-bodies';
 import { pageSocialMeta, publicOrigin } from '@/lib/social';
 
 export const Route = createFileRoute('/blog/$slug')({
@@ -63,6 +63,7 @@ function PostPage() {
             eyebrow={`${formatDate(meta.date)} · ${meta.author}`}
             title={meta.title}
             summary={meta.description}
+            headings={postHeadings[slug]}
         >
             <Mdx document={Content} />
         </ReadingPage>

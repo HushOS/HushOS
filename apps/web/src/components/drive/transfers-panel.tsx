@@ -1,15 +1,21 @@
 import type { DownloadItem } from '@hushos/drive/downloads';
 import { formatRate, type UploadItem } from '@hushos/drive/transfers';
+import { cn } from 'cn';
 import {
     ChevronDownIcon,
-    FileDownIcon,
+    CircleCheckIcon,
+    CloudOffIcon,
     FileUpIcon,
     PauseIcon,
     PlayIcon,
     RotateCcwIcon,
+    TriangleAlertIcon,
     XIcon,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { FileMark } from '@/components/drive/file-mark';
+import { openStorageFull } from '@/components/drive/storage-full-dialog';
+import { Ring } from '@/components/drive/viewer-parts';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -22,7 +28,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { downloads, useDownloads } from '@/lib/downloads';
-import { formatBytes } from '@/lib/drive';
+import { formatBytes, isNetworkFailure, OFFLINE_WORDS } from '@/lib/drive';
 import { transfers, useTransfers } from '@/lib/transfers';
 import { useBatchProgress } from '@/lib/batch-progress';
 import { formatTimeLeft } from '@/lib/progress';
@@ -30,136 +36,220 @@ import { formatTimeLeft } from '@/lib/progress';
 /*
  * The one panel that follows the person around the app while transfers run: a
  * lifted card, bottom right, with a row per file, uploads and downloads
- * together. It appears with the first transfer and can be dismissed once
- * everything has settled.
+ * together. One headline, one status line per file, the same words the phones
+ * use. It appears with the first transfer and can be closed once everything
+ * has settled; cancelling what is still on its way always asks.
  */
 
-function statusLine(item: UploadItem) {
+const OVER_QUOTA = 'over-quota';
+
+/*
+ * Whether the browser has a network. Uploads and downloads both stop and wait for
+ * it on their own; the panel only has to say so.
+ */
+function subscribeOnline(onChange: () => void) {
+    window.addEventListener('online', onChange);
+    window.addEventListener('offline', onChange);
+    return () => {
+        window.removeEventListener('online', onChange);
+        window.removeEventListener('offline', onChange);
+    };
+}
+function useOffline() {
+    return useSyncExternalStore(
+        subscribeOnline,
+        () => !navigator.onLine,
+        () => false,
+    );
+}
+const WAITING = 'Waiting for a connection';
+
+/* What went wrong, said as what to do about it. */
+function failure(item: { error: string | null; errorCode?: string | null }) {
+    if (item.errorCode === 'unavailable' || isNetworkFailure(item.error)) return OFFLINE_WORDS;
+    return item.error ?? 'This didn’t finish. Retry, or remove it from the list.';
+}
+
+function statusLine(item: UploadItem, offline: boolean) {
+    const sent = `${formatBytes(item.loaded)} of ${formatBytes(item.total)}`;
     switch (item.status) {
         case 'queued':
             return 'Waiting';
         case 'preparing':
-            return 'Encrypting keys';
+            return 'Preparing';
         case 'uploading':
-            return item.bytesPerSecond
-                ? `${formatBytes(item.loaded)} of ${formatBytes(item.total)} · ${formatRate(item.bytesPerSecond)}`
-                : `${formatBytes(item.loaded)} of ${formatBytes(item.total)}`;
+            if (offline) return `${WAITING} · ${sent}`;
+            return item.bytesPerSecond ? `${sent} · ${formatRate(item.bytesPerSecond)}` : sent;
         case 'paused':
-            if (!item.needsFile)
-                return `Paused · ${formatBytes(item.loaded)} of ${formatBytes(item.total)}`;
+            if (!item.needsFile) return `Paused · ${sent}`;
             // Came back after a reload: what the store already has, or nothing yet.
             return item.startedAt === null
-                ? (item.error ?? 'Waiting for its file')
-                : `${item.error ?? 'Interrupted'} · ${formatBytes(item.loaded)} of ${formatBytes(item.total)} kept`;
+                ? `Choose “${item.name}” again to finish`
+                : `Choose “${item.name}” again to finish · ${sent} kept`;
         case 'completing':
             return 'Finishing';
         case 'done':
-            return `Done · ${formatBytes(item.size)}`;
+            return `Uploaded · ${formatBytes(item.size)}`;
         case 'failed':
-            return item.error ?? 'Failed';
+            return item.errorCode === OVER_QUOTA
+                ? `Not enough room · needs ${formatBytes(item.total)}`
+                : failure(item);
         case 'cancelled':
             return 'Cancelled';
     }
 }
 
-function downloadLine(item: DownloadItem) {
+function downloadLine(item: DownloadItem, offline: boolean) {
     const files = item.files > 1 ? ` · ${item.files} files` : '';
+    const sent =
+        item.size !== null
+            ? `${formatBytes(item.loaded)} of ${formatBytes(item.size)}`
+            : formatBytes(item.loaded);
     switch (item.status) {
         case 'queued':
             return 'Waiting';
         case 'preparing':
             return `Preparing${files}`;
         case 'paused':
-            return item.size !== null
-                ? `Paused · ${formatBytes(item.loaded)} of ${formatBytes(item.size)}`
-                : `Paused · ${formatBytes(item.loaded)}`;
-        case 'downloading': {
-            const progress =
-                item.size !== null
-                    ? `${formatBytes(item.loaded)} of ${formatBytes(item.size)}`
-                    : formatBytes(item.loaded);
-            return item.bytesPerSecond
-                ? `${progress} · ${formatRate(item.bytesPerSecond)}`
-                : progress;
-        }
+            return `Paused · ${sent}`;
+        case 'downloading':
+            if (offline) return `${WAITING} · ${sent}`;
+            return item.bytesPerSecond ? `${sent} · ${formatRate(item.bytesPerSecond)}` : sent;
         case 'done':
-            return `Saved · ${formatBytes(item.size ?? item.loaded)}${files}`;
+            return `Downloaded · ${formatBytes(item.size ?? item.loaded)}${files}`;
         case 'failed':
-            return item.error ?? 'Failed';
+            return failure({ error: item.error });
         case 'cancelled':
             return 'Cancelled';
     }
 }
 
-const bar = (tone: 'failed' | 'paused' | 'active') =>
-    `mx-3.5 mb-2.5 block h-1 w-[calc(100%-1.75rem)] appearance-none overflow-hidden rounded-xl border-0 bg-muted [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-300 ${tone === 'failed' ? '[&::-moz-progress-bar]:bg-destructive [&::-webkit-progress-value]:bg-destructive' : tone === 'paused' ? '[&::-moz-progress-bar]:bg-muted-foreground [&::-webkit-progress-value]:bg-muted-foreground' : '[&::-moz-progress-bar]:bg-primary [&::-webkit-progress-value]:bg-primary'}`;
+type Tone = 'active' | 'paused' | 'failed' | 'done';
 
-function DownloadRow({ item }: { item: DownloadItem }) {
+/* One file: its mark, name, a bar while it moves, the status line, and what can be done. */
+function Row({
+    name,
+    line,
+    tone,
+    progress,
+    actions,
+}: {
+    name: string;
+    line: string;
+    tone: Tone;
+    progress: { value: number | undefined; max: number | undefined } | null;
+    actions: ReactNode;
+}) {
+    return (
+        <li className="flex items-center gap-3 border-t border-rule py-2.5 pr-2 pl-4">
+            <FileMark kind="file" name={name} size="row" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <p className="truncate text-sm font-semibold">{name}</p>
+                {progress && (
+                    <progress
+                        value={progress.value}
+                        max={progress.max}
+                        aria-label={`${name} progress`}
+                        className={cn(
+                            'block h-1 w-full appearance-none overflow-hidden rounded-full border-0 bg-rule [&::-webkit-progress-bar]:bg-rule [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-300',
+                            tone === 'failed'
+                                ? '[&::-moz-progress-bar]:bg-destructive [&::-webkit-progress-value]:bg-destructive'
+                                : tone === 'paused'
+                                  ? '[&::-moz-progress-bar]:bg-muted-foreground [&::-webkit-progress-value]:bg-muted-foreground'
+                                  : '[&::-moz-progress-bar]:bg-primary [&::-webkit-progress-value]:bg-primary',
+                        )}
+                    />
+                )}
+                <p
+                    className={cn(
+                        'truncate text-xs leading-snug tabular-nums',
+                        tone === 'failed'
+                            ? 'text-destructive'
+                            : tone === 'done'
+                              ? 'text-success'
+                              : 'text-muted-foreground',
+                    )}
+                    title={line}
+                >
+                    {line}
+                </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-0.5">{actions}</div>
+        </li>
+    );
+}
+
+function IconAction({
+    label,
+    icon: Icon,
+    onClick,
+}: {
+    label: string;
+    icon: typeof PauseIcon;
+    onClick: () => void;
+}) {
+    return (
+        <Button variant="ghost" size="icon-sm" aria-label={label} title={label} onClick={onClick}>
+            <Icon />
+        </Button>
+    );
+}
+
+function DownloadRow({ item, offline }: { item: DownloadItem; offline: boolean }) {
     const settled =
         item.status === 'done' || item.status === 'cancelled' || item.status === 'failed';
     return (
-        <li className="border-b border-rule last:border-b-0">
-            <div className="flex items-center gap-2 py-2 pr-1 pl-3.5">
-                <FileDownIcon
-                    aria-hidden="true"
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">{item.name}</p>
-                    <p
-                        className={`truncate text-xs tabular-nums ${item.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}
-                    >
-                        {downloadLine(item)}
-                    </p>
-                </div>
-                {item.status === 'paused' ? (
-                    <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Resume download"
-                        onClick={() => downloads.resume(item.id)}
-                    >
-                        <PlayIcon />
-                    </Button>
-                ) : !settled ? (
-                    <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Pause download"
-                        onClick={() => downloads.pause(item.id)}
-                    >
-                        <PauseIcon />
-                    </Button>
-                ) : null}
-                {settled ? (
-                    <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Remove from list"
-                        onClick={() => downloads.remove(item.id)}
-                    >
-                        <XIcon />
-                    </Button>
-                ) : (
-                    <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Cancel download"
-                        onClick={() => void downloads.cancel(item.id)}
-                    >
-                        <XIcon />
-                    </Button>
-                )}
-            </div>
-            {!settled && (
-                <progress
-                    value={item.size === null ? undefined : item.loaded}
-                    max={item.size ?? undefined}
-                    aria-label={`${item.name} progress`}
-                    className={bar(item.status === 'paused' ? 'paused' : 'active')}
-                />
-            )}
-        </li>
+        <Row
+            name={item.name}
+            line={downloadLine(item, offline)}
+            tone={
+                item.status === 'failed'
+                    ? 'failed'
+                    : item.status === 'done'
+                      ? 'done'
+                      : item.status === 'paused'
+                        ? 'paused'
+                        : 'active'
+            }
+            progress={
+                settled
+                    ? null
+                    : {
+                          value: item.size === null ? undefined : item.loaded,
+                          max: item.size ?? undefined,
+                      }
+            }
+            actions={
+                <>
+                    {item.status === 'paused' ? (
+                        <IconAction
+                            label={`Resume ${item.name}`}
+                            icon={PlayIcon}
+                            onClick={() => downloads.resume(item.id)}
+                        />
+                    ) : !settled ? (
+                        <IconAction
+                            label={`Pause ${item.name}`}
+                            icon={PauseIcon}
+                            onClick={() => downloads.pause(item.id)}
+                        />
+                    ) : null}
+                    {settled ? (
+                        <IconAction
+                            label={`Remove ${item.name} from the list`}
+                            icon={XIcon}
+                            onClick={() => downloads.remove(item.id)}
+                        />
+                    ) : (
+                        <IconAction
+                            label={`Cancel ${item.name}`}
+                            icon={XIcon}
+                            onClick={() => void downloads.cancel(item.id)}
+                        />
+                    )}
+                </>
+            }
+        />
     );
 }
 
@@ -184,7 +274,7 @@ function AttachFile({ item }: { item: UploadItem }) {
             />
             <Button
                 variant="outline"
-                size="xs"
+                size="sm"
                 onClick={() =>
                     item.hasHandle ? void transfers.resume(item.id) : input.current?.click()
                 }
@@ -196,14 +286,94 @@ function AttachFile({ item }: { item: UploadItem }) {
     );
 }
 
+function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
+    const overQuota = item.status === 'failed' && item.errorCode === OVER_QUOTA;
+    return (
+        <Row
+            name={item.name}
+            line={statusLine(item, offline)}
+            tone={
+                item.status === 'failed'
+                    ? 'failed'
+                    : item.status === 'done'
+                      ? 'done'
+                      : item.status === 'paused'
+                        ? 'paused'
+                        : 'active'
+            }
+            progress={
+                item.status === 'done' || item.status === 'cancelled' || item.status === 'failed'
+                    ? null
+                    : { value: item.loaded, max: item.total || 1 }
+            }
+            actions={
+                <>
+                    {overQuota && (
+                        <Button variant="outline" size="sm" onClick={openStorageFull}>
+                            Make room
+                        </Button>
+                    )}
+                    {item.status === 'uploading' || item.status === 'queued' ? (
+                        <IconAction
+                            label={`Pause ${item.name}`}
+                            icon={PauseIcon}
+                            onClick={() => void transfers.pause(item.id)}
+                        />
+                    ) : item.status === 'paused' && item.needsFile ? (
+                        <AttachFile item={item} />
+                    ) : item.status === 'paused' ? (
+                        <IconAction
+                            label={`Resume ${item.name}`}
+                            icon={PlayIcon}
+                            onClick={() => void transfers.resume(item.id)}
+                        />
+                    ) : item.status === 'failed' && !item.needsFile && !overQuota ? (
+                        <IconAction
+                            label={`Retry ${item.name}`}
+                            icon={RotateCcwIcon}
+                            onClick={() => void transfers.retry(item.id)}
+                        />
+                    ) : null}
+                    {item.status === 'done' ||
+                    item.status === 'cancelled' ||
+                    item.status === 'failed' ? (
+                        <IconAction
+                            label={`Remove ${item.name} from the list`}
+                            icon={XIcon}
+                            onClick={() => transfers.remove(item.id)}
+                        />
+                    ) : item.status === 'paused' && item.needsFile ? (
+                        <IconAction
+                            label={`Discard ${item.name}`}
+                            icon={XIcon}
+                            onClick={() => void transfers.discard(item.id)}
+                        />
+                    ) : (
+                        <IconAction
+                            label={`Cancel ${item.name}`}
+                            icon={XIcon}
+                            onClick={() => void transfers.cancel(item.id)}
+                        />
+                    )}
+                </>
+            }
+        />
+    );
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 export function TransfersPanel() {
     const state = useTransfers();
     const down = useDownloads();
     const [collapsed, setCollapsed] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const { batch, timeLeft } = useBatchProgress();
+    const offline = useOffline();
     if (!state.uploads.length && !down.downloads.length) return null;
     const settled = (status: string) => status === 'done' || status === 'cancelled';
+    const doneUploads = state.uploads.filter((item) => item.status === 'done').length;
+    const doneDownloads = down.downloads.filter((item) => item.status === 'done').length;
     const finished =
         state.uploads.filter((item) => settled(item.status)).length +
         down.downloads.filter((item) => settled(item.status)).length;
@@ -213,54 +383,53 @@ export function TransfersPanel() {
     const failed =
         state.uploads.filter((item) => item.status === 'failed').length +
         down.downloads.filter((item) => item.status === 'failed').length;
-    const plural = (n: number, word: string) => `${n} ${n === 1 ? word : `${word}s`}`;
+    const active = state.active + down.active;
+    // The one headline every client uses.
     const title =
-        state.active && down.active
-            ? `Transferring ${plural(state.active + down.active, 'file')}`
-            : state.active
-              ? `Uploading ${plural(state.active, 'file')}`
-              : down.active
-                ? `Downloading ${plural(down.active, 'file')}`
-                : failed
-                  ? `${plural(failed, 'transfer')} failed`
+        active > 0 && offline
+            ? WAITING
+            : state.active && down.active
+              ? `Transferring ${plural(active, 'file')}`
+              : state.active
+                ? `Uploading ${plural(state.active, 'file')}`
+                : down.active
+                  ? `Downloading ${plural(down.active, 'file')}`
                   : paused
                     ? `${paused} paused`
-                    : `${plural(finished, 'transfer')} finished`;
+                    : failed
+                      ? `${plural(failed, 'transfer')} didn’t finish`
+                      : doneDownloads === 0 && doneUploads > 0
+                        ? `${plural(doneUploads, 'file')} uploaded`
+                        : `${plural(doneUploads + doneDownloads, 'transfer')} finished`;
     const rate = state.bytesPerSecond + down.bytesPerSecond;
-    const active = state.active + down.active;
-    // The batch as a whole: files and bytes done, and the time left once the rate has settled.
-    // Two short lines rather than one long one, in the rows' own small type: a
-    // phone's panel is 340px wide, and the time left is the part worth reading,
-    // so it goes first with the file count.
+    const counted = state.uploads.length + down.downloads.length;
+    // Under the headline: files done of all, and the time left once the rate has settled.
     const summary =
         active > 0
             ? [
-                  [
-                      batch.files.total > 1
-                          ? `${batch.files.done} of ${batch.files.total} files`
+                  batch.files.total > 1
+                      ? `${batch.files.done} of ${batch.files.total} files`
+                      : `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
+                  // Nothing moves while offline, so no estimate.
+                  offline
+                      ? null
+                      : timeLeft !== null
+                        ? formatTimeLeft(timeLeft)
+                        : rate > 0
+                          ? formatRate(rate)
                           : null,
-                      timeLeft !== null ? formatTimeLeft(timeLeft) : null,
-                  ]
-                      .filter(Boolean)
-                      .join(' · '),
-                  [
-                      `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
-                      rate > 0 ? formatRate(rate) : null,
-                  ]
-                      .filter(Boolean)
-                      .join(' · '),
-              ].filter(Boolean)
-            : null;
+              ]
+                  .filter(Boolean)
+                  .join(' · ')
+            : `${doneUploads + doneDownloads} of ${counted} files`;
     // Failed items first: the reason the panel is still open is what to look at.
     const uploadRows = [
         ...state.uploads.filter((item) => item.status === 'failed'),
         ...state.uploads.filter((item) => item.status !== 'failed'),
     ];
-    const retryable = state.uploads.filter((item) => item.status === 'failed' && !item.needsFile);
-    const clearable = [
-        ...state.uploads.filter((item) => settled(item.status) || item.status === 'failed'),
-        ...down.downloads.filter((item) => settled(item.status) || item.status === 'failed'),
-    ].length;
+    const retryable = state.uploads.filter(
+        (item) => item.status === 'failed' && !item.needsFile && item.errorCode !== OVER_QUOTA,
+    );
     // Still on their way, paused included: what the header's cross would cancel.
     const unsettled = [
         ...state.uploads.filter((item) => !settled(item.status) && item.status !== 'failed'),
@@ -287,58 +456,67 @@ export function TransfersPanel() {
     return (
         <section
             aria-label="Transfers"
-            className="fixed right-4 bottom-4 z-40 flex w-[calc(100%-2rem)] max-w-sm flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-overlay sm:right-6 sm:bottom-6"
+            // Its height, for toasts to sit above it. It sits above the selection bar itself.
+            ref={(element) => {
+                if (!element) return;
+                const root = document.documentElement;
+                const lift = () =>
+                    root.style.setProperty('--transfers-lift', `${element.offsetHeight + 8}px`);
+                lift();
+                const observer = new ResizeObserver(lift);
+                observer.observe(element);
+                return () => {
+                    observer.disconnect();
+                    root.style.removeProperty('--transfers-lift');
+                };
+            }}
+            className="fixed right-4 bottom-[calc(1rem+var(--selection-lift,0px))] z-40 flex w-[calc(100%-2rem)] max-w-[420px] flex-col overflow-hidden rounded-xl border border-edge bg-card text-card-foreground shadow-xl transition-[bottom] duration-200 sm:right-6 sm:bottom-[calc(1.5rem+var(--selection-lift,0px))]"
         >
-            <header className="flex min-h-11 items-center gap-2 border-b border-rule py-2.5 pr-1 pl-3.5">
-                <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold">{title}</p>
-                    {summary && (
-                        <div className="mt-1.5 space-y-1 text-muted-foreground" data-batch-progress>
-                            {summary.map((line) => (
-                                <p key={line} className="text-xs tabular-nums">
-                                    {line}
-                                </p>
-                            ))}
-                        </div>
+            <header className="flex items-center gap-3 py-3 pr-2 pl-4">
+                <span className="flex size-[22px] shrink-0 items-center justify-center">
+                    {active > 0 && offline ? (
+                        <CloudOffIcon className="size-5 text-muted-foreground" aria-hidden="true" />
+                    ) : active > 0 ? (
+                        <Ring
+                            value={batch.bytes.total ? batch.bytes.loaded / batch.bytes.total : 0}
+                            size={22}
+                        />
+                    ) : paused > 0 ? (
+                        <PauseIcon className="size-5 text-muted-foreground" aria-hidden="true" />
+                    ) : failed > 0 ? (
+                        <TriangleAlertIcon className="size-5 text-destructive" aria-hidden="true" />
+                    ) : (
+                        <CircleCheckIcon className="size-5 text-success" aria-hidden="true" />
                     )}
+                </span>
+                <div className="min-w-0 flex-1">
+                    <p className="truncate text-[15px] font-bold">{title}</p>
+                    <p
+                        className="truncate text-xs text-muted-foreground tabular-nums"
+                        data-batch-progress
+                    >
+                        {summary}
+                    </p>
                 </div>
                 {active > 0 ? (
-                    <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Pause all"
+                    <IconAction
+                        label="Pause all"
+                        icon={PauseIcon}
                         onClick={() => {
                             transfers.pauseAll();
                             downloads.pauseAll();
                         }}
-                    >
-                        <PauseIcon />
-                    </Button>
+                    />
                 ) : paused > 0 ? (
-                    <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Resume all"
+                    <IconAction
+                        label="Resume all"
+                        icon={PlayIcon}
                         onClick={() => {
                             transfers.resumeAll();
                             downloads.resumeAll();
                         }}
-                    >
-                        <PlayIcon />
-                    </Button>
+                    />
                 ) : null}
-                {/* The cross ends it all: cancels what is on its way, after asking, or closes a finished panel. */}
-                <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={unsettled.length > 0 ? 'Cancel all transfers' : 'Close transfers'}
-                    onClick={() => {
-                        if (unsettled.length > 0) setConfirming(true);
-                        else removeEverything();
-                    }}
-                >
-                    <XIcon />
-                </Button>
                 <Button
                     variant="ghost"
                     size="icon-sm"
@@ -350,183 +528,84 @@ export function TransfersPanel() {
                 >
                     <ChevronDownIcon className={collapsed ? 'rotate-180' : ''} />
                 </Button>
-            </header>
-            {/* One place for the batch's leftovers: retry what failed, clear what is done, or clear the lot. */}
-            {(retryable.length > 0 || (active === 0 && clearable > 0)) && (
-                <div
-                    className="flex flex-wrap items-center gap-1 border-b border-rule bg-muted px-2 py-1"
-                    data-batch-actions
-                >
-                    {retryable.length > 0 && (
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => {
-                                for (const item of retryable) void transfers.retry(item.id);
-                            }}
-                        >
-                            <RotateCcwIcon />
-                            Retry{' '}
-                            {retryable.length === 1
-                                ? 'the failed one'
-                                : `all ${retryable.length} failed`}
-                        </Button>
-                    )}
-                    {finished > 0 && (
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => {
-                                transfers.clearFinished();
-                                downloads.clearFinished();
-                            }}
-                        >
-                            <XIcon />
-                            Clear finished
-                        </Button>
-                    )}
-                    {active === 0 && clearable > 0 && (
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => {
-                                for (const item of state.uploads)
-                                    if (settled(item.status) || item.status === 'failed')
-                                        transfers.remove(item.id);
-                                for (const item of down.downloads)
-                                    if (settled(item.status) || item.status === 'failed')
-                                        downloads.remove(item.id);
-                            }}
-                        >
-                            <XIcon />
-                            Clear all
-                        </Button>
-                    )}
-                </div>
-            )}
-            {active > 0 && batch.bytes.total > 0 && (
-                <progress
-                    value={batch.bytes.loaded}
-                    max={batch.bytes.total}
-                    aria-label="All transfers progress"
-                    className="block h-1 w-full appearance-none overflow-hidden border-0 bg-muted [&::-moz-progress-bar]:bg-primary [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-300"
+                {/* The cross ends it all: cancels what is on its way, after asking, or closes a finished panel. */}
+                <IconAction
+                    label={unsettled.length > 0 ? 'Cancel all transfers' : 'Close transfers'}
+                    icon={XIcon}
+                    onClick={() => {
+                        if (unsettled.length > 0) setConfirming(true);
+                        else removeEverything();
+                    }}
                 />
-            )}
+            </header>
             {!collapsed && (
-                <ul className="max-h-72 overflow-y-auto">
-                    {down.downloads.map((item) => (
-                        <DownloadRow key={item.id} item={item} />
-                    ))}
-                    {uploadRows.map((item) => (
-                        <li key={item.id} className="border-b border-rule last:border-b-0">
-                            <div className="flex items-center gap-2 py-2 pr-1 pl-3.5">
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm">{item.name}</p>
-                                    <p
-                                        className={`truncate text-xs tabular-nums ${item.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}
-                                    >
-                                        {statusLine(item)}
-                                    </p>
-                                </div>
-                                {item.status === 'uploading' || item.status === 'queued' ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Pause"
-                                        onClick={() => void transfers.pause(item.id)}
-                                    >
-                                        <PauseIcon />
-                                    </Button>
-                                ) : item.status === 'paused' && item.needsFile ? (
-                                    <AttachFile item={item} />
-                                ) : item.status === 'paused' ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Resume"
-                                        onClick={() => void transfers.resume(item.id)}
-                                    >
-                                        <PlayIcon />
-                                    </Button>
-                                ) : item.status === 'failed' && !item.needsFile ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Retry"
-                                        onClick={() => void transfers.retry(item.id)}
-                                    >
-                                        <RotateCcwIcon />
-                                    </Button>
-                                ) : null}
-                                {item.status === 'done' ||
-                                item.status === 'cancelled' ||
-                                item.status === 'failed' ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Remove from list"
-                                        onClick={() => transfers.remove(item.id)}
-                                    >
-                                        <XIcon />
-                                    </Button>
-                                ) : item.status === 'paused' && item.needsFile ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Discard"
-                                        onClick={() => void transfers.discard(item.id)}
-                                    >
-                                        <XIcon />
-                                    </Button>
-                                ) : (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label="Cancel"
-                                        onClick={() => void transfers.cancel(item.id)}
-                                    >
-                                        <XIcon />
-                                    </Button>
-                                )}
-                            </div>
-                            {item.status !== 'done' && item.status !== 'cancelled' && (
-                                <progress
-                                    value={item.loaded}
-                                    max={item.total || 1}
-                                    aria-label={`${item.name} progress`}
-                                    className={bar(
-                                        item.status === 'failed'
-                                            ? 'failed'
-                                            : item.status === 'paused'
-                                              ? 'paused'
-                                              : 'active',
-                                    )}
-                                />
+                <>
+                    <ul className="max-h-[min(380px,32svh)] overflow-y-auto">
+                        {down.downloads.map((item) => (
+                            <DownloadRow key={item.id} item={item} offline={offline} />
+                        ))}
+                        {uploadRows.map((item) => (
+                            <UploadRow key={item.id} item={item} offline={offline} />
+                        ))}
+                    </ul>
+                    {/* The batch's leftovers: clear what is done, retry what failed. */}
+                    {(retryable.length > 0 || finished > 0) && (
+                        <div
+                            className="flex items-center justify-end gap-2 border-t border-rule bg-muted px-4 py-2.5"
+                            data-batch-actions
+                        >
+                            {finished > 0 && (
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                        transfers.clearFinished();
+                                        downloads.clearFinished();
+                                    }}
+                                >
+                                    Clear finished
+                                </Button>
                             )}
-                        </li>
-                    ))}
-                </ul>
+                            {retryable.length > 0 && (
+                                <Button
+                                    size="sm"
+                                    onClick={() => {
+                                        for (const item of retryable) void transfers.retry(item.id);
+                                    }}
+                                >
+                                    <RotateCcwIcon />
+                                    {retryable.length === 1
+                                        ? 'Retry the failed one'
+                                        : `Retry ${retryable.length} failed`}
+                                </Button>
+                            )}
+                        </div>
+                    )}
+                </>
             )}
             <AlertDialog open={confirming} onOpenChange={setConfirming}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>
-                            Cancel {plural(unsettled.length, 'transfer')}?
+                            {unsettled.length === 1
+                                ? 'Cancel this transfer?'
+                                : `Cancel ${unsettled.length} transfers?`}
                         </AlertDialogTitle>
                         <AlertDialogDescription>
-                            What is still on its way stops and is not kept. What already finished
+                            What is still on its way stops and isn’t kept. What already finished
                             stays where it is.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Keep going</AlertDialogCancel>
                         <AlertDialogAction
+                            variant="destructive"
                             onClick={() => {
                                 setConfirming(false);
                                 void cancelEverything();
                             }}
                         >
-                            Cancel {unsettled.length === 1 ? 'it' : 'them all'}
+                            {unsettled.length === 1 ? 'Cancel it' : 'Cancel them all'}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>

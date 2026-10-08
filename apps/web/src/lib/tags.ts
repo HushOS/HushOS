@@ -20,13 +20,33 @@ export function invalidateTags(queryClient: QueryClient) {
     return queryClient.invalidateQueries({ queryKey: tagKeys.registry });
 }
 
-/* The five presets as the swatch's background; a hex colour paints itself. */
+/*
+ * The presets offered for a new tag, in the board's order. Yellow is offered
+ * again: links are marked by a blue icon now, so no colour is reserved for them.
+ * Yellow, teal and coral are their own colours, not the warning, success and
+ * danger signals, so a tag never reads as one.
+ */
+export const OFFERED_COLOURS = [
+    'blue',
+    'ink',
+    'yellow',
+    'teal',
+    'coral',
+] as const satisfies readonly TagPreset[];
+/* The colour a new tag starts with: the next offered one, cycling. */
+export function suggestedColour(registry: TagRegistry): TagColour {
+    return OFFERED_COLOURS[registry.tags.length % OFFERED_COLOURS.length]!;
+}
+const TEAL = '#23766d';
+const CORAL = '#b4503b';
+
+/* The presets as the swatch's background; a hex colour paints itself. */
 export const TAG_SWATCH: Record<TagPreset, string> = {
     blue: 'bg-primary',
     ink: 'bg-ink',
-    yellow: 'bg-warning',
-    teal: 'bg-success',
-    coral: 'bg-destructive',
+    yellow: 'bg-(--tag-yellow)',
+    teal: 'bg-[#23766d]',
+    coral: 'bg-[#b4503b]',
 };
 export const TAG_COLOUR_LABEL: Record<TagPreset, string> = {
     blue: 'Blue',
@@ -44,9 +64,9 @@ export const TAG_COLOUR_LABEL: Record<TagPreset, string> = {
 const TAG_INK: Record<TagPreset, { fill: string; text: string }> = {
     blue: { fill: 'var(--primary)', text: 'var(--primary-foreground)' },
     ink: { fill: 'var(--ink)', text: 'var(--card)' },
-    yellow: { fill: 'var(--warning)', text: 'var(--warning-foreground)' },
-    teal: { fill: 'var(--success)', text: 'var(--success-foreground)' },
-    coral: { fill: 'var(--destructive)', text: 'var(--destructive-foreground)' },
+    yellow: { fill: 'var(--tag-yellow)', text: 'var(--on-tag-yellow)' },
+    teal: { fill: TEAL, text: '#ffffff' },
+    coral: { fill: CORAL, text: '#ffffff' },
 };
 function luminance(hex: string) {
     const channel = (at: number) => {
@@ -56,8 +76,8 @@ function luminance(hex: string) {
     return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
 }
 // A hex tag is the same in both themes, so its text is too: the light theme's ink and sheet.
-const INK = '#1c2848';
-const SHEET = '#fcfbf7';
+const INK = '#17203a';
+const SHEET = '#ffffff';
 const INK_LUMINANCE = luminance(INK);
 const SHEET_LUMINANCE = luminance(SHEET);
 export function tagInk(colour: TagColour | null): { fill: string; text: string } {

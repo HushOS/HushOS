@@ -1,15 +1,19 @@
+import { cn } from 'cn';
+import { ArrowRightIcon } from 'lucide-react';
 import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { OperatorPage, OperatorTable, td, th } from '@/components/operator';
+import { buttonVariants } from '@/components/ui/button';
 import { adminOverviewQueryOptions } from '@/lib/admin';
 import { formatBytes, formatWhen } from '@/lib/drive';
+import { useBillingEnabled } from '@/lib/queries';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 
 /*
  * The management area's first page: what the instance holds and what the
- * store audit found. Numbers only, never names or content. A member who types
- * the address is sent to Drive; the API answers a member with 404 regardless.
+ * store audit found. Each count with a list behind it opens that list; no
+ * page here shows a file's name or content. A member who types the address
+ * is sent to Drive; the API answers a member with 404 regardless.
  */
 export const Route = createFileRoute('/_authenticated/app/admin/')({
     beforeLoad: ({ context }) => {
@@ -19,153 +23,223 @@ export const Route = createFileRoute('/_authenticated/app/admin/')({
     component: AdminPage,
 });
 
-const cell = 'px-4 py-2.5 text-sm';
-const head = `${cell} eyebrow text-muted-foreground`;
-const id = `${cell} font-mono text-xs`;
+type Stat = {
+    label: string;
+    value: string;
+    tone?: 'danger';
+    /* Where the count opens: the list behind it, or the table below. */
+    to?: {
+        to: '/app/admin/accounts' | '/app/admin/workspaces' | '/app/admin/reports';
+        search?: Record<string, string>;
+    };
+    anchor?: string;
+};
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: 'bad' }) {
+function StatGrid({ stats }: { stats: Stat[] }) {
     return (
-        <div className="flex flex-col-reverse justify-end gap-1.5 rounded-md border border-rule px-4 py-3.5">
-            <span className="text-sm text-muted-foreground">{label}</span>
-            <span
-                className={`text-2xl font-bold tracking-tight tabular-nums ${tone === 'bad' ? 'text-destructive' : ''}`}
-            >
-                {value}
-            </span>
-        </div>
+        <dl className="grid shrink-0 grid-cols-2 overflow-hidden rounded-xl border border-rule sm:grid-cols-3 lg:grid-cols-5">
+            {stats.map((stat) => {
+                const body = (
+                    <>
+                        <dt className="text-xs text-muted-foreground">{stat.label}</dt>
+                        <dd
+                            className={cn(
+                                'font-mono text-xl font-semibold tabular-nums',
+                                stat.tone === 'danger' && 'text-destructive',
+                            )}
+                        >
+                            {stat.value}
+                        </dd>
+                    </>
+                );
+                const box =
+                    '-mt-px -ml-px flex flex-col gap-1 border-t border-l border-rule px-3 py-2.5';
+                if (stat.to)
+                    return (
+                        <Link
+                            key={stat.label}
+                            to={stat.to.to}
+                            search={stat.to.search}
+                            className={cn(box, 'group hover:bg-muted')}
+                        >
+                            {body}
+                            <span className="sr-only">, open the list</span>
+                        </Link>
+                    );
+                if (stat.anchor)
+                    return (
+                        <a
+                            key={stat.label}
+                            href={stat.anchor}
+                            className={cn(box, 'hover:bg-muted')}
+                        >
+                            {body}
+                        </a>
+                    );
+                return (
+                    <div key={stat.label} className={box}>
+                        {body}
+                    </div>
+                );
+            })}
+        </dl>
     );
 }
 
+const count = (value: number) => value.toLocaleString();
+
 function AdminPage() {
     const overview = useQuery(adminOverviewQueryOptions);
+    const billing = useBillingEnabled();
+    const data = overview.data;
     return (
-        <div className="flex flex-1 flex-col">
-            <PageHeader
-                eyebrow="Operator"
-                title="Management"
-                description="Counts and bytes across this instance, and what the nightly store audit found. Names and content are never visible here."
-            />
+        <OperatorPage
+            title="Management"
+            description="Counts for this instance, refreshed when you open the page. Choose a count to see what is behind it."
+            actions={
+                <>
+                    <Link
+                        to="/app/admin/reports"
+                        className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                    >
+                        Reports
+                        <ArrowRightIcon />
+                    </Link>
+                    {billing && (
+                        <Link
+                            to="/app/admin/affiliates"
+                            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+                        >
+                            Affiliates
+                            <ArrowRightIcon />
+                        </Link>
+                    )}
+                </>
+            }
+        >
             {overview.isPending && (
                 <div className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
                     <Spinner />
                 </div>
             )}
             {overview.isError && (
-                <div className="px-5 py-6 sm:px-8">
-                    <Alert variant="destructive">
-                        <AlertTitle>Could not load</AlertTitle>
-                        <AlertDescription>
-                            {overview.error instanceof Error
-                                ? overview.error.message
-                                : 'Please try again.'}
-                        </AlertDescription>
-                    </Alert>
-                </div>
+                <p
+                    role="alert"
+                    className="rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"
+                >
+                    The counts didn’t load.{' '}
+                    {overview.error instanceof Error ? overview.error.message : 'Try again.'}
+                </p>
             )}
-            {overview.data && (
-                <div className="flex flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
-                    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                        <Stat label="Accounts" value={String(overview.data.people.total)} />
-                        <Stat label="Admins" value={String(overview.data.people.admins)} />
-                        <Stat label="Workspaces" value={String(overview.data.workspaces.total)} />
-                        <Stat
-                            label="Stored"
-                            value={formatBytes(overview.data.workspaces.usedBytes)}
-                        />
-                    </section>
-                    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                        <Stat label="Objects ready" value={String(overview.data.objects.ready)} />
-                        <Stat
-                            label="Objects missing"
-                            value={String(overview.data.objects.missing)}
-                            tone={overview.data.objects.missing > 0 ? 'bad' : undefined}
-                        />
-                        <Stat
-                            label="Awaiting replica"
-                            value={String(overview.data.objects.unreplicated)}
-                        />
-                        <Stat
-                            label="Deletions queued"
-                            value={String(overview.data.outbox.pending)}
-                        />
-                    </section>
-                    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                        <Stat
-                            label="Open reports"
-                            value={String(overview.data.reports.open)}
-                            tone={overview.data.reports.open > 0 ? 'bad' : undefined}
-                        />
-                        <Stat label="On hold" value={String(overview.data.reports.held)} />
-                        <div className="col-span-2 flex flex-wrap items-center gap-x-5 gap-y-2 px-1 text-sm">
-                            <Link to="/app/admin/reports" className="text-link">
-                                Open the reports queue
-                            </Link>
-                            <Link to="/app/admin/affiliates" className="text-link">
-                                Affiliates
-                            </Link>
-                        </div>
-                    </section>
-                    <p className="text-sm text-muted-foreground tabular-nums">
+            {data && (
+                <>
+                    <StatGrid
+                        stats={[
+                            {
+                                label: 'Accounts',
+                                value: count(data.people.total),
+                                to: { to: '/app/admin/accounts' },
+                            },
+                            {
+                                label: 'Admins',
+                                value: count(data.people.admins),
+                                to: { to: '/app/admin/accounts', search: { role: 'admin' } },
+                            },
+                            {
+                                label: 'Workspaces',
+                                value: count(data.workspaces.total),
+                                to: { to: '/app/admin/workspaces', search: { sort: 'created' } },
+                            },
+                            {
+                                label: 'Stored',
+                                value: formatBytes(data.workspaces.usedBytes),
+                                to: { to: '/app/admin/workspaces' },
+                            },
+                            { label: 'Objects ready', value: count(data.objects.ready) },
+                            {
+                                label: 'Objects missing',
+                                value: count(data.objects.missing),
+                                tone: data.objects.missing > 0 ? 'danger' : undefined,
+                                anchor: '#missing-objects',
+                            },
+                            { label: 'Awaiting replica', value: count(data.objects.unreplicated) },
+                            { label: 'Deletions queued', value: count(data.outbox.pending) },
+                            {
+                                label: 'Open reports',
+                                value: count(data.reports.open),
+                                tone: data.reports.open > 0 ? 'danger' : undefined,
+                                to: { to: '/app/admin/reports' },
+                            },
+                            {
+                                label: 'On hold',
+                                value: count(data.reports.held),
+                                to: { to: '/app/admin/reports', search: { status: 'held' } },
+                            },
+                        ]}
+                    />
+                    <p className="pt-3 font-mono text-xs text-muted-foreground tabular-nums">
                         Last store audit{' '}
-                        {overview.data.objects.lastAuditedAt
-                            ? formatWhen(overview.data.objects.lastAuditedAt)
+                        {data.objects.lastAuditedAt
+                            ? formatWhen(data.objects.lastAuditedAt)
                             : 'has not run yet'}
-                        . {overview.data.objects.cold} objects in the cold class,{' '}
-                        {overview.data.objects.pending} still uploading.
+                        . {count(data.objects.cold)} objects in the cold class,{' '}
+                        {count(data.objects.pending)} still uploading.
                     </p>
-                    <section className="flex flex-col gap-3">
-                        <h2 className="text-lg font-bold">Missing objects</h2>
-                        {overview.data.missing.length === 0 ? (
-                            <p className="rounded-md bg-success-soft px-4 py-3 text-sm leading-relaxed text-success">
-                                None. Every audited object was found at the store with its recorded
-                                size.
-                            </p>
-                        ) : (
-                            <div className="overflow-x-auto rounded-md border border-rule">
-                                <table className="w-full border-collapse">
-                                    <thead>
-                                        <tr className="border-b border-rule">
-                                            <th className={`${head} text-left`}>Object</th>
-                                            <th className={`${head} text-left`}>Workspace</th>
-                                            <th className={`${head} text-right`}>Size</th>
-                                            <th className={`${head} text-left`}>Replica</th>
-                                            <th className={`${head} text-left`}>Audited</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {overview.data.missing.map((row) => (
-                                            <tr
-                                                key={row.objectId}
-                                                className="border-b border-rule last:border-b-0 hover:bg-muted"
-                                            >
-                                                <td className={id}>{row.objectId}</td>
-                                                <td className={id}>{row.workspaceId}</td>
-                                                <td className={`${cell} text-right tabular-nums`}>
-                                                    {formatBytes(row.ciphertextSize)}
-                                                </td>
-                                                <td className={cell}>
-                                                    {row.replicatedAt ? 'holds a copy' : 'no copy'}
-                                                </td>
-                                                <td className={`${cell} tabular-nums`}>
-                                                    {row.auditedAt
-                                                        ? formatWhen(row.auditedAt)
-                                                        : '-'}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                            A missing object is one the audit could not find at the primary store
-                            with its recorded size. When a replica holds a copy, the next audit pass
-                            copies it back. Otherwise the file shows as unavailable to its owner
-                            until it is recovered by hand.
+                    <h2
+                        id="missing-objects"
+                        className="scroll-mt-20 pt-6 pb-2 text-[15px] font-bold"
+                    >
+                        Missing objects
+                    </h2>
+                    {data.missing.length === 0 ? (
+                        <p className="rounded-md bg-success-soft px-4 py-3 text-sm text-success">
+                            None. Every audited object was found at the store with its recorded
+                            size.
                         </p>
-                    </section>
-                </div>
+                    ) : (
+                        <OperatorTable>
+                            <thead>
+                                <tr>
+                                    <th className={th}>Object</th>
+                                    <th className={th}>Workspace</th>
+                                    <th className={cn(th, 'text-right')}>Size</th>
+                                    <th className={th}>Replica</th>
+                                    <th className={th}>Audited</th>
+                                </tr>
+                            </thead>
+                            <tbody className="font-mono">
+                                {data.missing.map((row) => (
+                                    <tr key={row.objectId} className="hover:bg-muted">
+                                        <td className={td}>{row.objectId}</td>
+                                        <td className={td}>{row.workspaceId}</td>
+                                        <td className={cn(td, 'text-right tabular-nums')}>
+                                            {formatBytes(row.ciphertextSize)}
+                                        </td>
+                                        <td
+                                            className={cn(
+                                                td,
+                                                !row.replicatedAt &&
+                                                    'font-semibold text-destructive',
+                                            )}
+                                        >
+                                            {row.replicatedAt ? 'present' : 'absent'}
+                                        </td>
+                                        <td className={cn(td, 'tabular-nums')}>
+                                            {row.auditedAt ? formatWhen(row.auditedAt) : '–'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </OperatorTable>
+                    )}
+                    <p className="max-w-2xl pt-3 text-[13px] text-muted-foreground">
+                        A missing object is one the audit couldn’t find at the primary store with
+                        its recorded size. When a replica holds a copy, the next audit copies it
+                        back. Otherwise the file shows as unavailable to its owner until it is
+                        recovered by hand.
+                    </p>
+                </>
             )}
-        </div>
+        </OperatorPage>
     );
 }

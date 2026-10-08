@@ -24,7 +24,11 @@ import { Route as RegisterRouteRouteImport } from './routes/register/route'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
 import { Route as SecurityRouteRouteImport } from './routes/security/route'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
+import { Route as SupportRouteRouteImport } from './routes/support/route'
+import { Route as TeamsRouteRouteImport } from './routes/teams/route'
 import { Route as TermsRouteRouteImport } from './routes/terms/route'
+import { Route as DotwellKnownAppleAppSiteAssociationRouteImport } from './routes/[.]well-known/apple-app-site-association'
+import { Route as DotwellKnownAssetlinksDotjsonRouteImport } from './routes/[.]well-known/assetlinks[.]json'
 import { Route as AuthenticatedAppRouteRouteImport } from './routes/_authenticated/app/route'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
@@ -40,22 +44,26 @@ import { Route as RegisterCheckEmailRouteImport } from './routes/register/check-
 import { Route as RegisterCompleteRouteImport } from './routes/register/complete'
 import { Route as STokenRouteImport } from './routes/s/$token'
 import { Route as VsSlugRouteImport } from './routes/vs/$slug'
-import { Route as AuthenticatedAppIndexRouteImport } from './routes/_authenticated/app/index'
 import { Route as AuthenticatedAppDriveRouteImport } from './routes/_authenticated/app/_drive'
 import { Route as AuthenticatedAppAccountRouteImport } from './routes/_authenticated/app/account'
 import { Route as AuthenticatedAppBillingRouteImport } from './routes/_authenticated/app/billing'
 import { Route as AuthenticatedAppRecoveryKeyRouteImport } from './routes/_authenticated/app/recovery-key'
 import { Route as AuthenticatedSetupRecoveryKeyRouteImport } from './routes/_authenticated/setup/recovery-key'
+import { Route as AuthenticatedAppDriveIndexRouteImport } from './routes/_authenticated/app/_drive/index'
 import { Route as AuthenticatedAppDriveContactsRouteImport } from './routes/_authenticated/app/_drive/contacts'
+import { Route as AuthenticatedAppDrivePeopleRouteImport } from './routes/_authenticated/app/_drive/people'
 import { Route as AuthenticatedAppDriveReferralsRouteImport } from './routes/_authenticated/app/_drive/referrals'
 import { Route as AuthenticatedAppDriveSearchRouteImport } from './routes/_authenticated/app/_drive/search'
 import { Route as AuthenticatedAppDriveSharedRouteImport } from './routes/_authenticated/app/_drive/shared'
 import { Route as AuthenticatedAppDriveTrashRouteImport } from './routes/_authenticated/app/_drive/trash'
 import { Route as AuthenticatedAppAdminIndexRouteImport } from './routes/_authenticated/app/admin/index'
+import { Route as AuthenticatedAppAdminWorkspacesRouteImport } from './routes/_authenticated/app/admin/workspaces'
 import { Route as AuthenticatedAppDriveAdminAffiliatesRouteImport } from './routes/_authenticated/app/_drive/admin.affiliates'
 import { Route as AuthenticatedAppDriveDriveIndexRouteImport } from './routes/_authenticated/app/_drive/drive/index'
 import { Route as AuthenticatedAppDriveTagsIndexRouteImport } from './routes/_authenticated/app/_drive/tags.index'
 import { Route as AuthenticatedAppDriveTagsTagIdRouteImport } from './routes/_authenticated/app/_drive/tags.$tagId'
+import { Route as AuthenticatedAppAdminAccountsIndexRouteImport } from './routes/_authenticated/app/admin/accounts/index'
+import { Route as AuthenticatedAppAdminAccountsAccountIdRouteImport } from './routes/_authenticated/app/admin/accounts/$accountId'
 import { Route as AuthenticatedAppAdminReportsIndexRouteImport } from './routes/_authenticated/app/admin/reports/index'
 import { Route as AuthenticatedAppDriveAdminReportsReportIdRouteImport } from './routes/_authenticated/app/_drive/admin.reports.$reportId'
 import { Route as AuthenticatedAppDriveDriveFFolderIdRouteImport } from './routes/_authenticated/app/_drive/drive/f.$folderId'
@@ -134,11 +142,33 @@ const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
   path: '/sitemap.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SupportRouteRoute = SupportRouteRouteImport.update({
+  id: '/support',
+  path: '/support',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeamsRouteRoute = TeamsRouteRouteImport.update({
+  id: '/teams',
+  path: '/teams',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TermsRouteRoute = TermsRouteRouteImport.update({
   id: '/terms',
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DotwellKnownAppleAppSiteAssociationRoute =
+  DotwellKnownAppleAppSiteAssociationRouteImport.update({
+    id: '/.well-known/apple-app-site-association',
+    path: '/.well-known/apple-app-site-association',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const DotwellKnownAssetlinksDotjsonRoute =
+  DotwellKnownAssetlinksDotjsonRouteImport.update({
+    id: '/.well-known/assetlinks.json',
+    path: '/.well-known/assetlinks.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AuthenticatedAppRouteRoute = AuthenticatedAppRouteRouteImport.update({
   id: '/app',
   path: '/app',
@@ -214,11 +244,6 @@ const VsSlugRoute = VsSlugRouteImport.update({
   path: '/vs/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedAppIndexRoute = AuthenticatedAppIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AuthenticatedAppRouteRoute,
-} as any)
 const AuthenticatedAppDriveRoute = AuthenticatedAppDriveRouteImport.update({
   id: '/_drive',
   getParentRoute: () => AuthenticatedAppRouteRoute,
@@ -245,10 +270,22 @@ const AuthenticatedSetupRecoveryKeyRoute =
     path: '/setup/recovery-key',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedAppDriveIndexRoute =
+  AuthenticatedAppDriveIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedAppDriveRoute,
+  } as any)
 const AuthenticatedAppDriveContactsRoute =
   AuthenticatedAppDriveContactsRouteImport.update({
     id: '/contacts',
     path: '/contacts',
+    getParentRoute: () => AuthenticatedAppDriveRoute,
+  } as any)
+const AuthenticatedAppDrivePeopleRoute =
+  AuthenticatedAppDrivePeopleRouteImport.update({
+    id: '/people',
+    path: '/people',
     getParentRoute: () => AuthenticatedAppDriveRoute,
   } as any)
 const AuthenticatedAppDriveReferralsRoute =
@@ -281,6 +318,12 @@ const AuthenticatedAppAdminIndexRoute =
     path: '/admin/',
     getParentRoute: () => AuthenticatedAppRouteRoute,
   } as any)
+const AuthenticatedAppAdminWorkspacesRoute =
+  AuthenticatedAppAdminWorkspacesRouteImport.update({
+    id: '/admin/workspaces',
+    path: '/admin/workspaces',
+    getParentRoute: () => AuthenticatedAppRouteRoute,
+  } as any)
 const AuthenticatedAppDriveAdminAffiliatesRoute =
   AuthenticatedAppDriveAdminAffiliatesRouteImport.update({
     id: '/admin/affiliates',
@@ -304,6 +347,18 @@ const AuthenticatedAppDriveTagsTagIdRoute =
     id: '/tags/$tagId',
     path: '/tags/$tagId',
     getParentRoute: () => AuthenticatedAppDriveRoute,
+  } as any)
+const AuthenticatedAppAdminAccountsIndexRoute =
+  AuthenticatedAppAdminAccountsIndexRouteImport.update({
+    id: '/admin/accounts/',
+    path: '/admin/accounts/',
+    getParentRoute: () => AuthenticatedAppRouteRoute,
+  } as any)
+const AuthenticatedAppAdminAccountsAccountIdRoute =
+  AuthenticatedAppAdminAccountsAccountIdRouteImport.update({
+    id: '/admin/accounts/$accountId',
+    path: '/admin/accounts/$accountId',
+    getParentRoute: () => AuthenticatedAppRouteRoute,
   } as any)
 const AuthenticatedAppAdminReportsIndexRoute =
   AuthenticatedAppAdminReportsIndexRouteImport.update({
@@ -334,6 +389,8 @@ export interface FileRoutesByFullPath {
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
   '/security': typeof SecurityRouteRoute
+  '/support': typeof SupportRouteRoute
+  '/teams': typeof TeamsRouteRoute
   '/terms': typeof TermsRouteRoute
   '/design.md': typeof DesignDotmdRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -341,6 +398,8 @@ export interface FileRoutesByFullPath {
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/app': typeof AuthenticatedAppRouteRouteWithChildren
+  '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
+  '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -359,17 +418,21 @@ export interface FileRoutesByFullPath {
   '/app/billing': typeof AuthenticatedAppBillingRoute
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
-  '/app/': typeof AuthenticatedAppIndexRoute
   '/app/contacts': typeof AuthenticatedAppDriveContactsRoute
+  '/app/people': typeof AuthenticatedAppDrivePeopleRoute
   '/app/referrals': typeof AuthenticatedAppDriveReferralsRoute
   '/app/search': typeof AuthenticatedAppDriveSearchRoute
   '/app/shared': typeof AuthenticatedAppDriveSharedRoute
   '/app/trash': typeof AuthenticatedAppDriveTrashRoute
+  '/app/admin/workspaces': typeof AuthenticatedAppAdminWorkspacesRoute
+  '/app/': typeof AuthenticatedAppDriveIndexRoute
   '/app/admin/': typeof AuthenticatedAppAdminIndexRoute
   '/app/admin/affiliates': typeof AuthenticatedAppDriveAdminAffiliatesRoute
   '/app/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
+  '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
   '/app/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
+  '/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
   '/app/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/app/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
@@ -382,12 +445,17 @@ export interface FileRoutesByTo {
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
   '/security': typeof SecurityRouteRoute
+  '/support': typeof SupportRouteRoute
+  '/teams': typeof TeamsRouteRoute
   '/terms': typeof TermsRouteRoute
   '/design.md': typeof DesignDotmdRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/og.jpg': typeof OgDotjpgRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/app': typeof AuthenticatedAppDriveIndexRoute
+  '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
+  '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -402,21 +470,24 @@ export interface FileRoutesByTo {
   '/blog': typeof BlogIndexRoute
   '/recover': typeof RecoverIndexRoute
   '/register': typeof RegisterIndexRoute
-  '/app': typeof AuthenticatedAppIndexRoute
   '/app/account': typeof AuthenticatedAppAccountRoute
   '/app/billing': typeof AuthenticatedAppBillingRoute
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
   '/app/contacts': typeof AuthenticatedAppDriveContactsRoute
+  '/app/people': typeof AuthenticatedAppDrivePeopleRoute
   '/app/referrals': typeof AuthenticatedAppDriveReferralsRoute
   '/app/search': typeof AuthenticatedAppDriveSearchRoute
   '/app/shared': typeof AuthenticatedAppDriveSharedRoute
   '/app/trash': typeof AuthenticatedAppDriveTrashRoute
+  '/app/admin/workspaces': typeof AuthenticatedAppAdminWorkspacesRoute
   '/app/admin': typeof AuthenticatedAppAdminIndexRoute
   '/app/admin/affiliates': typeof AuthenticatedAppDriveAdminAffiliatesRoute
   '/app/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
+  '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive': typeof AuthenticatedAppDriveDriveIndexRoute
   '/app/tags': typeof AuthenticatedAppDriveTagsIndexRoute
+  '/app/admin/accounts': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports': typeof AuthenticatedAppAdminReportsIndexRoute
   '/app/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/app/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
@@ -432,6 +503,8 @@ export interface FileRoutesById {
   '/recover': typeof RecoverRouteRouteWithChildren
   '/register': typeof RegisterRouteRouteWithChildren
   '/security': typeof SecurityRouteRoute
+  '/support': typeof SupportRouteRoute
+  '/teams': typeof TeamsRouteRoute
   '/terms': typeof TermsRouteRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design.md': typeof DesignDotmdRoute
@@ -440,6 +513,8 @@ export interface FileRoutesById {
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/app': typeof AuthenticatedAppRouteRouteWithChildren
+  '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
+  '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -459,17 +534,21 @@ export interface FileRoutesById {
   '/_authenticated/app/billing': typeof AuthenticatedAppBillingRoute
   '/_authenticated/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/_authenticated/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
-  '/_authenticated/app/': typeof AuthenticatedAppIndexRoute
   '/_authenticated/app/_drive/contacts': typeof AuthenticatedAppDriveContactsRoute
+  '/_authenticated/app/_drive/people': typeof AuthenticatedAppDrivePeopleRoute
   '/_authenticated/app/_drive/referrals': typeof AuthenticatedAppDriveReferralsRoute
   '/_authenticated/app/_drive/search': typeof AuthenticatedAppDriveSearchRoute
   '/_authenticated/app/_drive/shared': typeof AuthenticatedAppDriveSharedRoute
   '/_authenticated/app/_drive/trash': typeof AuthenticatedAppDriveTrashRoute
+  '/_authenticated/app/admin/workspaces': typeof AuthenticatedAppAdminWorkspacesRoute
+  '/_authenticated/app/_drive/': typeof AuthenticatedAppDriveIndexRoute
   '/_authenticated/app/admin/': typeof AuthenticatedAppAdminIndexRoute
   '/_authenticated/app/_drive/admin/affiliates': typeof AuthenticatedAppDriveAdminAffiliatesRoute
   '/_authenticated/app/_drive/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
+  '/_authenticated/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/_authenticated/app/_drive/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
   '/_authenticated/app/_drive/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
+  '/_authenticated/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/_authenticated/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
   '/_authenticated/app/_drive/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/_authenticated/app/_drive/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
@@ -486,6 +565,8 @@ export interface FileRouteTypes {
     | '/recover'
     | '/register'
     | '/security'
+    | '/support'
+    | '/teams'
     | '/terms'
     | '/design.md'
     | '/llms.txt'
@@ -493,6 +574,8 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/sitemap.xml'
     | '/app'
+    | '/.well-known/apple-app-site-association'
+    | '/.well-known/assetlinks.json'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -511,17 +594,21 @@ export interface FileRouteTypes {
     | '/app/billing'
     | '/app/recovery-key'
     | '/setup/recovery-key'
-    | '/app/'
     | '/app/contacts'
+    | '/app/people'
     | '/app/referrals'
     | '/app/search'
     | '/app/shared'
     | '/app/trash'
+    | '/app/admin/workspaces'
+    | '/app/'
     | '/app/admin/'
     | '/app/admin/affiliates'
     | '/app/tags/$tagId'
+    | '/app/admin/accounts/$accountId'
     | '/app/drive/'
     | '/app/tags/'
+    | '/app/admin/accounts/'
     | '/app/admin/reports/'
     | '/app/admin/reports/$reportId'
     | '/app/drive/f/$folderId'
@@ -534,12 +621,17 @@ export interface FileRouteTypes {
     | '/pricing'
     | '/privacy'
     | '/security'
+    | '/support'
+    | '/teams'
     | '/terms'
     | '/design.md'
     | '/llms.txt'
     | '/og.jpg'
     | '/robots.txt'
     | '/sitemap.xml'
+    | '/app'
+    | '/.well-known/apple-app-site-association'
+    | '/.well-known/assetlinks.json'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -554,21 +646,24 @@ export interface FileRouteTypes {
     | '/blog'
     | '/recover'
     | '/register'
-    | '/app'
     | '/app/account'
     | '/app/billing'
     | '/app/recovery-key'
     | '/setup/recovery-key'
     | '/app/contacts'
+    | '/app/people'
     | '/app/referrals'
     | '/app/search'
     | '/app/shared'
     | '/app/trash'
+    | '/app/admin/workspaces'
     | '/app/admin'
     | '/app/admin/affiliates'
     | '/app/tags/$tagId'
+    | '/app/admin/accounts/$accountId'
     | '/app/drive'
     | '/app/tags'
+    | '/app/admin/accounts'
     | '/app/admin/reports'
     | '/app/admin/reports/$reportId'
     | '/app/drive/f/$folderId'
@@ -583,6 +678,8 @@ export interface FileRouteTypes {
     | '/recover'
     | '/register'
     | '/security'
+    | '/support'
+    | '/teams'
     | '/terms'
     | '/_authenticated'
     | '/design.md'
@@ -591,6 +688,8 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/sitemap.xml'
     | '/_authenticated/app'
+    | '/.well-known/apple-app-site-association'
+    | '/.well-known/assetlinks.json'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -610,17 +709,21 @@ export interface FileRouteTypes {
     | '/_authenticated/app/billing'
     | '/_authenticated/app/recovery-key'
     | '/_authenticated/setup/recovery-key'
-    | '/_authenticated/app/'
     | '/_authenticated/app/_drive/contacts'
+    | '/_authenticated/app/_drive/people'
     | '/_authenticated/app/_drive/referrals'
     | '/_authenticated/app/_drive/search'
     | '/_authenticated/app/_drive/shared'
     | '/_authenticated/app/_drive/trash'
+    | '/_authenticated/app/admin/workspaces'
+    | '/_authenticated/app/_drive/'
     | '/_authenticated/app/admin/'
     | '/_authenticated/app/_drive/admin/affiliates'
     | '/_authenticated/app/_drive/tags/$tagId'
+    | '/_authenticated/app/admin/accounts/$accountId'
     | '/_authenticated/app/_drive/drive/'
     | '/_authenticated/app/_drive/tags/'
+    | '/_authenticated/app/admin/accounts/'
     | '/_authenticated/app/admin/reports/'
     | '/_authenticated/app/_drive/admin/reports/$reportId'
     | '/_authenticated/app/_drive/drive/f/$folderId'
@@ -636,6 +739,8 @@ export interface RootRouteChildren {
   RecoverRouteRoute: typeof RecoverRouteRouteWithChildren
   RegisterRouteRoute: typeof RegisterRouteRouteWithChildren
   SecurityRouteRoute: typeof SecurityRouteRoute
+  SupportRouteRoute: typeof SupportRouteRoute
+  TeamsRouteRoute: typeof TeamsRouteRoute
   TermsRouteRoute: typeof TermsRouteRoute
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignDotmdRoute: typeof DesignDotmdRoute
@@ -643,6 +748,8 @@ export interface RootRouteChildren {
   OgDotjpgRoute: typeof OgDotjpgRoute
   RobotsDottxtRoute: typeof RobotsDottxtRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  DotwellKnownAppleAppSiteAssociationRoute: typeof DotwellKnownAppleAppSiteAssociationRoute
+  DotwellKnownAssetlinksDotjsonRoute: typeof DotwellKnownAssetlinksDotjsonRoute
   ApiSplatRoute: typeof ApiSplatRoute
   BlogSlugRoute: typeof BlogSlugRoute
   GoSlugRoute: typeof GoSlugRoute
@@ -760,11 +867,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SitemapDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/support': {
+      id: '/support'
+      path: '/support'
+      fullPath: '/support'
+      preLoaderRoute: typeof SupportRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/teams': {
+      id: '/teams'
+      path: '/teams'
+      fullPath: '/teams'
+      preLoaderRoute: typeof TeamsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/terms': {
       id: '/terms'
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/apple-app-site-association': {
+      id: '/.well-known/apple-app-site-association'
+      path: '/.well-known/apple-app-site-association'
+      fullPath: '/.well-known/apple-app-site-association'
+      preLoaderRoute: typeof DotwellKnownAppleAppSiteAssociationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/assetlinks.json': {
+      id: '/.well-known/assetlinks.json'
+      path: '/.well-known/assetlinks.json'
+      fullPath: '/.well-known/assetlinks.json'
+      preLoaderRoute: typeof DotwellKnownAssetlinksDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/app': {
@@ -872,13 +1007,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VsSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/app/': {
-      id: '/_authenticated/app/'
-      path: '/'
-      fullPath: '/app/'
-      preLoaderRoute: typeof AuthenticatedAppIndexRouteImport
-      parentRoute: typeof AuthenticatedAppRouteRoute
-    }
     '/_authenticated/app/_drive': {
       id: '/_authenticated/app/_drive'
       path: ''
@@ -914,11 +1042,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSetupRecoveryKeyRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/app/_drive/': {
+      id: '/_authenticated/app/_drive/'
+      path: '/'
+      fullPath: '/app/'
+      preLoaderRoute: typeof AuthenticatedAppDriveIndexRouteImport
+      parentRoute: typeof AuthenticatedAppDriveRoute
+    }
     '/_authenticated/app/_drive/contacts': {
       id: '/_authenticated/app/_drive/contacts'
       path: '/contacts'
       fullPath: '/app/contacts'
       preLoaderRoute: typeof AuthenticatedAppDriveContactsRouteImport
+      parentRoute: typeof AuthenticatedAppDriveRoute
+    }
+    '/_authenticated/app/_drive/people': {
+      id: '/_authenticated/app/_drive/people'
+      path: '/people'
+      fullPath: '/app/people'
+      preLoaderRoute: typeof AuthenticatedAppDrivePeopleRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
     }
     '/_authenticated/app/_drive/referrals': {
@@ -956,6 +1098,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppAdminIndexRouteImport
       parentRoute: typeof AuthenticatedAppRouteRoute
     }
+    '/_authenticated/app/admin/workspaces': {
+      id: '/_authenticated/app/admin/workspaces'
+      path: '/admin/workspaces'
+      fullPath: '/app/admin/workspaces'
+      preLoaderRoute: typeof AuthenticatedAppAdminWorkspacesRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
     '/_authenticated/app/_drive/admin/affiliates': {
       id: '/_authenticated/app/_drive/admin/affiliates'
       path: '/admin/affiliates'
@@ -983,6 +1132,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/app/tags/$tagId'
       preLoaderRoute: typeof AuthenticatedAppDriveTagsTagIdRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
+    }
+    '/_authenticated/app/admin/accounts/': {
+      id: '/_authenticated/app/admin/accounts/'
+      path: '/admin/accounts'
+      fullPath: '/app/admin/accounts/'
+      preLoaderRoute: typeof AuthenticatedAppAdminAccountsIndexRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
+    }
+    '/_authenticated/app/admin/accounts/$accountId': {
+      id: '/_authenticated/app/admin/accounts/$accountId'
+      path: '/admin/accounts/$accountId'
+      fullPath: '/app/admin/accounts/$accountId'
+      preLoaderRoute: typeof AuthenticatedAppAdminAccountsAccountIdRouteImport
+      parentRoute: typeof AuthenticatedAppRouteRoute
     }
     '/_authenticated/app/admin/reports/': {
       id: '/_authenticated/app/admin/reports/'
@@ -1042,10 +1205,12 @@ const RegisterRouteRouteWithChildren = RegisterRouteRoute._addFileChildren(
 
 interface AuthenticatedAppDriveRouteChildren {
   AuthenticatedAppDriveContactsRoute: typeof AuthenticatedAppDriveContactsRoute
+  AuthenticatedAppDrivePeopleRoute: typeof AuthenticatedAppDrivePeopleRoute
   AuthenticatedAppDriveReferralsRoute: typeof AuthenticatedAppDriveReferralsRoute
   AuthenticatedAppDriveSearchRoute: typeof AuthenticatedAppDriveSearchRoute
   AuthenticatedAppDriveSharedRoute: typeof AuthenticatedAppDriveSharedRoute
   AuthenticatedAppDriveTrashRoute: typeof AuthenticatedAppDriveTrashRoute
+  AuthenticatedAppDriveIndexRoute: typeof AuthenticatedAppDriveIndexRoute
   AuthenticatedAppDriveAdminAffiliatesRoute: typeof AuthenticatedAppDriveAdminAffiliatesRoute
   AuthenticatedAppDriveTagsTagIdRoute: typeof AuthenticatedAppDriveTagsTagIdRoute
   AuthenticatedAppDriveDriveIndexRoute: typeof AuthenticatedAppDriveDriveIndexRoute
@@ -1056,10 +1221,12 @@ interface AuthenticatedAppDriveRouteChildren {
 
 const AuthenticatedAppDriveRouteChildren: AuthenticatedAppDriveRouteChildren = {
   AuthenticatedAppDriveContactsRoute: AuthenticatedAppDriveContactsRoute,
+  AuthenticatedAppDrivePeopleRoute: AuthenticatedAppDrivePeopleRoute,
   AuthenticatedAppDriveReferralsRoute: AuthenticatedAppDriveReferralsRoute,
   AuthenticatedAppDriveSearchRoute: AuthenticatedAppDriveSearchRoute,
   AuthenticatedAppDriveSharedRoute: AuthenticatedAppDriveSharedRoute,
   AuthenticatedAppDriveTrashRoute: AuthenticatedAppDriveTrashRoute,
+  AuthenticatedAppDriveIndexRoute: AuthenticatedAppDriveIndexRoute,
   AuthenticatedAppDriveAdminAffiliatesRoute:
     AuthenticatedAppDriveAdminAffiliatesRoute,
   AuthenticatedAppDriveTagsTagIdRoute: AuthenticatedAppDriveTagsTagIdRoute,
@@ -1081,8 +1248,10 @@ interface AuthenticatedAppRouteRouteChildren {
   AuthenticatedAppAccountRoute: typeof AuthenticatedAppAccountRoute
   AuthenticatedAppBillingRoute: typeof AuthenticatedAppBillingRoute
   AuthenticatedAppRecoveryKeyRoute: typeof AuthenticatedAppRecoveryKeyRoute
-  AuthenticatedAppIndexRoute: typeof AuthenticatedAppIndexRoute
+  AuthenticatedAppAdminWorkspacesRoute: typeof AuthenticatedAppAdminWorkspacesRoute
   AuthenticatedAppAdminIndexRoute: typeof AuthenticatedAppAdminIndexRoute
+  AuthenticatedAppAdminAccountsAccountIdRoute: typeof AuthenticatedAppAdminAccountsAccountIdRoute
+  AuthenticatedAppAdminAccountsIndexRoute: typeof AuthenticatedAppAdminAccountsIndexRoute
   AuthenticatedAppAdminReportsIndexRoute: typeof AuthenticatedAppAdminReportsIndexRoute
 }
 
@@ -1091,8 +1260,12 @@ const AuthenticatedAppRouteRouteChildren: AuthenticatedAppRouteRouteChildren = {
   AuthenticatedAppAccountRoute: AuthenticatedAppAccountRoute,
   AuthenticatedAppBillingRoute: AuthenticatedAppBillingRoute,
   AuthenticatedAppRecoveryKeyRoute: AuthenticatedAppRecoveryKeyRoute,
-  AuthenticatedAppIndexRoute: AuthenticatedAppIndexRoute,
+  AuthenticatedAppAdminWorkspacesRoute: AuthenticatedAppAdminWorkspacesRoute,
   AuthenticatedAppAdminIndexRoute: AuthenticatedAppAdminIndexRoute,
+  AuthenticatedAppAdminAccountsAccountIdRoute:
+    AuthenticatedAppAdminAccountsAccountIdRoute,
+  AuthenticatedAppAdminAccountsIndexRoute:
+    AuthenticatedAppAdminAccountsIndexRoute,
   AuthenticatedAppAdminReportsIndexRoute:
     AuthenticatedAppAdminReportsIndexRoute,
 }
@@ -1126,6 +1299,8 @@ const rootRouteChildren: RootRouteChildren = {
   RecoverRouteRoute: RecoverRouteRouteWithChildren,
   RegisterRouteRoute: RegisterRouteRouteWithChildren,
   SecurityRouteRoute: SecurityRouteRoute,
+  SupportRouteRoute: SupportRouteRoute,
+  TeamsRouteRoute: TeamsRouteRoute,
   TermsRouteRoute: TermsRouteRoute,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignDotmdRoute: DesignDotmdRoute,
@@ -1133,6 +1308,9 @@ const rootRouteChildren: RootRouteChildren = {
   OgDotjpgRoute: OgDotjpgRoute,
   RobotsDottxtRoute: RobotsDottxtRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  DotwellKnownAppleAppSiteAssociationRoute:
+    DotwellKnownAppleAppSiteAssociationRoute,
+  DotwellKnownAssetlinksDotjsonRoute: DotwellKnownAssetlinksDotjsonRoute,
   ApiSplatRoute: ApiSplatRoute,
   BlogSlugRoute: BlogSlugRoute,
   GoSlugRoute: GoSlugRoute,

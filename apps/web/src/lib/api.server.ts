@@ -1451,6 +1451,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         t.Literal('removed'),
                         t.Literal('filed'),
                         t.Literal('all'),
+                        t.Literal('held'),
                     ]),
                 ),
                 // Not UnionEnum: Elysia fills an absent optional UnionEnum query field with its first value.
@@ -1642,6 +1643,69 @@ export const apiApp = new Elysia({ prefix: '/api' })
         set.headers['Cache-Control'] = 'no-store';
         return auth.getAdminOverview(sessionToken);
     })
+    // Not UnionEnum: Elysia fills an absent optional UnionEnum query field with its first value.
+    .get(
+        '/admin/accounts',
+        {
+            query: t.Object({
+                role: t.Optional(t.Union([t.Literal('admin'), t.Literal('member')])),
+                q: t.Optional(t.String({ maxLength: 254 })),
+                sort: t.Optional(t.Union([t.Literal('joined'), t.Literal('stored')])),
+                offset: t.Optional(t.Numeric({ minimum: 0, maximum: 1_000_000 })),
+            }),
+        },
+        async ({ sessionToken, query, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.listAdminAccounts(sessionToken, {
+                role: query.role,
+                query: query.q,
+                sort: query.sort,
+                offset: query.offset,
+            });
+        },
+    )
+    .get(
+        '/admin/accounts/:id',
+        { params: t.Object({ id: uuidSchema }) },
+        async ({ sessionToken, params, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.getAdminAccount(sessionToken, params.id);
+        },
+    )
+    .post(
+        '/admin/accounts/:id/suspension',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({ suspended: t.Boolean() }) },
+        async ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            const result = await auth.setAdminAccountSuspended(
+                sessionToken,
+                params.id,
+                body.suspended,
+            );
+            // There is no audit table yet; the request log is the record of who did it.
+            useLogger().set({
+                admin: {
+                    action: body.suspended ? 'account-suspended' : 'account-reinstated',
+                    operatorId: result.operatorId,
+                    accountId: params.id,
+                },
+            });
+            return { suspendedAt: result.suspendedAt };
+        },
+    )
+    .get(
+        '/admin/workspaces',
+        {
+            query: t.Object({
+                sort: t.Optional(t.Union([t.Literal('stored'), t.Literal('created')])),
+                offset: t.Optional(t.Numeric({ minimum: 0, maximum: 1_000_000 })),
+            }),
+        },
+        async ({ sessionToken, query, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            return auth.listAdminWorkspaces(sessionToken, query);
+        },
+    )
     .get('/health', () => ({ status: 'ok' as const, service: API_SERVICE }))
     .get('/ready', async ({ status, log, set }) => {
         set.headers['Cache-Control'] = 'no-store';

@@ -1,6 +1,5 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { cn } from 'cn';
 import { ChevronRightIcon } from 'lucide-react';
 import { useState } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
@@ -24,9 +23,6 @@ import {
 } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
-/* The highlighter band that marks where the items will land. */
-const HIGHLIGHT = 'bg-accent';
-
 /*
  * A folder picker that browses from the root, for moving or copying. A move
  * offers neither the item itself nor its current folder; the server refuses a
@@ -48,7 +44,7 @@ export function MoveDialog({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="sm:max-w-[520px]">
                 <MovePicker nodes={nodes} rootId={rootId} mode={mode} onOpenChange={onOpenChange} />
             </DialogContent>
         </Dialog>
@@ -105,123 +101,118 @@ function MovePicker({
 
     const verb = mode === 'copy' ? 'Copy' : 'Move';
     const label = nodes.length === 1 ? `“${nodes[0]!.name}”` : `${nodes.length} items`;
+    const placeName = (folder: DriveNode) => (folder.parentId === null ? 'My files' : folder.name);
+    const already = mode === 'move' && sameParent && destination?.id === currentParent;
+    const trail = listing.data ? [...listing.data.ancestors, listing.data.folder] : [];
     return (
         <>
             <DialogHeader>
                 <DialogTitle>
                     {verb} {label}
                 </DialogTitle>
-                <DialogDescription>
-                    {mode === 'copy'
-                        ? 'Choose a folder. A copy shares the stored bytes with the original but still counts against your storage.'
-                        : 'Choose a folder. Moving rewraps one key; nothing is re-uploaded.'}
-                </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col">
-                <nav
-                    aria-label="Location"
-                    className="flex min-h-10 flex-wrap items-center gap-1 border-b border-rule pb-1 text-sm"
-                >
-                    {listing.data ? (
-                        [...listing.data.ancestors, listing.data.folder].map(
-                            (crumb, index, all) => (
-                                <span key={crumb.id} className="flex items-center gap-1">
-                                    {index > 0 && (
-                                        <ChevronRightIcon className="size-3 text-muted-foreground/60" />
-                                    )}
+                <DialogDescription render={<nav aria-label="Location" />}>
+                    <span className="flex flex-wrap items-center gap-1">
+                        {trail.length === 0 && '…'}
+                        {trail.map((crumb, index) => (
+                            <span key={crumb.id} className="flex items-center gap-1">
+                                {index > 0 && (
+                                    <ChevronRightIcon className="size-3.5" aria-hidden="true" />
+                                )}
+                                {index === trail.length - 1 ? (
+                                    <span
+                                        aria-current="location"
+                                        className="font-semibold text-foreground"
+                                    >
+                                        {placeName(crumb)}
+                                    </span>
+                                ) : (
                                     <button
                                         type="button"
-                                        aria-current={
-                                            index === all.length - 1 ? 'location' : undefined
-                                        }
-                                        className={cn(
-                                            'max-w-48 truncate rounded-xs px-1.5 py-1 hover:bg-muted',
-                                            index === all.length - 1
-                                                ? `${HIGHLIGHT} font-semibold text-accent-foreground hover:bg-transparent`
-                                                : 'text-muted-foreground',
-                                        )}
+                                        className="cursor-pointer font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
                                         onClick={() => setFolderId(crumb.id)}
                                     >
-                                        {crumb.name}
+                                        {placeName(crumb)}
                                     </button>
-                                </span>
-                            ),
-                        )
-                    ) : (
-                        <span className="px-1 text-muted-foreground">…</span>
-                    )}
-                </nav>
-                <div className="max-h-72 overflow-y-auto">
-                    {listing.isPending && (
-                        <div className="flex h-24 items-center justify-center text-muted-foreground">
-                            <Spinner />
-                        </div>
-                    )}
-                    {listing.isError && (
-                        <p className="px-1.5 py-4 text-sm text-destructive">
-                            {driveError(listing.error)}
-                        </p>
-                    )}
-                    {listing.data &&
-                        (() => {
-                            const folders = sortNodes(listing.data.children).filter(
-                                (child) => child.kind === 'folder',
-                            );
-                            if (!folders.length)
-                                return (
-                                    <p className="px-1.5 py-4 text-sm text-muted-foreground">
-                                        No folders here.
-                                    </p>
-                                );
+                                )}
+                            </span>
+                        ))}
+                    </span>
+                </DialogDescription>
+            </DialogHeader>
+            <div className="flex h-[260px] flex-col overflow-y-auto rounded-xl border border-rule">
+                {listing.isPending && (
+                    <div className="m-auto text-muted-foreground">
+                        <Spinner />
+                    </div>
+                )}
+                {listing.isError && (
+                    <p className="m-auto px-4 text-center text-sm text-destructive">
+                        {driveError(listing.error)}
+                    </p>
+                )}
+                {listing.data &&
+                    (() => {
+                        const folders = sortNodes(listing.data.children).filter(
+                            (child) => child.kind === 'folder',
+                        );
+                        if (!folders.length)
                             return (
-                                <ul className="divide-y divide-rule">
-                                    {folders.map((folder) => {
-                                        const blocked = moving.has(folder.id);
-                                        return (
-                                            <li key={folder.id}>
-                                                <button
-                                                    type="button"
-                                                    disabled={blocked}
-                                                    onClick={() => setFolderId(folder.id)}
-                                                    className="flex h-11 w-full items-center gap-3 px-1.5 text-left text-sm hover:bg-muted disabled:opacity-40"
-                                                >
-                                                    <FileMark kind="folder" name={folder.name} />
-                                                    <span className="truncate">{folder.name}</span>
-                                                    <ChevronRightIcon className="ml-auto size-3.5 text-muted-foreground/60" />
-                                                </button>
-                                            </li>
-                                        );
-                                    })}
-                                </ul>
+                                <p className="m-auto text-sm text-muted-foreground">
+                                    No folders in here.
+                                </p>
                             );
-                        })()}
-                </div>
+                        return folders.map((folder) => {
+                            const blocked = moving.has(folder.id);
+                            return (
+                                <button
+                                    key={folder.id}
+                                    type="button"
+                                    disabled={blocked}
+                                    title={
+                                        blocked
+                                            ? `${verb === 'Move' ? 'Moving' : 'Copying'} this one`
+                                            : undefined
+                                    }
+                                    onClick={() => setFolderId(folder.id)}
+                                    className="flex h-14 w-full shrink-0 cursor-pointer items-center gap-3 border-b border-rule px-3 text-left last:border-0 hover:bg-muted disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
+                                >
+                                    <FileMark kind="folder" name={folder.name} />
+                                    <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+                                        {folder.name}
+                                    </span>
+                                    <ChevronRightIcon
+                                        className="size-4 shrink-0 text-muted-foreground"
+                                        aria-hidden="true"
+                                    />
+                                </button>
+                            );
+                        });
+                    })()}
             </div>
             {error && (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" className="text-[13px] text-destructive">
                     {error}
                 </p>
             )}
             <DialogFooter>
+                {mode === 'copy' && (
+                    <p className="mr-auto text-[13px] text-muted-foreground max-sm:order-last">
+                        Copies count towards your storage.
+                    </p>
+                )}
                 <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                     Cancel
                 </Button>
                 <Button onClick={() => void submit()} disabled={pending || disabled}>
                     <PendingLabel
                         pending={pending}
-                        idle={
-                            !destination
-                                ? verb
-                                : destination.parentId === null
-                                  ? `${verb} to top folder`
-                                  : `${verb} to “${destination.name}”`
-                        }
+                        idle={already ? 'Already here' : `${verb} here`}
                         busy={
                             mode === 'copy'
                                 ? progress > 0
-                                    ? `Copying (${progress})`
-                                    : 'Copying'
-                                : 'Moving'
+                                    ? `Copying… ${progress}`
+                                    : 'Copying…'
+                                : 'Moving…'
                         }
                     />
                 </Button>

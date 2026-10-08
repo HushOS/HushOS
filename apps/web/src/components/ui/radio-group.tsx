@@ -34,4 +34,23 @@ function RadioItem({ className, children, ...props }: RadioPrimitive.Root.Props)
     );
 }
 
-export { RadioGroup, RadioItem };
+/* The circle alone, for a row that draws its own label and description around it. */
+function RadioGroupItem({ className, ...props }: RadioPrimitive.Root.Props) {
+    return (
+        <RadioPrimitive.Root
+            data-slot="radio"
+            className={cn(
+                'relative flex size-[18px] shrink-0 cursor-pointer items-center justify-center rounded-full border border-input bg-card transition-[background-color,border-color] duration-150 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 data-checked:border-primary',
+                className,
+            )}
+            {...props}
+        >
+            <RadioPrimitive.Indicator
+                data-slot="radio-indicator"
+                className="size-2.5 rounded-full bg-primary animate-in zoom-in-50 duration-150 ease-out-expo"
+            />
+        </RadioPrimitive.Root>
+    );
+}
+
+export { RadioGroup, RadioGroupItem, RadioItem };

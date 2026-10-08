@@ -2,34 +2,28 @@ import type { LinkView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
-import { CopyIcon, PencilIcon, QrCodeIcon, Share2Icon, Trash2Icon } from 'lucide-react';
 import { useId, useState } from 'react';
-import { QrCode } from '@/components/qr-code';
-import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { driveClient, driveError, driveKeys, formatWhen } from '@/lib/drive';
-import { rotateAfterRevoke } from '@/lib/rotation';
+import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
 /*
- * One link the owner made, wherever it is listed: copy it again, show it as a
- * QR code, hand it to the device's share sheet, change its password or expiry
- * without changing the link, or stop it. The URL is rebuilt on this device
- * from the sealed copy the server holds but cannot open.
+ * A link anyone can open, as its owner sees it: one line saying how it stands,
+ * and a small dialog for its password and end date. The link's address never
+ * changes when these do. The URL is rebuilt on this device from the sealed copy
+ * the server holds but cannot open.
  */
-
-/* A label beside its field; stacked where the container is narrow. */
-export const FIELD_ROW =
-    'grid items-center gap-x-4 gap-y-1.5 py-3 sm:grid-cols-[8rem_minmax(0,1fr)]';
 
 export const EXPIRIES = [
     { value: '', label: 'Never' },
@@ -42,99 +36,89 @@ export function expiryDate(expiry: Expiry) {
     return expiry ? new Date(Date.now() + Number(expiry) * 24 * 3600 * 1000).toISOString() : null;
 }
 
+const longDate = (iso: string) => formatDay(iso);
+
+/* "Opened 3 times · ends 12 Oct · password", or "Not opened yet". */
 export function describeLink(link: LinkView) {
     return [
-        `Made ${formatWhen(link.createdAt)}`,
-        link.hasPassword ? 'password' : null,
-        link.expiresAt ? `until ${formatWhen(link.expiresAt)}` : null,
         link.useCount === 0
-            ? 'not opened yet'
-            : `opened ${link.useCount} ${link.useCount === 1 ? 'time' : 'times'}`,
+            ? 'Not opened yet'
+            : `Opened ${link.useCount === 1 ? 'once' : `${link.useCount} times`}`,
+        link.expiresAt ? `ends ${longDate(link.expiresAt)}` : null,
+        link.hasPassword ? 'password' : null,
     ]
         .filter(Boolean)
         .join(' · ');
 }
 
-export function LinkRow({
+/*
+ * Password and end date for one link. The password is typed into the link on this
+ * device by whoever opens it; it never reaches the server. The end date keeps what
+ * it was unless another is chosen.
+ */
+export function LinkOptionsDialog({
     node,
     link,
-    title,
-    className,
+    open,
+    onOpenChange,
     onChanged,
+    onTurnOff,
 }: {
     node: DriveNode;
     link: LinkView;
-    /* Shown above the details when the row stands outside the node's own dialog. */
-    title?: React.ReactNode;
-    className?: string;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
     onChanged: () => Promise<unknown>;
+    onTurnOff: () => void;
+}) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="sm:max-w-[460px]">
+                <LinkOptionsForm
+                    node={node}
+                    link={link}
+                    onDone={() => onOpenChange(false)}
+                    onChanged={onChanged}
+                    onTurnOff={onTurnOff}
+                />
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function LinkOptionsForm({
+    node,
+    link,
+    onDone,
+    onChanged,
+    onTurnOff,
+}: {
+    node: DriveNode;
+    link: LinkView;
+    onDone: () => void;
+    onChanged: () => Promise<unknown>;
+    onTurnOff: () => void;
 }) {
     const queryClient = useQueryClient();
     const id = useId();
-    const [pending, setPending] = useState<string | null>(null);
-    const [qr, setQr] = useState<string | null>(null);
-    const [editing, setEditing] = useState(false);
     const [password, setPassword] = useState('');
-    const [clearPassword, setClearPassword] = useState(false);
-    const [expiry, setExpiry] = useState<Expiry>('');
-    const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    const [removePassword, setRemovePassword] = useState(false);
+    /* 'keep' leaves the end date as it is; the rest set a new one from today. */
+    const [ends, setEnds] = useState<Expiry | 'keep'>(link.expiresAt ? 'keep' : '');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+    const options: { value: Expiry | 'keep'; label: string }[] = [
+        ...(link.expiresAt ? [{ value: 'keep' as const, label: longDate(link.expiresAt) }] : []),
+        ...EXPIRIES,
+    ];
 
-    async function url() {
-        const value = await driveClient.linkUrl(node, link, window.location.origin);
-        if (!value)
-            throw new Error(
-                'This link was made before links could be shown again. Make a new one.',
-            );
-        return value;
-    }
-    async function copy() {
-        setPending('copy');
-        try {
-            await navigator.clipboard.writeText(await url());
-            cue('success', { volume: 0.4 });
-            toast.add({ type: 'success', title: 'Link copied' });
-        } catch (error) {
-            cue('error');
-            toast.add({ type: 'error', title: 'Could not copy', description: driveError(error) });
-        } finally {
-            setPending(null);
-        }
-    }
-    async function showQr() {
-        setPending('qr');
-        try {
-            setQr(await url());
-        } catch (error) {
-            cue('error');
-            toast.add({ type: 'error', title: 'Could not show', description: driveError(error) });
-        } finally {
-            setPending(null);
-        }
-    }
-    async function share() {
-        setPending('share');
-        try {
-            const value = await url();
-            await navigator.share({ title: `${node.name} · HushOS`, url: value });
-        } catch (error) {
-            if (!(error instanceof Error && error.name === 'AbortError')) {
-                cue('error');
-                toast.add({
-                    type: 'error',
-                    title: 'Could not share',
-                    description: driveError(error),
-                });
-            }
-        } finally {
-            setPending(null);
-        }
-    }
     async function save() {
-        setPending('save');
+        setSaving(true);
+        setError('');
         try {
             await driveClient.updateLink(node, link, {
-                password: clearPassword ? null : password.trim() ? password : undefined,
-                expiresAt: expiryDate(expiry),
+                password: removePassword ? null : password.trim() ? password : undefined,
+                expiresAt: ends === 'keep' ? undefined : expiryDate(ends),
             });
             await onChanged();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
@@ -142,202 +126,102 @@ export function LinkRow({
             toast.add({
                 type: 'success',
                 title: 'Link updated',
-                description: 'The link itself is unchanged.',
+                description: 'The link itself is the same.',
             });
-            setEditing(false);
-            setPassword('');
-            setClearPassword(false);
-        } catch (error) {
+            onDone();
+        } catch (cause) {
             cue('error');
-            toast.add({ type: 'error', title: 'Could not update', description: driveError(error) });
+            setError(driveError(cause));
         } finally {
-            setPending(null);
-        }
-    }
-    async function stop() {
-        setPending('stop');
-        try {
-            await driveClient.revokeLink(node, link.id);
-            await onChanged();
-            await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
-            cue('droplet');
-            toast.add({
-                type: 'success',
-                title: 'Link stopped',
-                description: 'It no longer opens.',
-            });
-            void rotateAfterRevoke(queryClient, node);
-        } catch (error) {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title: 'Could not stop the link',
-                description: driveError(error),
-            });
-        } finally {
-            setPending(null);
+            setSaving(false);
         }
     }
 
-    const busy = pending !== null;
     return (
-        <li data-link={link.id} className={cn('@container flex flex-col px-4 py-2.5', className)}>
-            {/* Details on one line and the actions on the next, flush with them; one line only where the row is wide. */}
-            <div className="flex flex-col gap-1 @2xl:flex-row @2xl:items-center @2xl:gap-x-3">
-                {/* A title carries a file mark taller than its text; the gap keeps the line below off it. */}
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    {title}
-                    <p className="text-xs text-muted-foreground tabular-nums">
-                        {describeLink(link)}
-                    </p>
-                </div>
-                <div className="-ml-2 flex items-center gap-0.5 @2xl:ml-auto">
-                    <Button
-                        variant="ghost"
-                        size="xs"
-                        aria-label="Copy link"
-                        disabled={busy}
-                        onClick={() => void copy()}
+        <form
+            noValidate
+            className="contents"
+            onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+            }}
+        >
+            <DialogHeader>
+                <DialogTitle>Password and end date</DialogTitle>
+                <DialogDescription className="wrap-anywhere">{node.name}</DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={`${id}-password`} className="text-[13px] font-semibold">
+                    Password
+                </label>
+                <Input
+                    id={`${id}-password`}
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={link.hasPassword ? 'Keep the current password' : 'None'}
+                    value={password}
+                    disabled={removePassword}
+                    onChange={(event) => setPassword(event.target.value)}
+                    className="text-[15px]"
+                />
+                <p className="text-[13px] text-muted-foreground">
+                    Whoever opens the link types it on their device. It never reaches us.
+                </p>
+                {link.hasPassword && (
+                    <label
+                        htmlFor={`${id}-remove`}
+                        className="flex items-center gap-2.5 pt-1 text-sm"
                     >
-                        <CopyIcon />
-                        <span className="max-sm:sr-only">Copy</span>
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="xs"
-                        aria-label="Show QR code"
-                        disabled={busy}
-                        onClick={() => (qr ? setQr(null) : void showQr())}
-                    >
-                        <QrCodeIcon />
-                        <span className="max-sm:sr-only">QR</span>
-                    </Button>
-                    {canShare && (
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label="Share link"
-                            disabled={busy}
-                            onClick={() => void share()}
-                        >
-                            <Share2Icon />
-                            <span className="max-sm:sr-only">Share</span>
-                        </Button>
-                    )}
-                    <Button
-                        variant="ghost"
-                        size="xs"
-                        aria-label="Edit link"
-                        aria-pressed={editing}
-                        disabled={busy}
-                        onClick={() => setEditing((on) => !on)}
-                    >
-                        <PencilIcon />
-                        <span className="max-sm:sr-only">Edit</span>
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="xs"
-                        aria-label="Stop this link"
-                        disabled={busy}
-                        onClick={() => void stop()}
-                    >
-                        <Trash2Icon />
-                        <span className="max-sm:sr-only">Stop</span>
-                    </Button>
-                </div>
+                        <Checkbox
+                            id={`${id}-remove`}
+                            checked={removePassword}
+                            onCheckedChange={(value) => setRemovePassword(value === true)}
+                        />
+                        Remove the password
+                    </label>
+                )}
             </div>
-            {qr && (
-                <div className="mt-2 flex flex-col items-center gap-2 border-t border-rule pt-3">
-                    <div className="rounded-xs border border-rule bg-white p-3">
-                        <QrCode value={qr} kind="share" title={`Link to ${node.name}`} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                        Whoever scans this can open it{link.hasPassword ? ' with the password' : ''}
-                        .
-                    </p>
-                </div>
-            )}
-            {editing && (
-                <form
-                    noValidate
-                    className="mt-2.5 flex flex-col divide-y divide-rule border-t border-rule"
-                    onSubmit={(event) => {
-                        event.preventDefault();
-                        void save();
-                    }}
-                >
-                    <div className={FIELD_ROW}>
-                        <label htmlFor={`${id}-password`} className="eyebrow text-muted-foreground">
-                            Password
-                        </label>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                            <Input
-                                id={`${id}-password`}
-                                type="password"
-                                autoComplete="new-password"
-                                placeholder={link.hasPassword ? 'Keep the current one' : 'None'}
-                                value={password}
-                                disabled={clearPassword}
-                                onChange={(event) => setPassword(event.target.value)}
-                                className="min-w-40 flex-1"
-                            />
-                            {link.hasPassword && (
-                                <label className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground">
-                                    <input
-                                        type="checkbox"
-                                        checked={clearPassword}
-                                        onChange={(event) => setClearPassword(event.target.checked)}
-                                    />
-                                    Remove password
-                                </label>
-                            )}
-                        </div>
-                    </div>
-                    <div className={FIELD_ROW}>
-                        <label htmlFor={`${id}-expiry`} className="eyebrow text-muted-foreground">
-                            Expires
-                        </label>
-                        <Select
-                            value={expiry}
-                            onValueChange={(value) => setExpiry((value ?? '') as Expiry)}
-                            items={EXPIRIES.map((option) => ({
-                                value: option.value,
-                                label: option.label,
-                            }))}
-                        >
-                            <SelectTrigger
-                                id={`${id}-expiry`}
-                                aria-label="Expires"
-                                className="w-full min-w-0"
-                            >
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {EXPIRIES.map((option) => (
-                                    <SelectItem key={option.value} value={option.value}>
-                                        {option.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex justify-end gap-2 pt-3 pb-0.5">
-                        <Button
+            <fieldset className="m-0 flex min-w-0 flex-col gap-1.5 border-0 p-0">
+                <legend className="mb-1.5 text-[13px] font-semibold">Ends</legend>
+                <div className="flex rounded-md border border-input bg-card p-0.5">
+                    {options.map((option) => (
+                        <button
+                            key={option.value}
                             type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditing(false)}
-                            disabled={busy}
+                            aria-pressed={ends === option.value}
+                            onClick={() => setEnds(option.value)}
+                            className={cn(
+                                'flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-sm px-2 text-sm whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                ends === option.value
+                                    ? 'bg-accent font-semibold text-accent-foreground'
+                                    : 'text-muted-foreground hover:text-foreground',
+                            )}
                         >
-                            Cancel
-                        </Button>
-                        <Button type="submit" size="sm" disabled={busy}>
-                            <PendingLabel pending={pending === 'save'} idle="Save" busy="Sealing" />
-                        </Button>
-                    </div>
-                </form>
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+            </fieldset>
+            {error && (
+                <p role="alert" className="text-[13px] text-destructive">
+                    {error}
+                </p>
             )}
-        </li>
+            <DialogFooter>
+                <button
+                    type="button"
+                    onClick={onTurnOff}
+                    className="mr-auto cursor-pointer text-sm font-semibold text-destructive underline underline-offset-4 max-sm:order-last max-sm:self-center"
+                >
+                    Turn off link
+                </button>
+                <Button type="button" variant="outline" disabled={saving} onClick={onDone}>
+                    Cancel
+                </Button>
+                <Button type="submit" disabled={saving}>
+                    {saving ? 'Saving…' : 'Save'}
+                </Button>
+            </DialogFooter>
+        </form>
     );
 }

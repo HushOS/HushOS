@@ -38,7 +38,7 @@ export function CopyValue({
             <TooltipTrigger
                 render={<button type="button" aria-label={`Copy ${label}`} />}
                 onClick={() => void copy()}
-                className={`block max-w-full cursor-copy text-left font-mono underline decoration-dotted decoration-1 underline-offset-4 transition-colors hover:text-primary ${className} ${wrap ? 'wrap-anywhere whitespace-normal' : 'truncate'}`}
+                className={`inline-block max-w-full cursor-copy text-left align-bottom font-mono underline decoration-dotted decoration-1 underline-offset-4 transition-colors hover:text-primary ${className} ${wrap ? 'wrap-anywhere whitespace-normal' : 'truncate'}`}
             >
                 {value}
             </TooltipTrigger>

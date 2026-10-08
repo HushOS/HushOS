@@ -1,369 +1,195 @@
 import HushOSKit
 import SwiftUI
+import UIKit
 
 /*
- * Home, Files, Shared and Account, as the cloud drives lay themselves out on a
- * phone: what changed, the tree, what others gave you, and you. Search sits on
- * Home and Files; the trash lives under Account.
+ * Home, Files, Shared and Account, then search as its own tab (the iOS 26 search
+ * role, drawn apart at the end of the bar as the board has it). Account stays a tab
+ * (the user's call over the board's avatar) and keeps Trash. Links that open the app
+ * land here: the right tab, then the folder, file, share or page they name.
  */
+enum MainTab: Hashable { case home, files, shared, account, search }
+
 struct MainView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @State private var store: DriveStore?
-    // Here rather than in the panel, which goes and comes back as transfers do.
-    @State private var transfersCollapsed = false
+    @State private var tab: MainTab = .home
     @State private var showingTransfers = false
+    @State private var makingRoom = false
+    @State private var searchQuery = ""
+    @State private var webOnly = false
 
     /* The background queue's records and this session's transfers, as rows. */
-    private func allTransfers(_ store: DriveStore) -> [DriveStore.TransferItem] {
-        let queued = BackgroundTransfers.shared.records.map { record in
-            DriveStore.TransferItem(
-                kind: record.kind == .upload ? .upload : .keep, name: record.name,
-                fraction: BackgroundTransfers.shared.fraction(of: record),
-                done: record.state == .done || record.state == .failed, failed: record.state == .failed,
-                waiting: record.state == .waiting, queuedId: record.state == .done ? nil : record.id,
-                message: record.state == .failed ? record.message ?? "The transfer failed." : nil,
-                canRetry: BackgroundTransfers.shared.canRetry(record)
-            )
-        }
-        return queued + store.transfers
+    private func rows(_ store: DriveStore) -> [TransferRowModel] {
+        TransferRowModel.rows(queued: BackgroundTransfers.shared.records, foreground: store.transfers)
     }
 
-    /* Transfers sit in the tab bar's accessory, like a player's now playing: one line, the list a tap away. From iOS 26.1, which can hide it. */
+    /* Transfers sit in the tab bar's accessory, like a player's now playing: one line, the list a tap away. */
     @ViewBuilder private func withTransfersAccessory(_ store: DriveStore, _ tabs: some View) -> some View {
         if #available(iOS 26.1, *) {
-            let transfers = allTransfers(store)
+            let transfers = rows(store)
             tabs.tabViewBottomAccessory(isEnabled: !transfers.isEmpty) {
-                Button { showingTransfers = true } label: { TransfersAccessoryBar(transfers: transfers, offline: store.offline) }
+                Button { showingTransfers = true } label: { TransfersAccessoryBar(rows: transfers, offline: store.offline) }
                     .buttonStyle(.plain)
             }
         } else {
-            tabs
+            // iOS 26.0 cannot hide the accessory: the same line floats in the same place.
+            tabs.overlay(alignment: .bottom) {
+                let transfers = rows(store)
+                if !transfers.isEmpty {
+                    Button { showingTransfers = true } label: { TransfersAccessoryBar(rows: transfers, offline: store.offline) }
+                        .buttonStyle(.plain).frame(height: 48)
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .padding(.horizontal, Alpine.Space.s4).padding(.bottom, 76)
+                }
+            }
         }
-    }
-
-    private func accessoryShown(_ store: DriveStore) -> Bool {
-        if #available(iOS 26.1, *) { return !allTransfers(store).isEmpty }
-        return false
-    }
-
-    private func dismissTransfer(_ store: DriveStore, _ item: DriveStore.TransferItem) {
-        if let queuedId = item.queuedId { BackgroundTransfers.shared.dismiss(queuedId) } else { store.dismiss(item.id) }
-    }
-
-    private func retryTransfer(_ store: DriveStore, _ item: DriveStore.TransferItem) {
-        if let queuedId = item.queuedId { BackgroundTransfers.shared.retry(queuedId) } else { store.retry(item.id) }
     }
 
     var body: some View {
         Group {
             if let store {
-                withTransfersAccessory(store, TabView {
-                    Tab("Home", systemImage: "house") {
+                withTransfersAccessory(store, TabView(selection: $tab) {
+                    Tab("Home", systemImage: "house", value: MainTab.home) {
                         HomeView().environment(store)
                     }
-                    Tab("Files", systemImage: "folder") {
+                    Tab("Files", systemImage: "folder", value: MainTab.files) {
                         BrowseView().environment(store)
                     }
-                    Tab("Shared", systemImage: "person.2") {
+                    Tab("Shared", systemImage: "person.2", value: MainTab.shared) {
                         SharedView().environment(store)
                     }
-                    Tab("Account", systemImage: "person.crop.circle") {
+                    Tab("Account", systemImage: "person.crop.circle", value: MainTab.account) {
                         AccountView().environment(store)
                     }
-                })
+                    Tab(value: MainTab.search, role: .search) {
+                        SearchView(query: $searchQuery).environment(store)
+                    }
+                }
+                .tabViewSearchActivation(.searchTabSelection))
                 .tabBarMinimizeBehavior(.onScrollDown)
-                // The accessory's list, a tap away.
                 .sheet(isPresented: $showingTransfers) {
                     TransfersSheet(
-                        transfers: allTransfers(store), offline: store.offline,
-                        dismiss: { dismissTransfer(store, $0) }, retry: { retryTransfer(store, $0) },
-                        close: { store.closeTransfers() }
+                        rows: rows(store), offline: store.offline,
+                        retry: { row in
+                            if let id = row.queuedId { BackgroundTransfers.shared.retry(id) } else if let id = row.foregroundId { store.retry(id) }
+                        },
+                        remove: { row in
+                            if let id = row.queuedId { BackgroundTransfers.shared.dismiss(id) } else if let id = row.foregroundId { store.dismiss(id) }
+                            for id in row.queuedIds { BackgroundTransfers.shared.dismiss(id) }
+                        },
+                        cancel: { targets in
+                            for row in targets {
+                                if let id = row.queuedId { await BackgroundTransfers.shared.cancel(id) }
+                                for id in row.queuedIds { await BackgroundTransfers.shared.cancel(id) }
+                            }
+                        },
+                        clearFinished: { store.closeTransfers() },
+                        makeRoom: { showingTransfers = false; makingRoom = true }
                     )
                 }
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if store.offline {
-                        // A quiet line at the top while the server is out of reach; kept files still open.
-                        Text("You're offline. Showing what's on this phone.")
-                            .font(.footnote).frame(maxWidth: .infinity).padding(.vertical, 6)
-                            .background(.regularMaterial)
-                    }
+                // Something that lets transfers finish in the background is off: said once, when a transfer starts.
+                .sheet(isPresented: Binding(get: { BackgroundAccess.shared.asking }, set: { if !$0 { BackgroundAccess.shared.asking = false } })) {
+                    BackgroundAccessSheet()
                 }
-                .overlay(alignment: .bottom) {
-                    VStack(spacing: 8) {
-                        if let notice = store.notice { NoticeBar(notice: notice, dismiss: { store.notice = nil }) }
-                        // iOS 26.0 has no way to hide the accessory, so there the panel floats as before.
-                        if #unavailable(iOS 26.1), !allTransfers(store).isEmpty {
-                            TransferPanel(
-                                transfers: allTransfers(store), offline: store.offline,
-                                dismiss: { dismissTransfer(store, $0) }, retry: { retryTransfer(store, $0) },
-                                close: { store.closeTransfers() },
-                                collapsed: $transfersCollapsed
-                            )
-                        }
-                    }
-                    // Above the tab bar, and above the transfers accessory while it shows.
-                    .padding(.bottom, accessoryShown(store) ? 124 : 76)
-                    // A new batch after the panel has closed starts unfolded, as the web's does.
-                    .onChange(of: store.transfers.isEmpty && BackgroundTransfers.shared.records.isEmpty) { _, empty in
-                        if empty { transfersCollapsed = false }
-                    }
-                    .animation(.snappy, value: store.notice?.id)
-                }
+                .sheet(isPresented: $makingRoom) { StorageFullSheet(rows: rows(store)).environment(store).environment(model) }
+                .fileViewer(Binding(get: { store.deepFile }, set: { store.deepFile = $0 }), among: store.deepSiblings, store: store)
+                // Notices sit above the tab bar, and above the transfers bar while it shows.
+                .onChange(of: rows(store).isEmpty, initial: true) { _, empty in NoticeCenter.shared.bottom = empty ? 76 : 124 }
                 // While the app is on screen the lists follow the server; in the background nothing polls.
                 .task(id: scenePhase) {
+                    // Back from Settings: the Account lines read the settings again.
+                    if scenePhase == .active { BackgroundAccess.shared.version += 1; await BackgroundAccess.shared.readNotifications() }
                     if scenePhase == .active { await store.liveSync() }
                 }
-                .alert("Something went wrong", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
-                    Button("OK") {
-                        if store.error == "Your session ended. Sign in again." { model.sessionLost() }
-                        store.error = nil
+                // Anything that routes (a link, Info's Folder row) brings its tab forward.
+                .onChange(of: store.route) { _, link in
+                    switch link {
+                    case .home: tab = .home; store.route = nil
+                    case .files, .node: tab = .files
+                    case .shared, .share, .incompleteShare: tab = .shared
+                    case .trash: tab = .account
+                    // The reset link never routes here: AppModel.open sends it to the reset screen.
+                    case .recover, nil: break
                     }
+                }
+                // A tap on a transfers notification: the list for a failure, else where the files are.
+                .onChange(of: TransferNotices.shared.opening, initial: true) { _, target in
+                    guard let target else { return }
+                    switch target {
+                    case .transfers: TransferNotices.shared.opening = nil; showingTransfers = true
+                    case let .folder(id): TransferNotices.shared.opening = nil; store.route = .files(folder: id, preview: nil)
+                    // Home pushes On this phone and clears it.
+                    case .phone: tab = .home
+                    }
+                }
+                // A Home Screen quick action (signed out, it waited for sign-in): Search, or the + menu's
+                // action in the folder last added to, or Files when that folder is gone.
+                .onChange(of: QuickActions.shared.pending, initial: true) { _, action in
+                    guard let action else { return }
+                    QuickActions.shared.pending = nil
+                    if action == .search { tab = .search; return }
+                    Task {
+                        guard let root = await store.loadRoot() else { return }
+                        var folder = Places.last()?.id
+                        if let id = folder, id != root, await store.lookUp(id)?.isFolder != true {
+                            Places.forget()
+                            folder = nil
+                        }
+                        store.pendingAdd = .init(folder: folder ?? root, action: action)
+                        store.route = .files(folder: folder == root ? nil : folder, preview: nil)
+                    }
+                }
+                .onChange(of: model.pendingLink, initial: true) { _, url in
+                    guard let url else { return }
+                    model.pendingLink = nil
+                    Task { await route(url, store: store) }
+                }
+                .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded }, set: { if !$0 { store.error = nil } })) {
+                    Button("Sign in") {
+                        store.error = nil
+                        model.sessionLost()
+                    }
+                } message: {
+                    Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.")
+                }
+                .alert("That page is only on the web.", isPresented: $webOnly) {
+                    Button("OK", role: .cancel) {}
+                }
+                .alert("That didn’t work", isPresented: Binding(get: { store.error != nil && store.error != DriveStore.sessionEnded }, set: { if !$0 { store.error = nil } })) {
+                    Button("OK") { store.error = nil }
                 } message: {
                     Text(store.error ?? "")
                 }
             } else {
-                ProgressView()
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
             }
         }
-        .task {
-            guard store == nil, let vault = model.vault else { return }
-            store = DriveStore(vault: vault)
-        }
-    }
-}
-
-/*
- * Every transfer with its own bar, the way the web's panel shows them: name, progress, and how it ended.
- * Failures come first, since they are why the panel is still up; past about four rows the list scrolls.
- * Once nothing is running, the header's cross closes it. Folded, it keeps the header and one bar for the lot.
- * A failed upload that kept its file offers a retry, and the header retries them all at once.
- */
-struct TransferPanel: View {
-    let transfers: [DriveStore.TransferItem]
-    var offline = false
-    var dismiss: (DriveStore.TransferItem) -> Void = { _ in }
-    var retry: (DriveStore.TransferItem) -> Void = { _ in }
-    var close: () -> Void = {}
-    @Binding var collapsed: Bool
-    @State private var rowsHeight: CGFloat = 0
-
-    private var headline: String { TransferSummary.headline(transfers, offline: offline) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(headline).font(.subheadline.weight(.semibold))
-                Spacer()
-                let done = transfers.filter(\.done).count
-                if transfers.count > 1 { Text("\(done) of \(transfers.count)").font(.footnote).foregroundStyle(.secondary) }
-                let retryable = transfers.filter(\.canRetry)
-                if transfers.allSatisfy(\.done), retryable.count > 1 {
-                    Button { retryable.forEach(retry) } label: { Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold)) }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Retry all failed")
-                }
-                Button { collapsed.toggle() } label: { Image(systemName: collapsed ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)) }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel(collapsed ? "Expand transfers" : "Collapse transfers")
-                if transfers.allSatisfy(\.done) {
-                    Button(action: close) { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Close transfers")
-                }
-            }
-            let moving = transfers.filter { !$0.done && !$0.waiting && $0.kind != .rotate }
-            if collapsed, !moving.isEmpty { ProgressView(value: moving.map(\.fraction).reduce(0, +) / Double(moving.count)) }
-            if !collapsed {
-                // As tall as the rows, up to about four of them; past that they scroll.
-                ScrollView {
-                    TransferRows(transfers: transfers, offline: offline, dismiss: dismiss, retry: retry)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowsHeight = $0 }
-                }
-                .frame(height: min(rowsHeight, 230))
-                .scrollBounceBehavior(.basedOnSize)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: 360)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .padding(.horizontal)
-    }
-}
-
-/* The transfers themselves, failures first, for the floating panel. */
-struct TransferRows: View {
-    let transfers: [DriveStore.TransferItem]
-    var offline = false
-    var dismiss: (DriveStore.TransferItem) -> Void = { _ in }
-    var retry: (DriveStore.TransferItem) -> Void = { _ in }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(TransferSummary.failuresFirst(transfers)) { item in
-                TransferRow(item: item, offline: offline, dismiss: dismiss, retry: retry)
-            }
-        }
-    }
-}
-
-/* One transfer: what it is, how far, how it ended and why, and what can be done about it. */
-struct TransferRow: View {
-    let item: DriveStore.TransferItem
-    var offline = false
-    var dismiss: (DriveStore.TransferItem) -> Void = { _ in }
-    var retry: (DriveStore.TransferItem) -> Void = { _ in }
-    /* The sheet's rows read at list size; the floating panel's stay small. */
-    var prominent = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: item.failed ? "exclamationmark.circle" : item.done ? "checkmark.circle.fill" : icon(item.kind))
-                .foregroundStyle(item.failed ? Color.red : item.done ? Color.green : Color.accentColor)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.name).font(prominent ? .body : .footnote).lineLimit(1)
-                if !item.done, !item.waiting, item.kind != .rotate { ProgressView(value: item.fraction) }
-                // The reason, in the server's words where it refused: what to do next is in it.
-                if let message = item.message { Text(message).font(prominent ? .subheadline : .caption).foregroundStyle(.red).lineLimit(3) }
-            }
-            Spacer(minLength: 0)
-            // A finished row says how it ended with its icon (and a failure with its reason); only what is still moving gets words here.
-            if !item.done {
-                Text(item.waiting ? (offline ? "Waiting" : "Queued") : item.kind == .rotate ? "" : "\(Int(item.fraction * 100))%")
-                    .font((prominent ? Font.footnote : Font.caption).monospacedDigit()).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing)
-            }
-            if item.canRetry {
-                Button { retry(item) } label: { Image(systemName: "arrow.clockwise").font(.caption.weight(.semibold)) }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Retry \(item.name)")
-            }
-            if item.failed {
-                Button { dismiss(item) } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Dismiss \(item.name)")
-            } else if let queuedId = item.queuedId {
-                Button { Task { await BackgroundTransfers.shared.cancel(queuedId) } } label: { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
-                    .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Cancel \(item.name)")
-            }
+        // A new vault (a sign-in again after Change password or Reset sharing keys ended the old session)
+        // replaces the store's in place: the old one's session is dead and its keys may be too.
+        .task(id: model.vault.map(ObjectIdentifier.init)) {
+            guard let vault = model.vault else { return }
+            if let store { await store.adopt(vault) } else { store = DriveStore(vault: vault) }
         }
     }
 
-    private func icon(_ kind: DriveStore.TransferItem.Kind) -> String {
-        switch kind {
-        case .upload: return "arrow.up.circle"
-        case .download, .keep: return "arrow.down.circle"
-        case .copy: return "doc.on.doc"
-        case .rotate: return "key"
+    /* A link, once signed in: the tab it belongs to, then the place inside it. */
+    private func route(_ url: URL, store: DriveStore) async {
+        switch AppLinks.parse(url, server: model.origin) {
+        case .success(let link):
+            // The tab follows the route (below); the tab's view picks the rest up once it is on screen.
+            store.route = link
+        case .failure(.otherServer(let host)):
+            store.notify("This link is for another HushOS server (\(host)). Sign in to that server to open it.")
+        case .failure(.webOnly):
+            // Billing, pricing, the operator console, the website: said, never opened from here, so the
+            // app holds no way to a page that sells plans (App Review 3.1.3(f)). Android says the same.
+            webOnly = true
+        case .failure(.malformed):
+            store.notify("This link doesn’t look right. Ask for a new one.")
+        case .failure(.unsupported):
+            break
         }
-    }
-}
-
-/* "Moved 2 items to trash · Undo", for a few seconds, above the tab bar. */
-struct NoticeBar: View {
-    let notice: DriveStore.Notice
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(notice.text).font(.subheadline).lineLimit(2)
-            Spacer(minLength: 8)
-            if let undo = notice.undo {
-                Button("Undo") { dismiss(); undo() }.font(.subheadline.weight(.semibold))
-            }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 12)
-        .frame(maxWidth: 360)
-        .glassEffect(.regular, in: .capsule)
-        .padding(.horizontal)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-}
-
-/* What the transfers amount to, in a few words: the accessory's line, the panel's and the sheet's title. */
-enum TransferSummary {
-    /* Failures lead: they are why the list is still up. */
-    static func failuresFirst(_ transfers: [DriveStore.TransferItem]) -> [DriveStore.TransferItem] {
-        transfers.filter(\.failed) + transfers.filter { !$0.failed }
-    }
-
-    static func headline(_ transfers: [DriveStore.TransferItem], offline: Bool) -> String {
-        let running = transfers.filter { !$0.done }
-        // How it ended, in words, as the web's panel says it: a bare "Done" read as a button.
-        if running.isEmpty {
-            if transfers.contains(where: \.failed) { return "Some transfers failed" }
-            return transfers.count == 1 ? "1 transfer finished" : "\(transfers.count) transfers finished"
-        }
-        if running.allSatisfy(\.waiting) { return offline ? "Waiting for a network" : "Queued" }
-        let uploads = running.filter { $0.kind == .upload }.count
-        if uploads == running.count { return uploads == 1 ? "Uploading" : "Uploading \(uploads) files" }
-        return running.count == 1 ? verb(running[0].kind) : "\(running.count) transfers"
-    }
-
-    private static func verb(_ kind: DriveStore.TransferItem.Kind) -> String {
-        switch kind {
-        case .upload: return "Uploading"
-        case .download: return "Downloading"
-        case .copy: return "Copying"
-        case .keep: return "Keeping downloaded"
-        case .rotate: return "Rotating keys"
-        }
-    }
-}
-
-/* One line: how it is going, and how far. Inline beside the folded tab bar it keeps only the words. */
-struct TransfersAccessoryBar: View {
-    let transfers: [DriveStore.TransferItem]
-    let offline: Bool
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
-
-    var body: some View {
-        let running = transfers.filter { !$0.done }
-        let failed = transfers.contains(where: \.failed)
-        HStack(spacing: 10) {
-            Image(systemName: failed && running.isEmpty ? "exclamationmark.circle.fill" : running.isEmpty ? "checkmark.circle.fill" : "arrow.up.arrow.down.circle")
-                .foregroundStyle(failed && running.isEmpty ? Color.red : running.isEmpty ? Color.green : Color.accentColor)
-            Text(TransferSummary.headline(transfers, offline: offline)).font(.subheadline.weight(.medium)).lineLimit(1)
-            Spacer(minLength: 0)
-            if placement != .inline, transfers.count > 1 {
-                Text("\(transfers.filter(\.done).count) of \(transfers.count)").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(.rect)
-    }
-}
-
-/* Every transfer, a tap away from the accessory: retry, dismiss, or clear what has finished. */
-private struct TransfersSheet: View {
-    let transfers: [DriveStore.TransferItem]
-    let offline: Bool
-    let dismiss: (DriveStore.TransferItem) -> Void
-    let retry: (DriveStore.TransferItem) -> Void
-    let close: () -> Void
-    @Environment(\.dismiss) private var dismissSheet
-
-    var body: some View {
-        let finished = !transfers.isEmpty && transfers.allSatisfy(\.done)
-        let retryable = transfers.filter(\.canRetry)
-        NavigationStack {
-            List(TransferSummary.failuresFirst(transfers)) { item in
-                TransferRow(item: item, offline: offline, dismiss: dismiss, retry: retry, prominent: true)
-            }
-            .navigationTitle(TransferSummary.headline(transfers, offline: offline))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if finished {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Clear") { close(); dismissSheet() }
-                    }
-                }
-                if finished, retryable.count > 1 {
-                    ToolbarItem(placement: .bottomBar) {
-                        Button("Retry All") { retryable.forEach(retry) }
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismissSheet() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .onChange(of: transfers.isEmpty) { _, empty in if empty { dismissSheet() } }
     }
 }

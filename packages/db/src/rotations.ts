@@ -312,8 +312,9 @@ export async function rotateNodes(input: {
                     .set({
                         keyEnvelope: item.keyEnvelope,
                         parentKeyEpoch: item.parentKeyEpoch,
+                        // A new change sequence so devices sync, but not a new updated time:
+                        // rotating keys is not a change anyone made to the item.
                         changeSeq,
-                        updatedAt: now,
                     })
                     .where(eq(driveNodes.id, item.id));
                 return 'ok';
@@ -332,7 +333,6 @@ export async function rotateNodes(input: {
                     parentKeyEpoch: item.parentKeyEpoch,
                     metadataEnvelope: rotated.metadataEnvelope,
                     changeSeq,
-                    updatedAt: now,
                 })
                 .where(eq(driveNodes.id, item.id));
             for (const version of rotated.versions)

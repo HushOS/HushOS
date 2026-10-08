@@ -17,7 +17,7 @@ The detail behind every line above is in the security page, `docs/drive-design.m
 
 - Bun workspaces and Turborepo; **Bun 1.4.0**, TypeScript 7.0.2.
 - TanStack Start + React Query on **Vite 8**, with Nitro v3 targeting Bun in production.
-- Tailwind v4, shadcn/ui **Base UI**, and locally bundled Fontsource Variable **Atkinson Hyperlegible Next** for text and **Geist Mono** for codes. The look is specified in [`DESIGN.md`](DESIGN.md), served at `/design.md`.
+- Tailwind v4, shadcn/ui **Base UI**, and locally bundled Fontsource Variable **Geist Sans** for text and **Geist Mono** for codes. The look is specified in [`DESIGN.md`](DESIGN.md), served at `/design.md`.
 - Elysia **2.0.0-beta.12** mounted at `/api` inside TanStack Start, with typed Eden Treaty and Eden Fetch clients.
 - PostgreSQL 18 and Drizzle ORM / Kit **1.0.0-rc.4**, compatible with PlanetScale Postgres.
 - Shared Oxlint, type-aware linting, and Oxfmt; four-space indentation.
@@ -109,7 +109,7 @@ Stop the development server before switching to the full self-hosted stack, whic
 
 Open `/register`, enter your email, and continue to `/register/check-email`. Open the verification message in [Mailpit](http://localhost:8025) to reach `/register/complete`. Choose your name and a password of 12–128 characters. The dedicated `/setup/recovery-key` page then lets you save the 24-word recovery phrase or download its recovery kit. Confirm it is saved and choose “Continue to HushOS” to open the app. The QR code contains that same private phrase.
 
-New accounts receive a personal workspace, its workspace key (random, generated in the browser, and granted to the account by wrapping it under the account key), and **1 GiB** allowance in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid plans grant additional entitlements through the Polar integration described in [the self-hosting guide](docs/self-hosting.md#billing-optional). Drive reserves an upload's ciphertext size against the allowance before any byte moves and counts it as used once the store has confirmed the object; see [the Drive design](docs/drive-design.md).
+New accounts receive a personal workspace, its workspace key (random, generated in the browser, and granted to the account by wrapping it under the account key), and **1 GB** allowance (counted in 1024s, as the app counts every size) in the same signup transaction. `INITIAL_STORAGE_QUOTA_BYTES` controls the allowance for future accounts. Paid plans grant additional entitlements through the Polar integration described in [the self-hosting guide](docs/self-hosting.md#billing-optional). Drive reserves an upload's ciphertext size against the allowance before any byte moves and counts it as used once the store has confirmed the object; see [the Drive design](docs/drive-design.md).
 
 A separate background worker (`packages/jobs`, pg-boss on the same Postgres) sweeps expired auth rows, reconciles billing, and runs Drive's expiry, purge, replication, deletion, audit, orphan-sweep and tiering jobs; `bun run dev` starts it alongside the app and Compose runs it as the `worker` service from its own small image.
 
@@ -129,7 +129,7 @@ bun run email:start   # Serve that built preview
 
 React Email's Resend preview setup is separate from the application's `EMAIL_ADAPTER` and `RESEND_API_KEY` settings. Preview sending uses the CLI's saved configuration. Production delivery uses the server's environment.
 
-Public social previews at `/og.jpg` and `/og/<page>.jpg` use Takumi, the local Atkinson Hyperlegible Next font, and the existing logo. The preview for a share link is generic by design: the server knows nothing about what is behind a link, so it has nothing to show. `bun run images:optimize` regenerates email logos and optimizes PNG assets.
+Public social previews at `/og.jpg` and `/og/<page>.jpg` use Takumi, the local Geist font, and the existing logo. The preview for a share link is generic by design: the server knows nothing about what is behind a link, so it has nothing to show. `bun run images:optimize` regenerates email logos and optimizes PNG assets.
 
 Appearance defaults to **System**, with **Light** and **Dark** options saved in a cookie. System follows operating-system changes without a reload.
 

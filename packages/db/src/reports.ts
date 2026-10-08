@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { db } from './client';
 import { selectNodes, walk, type NodeRow, type VersionRow } from './drive';
 import {
@@ -223,7 +223,8 @@ function objectKeyOf(item: NodeRow & { currentVersion: VersionRow | null }) {
 /* ------------------------------------------------------------------------- */
 
 export async function listReports(input: {
-    status?: ReportStatus | 'all';
+    /* 'held' is any report under a hold, whatever its status. */
+    status?: ReportStatus | 'all' | 'held';
     category?: ReportCategory;
     limit?: number;
 }) {
@@ -233,7 +234,11 @@ export async function listReports(input: {
         .from(driveReports)
         .where(
             and(
-                status === 'all' ? undefined : eq(driveReports.status, status),
+                status === 'all'
+                    ? undefined
+                    : status === 'held'
+                      ? isNotNull(driveReports.heldAt)
+                      : eq(driveReports.status, status),
                 input.category ? eq(driveReports.category, input.category) : undefined,
             ),
         )

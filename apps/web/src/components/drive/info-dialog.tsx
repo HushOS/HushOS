@@ -1,9 +1,11 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { ItemDetails, type ItemDetailsProps } from '@/components/drive/details-panel';
+import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
     DialogDescription,
+    DialogFooter,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
@@ -24,23 +26,28 @@ export function InfoDialog({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-md">
+            <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-[520px]">
                 {node && (
                     <ItemDetails
                         node={node}
+                        nameFirst
                         heading={(name) => (
                             <DialogHeader>
-                                <DialogTitle className="wrap-anywhere">{name}</DialogTitle>
-                                <DialogDescription>
-                                    {node.kind === 'folder'
-                                        ? 'What the app knows about this folder, and the key that protects it.'
-                                        : 'What the app knows about this file, and the keys that protect it.'}
+                                {/* Room on the right for the close button on the same row. */}
+                                <DialogTitle className="pr-10 wrap-anywhere">{name}</DialogTitle>
+                                <DialogDescription className="sr-only">
+                                    About this {node.kind === 'folder' ? 'folder' : 'file'}.
                                 </DialogDescription>
                             </DialogHeader>
                         )}
                         {...details}
                     />
                 )}
+                <DialogFooter>
+                    <Button variant="outline" onClick={() => onOpenChange(false)}>
+                        Done
+                    </Button>
+                </DialogFooter>
             </DialogContent>
         </Dialog>
     );

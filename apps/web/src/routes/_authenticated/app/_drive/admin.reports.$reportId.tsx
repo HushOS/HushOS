@@ -2,7 +2,7 @@ import { useDrive } from '@/components/drive/drive-shell';
 import { FileMark } from '@/components/drive/file-mark';
 import { Preview } from '@/components/drive/preview';
 import { PendingLabel, Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { OperatorHeader } from '@/components/operator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -17,6 +17,7 @@ import {
     driveError,
     folderQueryOptions,
     formatBytes,
+    formatDay,
     formatWhen,
     sortNodes,
 } from '@/lib/drive';
@@ -67,10 +68,10 @@ function ReportPage() {
     );
 }
 
-const box = 'rounded-md border border-rule';
-const row = 'grid gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline';
-const label = 'eyebrow text-muted-foreground';
-const value = 'min-w-0 text-sm leading-relaxed wrap-anywhere';
+const box = 'rounded-xl border border-rule';
+const row = 'grid gap-x-4 gap-y-1 px-3 py-2 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-baseline';
+const label = 'text-[13px] text-muted-foreground';
+const value = 'min-w-0 text-[13px] leading-relaxed wrap-anywhere';
 const mono = 'min-w-0 font-mono text-xs leading-relaxed wrap-anywhere';
 
 function ReportDetail() {
@@ -95,8 +96,8 @@ function ReportDetail() {
     const due = describeDue(report);
     return (
         <div className="flex flex-1 flex-col">
-            <PageHeader
-                eyebrow={
+            <OperatorHeader
+                back={
                     <Link to="/app/admin/reports" className="hover:underline">
                         Reports
                     </Link>
@@ -105,10 +106,11 @@ function ReportDetail() {
                 description={
                     <>
                         {STATUS_LABELS[report.status]}
-                        {report.heldAt ? ', on hold' : ''}. Reported {formatWhen(report.createdAt)}
+                        {report.heldAt ? ', on hold' : ''}. Reported{' '}
+                        {formatWhen(report.createdAt, { lower: true })}
                         {due ? (
                             <>
-                                , due {formatWhen(dueAt(report).toISOString())}{' '}
+                                , due {formatDay(dueAt(report).toISOString())}{' '}
                                 <span className={due.overdue ? 'text-destructive' : ''}>
                                     ({due.label})
                                 </span>
@@ -118,15 +120,16 @@ function ReportDetail() {
                     </>
                 }
             />
-            <div className="flex flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
-                <section className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
-                    <div className="flex min-w-0 flex-col gap-8">
+            {/* What happened and its record on the left; what to do about it on the right. */}
+            <div className="flex flex-col gap-6 px-5 pb-10 sm:px-8">
+                <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                    <div className="flex min-w-0 flex-col gap-5">
                         <Facts report={report} />
                         <Contents report={report} events={events} />
-                    </div>
-                    <div className="flex flex-col gap-8">
-                        <Actions report={report} />
                         <Timeline events={events} />
+                    </div>
+                    <div className="flex flex-col gap-5 lg:sticky lg:top-20 lg:self-start">
+                        <Actions report={report} />
                     </div>
                 </section>
             </div>
@@ -145,7 +148,7 @@ function Facts({ report }: { report: ReportView }) {
                 <span className={label}>Item</span>
                 <span className={value}>
                     {report.nodeKind === 'folder'
-                        ? `A folder holding ${report.itemCount - 1} items${report.itemsTruncated ? ', more than the snapshot kept' : ''}`
+                        ? `A folder holding ${report.itemCount - 1} ${report.itemCount - 1 === 1 ? 'item' : 'items'}${report.itemsTruncated ? ', more than the snapshot kept' : ''}`
                         : 'One file'}
                     , seen via a {report.via}
                 </span>
@@ -246,7 +249,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
 
     return (
         <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-bold">Content</h2>
+            <h2 className="text-[15px] font-bold">Content</h2>
             {!opened ? (
                 <div className={`${box} flex flex-col gap-3 px-4 py-4`}>
                     <p className="text-sm leading-relaxed text-muted-foreground">
@@ -594,7 +597,7 @@ function Actions({ report }: { report: ReportView }) {
     const open = report.status === 'open';
     return (
         <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-bold">Actions</h2>
+            <h2 className="text-[15px] font-bold">Actions</h2>
             <div className={`${box} flex flex-col divide-y divide-rule overflow-hidden`}>
                 {open ? (
                     <>
@@ -861,7 +864,7 @@ function Timeline({
 }) {
     return (
         <section className="flex flex-col gap-3">
-            <h2 className="text-lg font-bold">Record</h2>
+            <h2 className="text-[15px] font-bold">Record</h2>
             <ol className={`${box} divide-y divide-rule`}>
                 {events.map((event) => (
                     <li key={event.id} className="flex flex-col gap-0.5 px-4 py-2.5">

@@ -4,7 +4,7 @@ import { cn } from 'cn';
 import { AlertCircleIcon, CheckCircle2Icon, InfoIcon, TriangleAlertIcon } from 'lucide-react';
 
 const alertVariants = cva(
-    "group/alert relative grid w-full gap-1 rounded-md border border-transparent px-4 py-3 text-left text-sm animate-in fade-in slide-in-from-top-1 duration-200 ease-out-expo has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-3 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
+    "group/alert relative grid w-full gap-1 rounded-xl border border-transparent px-4 py-3 text-left text-sm animate-in fade-in slide-in-from-top-1 duration-200 ease-out-expo has-data-[slot=alert-action]:pr-18 has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-3 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*='size-'])]:size-4",
     {
         variants: {
             variant: {

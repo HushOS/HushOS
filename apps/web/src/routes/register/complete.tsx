@@ -1,15 +1,13 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
-import { AuthInput } from '@/components/auth-input';
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
+import { AuthInput, StrengthHint } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote } from '@/components/auth-layout';
-import { PendingLabel } from '@/components/motion';
 import { VerifiedEmailStep } from '@/components/verified-email-step';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { getCurrentEnrollment } from '@/lib/auth';
 import { authClient } from '@/lib/auth-client';
 import { authError, newPasswordValue } from '@/lib/form';
@@ -23,7 +21,7 @@ const signupFields = z
         confirmPassword: z.string(),
     })
     .refine((value) => value.password === value.confirmPassword, {
-        message: 'Your passwords don’t match.',
+        message: 'The passwords don’t match.',
         path: ['confirmPassword'],
     });
 
@@ -60,44 +58,40 @@ function SignOutFirst({ user, onSignedOut }: { user: SessionUser; onSignedOut: (
             onSignedOut();
         } catch {
             cue('error');
-            setError('Sign-out could not finish. Please try again.');
+            setError('Signing out didn’t finish. Check your connection and try again.');
             setPending(false);
         }
     }
     return (
         <AuthLayout
-            purpose="register"
             title="You’re already signed in"
-            stamp="Signed in"
-            description={`This browser is signed in as ${user.name} (${user.email}). Sign out to create a new account with this link; the link stays valid.`}
+            description={
+                <>
+                    You’re signed in as{' '}
+                    <span className="font-semibold text-foreground">{user.name}</span> ({user.email}
+                    ).
+                </>
+            }
         >
-            <AuthFields>
-                {error && <AuthNote tone="destructive">{error}</AuthNote>}
-                <AuthActions
-                    action={
-                        <Button
-                            type="button"
-                            size="lg"
-                            disabled={pending}
-                            onClick={() => void signOut()}
-                        >
-                            <PendingLabel
-                                pending={pending}
-                                idle="Sign out and continue"
-                                busy="Signing out…"
-                            />
-                            <ArrowRightIcon aria-hidden="true" />
-                        </Button>
-                    }
+            {error && <AuthNote tone="danger">{error}</AuthNote>}
+            <div className="flex flex-col gap-2 *:h-11 *:w-full *:text-[15px]">
+                <Link to="/app" className={buttonVariants({ size: 'lg' })}>
+                    Open HushOS
+                </Link>
+                <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    disabled={pending}
+                    onClick={() => void signOut()}
                 >
-                    <Link to="/app/drive" className="text-link">
-                        Keep this account and open the app
-                    </Link>
-                </AuthActions>
-            </AuthFields>
+                    {pending ? 'Signing out…' : 'Sign out and create another account'}
+                </Button>
+            </div>
         </AuthLayout>
     );
 }
+
 function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     const router = useRouter();
     const [error, setError] = useState('');
@@ -115,9 +109,9 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
                 cue('success');
                 router.options.context.queryClient.clear();
                 await router.navigate({ to: '/setup/recovery-key', replace: true });
-            } catch (error) {
+            } catch (cause) {
                 cue('error');
-                setError(authError(error));
+                setError(authError(cause));
             } finally {
                 setPending(false);
             }
@@ -125,11 +119,13 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     });
     return (
         <AuthLayout
-            purpose="register"
-            eyebrow={<Badge variant="success">Verified · {enrollment.email}</Badge>}
             title="Set up your account"
-            stamp="Step 2 of 2"
-            description="Choose your name and a password. The password is used on this device to protect your account key and is never sent to the server."
+            description={
+                <>
+                    Your email is confirmed:{' '}
+                    <span className="font-semibold text-foreground">{enrollment.email}</span>
+                </>
+            }
         >
             <form
                 onSubmit={(event) => {
@@ -140,10 +136,12 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
                 aria-busy={pending}
             >
                 <AuthFields>
+                    {error && <AuthNote tone="danger">{error}</AuthNote>}
                     <form.Field name="name">
                         {(field) => (
                             <AuthInput
                                 label="Name"
+                                hint="Shown to people you share with."
                                 id="name"
                                 name={field.name}
                                 type="text"
@@ -154,31 +152,40 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
                                 errors={field.state.meta.errors}
                                 disabled={pending}
                                 required
+                                maxLength={100}
                             />
                         )}
                     </form.Field>
                     <form.Field name="password">
                         {(field) => (
-                            <AuthInput
-                                label="Password"
-                                hint="12–128 characters. A long, unique passphrase works best."
-                                id="password"
-                                name={field.name}
-                                type="password"
-                                autoComplete="new-password"
-                                value={field.state.value}
-                                onChange={(event) => field.handleChange(event.target.value)}
-                                onBlur={field.handleBlur}
-                                errors={field.state.meta.errors}
-                                disabled={pending}
-                                required
-                            />
+                            <>
+                                <AuthInput
+                                    label="Password"
+                                    id="password"
+                                    name={field.name}
+                                    type="password"
+                                    autoComplete="new-password"
+                                    value={field.state.value}
+                                    onChange={(event) => field.handleChange(event.target.value)}
+                                    onBlur={field.handleBlur}
+                                    errors={field.state.meta.errors}
+                                    disabled={pending}
+                                    required
+                                    maxLength={PASSWORD_MAX_LENGTH}
+                                />
+                                {field.state.meta.errors.length === 0 && (
+                                    <StrengthHint
+                                        password={field.state.value}
+                                        min={PASSWORD_MIN_LENGTH}
+                                    />
+                                )}
+                            </>
                         )}
                     </form.Field>
                     <form.Field name="confirmPassword">
                         {(field) => (
                             <AuthInput
-                                label="Confirm"
+                                label="Confirm password"
                                 id="confirmPassword"
                                 name={field.name}
                                 type="password"
@@ -189,25 +196,17 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
                                 errors={field.state.meta.errors}
                                 disabled={pending}
                                 required
+                                maxLength={PASSWORD_MAX_LENGTH}
                             />
                         )}
                     </form.Field>
-                    {error && <AuthNote tone="destructive">{error}</AuthNote>}
                     <AuthActions
                         action={
                             <Button type="submit" size="lg" disabled={pending}>
-                                <PendingLabel
-                                    pending={pending}
-                                    idle="Create account"
-                                    busy="Securing…"
-                                />
-                                <ArrowRightIcon aria-hidden="true" />
+                                {pending ? 'Creating your account…' : 'Create account'}
                             </Button>
                         }
-                    >
-                        Next: a 24-word recovery phrase, your only way back in if you forget this
-                        password.
-                    </AuthActions>
+                    />
                 </AuthFields>
             </form>
         </AuthLayout>

@@ -1,3 +1,4 @@
 HushOS.xcodeproj/
 DerivedData/
 *.xcuserstate
+App/Local.xcconfig

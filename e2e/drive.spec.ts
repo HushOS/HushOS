@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import {
-    PASSWORD,
     grip,
+    newFolder,
     newPage,
+    PASSWORD,
     registerAccount,
     sampleFiles,
     sha256,
@@ -102,9 +103,7 @@ test('previews render each kind on the device: Markdown as a document, code high
         '_blank',
     );
     await expect(rendered.locator('.shiki span').first()).toBeVisible();
-    await dialog(page)
-        .getByRole('button', { name: /show source/i })
-        .click();
+    await dialog(page).getByRole('button', { name: 'Source', exact: true }).click();
     await expect(dialog(page).locator('.rt-code')).toBeVisible();
 
     await page.keyboard.press('ArrowRight');
@@ -139,7 +138,7 @@ test('holding an arrow key through every file never locks the device', async () 
         await page.keyboard.press(i % 3 === 2 ? 'ArrowLeft' : 'ArrowRight');
     await page.waitForTimeout(1500);
     await expect(dialog(page)).toBeVisible();
-    await expect(page.getByText('Unlock this device')).toHaveCount(0);
+    await expect(page.getByText('HushOS is locked here')).toHaveCount(0);
     await expect(page.getByText('Something went wrong')).toHaveCount(0);
     await closePreview(page);
     // The worker still holds its keys: a preview opens normally afterwards.
@@ -157,16 +156,13 @@ test('a downloaded file decrypts to the exact bytes that were uploaded', async (
     expect(download.suggestedFilename()).toBe('payload.bin');
     const path = await download.path();
     expect(sha256(readFileSync(path!))).toBe(samples.hashes.binary);
-    await expect(transfers(page)).toContainText(/Saved/);
+    await expect(transfers(page)).toContainText(/Downloaded/);
 });
 
 test('folders nest from one dialog, rows drag into them, and a selection downloads as a zip', async () => {
     // The folder's own controls give way to the selection bar while anything is selected.
     await page.keyboard.press('Escape');
-    await page
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(page);
     await page.getByPlaceholder('Reports/2026').fill('photos/inner');
     await page.keyboard.press('Enter');
     await expect(row(page, 'photos')).toBeVisible();
@@ -179,12 +175,12 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
 
     await row(page, 'photos').locator('button').first().dblclick(grip);
     const crumb = page.locator('[data-crumb-id]').first();
-    await expect(crumb).toHaveText('Drive');
+    await expect(crumb).toHaveText('My files');
     await expect(row(page, 'inner')).toBeVisible();
     await expect(row(page, 'pixel.png')).toBeVisible();
     // Dropping on a breadcrumb moves back up.
     await row(page, 'pixel.png').dragTo(crumb);
-    await expect(page.getByText(/moved to the top folder/)).toBeVisible();
+    await expect(page.getByText(/moved to My files/)).toBeVisible();
 
     // A folder in the path drags too: inner, picked up from the breadcrumb and dropped on
     // Drive, moves to the top with the page still showing it. Its own parent is no target.
@@ -194,7 +190,7 @@ test('folders nest from one dialog, rows drag into them, and a selection downloa
     await open.dragTo(page.locator('[data-crumb-id]').nth(1));
     await expect(page.locator('[data-crumb-id]')).toHaveCount(2);
     await open.dragTo(crumb);
-    await expect(page.getByText('“inner” moved to the top folder')).toBeVisible();
+    await expect(page.getByText('“inner” moved to My files')).toBeVisible();
     await expect(page.locator('[data-crumb-id]')).toHaveCount(1);
     await crumb.click();
     await expect(row(page, 'inner')).toBeVisible();
@@ -216,7 +212,7 @@ test('copy: a file copies beside itself under a “(copy)” name, a folder copi
     await row(page, 'notes.md').locator('button').first().click(grip);
     await page.keyboard.press('c');
     await expect(dialog(page)).toContainText('Copy “notes.md”');
-    await page.getByRole('button', { name: 'Copy to top folder' }).click();
+    await page.getByRole('button', { name: 'Copy here' }).click();
     await expect(row(page, 'notes (copy).md')).toBeVisible();
     await expect(row(page, 'notes.md')).toBeVisible();
 
@@ -230,8 +226,8 @@ test('copy: a file copies beside itself under a “(copy)” name, a folder copi
         .locator('button')
         .first()
         .click({ ...grip, button: 'right' });
-    await page.getByRole('menuitem', { name: 'Copy to…' }).click();
-    await page.getByRole('button', { name: 'Copy to top folder' }).click();
+    await page.getByRole('menuitem', { name: /^Copy/ }).click();
+    await page.getByRole('button', { name: 'Copy here' }).click();
     await expect(row(page, 'photos (copy)')).toBeVisible();
     await row(page, 'photos (copy)').locator('button').first().dblclick(grip);
     await expect(row(page, 'inner')).toBeVisible();
@@ -249,24 +245,46 @@ test('copy: a file copies beside itself under a “(copy)” name, a folder copi
     await expect(row(page, 'notes.md')).toBeVisible();
 });
 
-test('versions: uploading a name again keeps the earlier version, which restores and deletes', async () => {
-    await page.locator('input[type=file]').first().setInputFiles([samples.files.text]);
+test('versions: uploading a name again keeps the earlier version, which opens, downloads, restores and deletes', async () => {
+    // A README with other words, and another length: each version must be read as itself.
+    const newer = join(mkdtempSync(join(tmpdir(), 'hushos-version-')), 'README');
+    writeFileSync(newer, 'a newer README, longer than the first one was\n');
+    await page.locator('input[type=file]').first().setInputFiles([newer]);
     // The name is taken, so nothing uploads until the person chooses.
-    await expect(dialog(page)).toContainText('“README” already exists');
-    await dialog(page).getByRole('button', { name: 'Replace' }).click();
+    await expect(dialog(page)).toContainText('“README” is already here');
+    // Replace is the choice the dialog starts on.
+    await expect(dialog(page).getByRole('radio', { name: /Replace/ })).toBeChecked();
+    await dialog(page).getByRole('button', { name: 'Continue' }).click();
     await expect(
         transfers(page).getByRole('listitem').filter({ hasText: 'README' }).last(),
-    ).toContainText('Done', { timeout: 60_000 });
+    ).toContainText('Uploaded', { timeout: 60_000 });
     await expect(rows(page)).toHaveCount(8);
 
     await row(page, 'README')
         .locator('button')
         .first()
         .click({ ...grip, button: 'right' });
-    await page.getByRole('menuitem', { name: 'Versions…' }).click();
+    await page.getByRole('menuitem', { name: 'Versions' }).click();
     await expect(dialog(page)).toContainText('Versions of “README”');
     await expect(dialog(page).getByText('Current version', { exact: true })).toBeVisible();
     await expect(dialog(page).getByText('Earlier version', { exact: true })).toBeVisible();
+    // The earlier version downloads as the bytes first uploaded, not the current ones.
+    const [earlier] = await Promise.all([
+        page.waitForEvent('download'),
+        dialog(page).getByRole('button', { name: 'Download earlier version' }).click(),
+    ]);
+    expect(readFileSync((await earlier.path())!, 'utf8')).toBe(
+        readFileSync(samples.files.text, 'utf8'),
+    );
+    // It opens in the viewer as itself, with Restore beside it.
+    await dialog(page).getByRole('button', { name: 'Preview earlier version' }).click();
+    const viewer = dialog(page).filter({ hasText: 'Restore this version' });
+    await expect(viewer.locator('.rt-code')).toContainText('plain text without an extension', {
+        timeout: 60_000,
+    });
+    await expect(viewer).not.toContainText('a newer README');
+    await page.keyboard.press('Escape');
+    await expect(viewer).toHaveCount(0);
     await dialog(page).getByRole('button', { name: 'Restore earlier version' }).click();
     await expect(page.getByText(/Earlier version of “README” restored/)).toBeVisible();
     await expect(dialog(page)).toHaveCount(0);
@@ -275,7 +293,7 @@ test('versions: uploading a name again keeps the earlier version, which restores
         .locator('button')
         .first()
         .click({ ...grip, button: 'right' });
-    await page.getByRole('menuitem', { name: 'Versions…' }).click();
+    await page.getByRole('menuitem', { name: 'Versions' }).click();
     await expect(dialog(page).getByText('Earlier version', { exact: true })).toBeVisible();
     await dialog(page).getByRole('button', { name: 'Delete earlier version' }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete version' }).click();
@@ -290,29 +308,33 @@ test('a taken name can also be kept under another name or skipped, once or for t
     const input = page.locator('input[type=file]').first();
     // Keep both, with the suggested "(2)" name edited.
     await input.setInputFiles([samples.files.markdown]);
-    await expect(dialog(page)).toContainText('“notes.md” already exists');
+    await expect(dialog(page)).toContainText('“notes.md” is already here');
+    await dialog(page)
+        .getByRole('radio', { name: /Keep both/ })
+        .click();
     const name = dialog(page).getByRole('textbox');
     await expect(name).toHaveValue('notes (2).md');
     await name.fill('notes.md');
-    await expect(dialog(page).getByRole('button', { name: 'Keep both' })).toBeDisabled();
+    await expect(dialog(page).getByRole('button', { name: 'Continue' })).toBeDisabled();
     await name.fill('notes-again.md');
-    await dialog(page).getByRole('button', { name: 'Keep both' }).click();
+    await dialog(page).getByRole('button', { name: 'Continue' }).click();
     await expect(row(page, 'notes-again.md')).toBeVisible({ timeout: 60_000 });
     await expect(rows(page)).toHaveCount(9);
 
     // Skip, applied to the rest of the drop: one dialog, nothing uploads.
     await input.setInputFiles([samples.files.markdown, samples.files.text]);
-    await expect(dialog(page)).toContainText('“notes.md” already exists');
+    await expect(dialog(page)).toContainText('“notes.md” is already here');
     await expect(dialog(page)).toContainText('1 other file');
+    await dialog(page).getByRole('radio', { name: /Skip/ }).click();
     await dialog(page).getByRole('checkbox').click();
-    await dialog(page).getByRole('button', { name: 'Skip' }).click();
+    await dialog(page).getByRole('button', { name: 'Continue' }).click();
     await expect(dialog(page)).toHaveCount(0);
     await expect(rows(page)).toHaveCount(9);
     await expect(transfers(page)).not.toContainText(/Uploading/);
 
     // Closing the dialog is a skip as well.
     await input.setInputFiles([samples.files.image]);
-    await expect(dialog(page)).toContainText('“pixel.png” already exists');
+    await expect(dialog(page)).toContainText('“pixel.png” is already here');
     await page.keyboard.press('Escape');
     await expect(dialog(page)).toHaveCount(0);
     await expect(rows(page)).toHaveCount(9);
@@ -368,9 +390,12 @@ test('the grid view shows thumbnails and the choice survives a reload', async ()
 });
 
 test('locking drops every key and unlocking opens the same folder again', async () => {
-    await page.getByRole('button', { name: /lock this device/i }).click();
-    await page.getByRole('button', { name: 'Lock device' }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Unlock this device' })).toBeVisible();
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await page.getByRole('menuitem', { name: 'Lock on this browser' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Lock', exact: true }).click();
+    await expect(
+        page.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+    ).toBeVisible();
     // Locking must not leave the header's unlock dialog open over the page.
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await page.locator('input[autocomplete=current-password]').fill(PASSWORD);
@@ -394,14 +419,14 @@ test('trash: restore brings a file back, delete forever and empty trash remove t
     await expect(page.getByText('module.ts')).toBeVisible();
     await page.getByRole('button', { name: /delete “module.ts” forever/i }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete forever' }).click();
-    await expect(page.getByText(/deleted forever/)).toBeVisible();
+    await expect(page.getByText(/Deleted “module.ts” forever/)).toBeVisible();
     await expect(page.getByText('module.ts')).toHaveCount(0);
     await expect(page.getByText('README')).toBeVisible();
 
     await page.getByRole('button', { name: /empty trash/i }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Empty trash' }).click();
     await expect(page.getByText(/Trash emptied/)).toBeVisible();
-    await expect(page.getByText('The trash is empty.')).toBeVisible();
+    await expect(page.getByText('Trash is empty')).toBeVisible();
 
     await page.goto('/app/drive');
     await expect(row(page, 'notes.md')).toBeVisible();
@@ -415,7 +440,7 @@ test('the transfers panel closes from its header once everything has finished, a
     writeFileSync(path, 'a note on the way out\n');
     await page.locator('input[type=file]').first().setInputFiles([path]);
     await expect(row(page, 'closing.txt')).toBeVisible({ timeout: 60_000 });
-    await expect(transfers(page)).toContainText(/finished/, { timeout: 60_000 });
+    await expect(transfers(page)).toContainText(/uploaded/, { timeout: 60_000 });
     // Finished: the cross simply closes the panel, keeping every file where it is.
     await transfers(page).getByRole('button', { name: 'Close transfers' }).click();
     await expect(transfers(page)).toHaveCount(0);
@@ -440,7 +465,7 @@ test('the transfers panel closes from its header once everything has finished, a
     await page.context().unroute(parts);
     await Promise.all(held.map((route) => route.abort().catch(() => {})));
     await transfers(page).getByRole('button', { name: 'Cancel all transfers' }).click();
-    await expect(page.getByRole('alertdialog')).toContainText('Cancel 1 transfer?');
+    await expect(page.getByRole('alertdialog')).toContainText('Cancel this transfer?');
     await page.getByRole('alertdialog').getByRole('button', { name: 'Keep going' }).click();
     await expect(transfers(page)).toContainText(/paused/i);
     await transfers(page).getByRole('button', { name: 'Cancel all transfers' }).click();

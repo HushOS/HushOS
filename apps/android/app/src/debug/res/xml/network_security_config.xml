@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug only: plain http for the dev server, on localhost (adb reverse), the emulator's
+    host (10.0.2.2) or a machine on the local network. Android can't scope cleartext to an
+    address range, so it is allowed here and the server address field keeps http to local
+    addresses. Release builds use src/main's file, which allows no cleartext at all.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

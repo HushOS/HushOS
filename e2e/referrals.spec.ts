@@ -13,14 +13,14 @@ test.describe.configure({ mode: 'serial' });
 
 let inviter: Page;
 let code: string;
-let baseGiB: number;
+let baseGB: number;
 
 const storageMeter = (p: Page) =>
-    p.locator('aside, [data-slot=sidebar]').getByText(/of \d+(\.\d+)? GiB used/);
+    p.locator('aside, [data-slot=sidebar]').getByText(/of \d+(\.\d+)? GB used/);
 
 async function quotaOf(p: Page) {
     const text = await storageMeter(p).first().textContent();
-    return Number(/of ([\d.]+) GiB used/.exec(text ?? '')?.[1]);
+    return Number(/of ([\d.]+) GB used/.exec(text ?? '')?.[1]);
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -28,7 +28,7 @@ test.beforeAll(async ({ browser }) => {
     inviter = await (await newContext(browser)).newPage();
     await registerAccount(inviter, 'Ines Inviter');
     await expect(storageMeter(inviter).first()).toBeVisible({ timeout: 60_000 });
-    baseGiB = await quotaOf(inviter);
+    baseGB = await quotaOf(inviter);
 });
 test.afterAll(async () => {
     await inviter.context().close();
@@ -36,11 +36,13 @@ test.afterAll(async () => {
 
 test('the invite page shows a link and a code, and nobody has joined yet', async () => {
     await inviter.goto('/app/referrals', { waitUntil: 'networkidle' });
-    await expect(inviter.getByRole('heading', { name: /Give .* get/ })).toBeVisible();
-    const link = await inviter.getByRole('button', { name: 'Copy invite link' }).textContent();
+    await expect(inviter.getByText(/^Give .* get /)).toBeVisible();
+    const link = await inviter.getByLabel('Your invite link').inputValue();
     expect(link).toMatch(/\/r\/[a-z2-9]{8}$/);
-    code = /\/r\/([a-z2-9]{8})$/.exec(link!.trim())![1]!;
-    await expect(inviter.getByText('Joined through you').locator('..')).toContainText('0');
+    code = /\/r\/([a-z2-9]{8})$/.exec(link.trim())![1]!;
+    // The code people type is the one in the link.
+    await expect(inviter.getByRole('button', { name: 'Copy invite code' })).toHaveText(code);
+    await expect(inviter.locator('[data-earned=signup]')).toContainText('0 friends joined');
 });
 
 test('someone who joins through the link gives both sides the bonus', async ({ browser }) => {
@@ -59,15 +61,15 @@ test('someone who joins through the link gives both sides the bonus', async ({ b
     // The sign-up flow from here is the ordinary one; the code rides along.
     await registerAccount(joiner, 'Jo Joiner', undefined, { viaCurrentPage: true });
     await expect(storageMeter(joiner).first()).toBeVisible({ timeout: 60_000 });
-    expect(await quotaOf(joiner)).toBe(baseGiB + 1);
+    expect(await quotaOf(joiner)).toBe(baseGB + 1);
     await joiner.context().close();
 
     await inviter.goto('/app/referrals', { waitUntil: 'networkidle' });
-    await expect(inviter.getByText('Joined through you').locator('..')).toContainText('1');
-    await expect(inviter.getByText('Extra space').locator('..')).toContainText('1 GiB');
+    await expect(inviter.locator('[data-earned=signup]')).toContainText('1 friend joined');
+    await expect(inviter.locator('[data-earned=signup]')).toContainText(/1 GB of/);
     await inviter.goto('/app/drive', { waitUntil: 'networkidle' });
     await expect(storageMeter(inviter).first()).toBeVisible({ timeout: 60_000 });
-    expect(await quotaOf(inviter)).toBe(baseGiB + 1);
+    expect(await quotaOf(inviter)).toBe(baseGB + 1);
 });
 
 test('someone who types the code at sign-up gets the bonus the same way', async ({ browser }) => {
@@ -79,16 +81,16 @@ test('someone who types the code at sign-up gets the bonus the same way', async 
     await typer.getByRole('textbox', { name: /^email/i }).fill('typo@hushos.local');
     await typer.getByRole('checkbox').click();
     await typer.locator('form button[type=submit]').click();
-    await expect(typer.getByText(/not one we know/)).toBeVisible();
+    await expect(typer.getByText(/don’t recognise that code/)).toBeVisible();
     // The helper ticks the consent box itself; hand it the form as it found it.
     await typer.getByRole('checkbox').click();
     await typer.getByLabel('Code', { exact: true }).fill(code);
     await registerAccount(typer, 'Ty Typer', undefined, { viaCurrentPage: true });
     await expect(storageMeter(typer).first()).toBeVisible({ timeout: 60_000 });
-    expect(await quotaOf(typer)).toBe(baseGiB + 1);
+    expect(await quotaOf(typer)).toBe(baseGB + 1);
     await typer.context().close();
     await inviter.goto('/app/referrals', { waitUntil: 'networkidle' });
-    await expect(inviter.getByText('Joined through you').locator('..')).toContainText('2');
+    await expect(inviter.locator('[data-earned=signup]')).toContainText('2 friends joined');
 });
 
 test('an invite link that resolves to nobody says so and still offers sign-up', async ({

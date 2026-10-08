@@ -9,7 +9,7 @@ import { localeHintQueryOptions } from '@/lib/billing';
 import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
-import { formatGiB, formatMoney } from '@/lib/format';
+import { formatQuota, formatMoney } from '@/lib/format';
 import { usePageRestored } from '@/lib/page-restore';
 import {
     describeDiscount,
@@ -135,7 +135,7 @@ function OfferPage() {
         }
     }
     return (
-        <div className="flex min-h-svh flex-col">
+        <div className="flex min-h-svh flex-col bg-card">
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-16 px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
@@ -152,7 +152,7 @@ function OfferPage() {
                             and the code{' '}
                             <span className="font-mono text-foreground">{landing.code}</span> is
                             applied for you: {offer}. Every account starts free with{' '}
-                            {formatGiB(landing.catalogue.freeQuotaBytes)}.
+                            {formatQuota(landing.catalogue.freeQuotaBytes)}.
                         </p>
                         <div className="flex flex-wrap gap-3">
                             {hasSession ? (
@@ -183,7 +183,7 @@ function OfferPage() {
                             </p>
                         )}
                     </div>
-                    <aside className="sheet px-6 py-6">
+                    <aside className="rounded-xl border border-rule px-6 py-6">
                         <p className="eyebrow text-muted-foreground">The offer</p>
                         <dl className="mt-2 text-sm">
                             {[
@@ -191,7 +191,7 @@ function OfferPage() {
                                 ['Discount', offer],
                                 ['Applies to', appliesTo],
                                 ...(ends ? [['Ends', ends]] : []),
-                                ['Free to start', formatGiB(landing.catalogue.freeQuotaBytes)],
+                                ['Free to start', formatQuota(landing.catalogue.freeQuotaBytes)],
                             ].map(([key, value]) => (
                                 <div
                                     key={key}
@@ -218,11 +218,11 @@ function OfferPage() {
                             className={`mt-6 grid gap-6 md:grid-cols-2 ${tiers.length + 1 === 4 ? 'xl:grid-cols-4' : 'lg:grid-cols-3'}`}
                         >
                             {/* The offer is on paid plans, but nobody has to take one: free is a choice here too. */}
-                            <article className="flex sheet flex-col gap-6 border border-transparent px-6 py-6">
+                            <article className="flex flex-col gap-6 rounded-xl border border-rule px-6 py-6">
                                 <div className="flex flex-1 flex-col gap-2">
                                     <p className="eyebrow text-muted-foreground">Free</p>
                                     <p className="text-3xl font-bold tracking-tight tabular-nums">
-                                        {formatGiB(landing.catalogue.freeQuotaBytes)}
+                                        {formatQuota(landing.catalogue.freeQuotaBytes)}
                                     </p>
                                     <p className="text-sm leading-relaxed text-muted-foreground">
                                         The same protection as every paid plan, with no card. The
@@ -252,12 +252,12 @@ function OfferPage() {
                             {tiers.map((tier) => (
                                 <article
                                     key={tier.key}
-                                    className={`flex sheet flex-col gap-6 border px-6 py-6 ${tier.recommended ? 'border-primary ring-3 ring-accent' : 'border-transparent'}`}
+                                    className={`flex flex-col gap-6 rounded-xl border px-6 py-6 ${tier.recommended ? 'border-primary ring-3 ring-accent' : 'border-rule'}`}
                                 >
                                     <div className="flex flex-1 flex-col gap-2">
                                         <p className="eyebrow text-muted-foreground">{tier.name}</p>
                                         <p className="text-3xl font-bold tracking-tight tabular-nums">
-                                            {formatGiB(tier.quotaBytes)}
+                                            {formatQuota(tier.quotaBytes)}
                                         </p>
                                         {tier.description && (
                                             <p className="text-sm leading-relaxed text-muted-foreground">

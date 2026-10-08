@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PASSWORD, grip, newContext, registerAccount } from './helpers';
+import { grip, newContext, newFolder, newLink, PASSWORD, registerAccount } from './helpers';
 
 /*
  * Signing in comes back to where it was asked for: an app page through
@@ -16,7 +16,6 @@ let linkUrl: string;
 
 const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
-const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 
 async function signIn(p: Page, email: string) {
     const password = p.locator('input[autocomplete=current-password]');
@@ -31,19 +30,14 @@ test.beforeAll(async ({ browser }) => {
     test.setTimeout(300_000);
     owner = await (await newContext(browser)).newPage();
     ({ email: ownerEmail } = await registerAccount(owner));
-    await owner
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Deep/Deeper');
     await owner.keyboard.press('Enter');
     await expect(row(owner, 'Deep')).toBeVisible();
     // A link to the folder, for the visitors below.
     await row(owner, 'Deep').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Create link' }).click();
-    linkUrl = (await dialog(owner).locator('button[aria-label="Copy Link"]').textContent())!.trim();
+    linkUrl = await newLink(owner);
     expect(linkUrl).toMatch(/\/s\/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}$/);
     await owner.keyboard.press('Escape');
     await row(owner, 'Deep').getByRole('link', { name: 'Deep' }).click();
@@ -80,7 +74,7 @@ test('an existing account signs in from a shared link and comes back to it, key 
     await expect(visitor).toHaveURL(/\/login$/);
     await signIn(visitor, email);
     await expect(visitor).toHaveURL(linkUrl, { timeout: 60_000 });
-    await expect(visitor.getByRole('button', { name: 'Save a copy to my Drive' })).toBeVisible({
+    await expect(visitor.getByRole('button', { name: 'Save a copy to my files' })).toBeVisible({
         timeout: 60_000,
     });
     await visitor.close();
@@ -98,7 +92,7 @@ test('a new account made from a shared link ends on that link', async ({ browser
         landsOn: /\/s\//,
     });
     expect(visitor.url()).toBe(linkUrl);
-    await expect(visitor.getByRole('button', { name: 'Save a copy to my Drive' })).toBeVisible({
+    await expect(visitor.getByRole('button', { name: 'Save a copy to my files' })).toBeVisible({
         timeout: 60_000,
     });
     await visitor.close();

@@ -36,6 +36,8 @@ export const THUMBNAIL_BATCH = 100;
 
 /* The name a client shows for the root; never stored, the root's metadata names it. */
 export const ROOT_NAME = 'Drive';
+/* What people see for the top folder, wherever it is named: lists, paths, crumbs. */
+export const ROOT_LABEL = 'My files';
 
 export type Capabilities = {
     protocolVersion: number;

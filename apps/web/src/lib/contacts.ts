@@ -213,7 +213,7 @@ export async function trustGrantee(
     if (!pinned) throw new Error('This person is not in your contacts. Pin them before sharing.');
     if (pinned.encryptionPublicKey !== served.encryptionPublicKey)
         throw new Error(
-            `${pinned.name}’s key has changed since you pinned it. Check the fingerprint with them on the Contacts page before sharing.`,
+            `${pinned.name}’s key has changed since you pinned it. Check it’s them in People you share with before sharing.`,
         );
     if (!served.kem) {
         if (pinned.kemPublicKeyHash)
@@ -296,7 +296,7 @@ export async function trustGranter(granter: {
         if (pinned.encryptionPublicKey === granter.encryptionPublicKey)
             return pinned.encryptionPublicKey;
         throw new Error(
-            `${granter.name}’s key has changed since you pinned it. Check the fingerprint with them on the Contacts page before opening what they shared.`,
+            `${granter.name}’s key has changed since you pinned it. Check it’s them in People you share with before opening what they shared.`,
         );
     }
     const print = await fingerprint(publicKeyBytes(granter.encryptionPublicKey));

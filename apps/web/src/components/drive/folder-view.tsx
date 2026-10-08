@@ -1,10 +1,34 @@
+import {
+    AccessBanner,
+    AccessCell,
+    accessSentence,
+    useAccessIndex,
+} from '@/components/drive/access';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { useDrive } from '@/components/drive/drive-shell';
+import {
+    CornerCheck,
+    EmptyState,
+    MarqueeBox,
+    SelectableMark,
+    SkeletonRows,
+    SortButton,
+    useListSelection,
+} from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { HotkeyHints } from '@/components/drive/hotkey-hints';
 import { InfoDialog } from '@/components/drive/info-dialog';
 import { MoveDialog } from '@/components/drive/move-dialog';
+import {
+    NodeContextMenu,
+    nodeEntries,
+    NodeMoreMenu,
+    NodeSelectionBar,
+    SizeText,
+    useWideScreen,
+    type NodeActions,
+} from '@/components/drive/node-actions';
 import { Preview } from '@/components/drive/preview';
 import { RenameDialog } from '@/components/drive/rename-dialog';
 import { ReportDialog } from '@/components/drive/report-dialog';
@@ -12,18 +36,8 @@ import { ShareDialog } from '@/components/drive/share-dialog';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { keyLabel } from '@/components/drive/shortcuts';
-import { UploadMenu, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
+import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
-import { Spinner } from '@/components/motion';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import {
-    Breadcrumb,
-    BreadcrumbItem,
-    BreadcrumbLink,
-    BreadcrumbList,
-    BreadcrumbPage,
-    BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
 import { Button } from '@/components/ui/button';
 import {
     ContextMenu,
@@ -37,6 +51,7 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuShortcut,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
@@ -47,15 +62,15 @@ import {
     driveError,
     driveKeys,
     folderQueryOptions,
-    formatBytes,
     formatWhen,
     invalidateFolders,
-    nodeSize,
+    sharedQueryOptions,
     sortNodesBy,
     DEFAULT_SORT,
     type SortKey,
     type SortOrder,
 } from '@/lib/drive';
+import { previewKind } from '@/lib/previews';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { tagsQueryOptions } from '@/lib/tags';
@@ -65,48 +80,35 @@ import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import {
     draggable,
     dropTargetForElements,
+    monitorForElements,
 } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { disableNativeDragPreview } from '@atlaskit/pragmatic-drag-and-drop/element/disable-native-drag-preview';
 import type { DriveNode, FolderListing } from '@hushos/drive/client';
 import { useHotkey } from '@tanstack/react-hotkeys';
 import { lendPaletteContext, usePaletteOpen } from '@/lib/palette';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
+import { cn } from 'cn';
 import {
+    ChevronRightIcon,
     CopyIcon,
-    DownloadIcon,
-    EllipsisIcon,
-    FolderInputIcon,
+    FileUpIcon,
     FolderPlusIcon,
-    HistoryIcon,
-    InfoIcon,
+    FolderUpIcon,
     LayoutGridIcon,
+    ListChecksIcon,
     ListIcon,
-    PencilIcon,
-    Share2Icon,
-    SquareCheckIcon,
-    SquareIcon,
-    SquareMinusIcon,
-    TagIcon,
-    Trash2Icon,
-    UploadIcon,
-    XIcon,
-    ArrowDownIcon,
-    ArrowUpIcon,
+    PlusIcon,
+    RotateCcwIcon,
+    TriangleAlertIcon,
 } from 'lucide-react';
-import {
-    Fragment,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-    useSyncExternalStore,
-    type MouseEvent,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 
 /*
- * One folder at a time: a path, the rows, and the actions. Selection follows
- * desktop conventions (click, Mod-click, Shift-click, arrows), a double click or
- * Enter opens, and every action is also a keyboard shortcut and a palette entry.
+ * One folder at a time: its path as the page title, the rows, and the actions.
+ * Selection follows desktop conventions (click, Mod-click, Shift-click, a box
+ * drawn on empty space, arrows), a double click or Enter opens, and every action
+ * is also a keyboard shortcut and a palette entry.
  */
 
 function folderLink(rootId: string, folderId: string) {
@@ -117,94 +119,24 @@ function folderLink(rootId: string, folderId: string) {
 
 const VIEW_KEY = 'hushos.drive.view';
 
-/* A tile's face: the file's thumbnail where one exists, its mark otherwise. */
+/* A tile's face: a photo or a video frame fills it; everything else is its mark, centred. */
 function NodeFace({ node }: { node: DriveNode }) {
     const url = useThumbnail(node);
-    if (url) return <img src={url} alt="" draggable={false} className="size-full object-cover" />;
+    const kind = previewKind(node);
+    if (url && (kind === 'image' || kind === 'video'))
+        return (
+            <>
+                <img src={url} alt="" draggable={false} className="size-full object-cover" />
+                {kind === 'video' && (
+                    <span className="absolute flex size-10 items-center justify-center rounded-full bg-black/45">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                            <path d="M8 5.5v13l11-6.5z" />
+                        </svg>
+                    </span>
+                )}
+            </>
+        );
     return <FileMark node={node} size="large" />;
-}
-
-/* Whether there is room for the details panel beside the list; below this it is a dialog. */
-function useWideScreen() {
-    return useSyncExternalStore(
-        (onChange) => {
-            const query = window.matchMedia('(min-width: 1024px)');
-            query.addEventListener('change', onChange);
-            return () => query.removeEventListener('change', onChange);
-        },
-        () => window.matchMedia('(min-width: 1024px)').matches,
-        () => false,
-    );
-}
-
-/*
- * The spot a row's mark occupies is also where it is ticked: on a phone that
- * is the one target that reliably adds or removes a row, where a tap elsewhere
- * on the row is easy to miss and a tap on the name opens it. The mark itself
- * never changes, the row's fill shows the selection; only the header, which
- * has no mark, draws a box. It is a checkbox in role and behaviour, and it stops the
- * tap from reaching the row underneath so a tap is exactly one toggle.
- */
-function SelectMark({
-    checked,
-    indeterminate = false,
-    selecting = true,
-    face,
-    name,
-    className,
-    onToggle,
-    onPick,
-}: {
-    checked: boolean;
-    /* Some but not all: the header's box while a selection is partial. */
-    indeterminate?: boolean;
-    /* Whether a selection exists: the box shows, and a click toggles; otherwise the face shows, and a click picks. */
-    selecting?: boolean;
-    /* What sits here while nothing is selected: the row's icon or thumbnail. */
-    face?: React.ReactNode;
-    name: string;
-    className: string;
-    onToggle: () => void;
-    onPick?: (event: MouseEvent) => void;
-}) {
-    return (
-        <span className={`flex items-center justify-center ${className}`}>
-            {/*
-             * The input covers the box and takes every click; the icon beneath is its
-             * face. It stays the one element under the pointer whether a selection
-             * exists or not, so the browser can see a double click, which the row
-             * opens; the input itself acts only on a single click.
-             */}
-            <input
-                type="checkbox"
-                className="absolute inset-0 z-10 size-full cursor-default appearance-none opacity-0"
-                checked={checked}
-                ref={(input) => {
-                    if (input) input.indeterminate = indeterminate;
-                }}
-                aria-label={`Select ${name}`}
-                tabIndex={-1}
-                onChange={() => {}}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    event.preventDefault();
-                    if (event.detail > 1) return;
-                    if (selecting || !onPick) onToggle();
-                    else onPick(event);
-                }}
-            />
-            {face ? (
-                // The row's own fill says it is selected; its mark stays what it is.
-                face
-            ) : checked ? (
-                <SquareCheckIcon aria-hidden="true" className="size-4 text-primary" />
-            ) : indeterminate ? (
-                <SquareMinusIcon aria-hidden="true" className="size-4 text-primary" />
-            ) : (
-                <SquareIcon aria-hidden="true" className="size-4 text-muted-foreground" />
-            )}
-        </span>
-    );
 }
 
 /*
@@ -247,111 +179,6 @@ function NodeName({
     );
 }
 
-/* Whether the primary pointer is a finger: taps then toggle selection instead of replacing it. */
-export function useCoarsePointer() {
-    return useSyncExternalStore(
-        (onChange) => {
-            const query = window.matchMedia('(pointer: coarse)');
-            query.addEventListener('change', onChange);
-            return () => query.removeEventListener('change', onChange);
-        },
-        () => window.matchMedia('(pointer: coarse)').matches,
-        () => false,
-    );
-}
-
-/* The store lost this file's bytes: the audit marked it, and the row says so instead of failing later. */
-function unavailable(node: DriveNode) {
-    return node.currentVersion?.objectStatus === 'missing';
-}
-
-/* The menu a row or tile opens; `targets` is the selection when the node is part of it. */
-function NodeMenu({
-    node,
-    targets,
-    onOpen,
-    onDownload,
-    onRename,
-    onMove,
-    onCopy,
-    onVersions,
-    onInfo,
-    onTags,
-    onShare,
-    onSaveCopy,
-    onReport,
-    onTrash,
-}: {
-    node: DriveNode;
-    targets: DriveNode[];
-    onOpen: (node: DriveNode) => void;
-    onDownload: (nodes: DriveNode[]) => void;
-    onRename: (node: DriveNode) => void;
-    onMove: (nodes: DriveNode[]) => void;
-    onCopy: (nodes: DriveNode[]) => void;
-    onVersions: (node: DriveNode) => void;
-    onInfo: (node: DriveNode) => void;
-    /* Absent for a node in someone else's workspace: tags are sealed with one's own registry. */
-    onTags: ((nodes: DriveNode[]) => void) | null;
-    /* Absent for a node in someone else's workspace: only its owner shares it. */
-    onShare: ((node: DriveNode) => void) | null;
-    /* Present only for a node in someone else's workspace: a re-encrypted copy into one's own. */
-    onSaveCopy: ((nodes: DriveNode[]) => void) | null;
-    /* Present only for someone else's node: the operators get its key, sealed here. */
-    onReport: ((node: DriveNode) => void) | null;
-    onTrash: (nodes: DriveNode[]) => void;
-}) {
-    return (
-        <ContextMenuContent>
-            <ContextMenuItem onClick={() => onOpen(node)}>
-                {node.kind === 'folder' ? 'Open' : 'Preview'}
-                <ContextMenuShortcut>{keyLabel('Enter')}</ContextMenuShortcut>
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onDownload(targets)}>
-                Download
-                <ContextMenuShortcut>D</ContextMenuShortcut>
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onRename(node)}>
-                Rename
-                <ContextMenuShortcut>F2</ContextMenuShortcut>
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onMove(targets)}>
-                Move to…
-                <ContextMenuShortcut>M</ContextMenuShortcut>
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onCopy(targets)}>
-                Copy to…
-                <ContextMenuShortcut>C</ContextMenuShortcut>
-            </ContextMenuItem>
-            {node.kind === 'file' && (
-                <ContextMenuItem onClick={() => onVersions(node)}>Versions…</ContextMenuItem>
-            )}
-            <ContextMenuItem onClick={() => onInfo(node)}>
-                Info…
-                <ContextMenuShortcut>I</ContextMenuShortcut>
-            </ContextMenuItem>
-            {onTags && (
-                <ContextMenuItem onClick={() => onTags(targets)}>
-                    Tags…
-                    <ContextMenuShortcut>T</ContextMenuShortcut>
-                </ContextMenuItem>
-            )}
-            {onShare && <ContextMenuItem onClick={() => onShare(node)}>Share…</ContextMenuItem>}
-            {onSaveCopy && (
-                <ContextMenuItem onClick={() => onSaveCopy(targets)}>
-                    Save a copy to my Drive
-                </ContextMenuItem>
-            )}
-            {onReport && <ContextMenuItem onClick={() => onReport(node)}>Report…</ContextMenuItem>}
-            <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onClick={() => onTrash(targets)}>
-                Move to trash
-                <ContextMenuShortcut>{keyLabel('Backspace')}</ContextMenuShortcut>
-            </ContextMenuItem>
-        </ContextMenuContent>
-    );
-}
-
 export function FolderView({ folderId }: { folderId: string }) {
     const { rootId, workspaceId } = useDrive();
     const navigate = useNavigate();
@@ -362,9 +189,20 @@ export function FolderView({ folderId }: { folderId: string }) {
         () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
         [listing.data, order],
     );
-    const [selected, setSelected] = useState<Set<string>>(new Set());
-    const [anchor, setAnchor] = useState<string | null>(null);
-    const [focused, setFocused] = useState<string | null>(null);
+    const ids = useMemo(() => rows.map((row) => row.id), [rows]);
+    const dropRef = useRef<HTMLDivElement>(null);
+    const {
+        coarse,
+        selected,
+        setSelected,
+        focused,
+        marquee,
+        select,
+        toggle,
+        clear,
+        selectAll,
+        moveFocus,
+    } = useListSelection(ids, dropRef);
     const [creating, setCreating] = useState(false);
     const [renaming, setRenaming] = useState<DriveNode | null>(null);
     const [moving, setMoving] = useState<DriveNode[] | null>(null);
@@ -388,9 +226,6 @@ export function FolderView({ folderId }: { folderId: string }) {
     const router = useRouter();
     const search = useSearch({ strict: false }) as { preview?: string };
     const pushedPreview = useRef(false);
-    // On a touch screen there is no modifier key: every tap on a row toggles it,
-    // and the name itself is the link that opens.
-    const coarsePointer = useCoarsePointer();
     /* The folder row or breadcrumb a drag is hovering, for its highlight. */
     const [dropOver, setDropOver] = useState<string | null>(null);
     // List or grid, remembered on this device. The view only mounts after unlock,
@@ -410,15 +245,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         }
     }, [view]);
     const [movingByDrag, setMovingByDrag] = useState(false);
-    const listRef = useRef<HTMLDivElement>(null);
-    const dropRef = useRef<HTMLDivElement>(null);
     const picker = useRef<UploadPicker>(null);
-    const [marquee, setMarquee] = useState<{
-        left: number;
-        top: number;
-        width: number;
-        height: number;
-    } | null>(null);
 
     // Rows that vanished (moved, trashed elsewhere) drop out here; the routes remount
     // this view per folder, so a new folder always starts with nothing selected.
@@ -452,41 +279,6 @@ export function FolderView({ folderId }: { folderId: string }) {
         } else void navigate({ ...here, search: {}, replace: true });
     }
 
-    function select(
-        node: DriveNode,
-        event?: MouseEvent | { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean },
-    ) {
-        const toggle = coarsePointer || Boolean(event?.metaKey || event?.ctrlKey);
-        const range = Boolean(event?.shiftKey) && anchor !== null;
-        setFocused(node.id);
-        if (range) {
-            const from = rows.findIndex((row) => row.id === anchor);
-            const to = rows.findIndex((row) => row.id === node.id);
-            const [start, end] = from < to ? [from, to] : [to, from];
-            setSelected(new Set(rows.slice(start, end + 1).map((row) => row.id)));
-            return;
-        }
-        setAnchor(node.id);
-        if (toggle)
-            setSelected((current) => {
-                const next = new Set(current);
-                if (next.has(node.id)) next.delete(node.id);
-                else next.add(node.id);
-                return next;
-            });
-        else setSelected(new Set([node.id]));
-    }
-    /* The checkbox's toggle: always additive, whatever the pointer or modifier. */
-    function toggle(node: DriveNode) {
-        setFocused(node.id);
-        setAnchor(node.id);
-        setSelected((current) => {
-            const next = new Set(current);
-            if (next.has(node.id)) next.delete(node.id);
-            else next.add(node.id);
-            return next;
-        });
-    }
     const selecting = selection.length > 0;
     const single = selection.length === 1 ? selection[0]! : null;
     const allSelected = rows.length > 0 && selection.length === rows.length;
@@ -499,7 +291,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             setDetailsOpen(true);
         } else setInfoOf(node);
     }
-    /* The Info button and its key: they open the details, and put an open panel away. */
+    /* The Info key: it opens the details, and puts an open panel away. */
     function toggleInfo() {
         if (wide && detailsOpen) setDetailsOpen(false);
         else if (selection.length === 1) showInfo(selection[0]!);
@@ -508,7 +300,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         if (node.kind === 'folder') void navigate(folderLink(rootId, node.id));
         else showPreview(node);
     }
-    /* A re-encrypted copy of something shared with this person, into the top of their own Drive. */
+    /* A re-encrypted copy of something shared with this person, into the top of their own files. */
     async function saveToMyDrive(nodes: DriveNode[]) {
         if (!nodes.length) return;
         try {
@@ -517,15 +309,23 @@ export function FolderView({ folderId }: { folderId: string }) {
             cue('droplet');
             toast.add({
                 type: 'success',
+                // The same words as the Shared page: no keys, just where it lands.
                 title:
                     made === 1 && nodes[0]!.kind === 'file'
-                        ? `“${nodes[0]!.name}” is being saved to your Drive`
-                        : `${made} items are being saved to your Drive`,
-                description: 'Encrypted again under your own keys as they upload.',
+                        ? `Saving “${nodes[0]!.name}” to your files`
+                        : `Saving ${made} items to your files`,
+                description:
+                    made === 1
+                        ? 'It shows up in My files as it copies.'
+                        : 'They show up in My files as they copy.',
             });
         } catch (error) {
             cue('error');
-            toast.add({ type: 'error', title: 'Could not save', description: driveError(error) });
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t save a copy',
+                description: driveError(error),
+            });
         }
     }
     function download(nodes: DriveNode[]) {
@@ -533,29 +333,59 @@ export function FolderView({ folderId }: { folderId: string }) {
         const here = listing.data?.folder;
         downloadNodes(nodes, here?.parentId === null ? undefined : here?.name);
     }
-    async function trash(nodes: DriveNode[]) {
-        if (!nodes.length || trashing) return;
-        setTrashing(true);
-        let done = 0;
+    /* Puts trashed items back where they were: the toast's Undo. */
+    async function undoTrash(nodes: DriveNode[]) {
+        let back = 0;
         try {
             for (const node of nodes) {
-                await driveClient.trash(node);
-                done++;
+                await driveClient.restore(node);
+                back++;
             }
-            cue('droplet');
+            cue('success');
             toast.add({
                 type: 'success',
-                title:
-                    done === 1
-                        ? `“${nodes[0]!.name}” moved to trash`
-                        : `${done} items moved to trash`,
-                description: 'Restore from the trash within 30 days.',
+                title: back === 1 ? `“${nodes[0]!.name}” is back` : `${back} items are back`,
             });
         } catch (error) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: 'Could not move to trash',
+                title:
+                    back === 0 ? 'Couldn’t bring it back' : `${back} of ${nodes.length} are back`,
+                description: `${driveError(error)} The rest are still in Trash.`,
+            });
+        } finally {
+            await invalidateFolders(queryClient, folderId);
+        }
+    }
+    async function trash(nodes: DriveNode[]) {
+        if (!nodes.length || trashing) return;
+        setTrashing(true);
+        const done: DriveNode[] = [];
+        try {
+            for (const node of nodes) done.push(await driveClient.trash(node));
+            cue('droplet');
+            toast.add({
+                type: 'success',
+                title:
+                    done.length === 1
+                        ? `“${nodes[0]!.name}” moved to Trash`
+                        : `${done.length} items moved to Trash`,
+                description:
+                    done.length === 1
+                        ? 'It stays in Trash for 30 days.'
+                        : 'They stay in Trash for 30 days.',
+                timeout: 8_000,
+                actionProps: { children: 'Undo', onClick: () => void undoTrash(done) },
+            });
+        } catch (error) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title:
+                    done.length === 0
+                        ? 'Couldn’t move to Trash'
+                        : `${done.length} of ${nodes.length} moved to Trash`,
                 description: driveError(error),
             });
         } finally {
@@ -563,182 +393,6 @@ export function FolderView({ folderId }: { folderId: string }) {
             await invalidateFolders(queryClient, folderId);
         }
     }
-    /* Arrows move the one selected row; with Shift they stretch the selection from where it began, as a file manager does. */
-    function moveFocus(delta: number, extend = false) {
-        if (!rows.length) return;
-        const index = focused ? rows.findIndex((row) => row.id === focused) : -1;
-        const next = rows[Math.min(rows.length - 1, Math.max(0, index + delta))]!;
-        select(next, extend ? { shiftKey: true } : undefined);
-        listRef.current
-            ?.querySelector<HTMLElement>(`[data-node-id="${next.id}"]`)
-            ?.scrollIntoView({ block: 'nearest' });
-    }
-
-    // Desktop selection: a click on empty space clears, a drag on empty space draws a
-    // rectangle and selects what it touches (with Mod or Shift adding to what was there).
-    const latest = useRef({ rows, selected, select });
-    useEffect(() => {
-        latest.current = { rows, selected, select };
-    });
-    useEffect(() => {
-        const root = dropRef.current;
-        if (!root) return;
-        let start: {
-            x: number;
-            y: number;
-            additive: boolean;
-            base: Set<string>;
-            row: string | null;
-            /* The second press of a double click: it opens, it never lets go. */
-            second: boolean;
-            modifiers: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean };
-        } | null = null;
-        let dragging = false;
-        let lastClick: { row: string; at: number } | null = null;
-        const DOUBLE_CLICK_MS = 400;
-        // What was selected before the first press of what may become a double click,
-        // so a double click opens and leaves the selection as it found it.
-        let beforeDouble: Set<string> | null = null;
-        let lastDown: { row: string | null; at: number } | null = null;
-        const onDown = (event: globalThis.MouseEvent) => {
-            if (event.button !== 0) return;
-            const target = event.target as HTMLElement;
-            const pressed = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? null;
-            const repeat =
-                lastDown !== null &&
-                lastDown.row === pressed &&
-                event.timeStamp - lastDown.at < 700;
-            if (!repeat) beforeDouble = new Set(latest.current.selected);
-            lastDown = { row: pressed, at: event.timeStamp };
-            if (
-                target.closest(
-                    'button, a, input, summary, thead, [data-crumb-drag], [role=menu], [role=dialog], [data-selection-bar], [data-details], section[aria-label=Transfers]',
-                )
-            )
-                return;
-            const row = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? null;
-            start = {
-                x: event.clientX,
-                y: event.clientY,
-                additive: event.metaKey || event.ctrlKey || event.shiftKey,
-                base: new Set(latest.current.selected),
-                row,
-                second:
-                    row !== null &&
-                    lastClick?.row === row &&
-                    event.timeStamp - lastClick.at < DOUBLE_CLICK_MS,
-                modifiers: {
-                    metaKey: event.metaKey,
-                    ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey,
-                },
-            };
-            dragging = false;
-        };
-        const onMove = (event: PointerEvent) => {
-            if (!start || start.row) return;
-            if (!dragging && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4)
-                return;
-            dragging = true;
-            const bounds = root.getBoundingClientRect();
-            const left = Math.min(start.x, event.clientX);
-            const top = Math.min(start.y, event.clientY);
-            const right = Math.max(start.x, event.clientX);
-            const bottom = Math.max(start.y, event.clientY);
-            setMarquee({
-                left: left - bounds.left,
-                top: top - bounds.top + root.scrollTop,
-                width: right - left,
-                height: bottom - top,
-            });
-            const hit = new Set(start.additive ? start.base : []);
-            for (const row of root.querySelectorAll<HTMLElement>('[data-node-id]')) {
-                const rect = row.getBoundingClientRect();
-                const inside =
-                    rect.left < right &&
-                    rect.right > left &&
-                    rect.top < bottom &&
-                    rect.bottom > top;
-                if (inside) hit.add(row.dataset.nodeId!);
-            }
-            setSelected(hit);
-            event.preventDefault();
-        };
-        const onUp = (event: PointerEvent) => {
-            if (!start) return;
-            if (!dragging && event.type !== 'pointercancel') {
-                const node = start.row
-                    ? latest.current.rows.find((row) => row.id === start!.row)
-                    : undefined;
-                const { metaKey, ctrlKey, shiftKey } = start.modifiers;
-                const plain = !metaKey && !ctrlKey && !shiftKey;
-                // The name is a button with its own click; this is the blank part of a row.
-                // A plain click there on the one selected row lets go of it at once, since
-                // the eye reads that area as empty space and expects a second click to
-                // undo; a double click puts the selection back as it found it and opens.
-                const letGo =
-                    node !== undefined &&
-                    plain &&
-                    !start.second &&
-                    latest.current.selected.size === 1 &&
-                    latest.current.selected.has(node.id);
-                lastClick = node && plain ? { row: node.id, at: event.timeStamp } : null;
-                if (letGo) {
-                    setSelected(new Set());
-                    setFocused(null);
-                } else if (node) latest.current.select(node, start.modifiers);
-                else {
-                    setSelected(new Set());
-                    setFocused(null);
-                }
-            }
-            start = null;
-            dragging = false;
-            setMarquee(null);
-        };
-        // The browser decides what a double click is, on the system's own interval:
-        // when it says so, the selection goes back to what the first press found.
-        const onDouble = () => {
-            if (beforeDouble) {
-                setSelected(beforeDouble);
-                setFocused(null);
-            }
-        };
-        // WebKit drops the pointerdown of the first press after a drag and drop, sending the
-        // mousedown alone; that press starts here instead. A pointerdown and its mousedown
-        // come from the same input, a few milliseconds apart at most, and a touch sends a
-        // mousedown after its pointerup for the same tap. (A drag in WebKit ends without a
-        // pointerup, so no press can be held open between the two.)
-        let lastPointerDown = -Infinity;
-        let lastTouchUp = -Infinity;
-        const onPointerDown = (event: PointerEvent) => {
-            lastPointerDown = event.timeStamp;
-            onDown(event);
-        };
-        const onMouseDown = (event: globalThis.MouseEvent) => {
-            if (event.timeStamp - lastPointerDown < 50 || event.timeStamp - lastTouchUp < 1000)
-                return;
-            onDown(event);
-        };
-        const onPointerUp = (event: PointerEvent) => {
-            if (event.pointerType === 'touch') lastTouchUp = event.timeStamp;
-            onUp(event);
-        };
-        root.addEventListener('pointerdown', onPointerDown);
-        root.addEventListener('mousedown', onMouseDown);
-        root.addEventListener('dblclick', onDouble);
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onPointerUp);
-        window.addEventListener('pointercancel', onPointerUp);
-        return () => {
-            root.removeEventListener('pointerdown', onPointerDown);
-            root.removeEventListener('mousedown', onMouseDown);
-            root.removeEventListener('dblclick', onDouble);
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onPointerUp);
-            window.removeEventListener('pointercancel', onPointerUp);
-        };
-    }, []);
 
     useHotkey('Shift+N', () => setCreating(true), { enabled });
     useHotkey('F2', () => selection.length === 1 && setRenaming(selection[0]!), { enabled });
@@ -763,22 +417,12 @@ export function FolderView({ folderId }: { folderId: string }) {
     useHotkey('Shift+ArrowDown', () => moveFocus(1, true), { enabled });
     useHotkey('Shift+ArrowUp', () => moveFocus(-1, true), { enabled });
     // Never inside a text field, where Mod+A means the text.
-    useHotkey('Mod+A', () => setSelected(new Set(rows.map((row) => row.id))), {
-        enabled,
-        ignoreInputs: true,
-    });
-    useHotkey(
-        'Escape',
-        () => {
-            setSelected(new Set());
-            setFocused(null);
-        },
-        { enabled },
-    );
+    useHotkey('Mod+A', selectAll, { enabled, ignoreInputs: true });
+    useHotkey('Escape', clear, { enabled });
 
     const folder = listing.data?.folder;
     // While a folder loads for the first time, its path is already known from the
-    // listing it was opened from, so the breadcrumb never blanks on the way in.
+    // listing it was opened from, so the title never blanks on the way in.
     const knownPath = useMemo(() => {
         if (listing.data) return null;
         for (const [, cached] of queryClient.getQueriesData<FolderListing>({
@@ -793,6 +437,19 @@ export function FolderView({ folderId }: { folderId: string }) {
         () => (listing.data ? [...listing.data.ancestors, listing.data.folder] : (knownPath ?? [])),
         [listing.data, knownPath],
     );
+    /* A folder's name as the path shows it: one's own top folder is "My files". */
+    const crumbName = (crumb: DriveNode) =>
+        crumb.parentId === null && crumb.workspaceId === workspaceId ? 'My files' : crumb.name;
+    const shared = crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId;
+    const title = folder ? crumbName(folder) : crumbs.length ? crumbName(crumbs.at(-1)!) : '';
+    // Who can open what, from everything this person shares; a folder in the path that is
+    // shared means everything here is open to the same people.
+    const access = useAccessIndex(!shared);
+    const inheritedFrom = [...crumbs].reverse().find((crumb) => access.has(crumb.id)) ?? null;
+    const mounts = useQuery({ ...sharedQueryOptions, enabled: shared });
+    const sharedBy = shared
+        ? (mounts.data?.find((mount) => mount.node.id === crumbs[0]?.id) ?? null)
+        : null;
     // The whole view takes drops, not only the list: an empty folder has no list.
     const over = useDropZone(dropRef, folder, rows);
     const paletteHandlers = useRef({ download, trash });
@@ -829,17 +486,17 @@ export function FolderView({ folderId }: { folderId: string }) {
                 trash: () => void paletteHandlers.current.trash(selection),
             },
         });
+        // `setSelected` is a state setter and never changes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rows, folder, selection, ownSelection, view, workspaceId]);
     useEffect(() => () => lendPaletteContext(null), []);
 
-    /* Moves dragged rows into a folder row or a breadcrumb ancestor; with Alt held, copies them. */
-    async function moveTo(ids: string[], destination: DriveNode, copy = false) {
-        const nodes = latest.current.rows.filter(
-            (row) => ids.includes(row.id) && row.id !== destination.id,
-        );
+    /* Moves dragged rows into a folder row or a crumb further up; with Alt held, copies them. */
+    async function moveTo(dragged: string[], destination: DriveNode, copy = false) {
+        const nodes = rows.filter((row) => dragged.includes(row.id) && row.id !== destination.id);
         if (!nodes.length || movingByDrag) return;
         setMovingByDrag(true);
-        const where = destination.parentId === null ? 'the top folder' : `“${destination.name}”`;
+        const where = destination.parentId === null ? 'My files' : `“${destination.name}”`;
         let moved = 0;
         try {
             if (copy) {
@@ -851,13 +508,16 @@ export function FolderView({ folderId }: { folderId: string }) {
                         nodes.length === 1 && nodes[0]!.kind === 'file'
                             ? `“${nodes[0]!.name}” copied to ${where}`
                             : `${moved} items copied to ${where}`,
+                    description: 'The copies count against your storage.',
                 });
                 return;
             }
+            const done: DriveNode[] = [];
             for (const node of nodes) {
-                await driveClient.move(node, destination);
+                done.push(await driveClient.move(node, destination));
                 moved++;
             }
+            const origin = folder;
             cue('droplet');
             toast.add({
                 type: 'success',
@@ -865,17 +525,45 @@ export function FolderView({ folderId }: { folderId: string }) {
                     moved === 1
                         ? `“${nodes[0]!.name}” moved to ${where}`
                         : `${moved} items moved to ${where}`,
+                timeout: 8_000,
+                actionProps: origin
+                    ? { children: 'Undo', onClick: () => void moveBack(done, origin) }
+                    : undefined,
             });
         } catch (error) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: copy ? 'Could not copy' : 'Could not move',
+                title: copy ? 'Couldn’t copy' : 'Couldn’t move',
                 description: driveError(error),
             });
         } finally {
             setMovingByDrag(false);
             await invalidateFolders(queryClient, folderId, destination.id);
+        }
+    }
+    /* The Undo on a move made by dragging: everything goes back where it came from. */
+    async function moveBack(nodes: DriveNode[], origin: DriveNode) {
+        let back = 0;
+        try {
+            for (const node of nodes) {
+                await driveClient.move(node, origin);
+                back++;
+            }
+            cue('success');
+            toast.add({
+                type: 'success',
+                title: back === 1 ? `“${nodes[0]!.name}” is back` : `${back} items are back`,
+            });
+        } catch (error) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: back === 0 ? 'Couldn’t move it back' : `${back} of ${nodes.length} are back`,
+                description: driveError(error),
+            });
+        } finally {
+            await invalidateFolders(queryClient, origin.id, ...nodes.map((node) => node.parentId));
         }
     }
     /*
@@ -887,33 +575,31 @@ export function FolderView({ folderId }: { folderId: string }) {
         const node = crumbs.find((crumb) => crumb.id === id);
         if (!node || movingByDrag) return;
         setMovingByDrag(true);
-        const where = destination.parentId === null ? 'the top folder' : `“${destination.name}”`;
+        const where = destination.parentId === null ? 'My files' : `“${destination.name}”`;
         try {
             await driveClient.move(node, destination);
             cue('droplet');
             toast.add({ type: 'success', title: `“${node.name}” moved to ${where}` });
         } catch (error) {
             cue('error');
-            toast.add({ type: 'error', title: 'Could not move', description: driveError(error) });
+            toast.add({ type: 'error', title: 'Couldn’t move', description: driveError(error) });
         } finally {
             setMovingByDrag(false);
             await invalidateFolders(queryClient, folderId, node.parentId, destination.id);
         }
     }
     // Rows drag as themselves, or as the whole selection when they are part of it.
-    // Folder rows and breadcrumb ancestors take the drop; the current folder does not.
-    const moveToRef = useRef(moveTo);
-    const moveCrumbRef = useRef(moveCrumb);
+    // Folder rows and crumbs further up take the drop; the current folder does not.
+    const dragState = useRef({ selected, select, moveTo, moveCrumb });
     useEffect(() => {
-        moveToRef.current = moveTo;
-        moveCrumbRef.current = moveCrumb;
+        dragState.current = { selected, select, moveTo, moveCrumb };
     });
     useEffect(() => {
         const root = dropRef.current;
         if (!root) return;
         const cleanups: (() => void)[] = [];
         const dragged = (id: string) =>
-            latest.current.selected.has(id) ? [...latest.current.selected] : [id];
+            dragState.current.selected.has(id) ? [...dragState.current.selected] : [id];
         const target = (element: HTMLElement, destination: DriveNode) =>
             dropTargetForElements({
                 element,
@@ -934,10 +620,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                 onDrop: ({ source, location }) => {
                     setDropOver(null);
                     if (source.data.type === 'drive-crumb') {
-                        void moveCrumbRef.current(source.data.id as string, destination);
+                        void dragState.current.moveCrumb(source.data.id as string, destination);
                         return;
                     }
-                    void moveToRef.current(
+                    void dragState.current.moveTo(
                         source.data.ids as string[],
                         destination,
                         location.current.input.altKey,
@@ -952,8 +638,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                 draggable({
                     element,
                     getInitialData: () => ({ type: 'drive-nodes', ids: dragged(id) }),
+                    onGenerateDragPreview: ({ nativeSetDragImage }) =>
+                        disableNativeDragPreview({ nativeSetDragImage }),
                     onDragStart: () => {
-                        if (!latest.current.selected.has(id)) latest.current.select(node);
+                        if (!dragState.current.selected.has(id)) dragState.current.select(id);
                     },
                 }),
             );
@@ -967,294 +655,218 @@ export function FolderView({ folderId }: { folderId: string }) {
         for (const element of root.querySelectorAll<HTMLElement>('[data-crumb-drag]')) {
             const id = element.dataset.crumbDrag!;
             cleanups.push(
-                draggable({ element, getInitialData: () => ({ type: 'drive-crumb', id }) }),
+                draggable({
+                    element,
+                    getInitialData: () => ({ type: 'drive-crumb', id }),
+                    onGenerateDragPreview: ({ nativeSetDragImage }) =>
+                        disableNativeDragPreview({ nativeSetDragImage }),
+                }),
             );
         }
         return combine(...cleanups);
-    }, [rows, crumbs]);
+    }, [rows, crumbs, view]);
+
+    /* The card that follows the pointer while rows or a crumb are dragged, in place of the browser's snapshot. */
+    const [ghost, setGhost] = useState<{
+        x: number;
+        y: number;
+        ids: string[];
+        copy: boolean;
+    } | null>(null);
+    useEffect(
+        () =>
+            monitorForElements({
+                canMonitor: ({ source }) =>
+                    source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
+                onDragStart: ({ source, location }) =>
+                    setGhost({
+                        x: location.current.input.clientX,
+                        y: location.current.input.clientY,
+                        ids:
+                            source.data.type === 'drive-crumb'
+                                ? [source.data.id as string]
+                                : (source.data.ids as string[]),
+                        copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
+                    }),
+                onDrag: ({ source, location }) =>
+                    setGhost((current) =>
+                        current
+                            ? {
+                                  ...current,
+                                  x: location.current.input.clientX,
+                                  y: location.current.input.clientY,
+                                  copy:
+                                      source.data.type === 'drive-nodes' &&
+                                      location.current.input.altKey,
+                              }
+                            : current,
+                    ),
+                onDrop: () => setGhost(null),
+            }),
+        [],
+    );
+    const ghostNodes = ghost
+        ? [...rows, ...crumbs].filter(
+              (node, index, all) =>
+                  ghost.ids.includes(node.id) &&
+                  all.findIndex((other) => other.id === node.id) === index,
+          )
+        : [];
+    const ghostTarget = dropOver
+        ? [...rows, ...crumbs].find((node) => node.id === dropOver)
+        : undefined;
+
+    const actions: NodeActions = {
+        onOpen: open,
+        onDownload: download,
+        onRename: setRenaming,
+        onMove: setMoving,
+        onCopy: setCopying,
+        onVersions: setVersionsOf,
+        onInfo: showInfo,
+        onTags: (nodes) => setTagging(nodes),
+        onShare: setSharing,
+        onSaveCopy: (nodes) => void saveToMyDrive(nodes),
+        onReport: setReporting,
+        onTrash: (nodes) => void trash(nodes),
+    };
+    /* A node's menu: its own actions, or the selection's when it is part of one. */
+    function entriesFor(node: DriveNode) {
+        const own = node.workspaceId === workspaceId;
+        const isSelected = selected.has(node.id);
+        return nodeEntries(node, isSelected && selection.length > 1 ? selection : [node], {
+            ...actions,
+            onTags: own ? actions.onTags : null,
+            onShare: own ? actions.onShare : null,
+            onSaveCopy: own ? null : actions.onSaveCopy,
+            onReport: own ? null : actions.onReport,
+        });
+    }
+    const markOpened = (node: DriveNode) => () => {
+        if (node.kind === 'file') pushedPreview.current = true;
+    };
+    const tagIds = (node: DriveNode) => (registry ? tagsOf(registry, node.id) : []);
 
     return (
         <div
             ref={dropRef}
-            className={`relative flex min-h-0 flex-1 flex-col ${marquee ? 'select-none' : ''}`}
+            className={cn('relative flex flex-[1_0_auto] flex-col', marquee && 'select-none')}
         >
-            {marquee && (
-                <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute z-10 rounded-xs border border-primary bg-primary/10"
-                    style={marquee}
+            <MarqueeBox marquee={marquee} />
+            {ghost && ghostNodes.length > 0 && (
+                <DragCard
+                    x={ghost.x}
+                    y={ghost.y}
+                    nodes={ghostNodes}
+                    copy={ghost.copy}
+                    target={ghostTarget ? crumbName(ghostTarget) : null}
                 />
             )}
             {over && folder && (
                 <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xs border-2 border-dashed border-primary bg-card/80"
+                    className="pointer-events-none absolute inset-x-3 top-0 bottom-3 z-20 flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-[color-mix(in_oklab,var(--accent)_88%,transparent)] sm:inset-x-6 sm:bottom-6"
                 >
-                    <p className="rounded-xs bg-popover px-4 py-3 text-sm font-medium shadow-overlay">
-                        {folder.parentId === null
-                            ? 'Drop to upload here'
-                            : `Drop to upload into “${folder.name}”`}
+                    <FileUpIcon className="size-8 text-primary" strokeWidth={1.8} />
+                    <p className="px-6 text-center text-xl font-bold text-accent-foreground">
+                        Drop to add to “{title}”
+                    </p>
+                    <p className="text-sm text-accent-foreground">
+                        Files and whole folders both work.
                     </p>
                 </div>
             )}
-            <div className="flex flex-col gap-2 border-b border-rule px-5 pt-4 pb-2 sm:px-8">
-                {/* Where you are, and what you can add here: both stay put whatever is selected. */}
-                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                    <div className="mr-auto min-w-0">
-                        <Breadcrumb>
-                            <BreadcrumbList className="text-lg">
-                                {crumbs.length === 0 && <BreadcrumbPage>…</BreadcrumbPage>}
-                                {crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId && (
-                                    <>
-                                        <BreadcrumbItem>
-                                            <BreadcrumbLink render={<Link to="/app/shared" />}>
-                                                Shared with me
-                                            </BreadcrumbLink>
-                                        </BreadcrumbItem>
-                                        <BreadcrumbSeparator />
-                                    </>
-                                )}
-                                {crumbs.map((crumb, index) => (
-                                    <Fragment key={crumb.id}>
-                                        {index > 0 && <BreadcrumbSeparator />}
-                                        <BreadcrumbItem>
-                                            {index === crumbs.length - 1 ? (
-                                                <BreadcrumbPage
-                                                    className="font-bold tracking-tight"
-                                                    data-crumb-drag={
-                                                        index > 0 &&
-                                                        crumb.workspaceId === workspaceId
-                                                            ? crumb.id
-                                                            : undefined
-                                                    }
-                                                >
-                                                    {crumb.name}
-                                                </BreadcrumbPage>
-                                            ) : (
-                                                <BreadcrumbLink
-                                                    render={
-                                                        <Link
-                                                            {...folderLink(rootId, crumb.id)}
-                                                            data-crumb-id={crumb.id}
-                                                            data-crumb-drag={
-                                                                index > 0 &&
-                                                                crumb.workspaceId === workspaceId
-                                                                    ? crumb.id
-                                                                    : undefined
-                                                            }
-                                                            className={
-                                                                dropOver === crumb.id
-                                                                    ? 'rounded-xs bg-accent text-accent-foreground ring-2 ring-primary ring-offset-2 ring-offset-card'
-                                                                    : undefined
-                                                            }
-                                                        />
-                                                    }
-                                                >
-                                                    {crumb.name}
-                                                </BreadcrumbLink>
-                                            )}
-                                        </BreadcrumbItem>
-                                    </Fragment>
-                                ))}
-                            </BreadcrumbList>
-                        </Breadcrumb>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            size="icon-sm"
-                            aria-label={view === 'grid' ? 'Show as list' : 'Show as grid'}
-                            title={view === 'grid' ? 'Show as list' : 'Show as grid'}
-                            onClick={() =>
-                                setView((current) => (current === 'grid' ? 'list' : 'grid'))
-                            }
-                        >
-                            {view === 'grid' ? <ListIcon /> : <LayoutGridIcon />}
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setCreating(true)}
-                            disabled={!folder}
-                        >
-                            <FolderPlusIcon />
-                            New folder
-                        </Button>
-                        {folder && <UploadMenu folder={folder} known={rows} handle={picker} />}
-                    </div>
-                </div>
-                {/* One line, one height: the folder's controls, or the selection's actions in their place. */}
-                {selecting && (
-                    <div
-                        role="toolbar"
-                        aria-label="Selection"
-                        data-selection-bar=""
-                        className="-mx-2 flex h-11 items-center gap-0.5 rounded-md bg-accent px-2 text-accent-foreground sm:gap-1"
-                    >
-                        <span className="mr-1 shrink-0 pl-1 text-sm font-medium tabular-nums sm:mr-2">
-                            {selection.length} selected
-                        </span>
-                        {view === 'grid' && !allSelected && (
-                            <Button
-                                variant="ghost"
-                                size="xs"
-                                aria-label="Select all"
-                                onClick={() => setSelected(new Set(rows.map((row) => row.id)))}
+            <div className="flex shrink-0 items-center justify-between gap-3 px-5 pt-1 pb-3 sm:gap-6 sm:px-8 sm:pb-4">
+                <FolderPath
+                    crumbs={crumbs}
+                    title={title}
+                    shared={shared}
+                    rootId={rootId}
+                    workspaceId={workspaceId}
+                    dropOver={dropOver}
+                    crumbName={crumbName}
+                />
+                <div className="flex shrink-0 items-center gap-2">
+                    <fieldset className="m-0 flex min-w-0 items-center rounded-md border border-input bg-card p-0.5">
+                        <legend className="sr-only">View</legend>
+                        {(
+                            [
+                                ['list', 'Show as list', ListIcon],
+                                ['grid', 'Show as grid', LayoutGridIcon],
+                            ] as const
+                        ).map(([value, label, Icon]) => (
+                            <button
+                                key={value}
+                                type="button"
+                                aria-label={label}
+                                aria-pressed={view === value}
+                                title={label}
+                                onClick={() => setView(value)}
+                                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-pressed:bg-accent aria-pressed:text-accent-foreground"
                             >
-                                <SquareCheckIcon />
-                                <span className="max-sm:sr-only">Select all</span>
-                            </Button>
-                        )}
-                        {single && ownSelection && (
-                            <Button
-                                variant="ghost"
-                                size="xs"
-                                aria-label="Share"
-                                className="max-sm:hidden"
-                                onClick={() => setSharing(single)}
-                            >
-                                <Share2Icon />
-                                <span>Share</span>
-                            </Button>
-                        )}
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label="Download"
-                            onClick={() => download(selection)}
-                        >
-                            <DownloadIcon />
-                            <span className="max-sm:sr-only">Download</span>
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label="Move"
-                            onClick={() => setMoving(selection)}
-                        >
-                            <FolderInputIcon />
-                            <span className="max-sm:sr-only">Move</span>
-                        </Button>
-                        {single && (
-                            <Button
-                                variant="ghost"
-                                size="xs"
-                                aria-label="Rename"
-                                onClick={() => setRenaming(single)}
-                            >
-                                <PencilIcon />
-                                <span className="max-sm:sr-only">Rename</span>
-                            </Button>
-                        )}
-                        {single && (
-                            <Button
-                                variant="ghost"
-                                size="xs"
-                                aria-label="Info"
-                                aria-pressed={wide ? detailsOpen : undefined}
-                                className="max-sm:hidden"
-                                onClick={toggleInfo}
-                            >
-                                <InfoIcon />
-                                <span>Info</span>
-                            </Button>
-                        )}
-                        {ownSelection && (
-                            <Button
-                                variant="ghost"
-                                size="xs"
-                                aria-label="Tags"
-                                className="max-sm:hidden"
-                                onClick={() => setTagging(selection)}
-                            >
-                                <TagIcon />
-                                <span>Tags</span>
-                            </Button>
-                        )}
-                        <Button
-                            variant="ghost"
-                            size="xs"
-                            aria-label="Trash"
-                            disabled={trashing}
-                            onClick={() => void trash(selection)}
-                        >
-                            <Trash2Icon />
-                            <span className="max-sm:sr-only">Trash</span>
-                        </Button>
-                        {/* The less common actions, and on a phone every action the line has no room for. */}
+                                <Icon className="size-4" aria-hidden="true" />
+                            </button>
+                        ))}
+                    </fieldset>
+                    {folder && !shared && (
                         <DropdownMenu>
                             <DropdownMenuTrigger
-                                render={
-                                    <Button variant="ghost" size="xs" aria-label="More actions" />
-                                }
+                                render={<Button className="pr-4.5 pl-3.5 max-sm:px-3" />}
                             >
-                                <EllipsisIcon />
-                                <span className="max-sm:sr-only">More</span>
+                                <PlusIcon strokeWidth={2.4} />
+                                <span className="max-sm:sr-only">Add</span>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" sideOffset={6}>
-                                {single && ownSelection && (
-                                    <DropdownMenuItem
-                                        className="sm:hidden"
-                                        onClick={() => setSharing(single)}
-                                    >
-                                        <Share2Icon aria-hidden="true" /> Share…
-                                    </DropdownMenuItem>
-                                )}
-                                {single?.kind === 'file' && (
-                                    <DropdownMenuItem onClick={() => setVersionsOf(single)}>
-                                        <HistoryIcon aria-hidden="true" /> Versions…
-                                    </DropdownMenuItem>
-                                )}
-                                <DropdownMenuItem onClick={() => setCopying(selection)}>
-                                    <CopyIcon aria-hidden="true" /> Copy to…
+                            <DropdownMenuContent align="end" sideOffset={6} className="w-56">
+                                <DropdownMenuItem onClick={() => setCreating(true)}>
+                                    <FolderPlusIcon aria-hidden="true" />
+                                    New folder
+                                    <DropdownMenuShortcut>
+                                        {keyLabel('Shift')}N
+                                    </DropdownMenuShortcut>
                                 </DropdownMenuItem>
-                                {single && (
-                                    <DropdownMenuItem className="sm:hidden" onClick={toggleInfo}>
-                                        <InfoIcon aria-hidden="true" /> Info…
-                                    </DropdownMenuItem>
-                                )}
-                                {ownSelection && (
-                                    <DropdownMenuItem
-                                        className="sm:hidden"
-                                        onClick={() => setTagging(selection)}
-                                    >
-                                        <TagIcon aria-hidden="true" /> Tags…
-                                    </DropdownMenuItem>
-                                )}
+                                <DropdownMenuItem onClick={() => picker.current?.pickFiles()}>
+                                    <FileUpIcon aria-hidden="true" />
+                                    Upload files
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => picker.current?.pickFolder()}>
+                                    <FolderUpIcon aria-hidden="true" />
+                                    Upload folder
+                                </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                        <span className="flex-1" />
-                        <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label="Clear selection"
-                            onClick={() => {
-                                setSelected(new Set());
-                                setFocused(null);
-                            }}
-                        >
-                            <XIcon />
-                        </Button>
-                    </div>
-                )}
-                <div className={`h-11 items-center gap-2 ${selecting ? 'hidden' : 'flex'}`}>
-                    <p className="mr-auto text-sm whitespace-nowrap text-muted-foreground tabular-nums">
-                        {listing.data
-                            ? `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`
-                            : ''}
-                    </p>
-                    {view === 'grid' && rows.length > 0 && (
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="-mr-2 text-muted-foreground"
-                            onClick={() => setSelected(new Set(rows.map((row) => row.id)))}
-                        >
-                            Select all
-                        </Button>
                     )}
+                    {folder && <UploadInputs folder={folder} known={rows} handle={picker} />}
                 </div>
             </div>
+            {inheritedFrom && (
+                <AccessBanner
+                    text={accessSentence(access.get(inheritedFrom.id)!)}
+                    action="Manage access"
+                    onAction={() => setSharing(inheritedFrom)}
+                />
+            )}
+            {sharedBy && (
+                <AccessBanner
+                    text={`${sharedBy.granter.name} shared this folder with you. You can ${
+                        sharedBy.role === 'editor' ? 'view, add and change' : 'view and download'
+                    } what’s inside.`}
+                />
+            )}
+            {/* Always there in the grid, the same height, so selecting never moves the tiles. */}
+            {view === 'grid' && rows.length > 0 && (
+                <div className="flex h-8 shrink-0 items-center gap-3 px-5 text-[13px] text-muted-foreground tabular-nums sm:px-8">
+                    {selecting
+                        ? `${selection.length} of ${rows.length} selected`
+                        : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
+                    <button
+                        type="button"
+                        onClick={allSelected ? clear : selectAll}
+                        className="cursor-pointer font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                    >
+                        {allSelected ? 'Clear selection' : 'Select all'}
+                    </button>
+                </div>
+            )}
 
             <div className="flex min-h-0 flex-1">
                 {/* The space itself has a menu too: what you can do here, without a selection. */}
@@ -1263,382 +875,298 @@ export function FolderView({ folderId }: { folderId: string }) {
                         render={<div />}
                         className="flex min-h-0 min-w-0 flex-1 flex-col"
                     >
-                        {listing.isPending && (
-                            <div className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
-                                <Spinner />
-                            </div>
-                        )}
+                        {listing.isPending && <SkeletonRows />}
                         {listing.isError && (
-                            <div className="px-5 py-6 sm:px-8">
-                                <Alert variant="destructive" className="max-w-xl">
-                                    <AlertTitle>This folder could not be opened</AlertTitle>
-                                    <AlertDescription>{driveError(listing.error)}</AlertDescription>
-                                </Alert>
-                            </div>
+                            <EmptyState
+                                icon={TriangleAlertIcon}
+                                tone="danger"
+                                title="This folder couldn’t be opened"
+                                body={driveError(listing.error)}
+                            >
+                                <Button variant="outline" onClick={() => void listing.refetch()}>
+                                    <RotateCcwIcon />
+                                    Try again
+                                </Button>
+                            </EmptyState>
                         )}
                         {listing.data && rows.length === 0 && (
-                            <div className="px-5 py-6 sm:px-8">
-                                <div className="flex flex-col items-center gap-4 rounded-md border border-dashed border-input px-6 py-12 text-center">
-                                    <div className="max-w-sm">
-                                        <h2 className="text-lg font-bold">Nothing here yet</h2>
-                                        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                                            Drop files or folders anywhere on this page. Everything
-                                            is encrypted on this device before it leaves.
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center justify-center gap-2">
-                                        <Button
-                                            size="sm"
-                                            onClick={() => picker.current?.pickFiles()}
-                                        >
-                                            <UploadIcon />
+                            <EmptyState
+                                icon={FolderPlusIcon}
+                                title="Nothing here yet"
+                                body={
+                                    shared
+                                        ? 'When something is added to this folder, it shows up here.'
+                                        : 'Drop files or folders anywhere on this page, or use Add.'
+                                }
+                            >
+                                {!shared && (
+                                    <>
+                                        <Button onClick={() => picker.current?.pickFiles()}>
+                                            <FileUpIcon />
                                             Upload files
                                         </Button>
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => setCreating(true)}
-                                        >
+                                        <Button variant="outline" onClick={() => setCreating(true)}>
                                             <FolderPlusIcon />
                                             New folder
                                         </Button>
-                                    </div>
-                                </div>
-                            </div>
+                                    </>
+                                )}
+                            </EmptyState>
                         )}
                         {listing.data && rows.length > 0 && view === 'list' && (
-                            <div ref={listRef} className="flex flex-col">
-                                <table
-                                    aria-label={`Contents of ${folder?.name ?? 'folder'}`}
-                                    aria-multiselectable="true"
-                                    className="w-full table-fixed border-collapse"
-                                >
-                                    <thead>
-                                        <tr className="border-b border-rule">
-                                            <th
-                                                scope="col"
-                                                aria-sort={ariaSort(order, 'name')}
-                                                className="eyebrow py-2.5 pl-5 text-left text-muted-foreground sm:pl-8"
-                                            >
-                                                <span className="flex items-center gap-3">
-                                                    {rows.length > 0 && (
-                                                        <SelectMark
-                                                            checked={allSelected}
-                                                            indeterminate={
-                                                                selecting && !allSelected
-                                                            }
-                                                            name={allSelected ? 'none' : 'all'}
-                                                            className="relative h-[30px] w-[30px] shrink-0"
-                                                            onToggle={() =>
-                                                                setSelected(
-                                                                    allSelected
-                                                                        ? new Set()
-                                                                        : new Set(
-                                                                              rows.map(
-                                                                                  (row) => row.id,
-                                                                              ),
-                                                                          ),
-                                                                )
-                                                            }
-                                                        />
-                                                    )}
-                                                    <SortHeader
-                                                        label="Name"
-                                                        sortKey="name"
-                                                        order={order}
-                                                        onOrder={setOrder}
-                                                    />
-                                                </span>
-                                            </th>
-                                            <th
-                                                scope="col"
-                                                aria-sort={ariaSort(order, 'modified')}
-                                                className="eyebrow hidden w-40 py-2.5 text-left text-muted-foreground sm:table-cell"
-                                            >
-                                                <SortHeader
-                                                    label="Modified"
-                                                    sortKey="modified"
-                                                    order={order}
-                                                    onOrder={setOrder}
+                            <table
+                                aria-label={`Contents of ${title || 'folder'}`}
+                                aria-multiselectable="true"
+                                className="w-full table-fixed border-collapse"
+                            >
+                                <thead>
+                                    <tr className="h-10 border-b border-rule">
+                                        <th
+                                            scope="col"
+                                            aria-sort={ariaSort(order, 'name')}
+                                            className="pl-5 text-left sm:pl-8"
+                                        >
+                                            <span className="flex items-center gap-4">
+                                                <span className="w-10 shrink-0" />
+                                                <SortButton
+                                                    label="Name"
+                                                    {...sortProps(order, 'name', setOrder)}
                                                 />
-                                            </th>
+                                            </span>
+                                        </th>
+                                        {!shared && (
                                             <th
                                                 scope="col"
-                                                aria-sort={ariaSort(order, 'size')}
-                                                className="eyebrow w-28 py-2.5 pr-5 text-right text-muted-foreground sm:pr-8"
+                                                className="hidden w-[22%] text-left text-xs font-semibold text-muted-foreground lg:table-cell"
                                             >
-                                                <SortHeader
-                                                    label="Size"
-                                                    sortKey="size"
-                                                    order={order}
-                                                    onOrder={setOrder}
-                                                    align="end"
-                                                />
+                                                Who can open
                                             </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {rows.map((node) => {
-                                            const isSelected = selected.has(node.id);
-                                            const size = nodeSize(node);
-                                            return (
-                                                <ContextMenu key={node.id}>
-                                                    <ContextMenuTrigger
-                                                        render={
-                                                            <tr
-                                                                aria-selected={isSelected}
-                                                                data-node-id={node.id}
-                                                                onDoubleClick={() => open(node)}
-                                                                onContextMenu={(event) => {
-                                                                    event.stopPropagation();
-                                                                    if (!isSelected) select(node);
-                                                                }}
-                                                            />
-                                                        }
-                                                        className={`h-[46px] cursor-default border-b border-rule select-none ${isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'} ${focused === node.id && !isSelected ? 'ring-1 ring-ring ring-inset' : ''} ${dropOver === node.id ? 'bg-primary/15 ring-2 ring-primary ring-inset' : ''}`}
-                                                    >
-                                                        <td className="min-w-0 p-0">
-                                                            {/* Only as wide as the name: the blank rest of the cell is row, where a second click lets go. */}
-                                                            <span className="inline-flex max-w-full min-w-0 items-center">
-                                                                <button
-                                                                    type="button"
-                                                                    className="inline-flex max-w-full min-w-0 items-center gap-3 py-2 pl-5 text-left text-sm font-medium outline-none sm:pl-8"
-                                                                    onClick={(event) =>
-                                                                        select(node, event)
-                                                                    }
-                                                                >
-                                                                    <SelectMark
-                                                                        checked={isSelected}
-                                                                        selecting={selecting}
-                                                                        name={node.name}
-                                                                        className="relative h-[30px] w-[30px] shrink-0"
-                                                                        face={
-                                                                            <FileMark node={node} />
-                                                                        }
-                                                                        onToggle={() =>
-                                                                            toggle(node)
-                                                                        }
-                                                                        onPick={(event) =>
-                                                                            select(node, event)
-                                                                        }
-                                                                    />
-                                                                    <NodeName
-                                                                        node={node}
-                                                                        rootId={rootId}
-                                                                        folderId={folderId}
-                                                                        onOpen={() => {
-                                                                            if (
-                                                                                node.kind === 'file'
-                                                                            )
-                                                                                pushedPreview.current = true;
-                                                                        }}
-                                                                    />
-                                                                </button>
-                                                                <TagStamps
-                                                                    tagIds={
-                                                                        registry
-                                                                            ? tagsOf(
-                                                                                  registry,
-                                                                                  node.id,
-                                                                              )
-                                                                            : []
-                                                                    }
-                                                                    registry={registry}
-                                                                    itemName={node.name}
-                                                                    onEdit={
-                                                                        node.workspaceId ===
-                                                                        workspaceId
-                                                                            ? () =>
-                                                                                  setTagging([node])
-                                                                            : undefined
-                                                                    }
-                                                                    max={2}
-                                                                    className="ml-4"
-                                                                />
-                                                            </span>
-                                                        </td>
-                                                        <td className="hidden py-2 text-sm text-muted-foreground tabular-nums sm:table-cell">
-                                                            {formatWhen(
-                                                                node.metadata?.modified ??
-                                                                    node.updatedAt,
-                                                            )}
-                                                        </td>
-                                                        <td className="py-2 pr-5 text-right text-sm text-muted-foreground tabular-nums sm:pr-8">
-                                                            {node.kind === 'folder'
-                                                                ? '-'
-                                                                : unavailable(node)
-                                                                  ? 'Unavailable'
-                                                                  : formatBytes(size)}
-                                                        </td>
-                                                    </ContextMenuTrigger>
-                                                    <NodeMenu
-                                                        node={node}
-                                                        targets={
-                                                            isSelected && selection.length > 1
-                                                                ? selection
-                                                                : [node]
-                                                        }
-                                                        onOpen={open}
-                                                        onDownload={download}
-                                                        onRename={setRenaming}
-                                                        onMove={setMoving}
-                                                        onCopy={setCopying}
-                                                        onVersions={setVersionsOf}
-                                                        onInfo={showInfo}
-                                                        onTags={
-                                                            node.workspaceId === workspaceId
-                                                                ? (nodes) => setTagging(nodes)
-                                                                : null
-                                                        }
-                                                        onShare={
-                                                            node.workspaceId === workspaceId
-                                                                ? setSharing
-                                                                : null
-                                                        }
-                                                        onSaveCopy={
-                                                            node.workspaceId === workspaceId
-                                                                ? null
-                                                                : (nodes) =>
-                                                                      void saveToMyDrive(nodes)
-                                                        }
-                                                        onReport={
-                                                            node.workspaceId === workspaceId
-                                                                ? null
-                                                                : setReporting
-                                                        }
-                                                        onTrash={(nodes) => void trash(nodes)}
-                                                    />
-                                                </ContextMenu>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                        {listing.data && rows.length > 0 && view === 'grid' && (
-                            <div ref={listRef} className="flex flex-col">
-                                <div
-                                    aria-label={`Contents of ${folder?.name ?? 'folder'}`}
-                                    className="grid grid-cols-2 gap-2 px-3.5 py-4 sm:grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] sm:px-6.5"
-                                >
+                                        )}
+                                        <th
+                                            scope="col"
+                                            aria-sort={ariaSort(order, 'modified')}
+                                            className="hidden w-40 text-left sm:table-cell"
+                                        >
+                                            <SortButton
+                                                label="Changed"
+                                                {...sortProps(order, 'modified', setOrder)}
+                                            />
+                                        </th>
+                                        <th
+                                            scope="col"
+                                            aria-sort={ariaSort(order, 'size')}
+                                            className="w-24 pr-2 text-right sm:w-28"
+                                        >
+                                            <SortButton
+                                                label="Size"
+                                                align="end"
+                                                {...sortProps(order, 'size', setOrder)}
+                                            />
+                                        </th>
+                                        <th scope="col" className="w-14 pr-3 sm:w-16 sm:pr-5">
+                                            <span className="sr-only">More</span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
                                     {rows.map((node) => {
                                         const isSelected = selected.has(node.id);
-                                        const size = nodeSize(node);
+                                        const entries = entriesFor(node);
                                         return (
                                             <ContextMenu key={node.id}>
                                                 <ContextMenuTrigger
                                                     render={
-                                                        <div
+                                                        <tr
+                                                            aria-selected={isSelected}
                                                             data-node-id={node.id}
-                                                            data-selected={isSelected || undefined}
+                                                            onDoubleClick={() => open(node)}
                                                             onContextMenu={(event) => {
                                                                 event.stopPropagation();
-                                                                if (!isSelected) select(node);
+                                                                if (!isSelected) select(node.id);
                                                             }}
                                                         />
                                                     }
-                                                    className={`flex cursor-default flex-col rounded-md p-1.5 select-none ${isSelected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'} ${focused === node.id && !isSelected ? 'ring-1 ring-ring' : ''} ${dropOver === node.id ? 'bg-primary/15 ring-2 ring-primary' : ''}`}
+                                                    className={cn(
+                                                        'group/row h-14 cursor-default border-b border-rule select-none',
+                                                        dropOver === node.id
+                                                            ? 'bg-accent ring-2 ring-primary ring-inset'
+                                                            : isSelected
+                                                              ? 'bg-accent'
+                                                              : 'hover:bg-muted',
+                                                        focused === node.id &&
+                                                            !isSelected &&
+                                                            'ring-1 ring-ring ring-inset',
+                                                    )}
                                                 >
-                                                    <button
-                                                        type="button"
-                                                        aria-label={node.name}
-                                                        aria-pressed={isSelected}
-                                                        className="flex w-full min-w-0 flex-col text-left outline-none"
-                                                        onClick={(event) => select(node, event)}
-                                                        onDoubleClick={() => open(node)}
-                                                    >
-                                                        <div className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-xs">
-                                                            <NodeFace node={node} />
-                                                            {selecting && (
-                                                                <SelectMark
-                                                                    checked={isSelected}
+                                                    <td className="min-w-0 p-0">
+                                                        {/* Only as wide as the name: the blank rest of the cell is row, where a second click lets go. */}
+                                                        <span className="inline-flex max-w-full min-w-0 items-center gap-4">
+                                                            {/* The padding, the thumbnail and the name are one target that selects; only the name's text opens. */}
+                                                            <button
+                                                                type="button"
+                                                                className="inline-flex min-w-0 cursor-default items-center gap-4 py-2 pl-5 text-left text-[15px] font-medium outline-none sm:pl-8"
+                                                                onClick={(event) =>
+                                                                    select(node.id, event)
+                                                                }
+                                                            >
+                                                                <SelectableMark
                                                                     name={node.name}
-                                                                    className="absolute top-1.5 left-1.5 size-8 rounded-xs bg-popover shadow-overlay"
-                                                                    onToggle={() => toggle(node)}
-                                                                />
-                                                            )}
-                                                        </div>
-                                                        <div className="min-w-0 px-1 pt-2 pb-1">
-                                                            <p className="truncate text-sm font-medium">
+                                                                    checked={isSelected}
+                                                                    revealed={coarse && selecting}
+                                                                    onToggle={() => toggle(node.id)}
+                                                                >
+                                                                    <FileMark
+                                                                        node={node}
+                                                                        size="list"
+                                                                    />
+                                                                </SelectableMark>
                                                                 <NodeName
                                                                     node={node}
                                                                     rootId={rootId}
                                                                     folderId={folderId}
-                                                                    onOpen={() => {
-                                                                        if (node.kind === 'file')
-                                                                            pushedPreview.current = true;
-                                                                    }}
+                                                                    onOpen={markOpened(node)}
                                                                 />
-                                                            </p>
-                                                            <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
-                                                                {node.kind === 'folder'
-                                                                    ? 'Folder'
-                                                                    : unavailable(node)
-                                                                      ? 'Unavailable'
-                                                                      : formatBytes(size)}
-                                                            </p>
-                                                        </div>
-                                                    </button>
+                                                            </button>
+                                                            <TagStamps
+                                                                tagIds={tagIds(node)}
+                                                                registry={registry}
+                                                                itemName={node.name}
+                                                                onEdit={
+                                                                    node.workspaceId === workspaceId
+                                                                        ? () => setTagging([node])
+                                                                        : undefined
+                                                                }
+                                                                max={2}
+                                                            />
+                                                        </span>
+                                                    </td>
+                                                    {!shared && (
+                                                        <td className="hidden min-w-0 pr-4 lg:table-cell">
+                                                            <AccessCell
+                                                                access={access.get(node.id)}
+                                                                inherited={inheritedFrom !== null}
+                                                            />
+                                                        </td>
+                                                    )}
+                                                    <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
+                                                        {formatWhen(
+                                                            node.metadata?.modified ??
+                                                                node.updatedAt,
+                                                        )}
+                                                    </td>
+                                                    <td className="pr-2 text-right text-[13px] text-muted-foreground tabular-nums">
+                                                        <SizeText node={node} folderWord="–" />
+                                                    </td>
+                                                    <td className="pr-3 text-right sm:pr-5">
+                                                        <NodeMoreMenu
+                                                            name={node.name}
+                                                            entries={entries}
+                                                        />
+                                                    </td>
                                                 </ContextMenuTrigger>
-                                                <NodeMenu
-                                                    node={node}
-                                                    targets={
-                                                        isSelected && selection.length > 1
-                                                            ? selection
-                                                            : [node]
-                                                    }
-                                                    onOpen={open}
-                                                    onDownload={download}
-                                                    onRename={setRenaming}
-                                                    onMove={setMoving}
-                                                    onCopy={setCopying}
-                                                    onVersions={setVersionsOf}
-                                                    onInfo={showInfo}
-                                                    onTags={
-                                                        node.workspaceId === workspaceId
-                                                            ? (nodes) => setTagging(nodes)
-                                                            : null
-                                                    }
-                                                    onShare={
-                                                        node.workspaceId === workspaceId
-                                                            ? setSharing
-                                                            : null
-                                                    }
-                                                    onSaveCopy={
-                                                        node.workspaceId === workspaceId
-                                                            ? null
-                                                            : (nodes) => void saveToMyDrive(nodes)
-                                                    }
-                                                    onReport={
-                                                        node.workspaceId === workspaceId
-                                                            ? null
-                                                            : setReporting
-                                                    }
-                                                    onTrash={(nodes) => void trash(nodes)}
-                                                />
+                                                <NodeContextMenu entries={entries} />
                                             </ContextMenu>
                                         );
                                     })}
-                                </div>
+                                </tbody>
+                            </table>
+                        )}
+                        {listing.data && rows.length > 0 && view === 'grid' && (
+                            <div
+                                aria-label={`Contents of ${title || 'folder'}`}
+                                className="grid grid-cols-2 content-start gap-2 px-3 pt-1 pb-6 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] sm:gap-3 sm:px-6"
+                            >
+                                {rows.map((node) => {
+                                    const isSelected = selected.has(node.id);
+                                    const entries = entriesFor(node);
+                                    return (
+                                        <ContextMenu key={node.id}>
+                                            <ContextMenuTrigger
+                                                render={
+                                                    <div
+                                                        data-node-id={node.id}
+                                                        data-selected={isSelected || undefined}
+                                                        onContextMenu={(event) => {
+                                                            event.stopPropagation();
+                                                            if (!isSelected) select(node.id);
+                                                        }}
+                                                    />
+                                                }
+                                                className={cn(
+                                                    'group/row relative flex cursor-default flex-col gap-2 rounded-xl p-2 select-none',
+                                                    dropOver === node.id || isSelected
+                                                        ? 'bg-accent ring-2 ring-primary ring-inset'
+                                                        : 'hover:bg-muted',
+                                                    focused === node.id &&
+                                                        !isSelected &&
+                                                        'ring-1 ring-ring ring-inset',
+                                                )}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    aria-label={node.name}
+                                                    aria-pressed={isSelected}
+                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-none"
+                                                    onClick={(event) => select(node.id, event)}
+                                                    onDoubleClick={() => open(node)}
+                                                >
+                                                    <span className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted">
+                                                        <NodeFace node={node} />
+                                                    </span>
+                                                    <span className="flex min-w-0 flex-col gap-0.5 px-1 pb-0.5">
+                                                        <span className="truncate text-sm font-medium">
+                                                            <NodeName
+                                                                node={node}
+                                                                rootId={rootId}
+                                                                folderId={folderId}
+                                                                onOpen={markOpened(node)}
+                                                            />
+                                                        </span>
+                                                        <span className="truncate text-xs text-muted-foreground tabular-nums">
+                                                            <SizeText
+                                                                node={node}
+                                                                folderWord="Folder"
+                                                            />
+                                                        </span>
+                                                    </span>
+                                                </button>
+                                                <CornerCheck
+                                                    name={node.name}
+                                                    checked={isSelected}
+                                                    revealed={coarse && selecting}
+                                                    onToggle={() => toggle(node.id)}
+                                                    className="top-3.5 left-3.5 size-5 shadow-md"
+                                                    iconClassName="size-3"
+                                                />
+                                            </ContextMenuTrigger>
+                                            <NodeContextMenu entries={entries} />
+                                        </ContextMenu>
+                                    );
+                                })}
                             </div>
                         )}
                     </ContextMenuTrigger>
                     <ContextMenuContent>
-                        <ContextMenuItem onClick={() => setCreating(true)}>
-                            New folder
-                            <ContextMenuShortcut>{keyLabel('Shift')}N</ContextMenuShortcut>
-                        </ContextMenuItem>
-                        <ContextMenuItem onClick={() => picker.current?.pickFiles()}>
-                            Upload files
-                        </ContextMenuItem>
-                        <ContextMenuItem onClick={() => picker.current?.pickFolder()}>
-                            Upload folder
-                        </ContextMenuItem>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem
-                            disabled={!rows.length}
-                            onClick={() => setSelected(new Set(rows.map((row) => row.id)))}
-                        >
+                        {!shared && (
+                            <>
+                                <ContextMenuItem onClick={() => setCreating(true)}>
+                                    <FolderPlusIcon aria-hidden="true" />
+                                    New folder
+                                    <ContextMenuShortcut>{keyLabel('Shift')}N</ContextMenuShortcut>
+                                </ContextMenuItem>
+                                <ContextMenuItem onClick={() => picker.current?.pickFiles()}>
+                                    <FileUpIcon aria-hidden="true" />
+                                    Upload files
+                                </ContextMenuItem>
+                                <ContextMenuItem onClick={() => picker.current?.pickFolder()}>
+                                    <FolderUpIcon aria-hidden="true" />
+                                    Upload folder
+                                </ContextMenuItem>
+                                <ContextMenuSeparator />
+                            </>
+                        )}
+                        <ContextMenuItem disabled={!rows.length} onClick={selectAll}>
+                            <ListChecksIcon aria-hidden="true" />
                             Select all
                             <ContextMenuShortcut>{keyLabel('Mod')}A</ContextMenuShortcut>
                         </ContextMenuItem>
@@ -1647,23 +1175,45 @@ export function FolderView({ folderId }: { folderId: string }) {
                 {wide && detailsOpen && (
                     <DetailsPanel
                         node={single}
-                        location={crumbs.map((crumb) => crumb.name).join(' / ')}
+                        location={crumbs.map(crumbName).join(' / ')}
                         onTags={
                             single?.workspaceId === workspaceId
                                 ? (node) => setTagging([node])
                                 : undefined
                         }
                         onShare={single?.workspaceId === workspaceId ? setSharing : undefined}
+                        inherited={inheritedFrom !== null}
                         onClose={() => setDetailsOpen(false)}
                     />
                 )}
             </div>
 
+            {selecting && (
+                <NodeSelectionBar
+                    selection={selection}
+                    own={ownSelection}
+                    allSelected={allSelected}
+                    trashing={trashing}
+                    infoOpen={wide && detailsOpen}
+                    onShare={setSharing}
+                    onDownload={() => download(selection)}
+                    onMove={() => setMoving(selection)}
+                    onCopy={() => setCopying(selection)}
+                    onRename={setRenaming}
+                    onTags={() => setTagging(selection)}
+                    onTrash={() => void trash(selection)}
+                    onVersions={setVersionsOf}
+                    onInfo={toggleInfo}
+                    onSelectAll={selectAll}
+                    onClear={clear}
+                />
+            )}
             {folder && (
                 <CreateFolderDialog parent={folder} open={creating} onOpenChange={setCreating} />
             )}
             <RenameDialog
                 node={renaming}
+                siblings={rows}
                 open={renaming !== null}
                 onOpenChange={(open) => !open && setRenaming(null)}
             />
@@ -1687,7 +1237,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             />
             <InfoDialog
                 node={infoOf}
-                location={crumbs.map((crumb) => crumb.name).join(' / ')}
+                location={crumbs.map(crumbName).join(' / ')}
                 onShare={
                     infoOf && infoOf.workspaceId === workspaceId
                         ? (node) => {
@@ -1704,6 +1254,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                           }
                         : undefined
                 }
+                inherited={inheritedFrom !== null}
                 open={infoOf !== null}
                 onOpenChange={(open) => !open && setInfoOf(null)}
             />
@@ -1729,9 +1280,170 @@ export function FolderView({ folderId }: { folderId: string }) {
                 current={previewing}
                 onChange={(node) => showPreview(node, node !== null)}
                 onDownload={(node) => download([node])}
+                onShare={folder?.workspaceId === workspaceId ? setSharing : undefined}
+                access={
+                    shared
+                        ? undefined
+                        : (node) => (
+                              <AccessCell
+                                  access={access.get(node.id)}
+                                  inherited={inheritedFrom !== null}
+                              />
+                          )
+                }
             />
             <HotkeyHints />
         </div>
+    );
+}
+
+/*
+ * What is being dragged and what the drop will do, beside the pointer: the first
+ * item's thumbnail on a small pile when there are several, then "Move to …" over a
+ * folder or a crumb, or "Copy to …" while Alt (⌥) is held.
+ */
+function DragCard({
+    x,
+    y,
+    nodes,
+    copy,
+    target,
+}: {
+    x: number;
+    y: number;
+    nodes: DriveNode[];
+    copy: boolean;
+    target: string | null;
+}) {
+    const first = nodes[0]!;
+    const verb = copy ? 'Copy' : 'Move';
+    return (
+        <div
+            aria-hidden="true"
+            className="pointer-events-none fixed z-[60] flex max-w-80 items-center gap-3 rounded-xl border border-edge bg-popover py-2 pr-4 pl-2 shadow-xl"
+            style={{ left: x + 14, top: y + 10 }}
+        >
+            <span className="relative shrink-0">
+                {nodes.length > 1 && (
+                    <span className="absolute -top-1 -right-1 size-9 rotate-6 rounded-md bg-ink/10" />
+                )}
+                <FileMark node={first} size="list" className="relative" />
+            </span>
+            <span className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate text-sm font-semibold">
+                    {nodes.length === 1 ? first.name : `${nodes.length} items`}
+                </span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    {copy && <CopyIcon className="size-3 shrink-0" aria-hidden="true" />}
+                    <span className="truncate">
+                        {target ? `${verb} to “${target}”` : 'Drop on a folder'}
+                        {!copy && ` · hold ${keyLabel('Alt')} to copy`}
+                    </span>
+                </span>
+            </span>
+        </div>
+    );
+}
+
+/*
+ * The folder path is the page title: folders above are links, the folder you are in
+ * is the heading. One row at every depth, so nothing moves as you go in and out of
+ * folders. A deep path folds its middle into "…". Crumbs take dropped rows, and every
+ * folder in the path but the top one can be dragged onto a crumb further up.
+ */
+function FolderPath({
+    crumbs,
+    title,
+    shared,
+    rootId,
+    workspaceId,
+    dropOver,
+    crumbName,
+}: {
+    crumbs: DriveNode[];
+    title: string;
+    shared: boolean;
+    rootId: string;
+    workspaceId: string;
+    dropOver: string | null;
+    crumbName: (crumb: DriveNode) => string;
+}) {
+    const above = crumbs.slice(0, -1);
+    const current = crumbs.at(-1);
+    const folded = above.length > 3 ? above.slice(1, -2) : [];
+    const shown = above.length > 3 ? [above[0]!, null, ...above.slice(-2)] : above;
+    const draggableCrumb = (crumb: DriveNode, index: number) =>
+        index > 0 && crumb.workspaceId === workspaceId ? crumb.id : undefined;
+    const crumbClass =
+        '-mx-1.5 shrink-0 rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
+    return (
+        <nav aria-label="Folder path" className="flex h-11 min-w-0 items-center gap-1">
+            {shared && (
+                <>
+                    <Link to="/app/shared" className={crumbClass}>
+                        Shared with me
+                    </Link>
+                    <ChevronRightIcon
+                        className="size-5 shrink-0 text-muted-foreground"
+                        strokeWidth={2.2}
+                        aria-hidden="true"
+                    />
+                </>
+            )}
+            {shown.map((crumb) => (
+                <span key={crumb?.id ?? 'fold'} className="flex shrink-0 items-center gap-1">
+                    {crumb ? (
+                        <Link
+                            {...folderLink(rootId, crumb.id)}
+                            data-crumb-id={crumb.id}
+                            data-crumb-drag={draggableCrumb(crumb, crumbs.indexOf(crumb))}
+                            className={cn(
+                                crumbClass,
+                                dropOver === crumb.id &&
+                                    'bg-accent text-accent-foreground outline-2 outline-primary',
+                            )}
+                        >
+                            {crumbName(crumb)}
+                        </Link>
+                    ) : (
+                        <DropdownMenu>
+                            <DropdownMenuTrigger
+                                aria-label="More folders"
+                                className={cn(crumbClass, 'cursor-pointer')}
+                            >
+                                …
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="min-w-48">
+                                {folded.map((hidden) => (
+                                    <DropdownMenuItem
+                                        key={hidden.id}
+                                        render={<Link {...folderLink(rootId, hidden.id)} />}
+                                    >
+                                        {hidden.name}
+                                    </DropdownMenuItem>
+                                ))}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    )}
+                    <ChevronRightIcon
+                        className="size-5 text-muted-foreground"
+                        strokeWidth={2.2}
+                        aria-hidden="true"
+                    />
+                </span>
+            ))}
+            <h1
+                aria-current="page"
+                data-crumb-drag={
+                    current && crumbs.length > 1 && current.workspaceId === workspaceId
+                        ? current.id
+                        : undefined
+                }
+                className="min-w-0 truncate text-xl leading-tight font-extrabold tracking-[-0.03em] sm:text-[28px]"
+            >
+                {title || '…'}
+            </h1>
+        </nav>
     );
 }
 
@@ -1791,37 +1503,15 @@ function ariaSort(order: SortOrder, key: SortKey) {
     return order.ascending ? ('ascending' as const) : ('descending' as const);
 }
 
-/* A column label that sorts by it; a second click flips the direction. Newest and largest come first on the first click. */
-function SortHeader({
-    label,
-    sortKey,
-    order,
-    onOrder,
-    align = 'start',
-}: {
-    label: string;
-    sortKey: SortKey;
-    order: SortOrder;
-    onOrder: (order: SortOrder) => void;
-    align?: 'start' | 'end';
-}) {
-    const active = order.key === sortKey;
-    const Arrow = order.ascending ? ArrowUpIcon : ArrowDownIcon;
-    return (
-        <button
-            type="button"
-            onClick={() =>
-                onOrder(
-                    active
-                        ? { key: sortKey, ascending: !order.ascending }
-                        : { key: sortKey, ascending: sortKey === 'name' },
-                )
-            }
-            className={`eyebrow inline-flex items-center gap-1 hover:text-foreground ${active ? 'text-foreground' : ''} ${align === 'end' ? 'flex-row-reverse' : ''}`}
-            aria-label={`Sort by ${label.toLowerCase()}`}
-        >
-            {label}
-            {active && <Arrow className="size-3" aria-hidden="true" />}
-        </button>
-    );
+/* A column's sort state; a second click flips the direction. Newest and largest come first on the first click. */
+function sortProps(order: SortOrder, key: SortKey, onOrder: (order: SortOrder) => void) {
+    const active = order.key === key;
+    return {
+        active,
+        ascending: order.ascending,
+        onClick: () =>
+            onOrder(
+                active ? { key, ascending: !order.ascending } : { key, ascending: key === 'name' },
+            ),
+    };
 }

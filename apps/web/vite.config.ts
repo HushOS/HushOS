@@ -4,6 +4,7 @@ import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
 import { nitro } from 'nitro/vite';
 import rehypeSlug from 'rehype-slug';
+import { rehypeHeadings } from './mdx-headings';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
@@ -80,7 +81,7 @@ export default defineConfig({
                     remarkFrontmatter,
                     [remarkMdxFrontmatter, { name: 'frontmatter' }],
                 ],
-                rehypePlugins: [rehypeSlug],
+                rehypePlugins: [rehypeSlug, rehypeHeadings],
                 providerImportSource: '@mdx-js/react',
             }),
         },

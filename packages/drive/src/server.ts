@@ -1838,7 +1838,7 @@ export async function fileReport(
 /* The operator's side. Every function takes an operator the caller has already checked. */
 
 export async function listReports(filter: {
-    status?: 'open' | 'dismissed' | 'removed' | 'filed' | 'all';
+    status?: 'open' | 'dismissed' | 'removed' | 'filed' | 'all' | 'held';
     category?: ReportCategory;
 }) {
     const [reports, counts] = await Promise.all([

@@ -238,6 +238,7 @@ describe('rotation', () => {
         ).toEqual([{ id: project.id, status: 'stale' }]);
 
         // The root, with its share re-sealed; the previous envelope and grant stay.
+        const before = await current(project.id);
         const first = await rotations.rotateNodes({
             ...ws,
             nodes: [
@@ -249,6 +250,9 @@ describe('rotation', () => {
         expect(first).toEqual([{ id: project.id, status: 'ok' }]);
         const afterRoot = await current(project.id);
         expect(afterRoot.keyEpoch).toBe(targetEpoch);
+        // Devices see the change, but nobody changed the folder: its updated time stands.
+        expect(afterRoot.changeSeq!).toBeGreaterThan(project.changeSeq!);
+        expect(afterRoot.updatedAt.getTime()).toBe(before.updatedAt.getTime());
         expect(afterRoot.prevKeyEnvelope?.equals(project.keyEnvelope!)).toBe(true);
         expect(afterRoot.prevKeyEpoch).toBe(project.keyEpoch);
         expect(afterRoot.prevParentKeyEpoch).toBe(rootEpoch);
@@ -443,6 +447,8 @@ describe('rotation', () => {
         expect(lateAfter.keyEpoch).toBe(late.keyEpoch);
         expect(lateAfter.parentKeyEpoch).toBe(ws.targetEpoch);
         expect(lateAfter.prevKeyEnvelope).toBeNull();
+        // A rewrap is not a change to the folder either.
+        expect(lateAfter.updatedAt.getTime()).toBe(lateNow.updatedAt.getTime());
         // Sending a full rotation for a rewrap, or a rewrap for a rotation, is refused.
         expect(
             (

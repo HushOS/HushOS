@@ -18,8 +18,7 @@ export const Route = createFileRoute('/register')({
         if (preload) return { user: null };
         const user = await ensureSessionUser(context.queryClient).catch(() => null);
         // The complete page holds a one-time link; it offers sign-out instead of bouncing.
-        if (user && location.pathname !== '/register/complete')
-            throw redirect({ to: '/app/drive' });
+        if (user && location.pathname !== '/register/complete') throw redirect({ to: '/app' });
         return { user };
     },
     head: () => ({

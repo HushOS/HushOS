@@ -1,4 +1,4 @@
-import sansLatin from '@fontsource-variable/atkinson-hyperlegible-next/files/atkinson-hyperlegible-next-latin-wght-normal.woff2?url';
+import sansLatin from '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url';
 import geistMonoLatin from '@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url';
 import { evlogErrorHandler } from '@hushos/logging/nitro';
 import type { QueryClient } from '@tanstack/react-query';
@@ -34,11 +34,11 @@ import { ThemeProvider, useTheme } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { billingHint } from '@/lib/billing';
+import { billingHint, freeQuotaHint } from '@/lib/billing';
 import { sessionHint } from '@/lib/session';
 import { operatorHint } from '@/lib/social';
 import { initSounds } from '@/lib/sounds';
-import { getThemeServerFn } from '@/lib/theme';
+import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import styles from '@/styles.css?url';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -50,11 +50,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     beforeLoad: async ({ context }) => ({
         hasSession: sessionHint(context.queryClient),
         billingEnabled: await billingHint(context.queryClient),
+        freeQuotaBytes: await freeQuotaHint(context.queryClient),
         operatorName: await operatorHint(context.queryClient),
     }),
     // Then the loader, so `head` knows its shape: the theme, and whether analytics may load here.
     loader: async ({ location }) => ({
         theme: await getThemeServerFn(),
+        contrast: await getContrastServerFn(),
         analytics: analyticsAllowed(location.pathname) ? await getAnalyticsServerFn() : null,
         release: await getReleaseServerFn(),
     }),
@@ -76,8 +78,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { name: 'apple-mobile-web-app-capable', content: 'yes' },
             { name: 'apple-mobile-web-app-title', content: 'HushOS' },
             { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
-            { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#e6e2d9' },
-            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#13151b' },
+            { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f3f4f8' },
+            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0e111a' },
             { name: 'msapplication-TileColor', content: '#2c428e' },
             { name: 'msapplication-config', content: '/browserconfig.xml' },
         ],
@@ -168,14 +170,14 @@ function StatusPage({
 function RootDocument({ children }: { children: ReactNode }) {
     const data = Route.useLoaderData();
     return (
-        <ThemeProvider theme={data?.theme ?? 'system'}>
+        <ThemeProvider theme={data?.theme ?? 'system'} contrast={data?.contrast ?? false}>
             <Document release={data?.release ?? null}>{children}</Document>
         </ThemeProvider>
     );
 }
 
 function Document({ children, release }: { children: ReactNode; release: string | null }) {
-    const { theme } = useTheme();
+    const { theme, contrast } = useTheme();
     const { pathname } = useLocation();
     useEffect(() => {
         setServedRelease(release);
@@ -198,7 +200,7 @@ function Document({ children, release }: { children: ReactNode; release: string 
         if (moved && !pathname.startsWith('/app')) void checkRelease();
     }, [pathname, stale]);
     return (
-        <html lang="en" className={theme}>
+        <html lang="en" className={contrast ? `${theme} hc` : theme}>
             <head>
                 <HeadContent />
             </head>

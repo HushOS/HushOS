@@ -9,7 +9,7 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
     return (
         <SelectPrimitive.Group
             data-slot="select-group"
-            className={cn('scroll-my-1 p-1', className)}
+            className={cn('flex scroll-my-1.5 flex-col gap-0.5 p-1.5', className)}
             {...props}
         />
     );
@@ -103,7 +103,7 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
         <SelectPrimitive.Item
             data-slot="select-item"
             className={cn(
-                'relative flex w-full cursor-pointer items-center gap-2 rounded-xs py-2 pr-8 pl-3 font-sans text-sm outline-hidden select-none data-highlighted:bg-muted data-selected:bg-accent data-selected:font-semibold data-selected:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-3.5',
+                'relative flex w-full cursor-pointer items-center gap-2 rounded-md py-2 pr-8 pl-3 font-sans text-sm outline-hidden select-none data-highlighted:bg-muted data-selected:bg-accent data-selected:font-semibold data-selected:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-3.5',
                 className,
             )}
             {...props}
@@ -126,7 +126,7 @@ function SelectSeparator({ className, ...props }: SelectPrimitive.Separator.Prop
     return (
         <SelectPrimitive.Separator
             data-slot="select-separator"
-            className={cn('pointer-events-none -mx-1 my-1 h-px bg-rule', className)}
+            className={cn('pointer-events-none -mx-1.5 my-0.5 h-px bg-rule', className)}
             {...props}
         />
     );

@@ -41,10 +41,18 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     private val authority: String get() = "${context!!.packageName}.documents"
 
+    /*
+     * The vault for the session signed in now. A sign-out, another account signing in, or a
+     * new session after a password change or a key reset drops the one held here, so the
+     * Files app never answers from an account (or a token) that is gone.
+     */
     private fun requireVault(): Vault {
-        vault?.let { return it }
         val ctx = context ?: throw FileNotFoundException("no context")
-        val created = Vault.fromShared(ctx) ?: throw authenticationRequired()
+        val session = Shared.session(ctx)
+        vault?.let { if (session != null && it.api.session == session) return it }
+        vault = null
+        session ?: throw authenticationRequired()
+        val created = Vault(ctx, com.hushos.app.data.DriveApi(session))
         vault = created
         // The tree on the phone first: listings answer from it, and without a network they still answer.
         runCatching { created.buildCatalogue() }
@@ -88,7 +96,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             .add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_CREATE or Root.FLAG_SUPPORTS_IS_CHILD or Root.FLAG_SUPPORTS_RECENTS)
             .add(Root.COLUMN_ICON, ctx.applicationInfo.icon)
             .add(Root.COLUMN_TITLE, "HushOS")
-            .add(Root.COLUMN_SUMMARY, Shared.session(ctx)?.let { "Encrypted drive" } ?: "Sign in to HushOS")
+            // The account it opens, as the board has it; signed out, the way in.
+            .add(Root.COLUMN_SUMMARY, Shared.session(ctx)?.let { it.email.ifEmpty { null } } ?: if (Shared.session(ctx) == null) "Sign in to HushOS" else null)
             .add(Root.COLUMN_DOCUMENT_ID, "root")
         return cursor
     }

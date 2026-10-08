@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.hushos.core.Content
+import com.hushos.core.linkReseal
 import com.hushos.core.MetadataContext
 import com.hushos.core.NodeKeyContext
 import com.hushos.core.NodeMetadata
@@ -54,17 +55,55 @@ import java.time.Instant
 import java.util.UUID
 
 /* A node with its metadata opened: what every list, row and provider cursor is built from. */
-data class Opened(val node: NodeView, val metadata: NodeMetadata) {
+data class Opened(
+    val node: NodeView, val metadata: NodeMetadata,
+    /* The current version's size as sealed in its own envelope: true after a restore, when the metadata still describes the newer upload. */
+    val contentSize: Long? = null,
+) {
     val id get() = node.id
     val name get() = metadata.name
     val isFolder get() = node.isFolder
-    val size: Long? get() = if (isFolder) null else metadata.size?.toLong() ?: node.currentVersion?.plaintextSize?.toLongOrNull()
-    val modifiedMillis: Long? get() = (metadata.modified ?: node.updatedAt)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+    val size: Long? get() = if (isFolder) null else contentSize ?: metadata.size?.toLong() ?: node.currentVersion?.plaintextSize?.toLongOrNull()
+    /*
+     * When it changed: the file's own date from its metadata, unless the metadata describes
+     * another version than the current one (an earlier version was restored), when the
+     * node's last change (the restore) is the honest answer.
+     */
+    val modifiedMillis: Long? get() {
+        val stale = contentSize != null && metadata.size != null && metadata.size!!.toLong() != contentSize
+        val at = if (stale) node.updatedAt ?: metadata.modified else metadata.modified ?: node.updatedAt
+        return at?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+    }
     val hasThumbnail get() = !isFolder && node.currentVersion?.contentSuite == 2u
 }
 
-/* A trashed node opened, and whether its old folder is in the trash too. */
-data class TrashItem(val item: Opened, val parentTrashed: Boolean)
+/*
+ * Recent: newest first; things changed in the same moment by name, then id, as the web orders
+ * them, so the list never reshuffles between loads.
+ */
+val byRecent: Comparator<Opened> = compareByDescending<Opened> { it.modifiedMillis ?: 0L }
+    .thenBy(java.text.Collator.getInstance()) { it.name }
+    .thenBy { it.id }
+
+/*
+ * A row as every list, link and provider cursor shows it: the node, its metadata, and the
+ * current version's size from that version's own envelope. After a restore the metadata
+ * still describes the newer upload; the envelope is what the file is now.
+ */
+internal fun openedRow(node: NodeView, metadata: NodeMetadata, key: ByteArray) = Opened(node, metadata, sealedSize(node, key))
+
+/* The current version's size from its own envelope, or null when it doesn't open with this key. */
+internal fun sealedSize(node: NodeView, key: ByteArray): Long? {
+    val version = node.currentVersion ?: return null
+    if (node.isFolder) return null
+    return runCatching {
+        versionOpen(VersionContext(node.workspaceId, node.id, version.id, version.objectId), version.contentSuite, key,
+            base64urlDecode(version.contentKeyEnvelope), version.plaintextSize?.toULongOrNull()).plaintextSize.toLong()
+    }.getOrNull()
+}
+
+/* A trashed node opened, whether its old folder is in the trash too, and that folder's name ("Files" for the top). */
+data class TrashItem(val item: Opened, val parentTrashed: Boolean, val wasIn: String? = null)
 
 data class OpenedVersion(val content: Content, val versionId: String) {
     val layout get() = contentLayout(content.plaintextSize, content.thumbnailBytes)
@@ -131,9 +170,21 @@ class Vault(private val context: Context, val api: DriveApi) {
         } catch (error: Unreachable) {
             mirror.document(key)?.let { JSONObject(it) } ?: throw error
         }
-        val view = api.workspace(json)
+        var view = api.workspace(json)
         val grant = view.grant ?: throw ApiError(404, "No workspace grant")
-        workspaceKey = workspaceOpen(api.session.userId, unlockAccount(), grant.grant)
+        val wsKey = workspaceOpen(api.session.userId, unlockAccount(), grant.grant)
+        workspaceKey = wsKey
+        // Never opened on any device: the top folder is made here, once, for the app, the Files app and the queue alike.
+        if (view.root == null) {
+            val parentEpoch = grant.grant.workspaceKeyVersion
+            view = ensureRoot(view, parentEpoch, api, seal = { id, epoch, parentKeyEpoch ->
+                val key = randomBytes(32u)
+                val wrapped = nodeWrap(NodeKeyContext(view.workspaceId, id, view.workspaceId, parentKeyEpoch, epoch), wsKey, key)
+                val sealed = metadataSeal(MetadataContext(view.workspaceId, id, 1uL), key, NodeMetadata(ROOT_NAME, null, null, null))
+                base64urlEncode(wrapped) to base64urlEncode(sealed)
+            })
+            runCatching { mirror.putDocument(key, api.workspaceJson().toString()) }
+        }
         workspace = view
         return view
     }
@@ -184,6 +235,27 @@ class Vault(private val context: Context, val api: DriveApi) {
     }
 
     fun revokeLink(link: LinkView, item: Opened) = api.revokeLink(link.id, item.node.workspaceId)
+
+    /*
+     * Changes a link's password (`password`: null keeps it, "" removes it) and or its
+     * end date (`expiresAt`: null keeps it, Optional.empty() clears it). A new password
+     * reseals the same secret, so the address people already have keeps working.
+     */
+    fun updateLink(link: LinkView, item: Opened, password: String?, expiresAt: java.util.Optional<Instant>?): LinkView {
+        val body = JSONObject().put("workspaceId", item.node.workspaceId).put("keyEpoch", link.keyEpoch.toLong())
+        if (password != null) {
+            val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+            val sealed = link.secretEnvelope ?: throw ApiError(409, "This link can’t be changed. Turn it off and make a new one.")
+            val made = linkReseal(LinkContext(item.node.workspaceId, item.id, link.keyEpoch, link.id), nodeKey, base64urlDecode(sealed), password.ifEmpty { null })
+            body.put("seal", JSONObject().put("linkEnvelope", made.linkEnvelope).put("linkSalt", made.linkSalt)
+                .put("hasPassword", made.hasPassword).put("secretEnvelope", made.secretEnvelope))
+        }
+        if (expiresAt != null) body.put("expiresAt", expiresAt.map<Any> { it.toString() }.orElse(JSONObject.NULL))
+        return api.updateLink(link.id, body)
+    }
+
+    /* Deletes an earlier version of a file for good. */
+    fun discardVersion(item: Opened, version: VersionListView) = api.discardVersion(version.id, item.node.workspaceId)
 
     /* Files a report on an item shared with this account; the session names the reporter. */
     fun report(item: Opened, category: String, reason: String, email: String?): Boolean {
@@ -294,11 +366,11 @@ class Vault(private val context: Context, val api: DriveApi) {
      * per workspace, so the file is fetched and uploaded again, thumbnail and
      * all. Folders go node by node.
      */
-    fun copyAcross(id: String, parentId: String, progress: (Float) -> Unit = {}): Opened {
+    fun copyAcross(id: String, parentId: String, name: String? = null, progress: (Float) -> Unit = {}): Opened {
         val source = resolve(id)
         if (source.isFolder) {
-            val made = createFolder(parentId, source.name)
-            for (child in listChildren(source.id)) copyAcross(child.id, made.id, progress)
+            val made = createFolder(parentId, name ?: source.name)
+            for (child in listChildren(source.id)) copyAcross(child.id, made.id, null, progress)
             return made
         }
         val directory = File(context.cacheDir, "copy-" + UUID.randomUUID())
@@ -306,7 +378,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             val file = File(directory, source.name)
             download(source.id, file) { progress(it / 2f) }
             val thumb = runCatching { thumbnail(source.id) }.getOrNull()
-            return upload(file, source.name, source.metadata.mime, parentId, null, thumb) { progress(0.5f + it / 2f) }
+            return upload(file, name ?: source.name, source.metadata.mime, parentId, null, thumb) { progress(0.5f + it / 2f) }
         } finally {
             directory.deleteRecursively()
         }
@@ -326,8 +398,99 @@ class Vault(private val context: Context, val api: DriveApi) {
             links.map { (link, node) -> SharedByMe("link-" + link.id, openAnywhere(node), node, null, link) }
     }
 
-    /* Keeps a file: downloads its current version into the offline store and records it. */
-    fun keepDownloaded(item: Opened, progress: (Float) -> Unit = {}) {
+    /* Every file in a folder and its subfolders, not counting what is in the Trash. */
+    fun filesUnder(folderId: String): List<Opened> {
+        val out = ArrayList<Opened>()
+        val pending = ArrayDeque(listOf(folderId))
+        val seen = HashSet<String>()
+        while (pending.isNotEmpty()) {
+            val id = pending.removeFirst()
+            if (!seen.add(id)) continue
+            for (child in listChildren(id)) {
+                if (child.node.trashedAt != null) continue
+                if (child.isFolder) pending.add(child.id) else if (child.node.currentVersion != null) out.add(child)
+            }
+        }
+        return out
+    }
+
+    /*
+     * Opens a kept folder for its job, which runs without the app: one of this drive's
+     * through the tree; one kept out of a share through that share, walking down from its
+     * root. Null when the share is no longer received (its copies are then removed).
+     */
+    fun openKeptFolder(id: String, shareRoot: String?): Opened? {
+        if (shareRoot == null) return resolve(id)
+        val mounts = mountShares()
+        if (mounts.none { it.share.node.id == shareRoot }) return null
+        opened[id]?.let { return it }
+        val pending = ArrayDeque(listOf(shareRoot))
+        var steps = 0
+        while (pending.isNotEmpty() && steps++ < 2_000) {
+            for (child in listChildren(pending.removeFirst())) {
+                if (child.id == id) return child
+                if (child.isFolder) pending.add(child.id)
+            }
+        }
+        throw NotFound("This folder is no longer in the share.")
+    }
+
+    /*
+     * Keeps a folder: every file in it and its subfolders comes down (what is already here
+     * stays), and a file no longer in it (moved out, trashed, deleted) leaves the phone. A
+     * file that fails on its own (not the network) is recorded with a wait before its next
+     * try (KeepRules) and the rest of the folder is kept. Progress is by bytes, with how
+     * many files are done of how many. A folder gone from the drive takes its files with it.
+     */
+    fun keepFolder(folder: Opened, shareRoot: String? = null, progress: (fraction: Float, done: Int, total: Int) -> Unit = { _, _, _ -> }) {
+        if (folder.node.trashedAt != null) { Offline.forgetFolder(context, folder.id); return }
+        Offline.rememberFolder(context, folder, shareRoot)
+        val files = filesUnder(folder.id)
+        val bytes = files.sumOf { it.size ?: 0L }.coerceAtLeast(1L).toDouble()
+        var doneBytes = 0L
+        var doneFiles = 0
+        val failures = Offline.failures(context).associateBy { it.fileId }
+        val now = System.currentTimeMillis()
+        progress(0f, 0, files.size)
+        for (file in files) {
+            val size = file.size ?: 0L
+            val failure = failures[file.id]
+            // A file still waiting after a failure is left for later; it counts as done for the bar.
+            if (KeepRules.due(failure, now)) try {
+                keepDownloaded(file, via = folder.id) { f -> progress(((doneBytes + f * size) / bytes).toFloat().coerceIn(0f, 1f), doneFiles, files.size) }
+                if (failure != null) Offline.clearFailure(context, file.id)
+            } catch (error: Exception) {
+                if (KeepRules.failsTheJob(error)) throw error
+                android.util.Log.w("HushOSOffline", "keeping ${file.id} in ${folder.id} failed", error)
+                Offline.recordFailure(context, KeepRules.failed(failure, file.id, folder.id, file.name, error.message ?: "It didn’t download.", System.currentTimeMillis()))
+            }
+            doneBytes += size
+            doneFiles++
+            progress((doneBytes / bytes).toFloat().coerceIn(0f, 1f), doneFiles, files.size)
+        }
+        val ids = files.map { it.id }.toSet()
+        for (entry in Offline.entries(context).filter { it.via == folder.id && it.id !in ids }) Offline.forget(context, entry.id)
+        for (gone in Offline.failures(context).filter { it.folderId == folder.id && it.fileId !in ids }) Offline.clearFailure(context, gone.fileId)
+    }
+
+    /*
+     * Whether a kept folder differs from what is on the phone: a file missing or out of date
+     * (unless it failed and is still waiting), one that left it, or the folder gone. A shared
+     * folder this session hasn't opened is looked at through its share.
+     */
+    fun keptFolderStale(id: String, shareRoot: String? = null): Boolean {
+        val folder = item(id) ?: if (shareRoot != null) runCatching { openKeptFolder(id, shareRoot) }.getOrElse { return false } ?: return true else return true
+        if (folder.node.trashedAt != null) return true
+        val files = runCatching { filesUnder(id) }.getOrElse { return false }
+        val ids = files.map { it.id }.toSet()
+        val failures = Offline.failures(context).associateBy { it.fileId }
+        val now = System.currentTimeMillis()
+        return files.any { (!Offline.hasVersion(context, it) || Offline.keptWith(context, it.id)?.id != id) && KeepRules.due(failures[it.id], now) } ||
+            Offline.entries(context).any { it.via == id && it.id !in ids }
+    }
+
+    /* Keeps a file: downloads its current version into the offline store and records it (with the kept folder it came with, if any). */
+    fun keepDownloaded(item: Opened, via: String? = null, progress: (Float) -> Unit = {}) {
         val destination = Offline.file(context, item) ?: throw ApiError(400, "Only files can be kept downloaded.")
         if (!destination.exists()) {
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
@@ -344,7 +507,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         }
         // Older versions of the same file go; only the current one is kept.
         destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
-        Offline.remember(context, item)
+        Offline.remember(context, item, via)
     }
 
     /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
@@ -411,6 +574,12 @@ class Vault(private val context: Context, val api: DriveApi) {
     }
     fun item(id: String): Opened? = opened[id]
 
+    /* A folder's name for "Was in …": the top folder is Files, as the tab calls it. */
+    fun folderName(id: String?): String? {
+        val folder = opened[id ?: return null] ?: return null
+        return if (folder.node.parentId == null) "Files" else folder.name
+    }
+
     private fun parentKeyFor(node: NodeView): ByteArray {
         val parentId = node.parentId ?: node.workspaceId
         if (parentId == node.workspaceId) return workspaceKey ?: throw ApiError(500, "Workspace not opened")
@@ -424,15 +593,16 @@ class Vault(private val context: Context, val api: DriveApi) {
         val key = nodeOpen(ctx, parentKeyFor(node), base64urlDecode(node.keyEnvelope))
         nodeKeys[node.id] = key
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
-        val result = Opened(node, metadata)
+        val result = openedRow(node, metadata, key)
         opened[node.id] = result
         node.parentId?.let { parents[node.id] = it }
         return result
     }
 
+    /* The current version's size from its sealed envelope (a local decrypt, no network); null when it can't be read. */
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         nodeKeys[node.id] = key
-        val result = Opened(node, metadata)
+        val result = openedRow(node, metadata, key)
         opened[node.id] = result
         node.parentId?.let { rememberParent(node.id, it) }
         return result
@@ -518,14 +688,14 @@ class Vault(private val context: Context, val api: DriveApi) {
             for (entry in page.items) {
                 entry.ancestors.forEach { runCatching { open(it) } }
                 forget(entry.node.id)
-                runCatching { open(entry.node) }.onSuccess { result.add(TrashItem(it, entry.parentTrashed)) }
+                runCatching { open(entry.node) }.onSuccess { result.add(TrashItem(it, entry.parentTrashed, folderName(entry.node.parentId))) }
             }
             after = page.nextCursor
         } while (after != null)
         return result
     }
 
-    /* The most recently changed files, from the tail of the change feed. */
+    /* The most recently changed files and folders, from the tail of the change feed. */
     fun recents(limit: Int = 60): List<Opened> {
         catalogueRecents(limit)?.let { return it }
         val view = loadWorkspace()
@@ -534,7 +704,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         for (change in feed.changes) {
             if (change.kind != "node") continue
             val node = change.node ?: continue
-            if (node.isFolder || node.trashedAt != null || node.currentVersion == null) { latest.remove(node.id); continue }
+            if (node.parentId == null || node.trashedAt != null || (!node.isFolder && node.currentVersion == null)) { latest.remove(node.id); continue }
             latest[node.id] = node
         }
         val items = ArrayList<Opened>()
@@ -543,7 +713,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             forget(node.id)
             runCatching { resolve(node.id) }.onSuccess { items.add(it) }
         }
-        return items.sortedByDescending { it.modifiedMillis ?: 0 }.take(limit)
+        return items.sortedWith(byRecent).take(limit)
     }
 
     fun versions(id: String): List<VersionListView> = api.versions(id, resolve(id).node.workspaceId)
@@ -648,27 +818,30 @@ class Vault(private val context: Context, val api: DriveApi) {
         return adopt(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata)
     }
 
-    /* A small JPEG for the lists and the picker, as the web makes one at upload; null when not an image or too big. */
+    /* A JPEG for the lists, the grid and the picker, 512px on the long edge as the web makes one at upload; null when not an image or too big. */
     fun makeThumbnail(file: File, mime: String?): ByteArray? {
         if (mime?.startsWith("image/") != true) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
         if (bounds.outWidth <= 0) return null
         var sample = 1
-        while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+        while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
         val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
-        val scale = minOf(1f, 256f / maxOf(bitmap.width, bitmap.height))
-        val scaled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true) else bitmap
-        // JPEG has no alpha: transparent images sit on the sheet colour, not on black.
-        val small = Bitmap.createBitmap(scaled.width, scaled.height, Bitmap.Config.ARGB_8888).also { flat ->
-            val canvas = android.graphics.Canvas(flat)
-            canvas.drawColor(0xFFFCFBF7.toInt())
-            canvas.drawBitmap(scaled, 0f, 0f, null)
-        }
-        for (quality in intArrayOf(70, 50, 30)) {
-            val out = ByteArrayOutputStream()
-            small.compress(Bitmap.CompressFormat.JPEG, quality, out)
-            if (out.size() <= 65_536) return out.toByteArray()
+        // Size first, then quality, as the web does: a sharp picture a little smaller beats a large smeared one.
+        for (edge in intArrayOf(512, 384, 256, 192, 128)) {
+            val scale = minOf(1f, edge.toFloat() / maxOf(bitmap.width, bitmap.height))
+            val scaled = if (scale < 1f) Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1), true) else bitmap
+            // JPEG has no alpha: transparent images sit on the sheet colour, not on black.
+            val small = Bitmap.createBitmap(scaled.width, scaled.height, Bitmap.Config.ARGB_8888).also { flat ->
+                val canvas = android.graphics.Canvas(flat)
+                canvas.drawColor(0xFFFCFBF7.toInt())
+                canvas.drawBitmap(scaled, 0f, 0f, null)
+            }
+            for (quality in intArrayOf(82, 70, 58)) {
+                val out = ByteArrayOutputStream()
+                small.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                if (out.size() <= 65_536) return out.toByteArray()
+            }
         }
         return null
     }

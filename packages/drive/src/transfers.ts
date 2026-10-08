@@ -1532,7 +1532,7 @@ export type TransferManager = ReturnType<typeof createTransferManager>;
 /* Human units for speeds and sizes; the UI formats, the engine never does. */
 export function formatRate(bytesPerSecond: number) {
     if (!bytesPerSecond) return '';
-    const units = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s'];
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
     let value = bytesPerSecond;
     let unit = 0;
     while (value >= 1024 && unit < units.length - 1) {

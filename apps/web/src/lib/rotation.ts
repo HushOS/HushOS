@@ -11,33 +11,30 @@ import { driveClient, driveError, driveKeys, folderQueryOptions } from '@/lib/dr
  */
 
 let running: Promise<unknown> | null = null;
+let finished = 0;
 
-async function announce(
+/*
+ * Runs quietly: stopping a share or a link already said what happened, and the
+ * re-keying behind it is not something a person acts on. Only a failure is
+ * said, since it leaves the job for next time. Each finished rotation is
+ * counted on the document, so a test can wait for the door to shut.
+ */
+async function quietly(
     queryClient: QueryClient,
     name: string | null,
     work: Promise<{ rotated: number } | null>,
 ) {
-    const id = toast.add({
-        type: 'loading',
-        title: name ? `Rotating the keys of “${name}”` : 'Finishing a key rotation',
-        description: 'Whoever was cut off keeps no key that still opens anything here.',
-        timeout: 0,
-    });
     try {
-        const result = await work;
-        toast.close(id);
-        if (result)
-            toast.add({
-                type: 'success',
-                title: 'Keys rotated',
-                description: `${result.rotated} ${result.rotated === 1 ? 'item' : 'items'} re-keyed and re-sealed.`,
-            });
+        await work;
+        finished++;
+        document.documentElement.dataset.keyRotations = String(finished);
     } catch (error) {
-        toast.close(id);
         toast.add({
             type: 'error',
-            title: 'Key rotation did not finish',
-            description: `${driveError(error)} It resumes the next time you open Drive.`,
+            title: name
+                ? `Stopping access to “${name}” didn’t finish`
+                : 'Stopping access didn’t finish',
+            description: `${driveError(error)} HushOS finishes it the next time you open your files.`,
         });
     } finally {
         // Every envelope under the root changed: listings and shares are stale.
@@ -48,7 +45,7 @@ async function announce(
 /* Rotate after a revocation; a rotation already running in this tab finishes first. */
 export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
     const previous = running ?? Promise.resolve();
-    running = previous.then(() => announce(queryClient, node.name, driveClient.rotate(node)));
+    running = previous.then(() => quietly(queryClient, node.name, driveClient.rotate(node)));
     return running;
 }
 
@@ -74,7 +71,7 @@ export async function currentNode(queryClient: QueryClient, node: DriveNode): Pr
 /* On opening Drive: a rotation left unfinished, by this tab or another device. */
 export function resumePendingRotation(queryClient: QueryClient) {
     if (!driveClient.pendingRotation() || running) return;
-    running = announce(queryClient, null, driveClient.resumeRotation()).finally(() => {
+    running = quietly(queryClient, null, driveClient.resumeRotation()).finally(() => {
         running = null;
     });
 }

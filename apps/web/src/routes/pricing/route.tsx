@@ -1,6 +1,6 @@
 import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { PendingLabel } from '@/components/motion';
-import { Button } from '@/components/ui/button';
+import { container, Faq, H1, H2, Lede, SiteSwitch, TalkToUs, TextLink } from '@/components/site';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
     Select,
     SelectContent,
@@ -15,16 +15,17 @@ import { usePageRestored } from '@/lib/page-restore';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
-    formatGiB,
+    formatQuota,
     formatMoney,
     localeHintQueryOptions,
 } from '@/lib/queries';
-import { publicOrigin } from '@/lib/social';
+import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
 import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
-import { ArrowRightIcon } from 'lucide-react';
+import { cn } from 'cn';
+import { CheckIcon } from 'lucide-react';
 import { useState } from 'react';
 
 export const Route = createFileRoute('/pricing')({
@@ -69,7 +70,7 @@ export const Route = createFileRoute('/pricing')({
     head: ({ loaderData }) => {
         if (!loaderData) return {};
         const { origin, catalogue, currency } = loaderData;
-        const description = `Start free with ${formatGiB(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
+        const description = `Start free with ${formatQuota(catalogue.freeQuotaBytes)} of end-to-end encrypted storage. Paid plans add space, from ${cheapest(catalogue.plans, currency)} a month, billed by Polar with tax handled at checkout.`;
         return {
             meta: [
                 { title: 'Pricing · HushOS' },
@@ -103,7 +104,7 @@ export const Route = createFileRoute('/pricing')({
                                     {
                                         '@type': 'Offer',
                                         name: 'Free',
-                                        description: `${formatGiB(catalogue.freeQuotaBytes)} of encrypted storage`,
+                                        description: `${formatQuota(catalogue.freeQuotaBytes)} of encrypted storage`,
                                         price: '0',
                                         priceCurrency: currency.toUpperCase(),
                                         url: `${origin}/register`,
@@ -113,7 +114,7 @@ export const Route = createFileRoute('/pricing')({
                                         return {
                                             '@type': 'Offer',
                                             name: plan.name,
-                                            description: `${formatGiB(plan.quotaBytes)} of encrypted storage, billed ${plan.interval === 'year' ? 'yearly' : 'monthly'}`,
+                                            description: `${formatQuota(plan.quotaBytes)} of encrypted storage, billed ${plan.interval === 'year' ? 'yearly' : 'monthly'}`,
                                             price: (price.amount / 100).toFixed(2),
                                             priceCurrency: price.currency.toUpperCase(),
                                             url: `${origin}/pricing`,
@@ -148,23 +149,23 @@ export const Route = createFileRoute('/pricing')({
 const faq = [
     {
         q: 'What do paid plans add?',
-        a: 'Storage, and nothing else. Every plan is end-to-end encrypted the same way: your password never leaves your device and your keys are made in your browser. Paying only buys more room.',
+        a: 'Storage, and nothing else. Every plan protects your files the same way: your password never leaves your device and your keys are made on it. Paying only buys more room.',
     },
     {
         q: 'Who bills me?',
-        a: 'Polar, our merchant of record. Polar collects payment, works out sales tax or VAT for your country, and issues invoices. Your card details never touch HushOS.',
+        a: 'Polar, our merchant of record. Polar takes the payment, works out sales tax or VAT for your country at checkout, and sends the invoices. Your card details never reach HushOS.',
     },
     {
         q: 'What happens when I cancel?',
-        a: 'Your plan stays active until the end of the period you paid for, and you can resume before then. After that your allowance returns to the free tier. Nothing is deleted; uploads pause until you are back under your allowance.',
+        a: 'Your plan stays until the end of the time you paid for, and you can change your mind before then. After that you are back on Free. Nothing is deleted; uploads pause until you are under your space again.',
     },
     {
         q: 'Can I switch between monthly and yearly?',
-        a: 'Yes. Monthly and yearly are separate plans. Choose the one you want and the prorated difference is charged, or credited, to your saved card straight away. Paying yearly gets you two months free.',
+        a: 'Yes. Choose the one you want and the difference is charged, or credited, to your saved card straight away. Paying yearly gets you two months free.',
     },
     {
-        q: 'Is self-hosting free?',
-        a: 'Yes. HushOS is AGPL-3.0. Run your own instance with Docker Compose and set any allowance you like. These plans apply only to the hosted service.',
+        q: 'Is running it myself free?',
+        a: 'Yes. HushOS is open source under the AGPL-3.0. Run your own copy with Docker Compose and give everyone as much space as you like. These plans are only for the service we run.',
     },
 ];
 
@@ -182,18 +183,52 @@ function cheapest(plans: Plan[], currency: string) {
 }
 
 type Interval = 'month' | 'year';
+type Audience = 'personal' | 'business';
+
+const included = [
+    'Everything locked on your device, on every plan',
+    'Share with people, or by link with a password and an end date',
+    'Trash keeps things for 30 days',
+    'Replacing a file keeps the one before',
+    'On any computer or phone, in the browser',
+    'Kept in the EU',
+];
+
+/* What each size is for, by plan name; a plan without one shows none rather than its size again. */
+const blurbs: Record<string, string> = {
+    plus: 'For your photos and paperwork.',
+    pro: 'For a large photo library and the folders you share.',
+    max: 'For everything, with room to spare.',
+};
+const blurbOf = (name: string, description: string | null) =>
+    blurbs[name.toLowerCase()] ??
+    (description && !/\b\d+(\.\d+)?\s*(GiB|GB|TiB|TB)\b/.test(description) ? description : null);
+
+const teamToday = [
+    'Share a folder with each person, to view or to edit',
+    'An editor’s uploads count against the folder owner’s space',
+    'Links with a password and an end date, turned off at any time',
+    'Every file shows who can open it',
+    'Run HushOS on your own server, free, for the whole team',
+];
+
+const teamPlanned = [
+    'One bill for the whole team',
+    'Folders that belong to the team, not to one person',
+    'Add and remove people in one place',
+    'The same protection as every plan',
+];
 
 function PricingPage() {
     const { catalogue, currency, currencies, detected } = Route.useLoaderData();
     const { hasSession } = Route.useRouteContext();
     const navigate = useNavigate();
-    const money = (plan: Plan) => {
-        const price = priceOf(plan, currency);
-        return formatMoney(price.amount, price.currency);
-    };
+    const amount = (plan: Plan) => priceOf(plan, currency);
+    const money = (minor: number, code = currency) => formatMoney(minor, code);
+    const [audience, setAudience] = useState<Audience>('personal');
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
-    const free = formatGiB(catalogue.freeQuotaBytes);
+    const free = formatQuota(catalogue.freeQuotaBytes);
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live =
@@ -224,77 +259,88 @@ function PricingPage() {
         }
     }
     return (
-        <div className="flex min-h-svh flex-col">
+        <div className="flex min-h-svh flex-col bg-card">
             <SiteHeader />
-            <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-5 sm:px-8">
-                <section className="py-14 lg:py-20">
-                    <p className="eyebrow text-muted-foreground">Pricing</p>
-                    <h1 className="mt-5 max-w-3xl text-4xl font-bold tracking-tight text-balance sm:text-5xl">
-                        Start free. Pay for room, not for privacy.
-                    </h1>
-                    <p className="mt-5 max-w-xl text-lg leading-relaxed text-pretty text-muted-foreground">
-                        Every plan is end-to-end encrypted the same way. Paid plans only add
-                        storage. Pay yearly and two months are free. Billing runs through Polar, our
-                        merchant of record, so tax is handled at checkout.
-                    </p>
+            <main className="flex-1">
+                <section className={cn(container, 'pt-10 pb-8 lg:pt-20 lg:pb-10')}>
+                    <div className="flex max-w-[760px] flex-col gap-5">
+                        <H1 className="lg:text-[56px]">
+                            Start free. Pay for room, not for privacy.
+                        </H1>
+                        <Lede>
+                            Every plan protects your files the same way. Paid plans add space, and
+                            nothing else.
+                        </Lede>
+                    </div>
                 </section>
-                <section aria-label="Plans">
-                    <div className="mb-6 flex flex-wrap items-center gap-3">
-                        <div
-                            aria-label="Billing period"
-                            className="inline-flex gap-0.5 rounded-md border border-rule bg-muted p-0.5"
-                        >
-                            <IntervalButton
-                                active={interval === 'year'}
-                                onClick={() => setInterval('year')}
-                            >
-                                Yearly · 2 months free
-                            </IntervalButton>
-                            <IntervalButton
-                                active={interval === 'month'}
-                                onClick={() => setInterval('month')}
-                            >
-                                Monthly
-                            </IntervalButton>
-                        </div>
-                        {currencies.length > 1 && (
-                            <Select
-                                value={currency}
-                                onValueChange={(value) => {
-                                    if (typeof value === 'string' && value !== currency)
-                                        void navigate({
-                                            to: '/pricing',
-                                            search: { currency: value },
-                                            replace: true,
-                                            // Only the prices change; stay where the reader is.
-                                            resetScroll: false,
-                                        });
-                                }}
-                                items={currencies.map((code) => ({
-                                    value: code,
-                                    label: `${code.toUpperCase()} · ${currencyLabel(code)}`,
-                                }))}
-                            >
-                                <SelectTrigger
-                                    aria-label="Currency"
-                                    className="h-10 w-auto min-w-56"
-                                >
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {currencies.map((code) => (
-                                        <SelectItem key={code} value={code}>
-                                            {code.toUpperCase()} · {currencyLabel(code)}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
-                        {currency !== detected && (
-                            <p className="text-sm text-muted-foreground">
-                                Shown in {currency.toUpperCase()}. Checkout charges in the currency
-                                of the country you are in.
-                            </p>
+                <section aria-label="Plans" className={container}>
+                    <div className="flex flex-col gap-3 pb-8 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                        <SiteSwitch
+                            label="Who it is for"
+                            value={audience}
+                            onChange={setAudience}
+                            className="sm:w-fit"
+                            options={[
+                                { value: 'personal', label: 'Personal' },
+                                { value: 'business', label: 'Business' },
+                            ]}
+                        />
+                        {audience === 'personal' && (
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                {currencies.length > 1 && (
+                                    <Select
+                                        value={currency}
+                                        onValueChange={(value) => {
+                                            if (typeof value === 'string' && value !== currency)
+                                                void navigate({
+                                                    to: '/pricing',
+                                                    search: { currency: value },
+                                                    replace: true,
+                                                    // Only the prices change; stay where the reader is.
+                                                    resetScroll: false,
+                                                });
+                                        }}
+                                        items={currencies.map((code) => ({
+                                            value: code,
+                                            label: `${code.toUpperCase()} · ${currencyLabel(code)}`,
+                                        }))}
+                                    >
+                                        <SelectTrigger
+                                            aria-label="Currency"
+                                            className="h-12 w-full sm:w-auto sm:min-w-56"
+                                        >
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {currencies.map((code) => (
+                                                <SelectItem key={code} value={code}>
+                                                    {code.toUpperCase()} · {currencyLabel(code)}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                                <SiteSwitch
+                                    label="How often you pay"
+                                    value={interval}
+                                    onChange={setInterval}
+                                    className="sm:w-fit"
+                                    options={[
+                                        { value: 'month', label: 'Monthly' },
+                                        {
+                                            value: 'year',
+                                            label: (
+                                                <>
+                                                    Yearly
+                                                    <span className="font-semibold text-primary">
+                                                        2 months free
+                                                    </span>
+                                                </>
+                                            ),
+                                        },
+                                    ]}
+                                />
+                            </div>
                         )}
                     </div>
                     {checkoutError && (
@@ -305,125 +351,165 @@ function PricingPage() {
                             {checkoutError}
                         </p>
                     )}
-                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-                        <PlanColumn
-                            name="Free"
-                            description="Everything, with a starter allowance."
-                            storage={free}
-                            price={formatMoney(0, currency)}
-                            note="No card needed."
-                            action={
-                                <Button
-                                    render={<Link to={hasSession ? '/app/drive' : '/register'} />}
-                                    nativeButton={false}
-                                    variant="outline"
-                                    size="lg"
-                                    className="w-full justify-between"
-                                    disabled={onFree}
-                                >
-                                    {onFree
-                                        ? 'Current plan'
-                                        : hasSession
-                                          ? 'Go to Drive'
-                                          : 'Start for free'}
-                                    {!onFree && <ArrowRightIcon aria-hidden="true" />}
-                                </Button>
-                            }
-                        />
-                        {tiers.map((tier) => {
-                            const plan = tier[interval] ?? tier.month ?? tier.year;
-                            if (!plan) return null;
-                            const other = interval === 'month' ? tier.year : tier.month;
-                            const current = live?.productId === plan.id;
-                            const label = !hasSession
-                                ? `Start with ${tier.name}`
-                                : current
-                                  ? 'Current plan'
-                                  : live
-                                    ? `Switch to ${tier.name}`
-                                    : summary
-                                      ? `Upgrade to ${tier.name}`
-                                      : `Choose ${tier.name}`;
-                            return (
-                                <PlanColumn
-                                    key={tier.key}
-                                    name={tier.name}
-                                    description={tier.description}
-                                    storage={formatGiB(tier.quotaBytes)}
-                                    recommended={tier.recommended}
-                                    price={`${money(plan)} / ${plan.interval}`}
-                                    note={
-                                        plan.interval === 'year'
-                                            ? '12 months for the price of 10.'
-                                            : other
-                                              ? `Or ${money(other)} a year, 2 months free.`
-                                              : 'Billed monthly.'
-                                    }
+                    {audience === 'business' ? (
+                        <Business />
+                    ) : (
+                        <div className="flex flex-col gap-10">
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                <PlanCard
+                                    name="Free"
+                                    storage={free}
+                                    blurb="To try it, or for the few things that matter most."
+                                    price={money(0)}
+                                    note="No card needed."
                                     action={
-                                        onFree ? (
-                                            <Button
-                                                variant={tier.recommended ? 'default' : 'outline'}
-                                                size="lg"
-                                                className="w-full justify-between"
-                                                disabled={starting !== null}
-                                                onClick={() => void startCheckout(plan)}
-                                            >
-                                                <PendingLabel
-                                                    pending={starting === plan.id}
-                                                    idle={label}
-                                                    busy="Opening checkout…"
-                                                />
-                                                <ArrowRightIcon aria-hidden="true" />
-                                            </Button>
-                                        ) : (
-                                            <Button
-                                                render={
-                                                    hasSession ? (
-                                                        <Link
-                                                            to="/app/billing"
-                                                            search={{ plan: plan.id }}
-                                                        />
-                                                    ) : (
-                                                        <Link
-                                                            to="/register"
-                                                            search={{ plan: plan.id }}
-                                                        />
-                                                    )
-                                                }
-                                                nativeButton={false}
-                                                variant={
-                                                    tier.recommended && !current
-                                                        ? 'default'
-                                                        : 'outline'
-                                                }
-                                                size="lg"
-                                                className="w-full justify-between"
-                                                disabled={current}
-                                            >
-                                                {label}
-                                                {!current && <ArrowRightIcon aria-hidden="true" />}
-                                            </Button>
-                                        )
+                                        <Link
+                                            to={hasSession ? '/app/drive' : '/register'}
+                                            aria-disabled={onFree || undefined}
+                                            className={buttonVariants({
+                                                size: 'lg',
+                                                variant: 'outline',
+                                                className: cn(
+                                                    'w-full',
+                                                    onFree && 'pointer-events-none opacity-60',
+                                                ),
+                                            })}
+                                        >
+                                            {onFree
+                                                ? 'Your plan'
+                                                : hasSession
+                                                  ? 'Go to Drive'
+                                                  : 'Start free'}
+                                        </Link>
                                     }
                                 />
-                            );
-                        })}
-                    </div>
-                </section>
-                <section aria-labelledby="pricing-faq" className="py-16 lg:py-20">
-                    <h2 id="pricing-faq" className="text-2xl font-bold tracking-tight">
-                        Questions
-                    </h2>
-                    <dl className="mt-8 grid gap-x-12 gap-y-8 lg:grid-cols-2">
-                        {faq.map(({ q, a }) => (
-                            <div key={q}>
-                                <dt className="font-semibold">{q}</dt>
-                                <dd className="mt-2 max-w-[60ch] text-[15px] leading-relaxed text-muted-foreground">
-                                    {a}
-                                </dd>
+                                {tiers.map((tier) => {
+                                    const plan = tier[interval] ?? tier.month ?? tier.year;
+                                    if (!plan) return null;
+                                    const yearly = tier.year ? amount(tier.year) : null;
+                                    const price = amount(plan);
+                                    const current = live?.productId === plan.id;
+                                    const label = !hasSession
+                                        ? `Start with ${tier.name}`
+                                        : current
+                                          ? 'Your plan'
+                                          : live
+                                            ? `Switch to ${tier.name}`
+                                            : `Choose ${tier.name}`;
+                                    return (
+                                        <PlanCard
+                                            key={tier.key}
+                                            name={tier.name}
+                                            storage={formatQuota(tier.quotaBytes)}
+                                            blurb={blurbOf(tier.name, tier.description)}
+                                            recommended={tier.recommended}
+                                            price={`${
+                                                plan.interval === 'year'
+                                                    ? money(
+                                                          Math.round(price.amount / 12),
+                                                          price.currency,
+                                                      )
+                                                    : money(price.amount, price.currency)
+                                            } a month`}
+                                            note={
+                                                plan.interval === 'year'
+                                                    ? `Billed ${money(price.amount, price.currency)} yearly.`
+                                                    : yearly
+                                                      ? `Billed monthly. ${money(yearly.amount, yearly.currency)} a year if you pay yearly.`
+                                                      : 'Billed monthly.'
+                                            }
+                                            action={
+                                                onFree ? (
+                                                    <Button
+                                                        variant={
+                                                            tier.recommended ? 'default' : 'outline'
+                                                        }
+                                                        size="lg"
+                                                        className="w-full"
+                                                        disabled={starting !== null}
+                                                        onClick={() => void startCheckout(plan)}
+                                                    >
+                                                        {starting === plan.id
+                                                            ? 'Opening checkout…'
+                                                            : label}
+                                                    </Button>
+                                                ) : (
+                                                    <Link
+                                                        to={
+                                                            hasSession
+                                                                ? '/app/billing'
+                                                                : '/register'
+                                                        }
+                                                        search={{ plan: plan.id }}
+                                                        aria-disabled={current || undefined}
+                                                        className={buttonVariants({
+                                                            size: 'lg',
+                                                            variant:
+                                                                tier.recommended && !current
+                                                                    ? 'default'
+                                                                    : 'outline',
+                                                            className: cn(
+                                                                'w-full',
+                                                                current &&
+                                                                    'pointer-events-none opacity-60',
+                                                            ),
+                                                        })}
+                                                    >
+                                                        {label}
+                                                    </Link>
+                                                )
+                                            }
+                                        />
+                                    );
+                                })}
                             </div>
-                        ))}
-                    </dl>
+                            <p className="-mt-4 text-[15px] text-muted-foreground">
+                                Prices in {currency.toUpperCase()}. Polar, our merchant of record,
+                                adds any tax for your country at checkout.
+                                {currency !== detected &&
+                                    ' Checkout charges in the currency of the country you are in.'}
+                            </p>
+
+                            <div className="flex flex-col gap-4 rounded-xl bg-muted p-6">
+                                <h2 className="text-lg font-bold">Every plan, including Free</h2>
+                                <ul className="grid gap-x-8 gap-y-3 lg:grid-cols-3">
+                                    {included.map((line) => (
+                                        <li
+                                            key={line}
+                                            className="flex gap-2.5 text-[15px] leading-snug"
+                                        >
+                                            <CheckIcon
+                                                className="mt-0.5 size-[18px] shrink-0 text-primary"
+                                                strokeWidth={2.6}
+                                                aria-hidden="true"
+                                            />
+                                            {line}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+                                <h2 className="text-lg font-bold">
+                                    Invite a friend, both get more space
+                                </h2>
+                                <p className="text-[15px] leading-relaxed text-muted-foreground">
+                                    Every friend who signs up with your link or code gives you both
+                                    more room. Find your link under Invite friends once you’re in.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                </section>
+                <section aria-labelledby="pricing-faq" className="mt-20 border-t border-rule">
+                    <div
+                        className={cn(
+                            container,
+                            'grid items-start gap-6 py-14 lg:grid-cols-[5fr_7fr] lg:gap-16 lg:py-20',
+                        )}
+                    >
+                        <H2 id="pricing-faq">Questions</H2>
+                        <Faq items={faq} />
+                    </div>
                 </section>
             </main>
             <SiteFooter />
@@ -431,39 +517,72 @@ function PricingPage() {
     );
 }
 
-function IntervalButton({
-    active,
-    onClick,
-    children,
-}: {
-    active: boolean;
-    onClick: () => void;
-    children: React.ReactNode;
-}) {
+/* The team plan: coming, not for sale, with what teams can already do beside it. */
+function Business() {
+    const { data: contact } = useQuery(salesContactQueryOptions);
     return (
-        <button
-            type="button"
-            aria-pressed={active}
-            onClick={onClick}
-            className={`h-9 cursor-pointer rounded-xs px-3.5 text-sm transition-colors outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring ${active ? 'bg-card font-bold text-foreground' : 'font-medium text-muted-foreground hover:text-foreground'}`}
-        >
-            {children}
-        </button>
+        <div className="grid items-start gap-6 lg:grid-cols-[7fr_5fr] lg:gap-10">
+            <div className="flex flex-col gap-5 rounded-xl border border-rule bg-card p-7">
+                <div className="flex flex-col gap-2">
+                    <span className="flex items-baseline gap-2 text-[17px] font-bold">
+                        Team
+                        <span className="text-[15px] font-semibold text-muted-foreground">
+                            · coming soon
+                        </span>
+                    </span>
+                    <span className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
+                        For small teams that share folders every day.
+                    </span>
+                </div>
+                <ul className="flex flex-col gap-3">
+                    {teamPlanned.map((line) => (
+                        <li key={line} className="flex gap-2.5 text-base leading-snug">
+                            <CheckIcon
+                                className="mt-0.5 size-[18px] shrink-0 text-muted-foreground"
+                                strokeWidth={2.4}
+                                aria-hidden="true"
+                            />
+                            {line}
+                        </li>
+                    ))}
+                </ul>
+                <p className="text-[15px] leading-relaxed text-muted-foreground">
+                    {contact
+                        ? 'It isn’t for sale yet. Tell us about your team and we’ll write to you when it is.'
+                        : 'It isn’t for sale yet. Until it is, share folders with your team on any plan.'}
+                </p>
+                <TalkToUs className="w-full sm:w-fit" />
+            </div>
+            <div className="flex flex-col gap-4 pt-1">
+                <h2 className="text-lg font-bold">What teams can do today</h2>
+                <ul className="flex flex-col">
+                    {teamToday.map((line) => (
+                        <li
+                            key={line}
+                            className="border-b border-rule py-3 text-[15px] leading-snug first:pt-0"
+                        >
+                            {line}
+                        </li>
+                    ))}
+                </ul>
+                <TextLink to="/teams">More for teams</TextLink>
+            </div>
+        </div>
     );
 }
 
-function PlanColumn({
+function PlanCard({
     name,
-    description,
     storage,
+    blurb,
     price,
     note,
     recommended = false,
     action,
 }: {
     name: string;
-    description: string | null;
     storage: string;
+    blurb: string | null;
     price: string;
     note: string;
     recommended?: boolean;
@@ -471,27 +590,31 @@ function PlanColumn({
 }) {
     return (
         <div
-            className={`sheet flex flex-col gap-6 border p-6 ${recommended ? 'border-primary ring-3 ring-accent' : 'border-transparent'}`}
+            data-plan={name}
+            className={cn(
+                'flex flex-col gap-5 rounded-xl bg-card p-6',
+                recommended ? 'border-2 border-primary shadow-md' : 'border border-rule',
+            )}
         >
-            <div className="flex flex-1 flex-col gap-4">
-                <p className="flex items-center justify-between gap-3 text-sm font-semibold">
+            <div className="flex flex-1 flex-col gap-2">
+                <span className="flex items-center justify-between text-[17px] font-bold">
                     {name}
                     {recommended && (
-                        <span className="rounded-xs bg-accent px-1.5 py-0.5 text-xs text-accent-foreground">
-                            Recommended
-                        </span>
+                        <span className="text-sm font-bold text-primary">Recommended</span>
                     )}
-                </p>
-                <p className="text-4xl font-bold tracking-tight tabular-nums">{storage}</p>
-                {description && (
-                    <p className="text-sm leading-relaxed text-muted-foreground">{description}</p>
+                </span>
+                <span className="text-[40px] leading-none font-extrabold tracking-[-0.03em] tabular-nums">
+                    {storage}
+                </span>
+                {blurb && (
+                    <span className="text-[15px] leading-snug text-muted-foreground">{blurb}</span>
                 )}
             </div>
-            <div className="border-t border-rule pt-4 tabular-nums">
-                <p className="text-xl font-bold">{price}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{note}</p>
+            <div className="flex flex-col gap-1 border-t border-rule pt-4 tabular-nums">
+                <span className="text-[22px] font-bold">{price}</span>
+                <span className="min-h-10 text-sm leading-snug text-muted-foreground">{note}</span>
             </div>
-            <div className="flex">{action}</div>
+            {action}
         </div>
     );
 }

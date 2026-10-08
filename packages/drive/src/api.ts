@@ -510,7 +510,7 @@ export type ReportResolution =
  */
 export interface ReportApi {
     list(filter: {
-        status?: ReportStatus | 'all';
+        status?: ReportStatus | 'all' | 'held';
         category?: ReportCategory;
     }): Promise<{ reports: ReportView[]; counts: { open: number; held: number; total: number } }>;
     get(reportId: string): Promise<{ report: ReportView; events: ReportEventView[] }>;

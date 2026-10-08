@@ -8,13 +8,14 @@ import {
 } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { PaletteIcon, PencilIcon, Trash2Icon } from 'lucide-react';
+import { PaletteIcon, PencilIcon, TagIcon, Trash2Icon } from 'lucide-react';
 import { useId, useState } from 'react';
+import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { Swatch, TagColourPicker } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamp, TagStamps } from '@/components/drive/tag-stamp';
-import { PendingLabel, Spinner } from '@/components/motion';
+import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import {
     AlertDialog,
@@ -43,6 +44,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import {
+    displayName,
     driveClient,
     driveError,
     formatBytes,
@@ -97,7 +99,7 @@ export function TagView({ tagId }: { tagId: string }) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: 'Could not change the colour',
+                title: 'Couldn’t change the colour',
                 description: driveError(error),
             });
         } finally {
@@ -119,7 +121,7 @@ export function TagView({ tagId }: { tagId: string }) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: 'Could not remove the tag',
+                title: 'Couldn’t remove the tag',
                 description: driveError(error),
             });
         } finally {
@@ -131,11 +133,10 @@ export function TagView({ tagId }: { tagId: string }) {
     return (
         <div className="flex flex-col">
             <PageHeader
-                eyebrow="Tag"
                 title={
                     tag ? (
                         <span className="flex items-center gap-3">
-                            <Swatch colour={tag.colour} className="size-3" />
+                            <Swatch colour={tag.colour} className="size-3.5 rounded-full" />
                             {tag.name}
                         </span>
                     ) : registry.isPending ? (
@@ -146,26 +147,24 @@ export function TagView({ tagId }: { tagId: string }) {
                 }
                 description={
                     tag
-                        ? `${items.length} ${items.length === 1 ? 'item carries' : 'items carry'} this tag across your Drive.${building ? ' Still indexing.' : ''}`
-                        : 'This tag is not in your list any more.'
+                        ? `${items.length} ${items.length === 1 ? 'item has' : 'items have'} this tag.${building ? ' Search is still getting ready, so this may grow.' : ''}`
+                        : 'This tag isn’t in your list any more.'
                 }
             >
                 {tag && (
                     <>
-                        <Button variant="outline" size="sm" onClick={() => setRenaming(true)}>
+                        <Button variant="outline" onClick={() => setRenaming(true)}>
                             <PencilIcon />
-                            Rename
+                            Rename tag
                         </Button>
                         <DropdownMenu>
                             <DropdownMenuTrigger
-                                render={
-                                    <Button variant="outline" size="sm" disabled={busy !== null} />
-                                }
+                                render={<Button variant="outline" disabled={busy !== null} />}
                             >
                                 <PaletteIcon />
-                                Colour
+                                Change colour
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-auto p-2">
+                            <DropdownMenuContent align="end" className="w-auto p-3">
                                 <TagColourPicker
                                     value={tag.colour}
                                     onChange={(colour) => void recolour(colour)}
@@ -175,7 +174,6 @@ export function TagView({ tagId }: { tagId: string }) {
                         </DropdownMenu>
                         <Button
                             variant="ghost"
-                            size="sm"
                             disabled={busy !== null}
                             onClick={() => setRemoving(true)}
                         >
@@ -186,40 +184,31 @@ export function TagView({ tagId }: { tagId: string }) {
                 )}
             </PageHeader>
             {tag && items.length === 0 && (
-                <p className="px-5 py-12 text-sm text-muted-foreground sm:px-8">
-                    {building
-                        ? 'Nothing yet. Your Drive is still being indexed.'
-                        : 'Nothing carries this tag. Select items in a folder and press T.'}
-                </p>
+                <EmptyState
+                    icon={TagIcon}
+                    title={building ? 'Nothing yet' : 'Nothing has this tag'}
+                    body={
+                        building
+                            ? 'Search is still getting ready, so tagged items may still appear.'
+                            : 'Select items in a folder and press T to tag them.'
+                    }
+                />
             )}
-            {registry.isPending && (
-                <div className="flex items-center justify-center py-24 text-muted-foreground">
-                    <Spinner />
-                </div>
-            )}
+            {registry.isPending && <SkeletonRows rows={4} />}
             {tag && items.length > 0 && (
                 <table
                     aria-label={`Items tagged ${tag.name}`}
                     className="w-full table-fixed border-collapse"
                 >
                     <thead>
-                        <tr className="border-b border-rule">
-                            <th
-                                scope="col"
-                                className="eyebrow py-2.5 pl-5 text-left text-muted-foreground sm:pl-8"
-                            >
+                        <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
+                            <th scope="col" className="pl-5 text-left sm:pl-8">
                                 Name
                             </th>
-                            <th
-                                scope="col"
-                                className="eyebrow hidden w-40 py-2.5 text-left text-muted-foreground sm:table-cell"
-                            >
-                                Modified
+                            <th scope="col" className="hidden w-40 text-left sm:table-cell">
+                                Changed
                             </th>
-                            <th
-                                scope="col"
-                                className="eyebrow w-28 py-2.5 pr-5 text-right text-muted-foreground sm:pr-8"
-                            >
+                            <th scope="col" className="w-28 pr-5 text-right sm:pr-8">
                                 Size
                             </th>
                         </tr>
@@ -227,7 +216,7 @@ export function TagView({ tagId }: { tagId: string }) {
                     <tbody>
                         {items.map((node) => {
                             const size = nodeSize(node);
-                            const path = driveClient.ancestorsOf(node.id).map((a) => a.name);
+                            const path = driveClient.ancestorsOf(node.id).map(displayName);
                             const target =
                                 node.kind === 'folder'
                                     ? folderLink(node.id)
@@ -244,18 +233,18 @@ export function TagView({ tagId }: { tagId: string }) {
                                 <tr
                                     key={node.id}
                                     data-node-id={node.id}
-                                    className="h-[46px] border-b border-rule hover:bg-muted"
+                                    className="h-14 border-b border-rule hover:bg-muted"
                                 >
-                                    <td className="min-w-0 py-2 pl-5 sm:pl-8">
+                                    <td className="min-w-0 pl-5 sm:pl-8">
                                         <span className="flex min-w-0 items-center gap-4">
                                             <Link
                                                 {...target}
-                                                className="flex min-w-0 items-center gap-3 text-sm font-medium"
+                                                className="flex min-w-0 items-center gap-4 text-[15px] font-medium hover:[&>span>span:first-child]:underline"
                                             >
-                                                <FileMark node={node} />
+                                                <FileMark node={node} size="list" />
                                                 <span className="flex min-w-0 flex-col">
                                                     <span className="truncate">{node.name}</span>
-                                                    <span className="truncate text-xs font-normal text-muted-foreground">
+                                                    <span className="truncate text-[13px] font-normal text-muted-foreground">
                                                         {path.join(' › ')}
                                                     </span>
                                                 </span>
@@ -269,14 +258,14 @@ export function TagView({ tagId }: { tagId: string }) {
                                             />
                                         </span>
                                     </td>
-                                    <td className="hidden py-2 text-sm text-muted-foreground tabular-nums sm:table-cell">
+                                    <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
                                         {formatWhen(node.metadata?.modified ?? node.updatedAt)}
                                     </td>
-                                    <td className="py-2 pr-5 text-right text-sm text-muted-foreground tabular-nums sm:pr-8">
+                                    <td className="pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8">
                                         {node.kind === 'folder'
-                                            ? '-'
+                                            ? '–'
                                             : Number.isNaN(size)
-                                              ? 'Unavailable'
+                                              ? 'Missing'
                                               : formatBytes(size!)}
                                     </td>
                                 </tr>
@@ -311,12 +300,16 @@ export function TagView({ tagId }: { tagId: string }) {
                         <AlertDialogTitle>Remove “{tag?.name}”?</AlertDialogTitle>
                         <AlertDialogDescription>
                             The tag comes off {items.length} {items.length === 1 ? 'item' : 'items'}{' '}
-                            and leaves your list. The items themselves stay where they are.
+                            and leaves your list. The items themselves aren’t touched.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
-                        <AlertDialogAction disabled={busy !== null} onClick={() => void remove()}>
+                        <AlertDialogAction
+                            variant="destructive"
+                            disabled={busy !== null}
+                            onClick={() => void remove()}
+                        >
                             <PendingLabel
                                 pending={busy === 'remove'}
                                 idle="Remove tag"

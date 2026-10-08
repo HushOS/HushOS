@@ -2,6 +2,7 @@ import BackgroundTasks
 import Foundation
 import HushOSKit
 import Observation
+import UIKit
 
 /*
  * Uploads and keeps that outlive the app. iOS does not let an app run its own
@@ -47,6 +48,13 @@ final class BackgroundTransfers {
         var expired: Set<Int> = []
         var failures = 0
         var message: String?
+        /* Bytes in all, for the row's "3.7 of 6.0 MB"; nil on records saved before it was kept. */
+        var size: Int64?
+        /* Refused because the account is out of room: the row offers Make room. */
+        var noRoom: Bool?
+        /* A keep that belongs to a kept folder: the folder's id and name, so the panel shows one row for them all. */
+        var group: String?
+        var groupName: String?
 
         var total: Int { sealed?.partCount ?? plan?.chunkCount ?? 0 }
         var landed: Int { kind == .upload ? etags.count : fetched.count }
@@ -59,11 +67,17 @@ final class BackgroundTransfers {
     var onLanded: (() -> Void)?
     /* The vault the signed-in app holds; a background launch without the UI makes its own. */
     var vault: Vault?
-    /* Handed over by iOS when it relaunches the app for the session; called once its events are handled. */
-    var eventsHandled: (() -> Void)?
+    /* Handed over by iOS when it relaunches the app for a session (by its identifier); called once its events are handled. */
+    var eventsHandled: [String: () -> Void] = [:]
 
     private let root: URL
     private var session: URLSession!
+    /*
+     * Save to HushOS's session, connected only when iOS wakes the app for it (or to stop it on
+     * sign-out): the extension may hold the same identifier while it is open, and two processes
+     * on one background session is undefined.
+     */
+    private var shareSession: URLSession?
     private let relay = SessionRelay()
     private var pumping = false
     private var pumpAgain = false
@@ -86,6 +100,8 @@ final class BackgroundTransfers {
         configuration.sharedContainerIdentifier = SharedKeychain.accessGroup
         session = URLSession(configuration: configuration, delegate: relay, delegateQueue: nil)
         relay.owner = self
+        // Save to HushOS uploads waiting: after init, since adopting reads `shared`, which this init is building.
+        Task { @MainActor in BackgroundTransfers.shared.adoptHandoffs() }
         // Back on a network: seal what was waiting and start what is ready.
         networkToken = NetworkWatch.shared.observe { online in
             guard online else { return }
@@ -125,22 +141,69 @@ final class BackgroundTransfers {
             try? FileManager.default.copyItem(at: fileURL, to: content)
         }
         records.append(record)
+        update(record.id) { $0.size = (try? FileManager.default.attributesOfItem(atPath: content.path)[.size] as? Int64) ?? nil }
         save()
+        BackgroundAccess.shared.transferStarted()
         Task { await pump() }
     }
 
     /* Queues a file to be kept downloaded; asking twice does not fetch it twice. */
     func keep(_ item: Opened) {
         guard !records.contains(where: { $0.kind == .keep && $0.nodeId == item.id && $0.state != .failed }) else { return }
-        records.append(Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id))
+        records.append(Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id, size: item.size.map(Int64.init)))
         save()
+        BackgroundAccess.shared.transferStarted()
         Task { await pump() }
+    }
+
+    /*
+     * Queues a kept folder's files, each fetched by iOS like a single keep, so the folder
+     * finishes with the app closed; the panel shows them as one row named after the folder.
+     * A file already on its way is not queued twice; one that failed before goes again.
+     */
+    func keep(_ files: [Opened], folder: String, named name: String) {
+        var added = false
+        for item in files {
+            if records.contains(where: { $0.kind == .keep && $0.nodeId == item.id && $0.state != .failed && $0.state != .done }) { continue }
+            records.removeAll { $0.kind == .keep && $0.nodeId == item.id && $0.state == .failed }
+            var record = Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id, size: item.size.map(Int64.init))
+            record.group = folder
+            record.groupName = name
+            records.append(record)
+            added = true
+        }
+        guard added else { return }
+        save()
+        BackgroundAccess.shared.transferStarted()
+        Task { await pump() }
+    }
+
+    /* Whether a kept folder still has files on their way. */
+    func keepingFolder(_ folder: String) -> Bool {
+        records.contains { $0.group == folder && $0.state != .done && $0.state != .failed }
+    }
+
+    /*
+     * A folder no longer kept: what was still coming for it stops. The records are taken off the
+     * queue at once, so keeping the folder again straight after queues fresh ones instead of
+     * finding the old ones and then losing them to this cancel.
+     */
+    func cancelFolder(_ group: String) {
+        let gone = records.filter { $0.group == group }
+        guard !gone.isEmpty else { return }
+        records.removeAll { $0.group == group }
+        save()
+        Task {
+            let ids = Set(gone.map(\.id.uuidString))
+            for task in await allTasks() where ids.contains(where: { task.taskDescription?.hasPrefix($0) == true }) { task.cancel() }
+            for record in gone { try? FileManager.default.removeItem(at: folder(record.id)) }
+        }
     }
 
     /* Stops a transfer: its tasks go, an upload the server began is aborted, its files are removed. */
     func cancel(_ id: UUID) async {
         guard let record = records.first(where: { $0.id == id }) else { return }
-        for task in await session.allTasks where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
+        for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
         if let sealed = record.sealed, let vault = currentVault() { await vault.abortUpload(sealed) }
         try? FileManager.default.removeItem(at: folder(id))
         records.removeAll { $0.id == id }
@@ -150,17 +213,13 @@ final class BackgroundTransfers {
 
     /* Takes a failed transfer off the panel, and the file it kept for a retry. */
     func dismiss(_ id: UUID) {
-        remove { $0.id == id && $0.state == .failed }
+        // A kept folder's finished files go off the panel with its row.
+        remove { $0.id == id && ($0.state == .failed || ($0.state == .done && $0.group != nil)) }
     }
 
-    /* A new transfer starts: the failures on show make way. */
-    func clearFailed() {
-        remove { $0.state == .failed }
-    }
-
-    /* The panel's close: what has landed or failed goes. */
+    /* Clear finished: done rows only. A failed one keeps its file and its action until it is retried or removed. */
     func clearFinished() {
-        remove { $0.state == .done || $0.state == .failed }
+        remove { $0.state == .done }
     }
 
     private func remove(where which: (Record) -> Bool) {
@@ -174,6 +233,9 @@ final class BackgroundTransfers {
     /* Signing out: every transfer belongs to the account leaving, so all of them stop and their files go. */
     func cancelAll() async {
         for id in records.map(\.id) { await cancel(id) }
+        // Save to HushOS uploads not adopted yet: their parts stop too (their files go with the account's).
+        connectShare()
+        for task in await shareSession?.allTasks ?? [] { task.cancel() }
         vault = nil
     }
 
@@ -198,9 +260,11 @@ final class BackgroundTransfers {
             if pumpAgain { pumpAgain = false; Task { await pump() } }
         }
         guard let vault = currentVault() else { return }
+        adoptHandoffs()
         await vault.buildCatalogue()
-        let running = Set(await session.allTasks.compactMap(\.taskDescription))
+        let running = Set(await allTasks().compactMap(\.taskDescription))
         for id in records.map(\.id) {
+            takeLanded(id)
             guard let record = records.first(where: { $0.id == id }) else { continue }
             do {
                 switch (record.kind, record.state) {
@@ -219,7 +283,7 @@ final class BackgroundTransfers {
                     land(id)
                 case (.keep, .finishing):
                     guard let plan = record.plan else { continue }
-                    try await vault.assembleKeep(plan, from: folder(id))
+                    try await vault.assembleKeep(plan, from: folder(id), folder: record.group)
                     land(id)
                 default:
                     continue
@@ -305,9 +369,12 @@ final class BackgroundTransfers {
     fileprivate func sent(_ description: String, fraction: Double) {
         guard let (id, piece) = Self.parse(description) else { return }
         inFlight[id, default: [:]][piece] = fraction
+        TransferLive.shared.refresh()
     }
 
     fileprivate func finished(_ description: String, status: Int, etag: String?, fetched: Bool, failed: Bool) {
+        // A part of an upload Save to HushOS started, landing after the extension closed: take its note in first.
+        if let (id, _) = Self.parse(description), !records.contains(where: { $0.id == id }) { adoptHandoffs(force: id) }
         guard let (id, piece) = Self.parse(description), let record = records.first(where: { $0.id == id }) else { return }
         inFlight[id]?[piece] = nil
         if record.kind == .upload {
@@ -340,21 +407,78 @@ final class BackgroundTransfers {
         update(id) { $0.failures += 1 }
         guard let record = records.first(where: { $0.id == id }) else { return }
         if record.failures > 30 {
-            fail(id, DriveAPIError.server(status, "The transfer kept failing."))
+            fail(id, DriveAPIError.server(status, TransferWords.repeated))
             return
         }
         start(id, skipping: [], after: Resumable.delay(attempt: min(record.failures, 7)))
     }
 
-    fileprivate func sessionEventsDone() {
-        eventsHandled?()
-        eventsHandled = nil
+    fileprivate func sessionEventsDone(_ identifier: String?) {
+        guard let identifier else { return }
+        eventsHandled.removeValue(forKey: identifier)?()
+    }
+
+    // MARK: - Save to HushOS
+
+    /*
+     * Uploads the share extension sealed and started (ShareHandoff): each joins the queue as
+     * sending, with the parts the extension saw land, so the list, the Live Activity and the
+     * finish are the app's as for any upload. `force`: iOS woke the app for a part of this one,
+     * so the extension is gone even if it never released the note.
+     */
+    private func adoptHandoffs(force: UUID? = nil) {
+        var notes = ShareHandoff.waiting()
+        if let force, !notes.contains(where: { $0.id == force }),
+           let data = try? Data(contentsOf: ShareHandoff.directory(force).appendingPathComponent("handoff.json")),
+           let note = try? JSONDecoder().decode(ShareHandoff.self, from: data) {
+            notes.append(note)
+        }
+        var added = false
+        for note in notes where !records.contains(where: { $0.id == note.id }) {
+            var record = Record(id: note.id, kind: .upload, name: note.name, folderId: note.folderId, mime: note.mime)
+            record.state = .sending
+            record.sealed = note.sealed
+            record.size = note.size
+            record.etags = ShareHandoff.takeLanded(note.id)
+            if record.etags.count == note.sealed.partCount { record.state = .finishing }
+            records.append(record)
+            ShareHandoff.adopted(note.id)
+            added = true
+        }
+        guard added else { return }
+        save()
+        if UIApplication.shared.applicationState == .active { BackgroundAccess.shared.transferStarted() }
+        Task { await pump() }
+    }
+
+    /* Parts the extension saw land after its upload was adopted (it may still be open). */
+    private func takeLanded(_ id: UUID) {
+        guard let record = record(id), record.kind == .upload, record.state == .sending else { return }
+        let landed = ShareHandoff.takeLanded(id)
+        guard !landed.isEmpty else { return }
+        update(id) { $0.etags.merge(landed) { old, _ in old } }
+        if let current = self.record(id), current.landed == current.total { update(id) { $0.state = .finishing } }
+    }
+
+    private func allTasks() async -> [URLSessionTask] {
+        await session.allTasks + (shareSession?.allTasks ?? [])
+    }
+
+    /* iOS woke the app for Save to HushOS's session: connect to it, so its delegate (the relay) takes the events. */
+    func connectShare() {
+        guard shareSession == nil else { return }
+        let share = URLSessionConfiguration.background(withIdentifier: ShareHandoff.sessionIdentifier)
+        share.sessionSendsLaunchEvents = true
+        share.isDiscretionary = false
+        share.sharedContainerIdentifier = SharedKeychain.accessGroup
+        shareSession = URLSession(configuration: share, delegate: relay, delegateQueue: nil)
     }
 
     // MARK: - Bookkeeping
 
     private func land(_ id: UUID) {
         update(id) { $0.state = .done }
+        if let record = record(id) { ended(record, reason: nil) }
         try? FileManager.default.removeItem(at: folder(id))
         onLanded?()
         // Finished rows linger so the result is seen.
@@ -368,11 +492,16 @@ final class BackgroundTransfers {
     private func fail(_ id: UUID, _ error: Error) {
         // No network yet: stays where it was, for the next pass.
         if Resumable.retryable(error) { update(id) { $0.failures += 1 }; return }
-        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        let message = record(id)?.kind == .keep ? TransferWords.keepReason(error) : TransferWords.reason(error)
         if let sealed = records.first(where: { $0.id == id })?.sealed, let vault = currentVault() {
             Task { await vault.abortUpload(sealed) }
         }
-        update(id) { $0.state = .failed; $0.message = message }
+        update(id) { $0.state = .failed; $0.message = message; $0.noRoom = message == TransferWords.noRoom }
+        // A file of a kept folder: the rest of the folder stays kept; this one waits before it is tried again.
+        if let record = record(id), let group = record.group, let nodeId = record.nodeId {
+            Offline.recordKeepFailure(nodeId, folder: group, reason: message)
+            onLanded?()
+        }
         // An upload that failed before it was sealed still has its file: that stays for a retry, the rest goes.
         let content = folder(id).appendingPathComponent("content")
         if FileManager.default.fileExists(atPath: content.path) {
@@ -382,6 +511,18 @@ final class BackgroundTransfers {
         } else {
             try? FileManager.default.removeItem(at: folder(id))
         }
+        if let record = record(id) { ended(record, reason: message) }
+    }
+
+    /* Tells the notices how a transfer ended, and once nothing is left running, lets them speak. */
+    private func ended(_ record: Record, reason: String?) {
+        // Retry only where it can help: not for a file that's gone, an account out of room, or a session that ended.
+        let helps = reason.map { ![TransferWords.noRoom, TransferWords.signedOut, TransferWords.gone].contains($0) } ?? false
+        TransferNotices.shared.ended(.init(key: record.group ?? record.id.uuidString, name: record.groupName ?? record.name,
+                                           upload: record.kind == .upload, reason: reason, folder: record.folderId,
+                                           retryable: helps && canRetry(record) ? [record.id] : []))
+        let running: Set<Record.State> = [.waiting, .sending, .finishing]
+        if !records.contains(where: { running.contains($0.state) }) { Task { await TransferNotices.shared.queueDrained() } }
     }
 
     /* Whether a failed upload kept its file, so it can be sent again. */
@@ -394,7 +535,7 @@ final class BackgroundTransfers {
     func retry(_ id: UUID) {
         guard let record = records.first(where: { $0.id == id }), canRetry(record) else { return }
         update(id) {
-            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil
+            $0.state = .waiting; $0.sealed = nil; $0.etags = [:]; $0.expired = []; $0.failures = 0; $0.message = nil; $0.noRoom = nil
         }
         save()
         Task { await pump() }
@@ -405,7 +546,10 @@ final class BackgroundTransfers {
         change(&records[index])
     }
 
+    private func record(_ id: UUID) -> Record? { records.first { $0.id == id } }
+
     private func save() {
+        TransferLive.shared.refresh()
         if let data = try? JSONEncoder().encode(records) { try? data.write(to: root.appendingPathComponent("records.json"), options: .atomic) }
     }
 
@@ -469,6 +613,7 @@ private final class SessionRelay: NSObject, URLSessionDataDelegate, URLSessionDo
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        Task { @MainActor in BackgroundTransfers.shared.sessionEventsDone() }
+        let identifier = session.configuration.identifier
+        Task { @MainActor in BackgroundTransfers.shared.sessionEventsDone(identifier) }
     }
 }

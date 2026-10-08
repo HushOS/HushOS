@@ -2,3 +2,10 @@
 // File Provider testing-mode entitlement, a device build keeps the plain one.
 CODE_SIGN_ENTITLEMENTS = App/HushOS.entitlements
 CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = App/HushOS-Simulator.entitlements
+
+// The server whose links open the app (applinks:) and whose saved passwords it offers
+// (webcredentials:). That server must list this app in /.well-known/apple-app-site-association
+// (APPLE_APP_IDS, see docs/self-hosting.md). A self-hosted build sets its own host here, or in
+// a Local.xcconfig included below.
+HUSHOS_LINK_HOST = hushos.com
+#include? "Local.xcconfig"

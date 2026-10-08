@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="desk">#E6E2D9</color>
-    <color name="sheet">#FCFBF7</color>
-    <color name="ink">#1C2848</color>
-    <color name="splash">#FFFFFF</color>
+    <!-- Alpine ground (packages/tokens), behind the first frame. -->
+    <color name="ground">#F3F4F8</color>
+    <color name="splash">#F3F4F8</color>
+    <!-- Launcher shortcuts: Hush blue on its tint, as the + menu's actions. -->
+    <color name="shortcut_ground">#DCE3F7</color>
+    <color name="shortcut_glyph">#2C428E</color>
 </resources>

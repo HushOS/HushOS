@@ -3,9 +3,10 @@ import { SearchIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
-import { createFileRoute, Outlet, useLocation, useRouter } from '@tanstack/react-router';
+import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
 import { AppSidebar } from '@/components/app-sidebar';
-import { DeviceControl } from '@/components/device-control';
+import { UserMenu } from '@/components/user-menu';
+import { DeviceControl, openDeviceDialog } from '@/components/device-control';
 import { NavigationBar } from '@/components/navigation-bar';
 import { ReleaseNotice } from '@/components/release-notice';
 import { CollisionDialog } from '@/components/drive/collision-dialog';
@@ -13,8 +14,9 @@ import { DriveRuntime } from '@/components/drive/drive-shell';
 import { CommandCenter } from '@/components/drive/command-palette';
 import { StorageFullDialog } from '@/components/drive/storage-full-dialog';
 import { TransfersPanel } from '@/components/drive/transfers-panel';
-import { Spinner, TextSwap } from '@/components/motion';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Spinner } from '@/components/motion';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { billingApi } from '@/lib/billing-api';
 import { usePageRestored } from '@/lib/page-restore';
@@ -41,40 +43,14 @@ export const Route = createFileRoute('/_authenticated/app')({
     component: AppLayout,
 });
 
-/*
- * The header names the section the person is in, in the words the sidebar and
- * the account menu use for it. A longer prefix comes before the shorter one it
- * sits under, since the first match wins; only what is not listed is Drive.
- */
-const sections: [string, string][] = [
-    ['/app/search', 'Search'],
-    ['/app/tags', 'Tags'],
-    ['/app/shared', 'Shared'],
-    ['/app/contacts', 'Contacts'],
-    ['/app/trash', 'Trash'],
-    ['/app/referrals', 'Invite friends'],
-    ['/app/admin/reports', 'Reports'],
-    ['/app/admin/affiliates', 'Affiliates'],
-    ['/app/admin', 'Management'],
-    ['/app/account', 'Settings'],
-    ['/app/billing', 'Billing'],
-    ['/app/recovery-key', 'Recovery phrase'],
-];
-function sectionTitle(pathname: string) {
-    const match = sections.find(
-        ([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-    );
-    return match ? match[1] : 'Drive';
-}
-
 function AppLayout() {
     const router = useRouter();
-    const pathname = useLocation({ select: (location) => location.pathname });
     const { user } = Route.useRouteContext();
     const sidebarOpen = Route.useLoaderData();
     const queryClient = router.options.context.queryClient;
     const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
     const rememberError = useStore(authClient.store, (state) => state.rememberError);
+    const unlocked = useStore(authClient.store, (state) => state.unlockedUserId === user.id);
     const [setupError, setSetupError] = useState('');
     const [checkingOut, setCheckingOut] = useState(false);
     // Back from Polar's checkout: show the app, not "Taking you to checkout…".
@@ -154,8 +130,7 @@ function AppLayout() {
                     });
             })
             .catch(() => {
-                if (active)
-                    setSetupError('Account setup could not finish. Please refresh to try again.');
+                if (active) setSetupError('Reload the page to try again.');
             });
         return () => {
             active = false;
@@ -170,31 +145,37 @@ function AppLayout() {
     return (
         <SidebarProvider
             defaultOpen={sidebarOpen}
-            style={{ '--sidebar-width': '14rem' } as CSSProperties}
+            style={{ '--sidebar-width': '15rem' } as CSSProperties}
         >
             <NavigationBar />
-            <AppSidebar user={user} onSearch={() => setPaletteOpen(true)} />
+            <AppSidebar user={user} />
             {/*
-             * The one sheet every page lies on. On a desk-sized screen it keeps its place, a margin
-             * of desk on every side, and the page scrolls inside it; on a phone it is full-bleed
-             * and the window scrolls as usual.
+             * The panel every page sits in. On a desk-sized screen it keeps its place, a margin
+             * of ground on three sides, and the page scrolls inside it; on a phone it is
+             * full-bleed and the window scrolls as usual.
              */}
-            <SidebarInset className="min-w-0 bg-card md:my-3 md:mr-3 md:h-[calc(100svh-1.5rem)] md:overflow-hidden md:rounded-xs md:shadow-sheet">
-                <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b border-rule bg-card px-2.5 sm:px-4">
-                    <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
-                    <div className="text-sm font-semibold text-foreground">
-                        <TextSwap>{sectionTitle(pathname)}</TextSwap>
-                    </div>
-                    <div className="flex-1" />
-                    {/* On a phone the sidebar is a sheet, so search stays reachable up here. */}
+            <SidebarInset className="min-w-0 bg-card md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
+                <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-card px-3 sm:px-5 md:px-8">
+                    <SidebarTrigger
+                        aria-label="Menu"
+                        className="text-muted-foreground hover:text-foreground md:hidden"
+                    />
+                    {/* Search opens the command palette; it reads as a box so people know where to look. */}
                     <button
                         type="button"
                         onClick={() => setPaletteOpen(true)}
                         aria-label="Search"
-                        className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground md:hidden"
+                        aria-keyshortcuts="/ Meta+K Control+K"
+                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring md:max-w-110"
                     >
-                        <SearchIcon aria-hidden="true" className="size-4" />
+                        <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
+                        <span className="flex-1 truncate">
+                            Search<span className="max-sm:hidden"> your files</span>
+                        </span>
+                        <kbd className="text-xs max-md:hidden">/</kbd>
                     </button>
+                    <div className="flex-1 max-md:hidden" />
+                    <UserMenu user={user} />
                     <DeviceControl
                         user={user}
                         onUnlocked={() => queryClient.invalidateQueries(storageQueryOptions)}
@@ -202,19 +183,44 @@ function AppLayout() {
                 </header>
                 <div
                     data-scroll-restoration-id="app-sheet"
-                    className="flex min-h-0 min-w-0 flex-1 flex-col md:overflow-x-hidden md:overflow-y-auto"
+                    className="flex min-h-0 min-w-0 flex-1 flex-col scroll-pb-[var(--selection-room,0px)] md:overflow-x-hidden md:overflow-y-auto"
                 >
                     <ReleaseNotice />
                     {(rememberError || setupError) && (
                         <div className="flex flex-col gap-3 border-b border-rule px-5 py-4 sm:px-6">
-                            {rememberError && (
+                            {/*
+                             * Unlocked, remembering failed: nothing to do now. Locked, the saved
+                             * sign-in didn't open: say so and offer Unlock where it is read.
+                             */}
+                            {rememberError && unlocked && (
                                 <Alert variant="warning">
-                                    <AlertTitle>Saved device access needs attention</AlertTitle>
-                                    <AlertDescription>{rememberError}</AlertDescription>
+                                    <AlertTitle>
+                                        HushOS couldn’t stay unlocked on this browser
+                                    </AlertTitle>
+                                    <AlertDescription>
+                                        You’ll be asked for your password next time you open it
+                                        here.
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+                            {rememberError && !unlocked && (
+                                <Alert variant="warning">
+                                    <AlertTitle>
+                                        HushOS didn’t open on its own on this browser
+                                    </AlertTitle>
+                                    <AlertDescription>
+                                        Enter your password to open your files here again.
+                                    </AlertDescription>
+                                    <AlertAction>
+                                        <Button size="sm" onClick={openDeviceDialog}>
+                                            Unlock
+                                        </Button>
+                                    </AlertAction>
                                 </Alert>
                             )}
                             {setupError && (
                                 <Alert variant="destructive">
+                                    <AlertTitle>Your account didn’t finish setting up</AlertTitle>
                                     <AlertDescription>{setupError}</AlertDescription>
                                 </Alert>
                             )}

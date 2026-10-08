@@ -2,7 +2,9 @@ import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { LockKeyholeIcon } from 'lucide-react';
+import { useRouter } from '@tanstack/react-router';
+import { forgetSession } from '@/lib/session';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
@@ -75,7 +77,6 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
 export function DriveShell({ user, children }: { user: SessionUser; children: ReactNode }) {
     const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
     const restoring = useStore(authClient.store, (state) => state.restoring);
-    const restoreStep = useStore(authClient.store, (state) => state.restoreStep);
     const unlocked = unlockedUser === user.id;
     const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
     // Saved device access is tried before anything is called locked, so a refresh
@@ -95,41 +96,50 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     const attempted = restored.isFetched;
     // The same query the runtime holds open: no second request, no second open.
     const opened = useQuery({ ...driveOpenQueryOptions(user.id), enabled: unlocked });
+    const router = useRouter();
+    async function signOut() {
+        try {
+            await authClient.logout();
+        } finally {
+            forgetSession(router.options.context.queryClient, false);
+            await router.navigate({ to: '/login' });
+            router.options.context.queryClient.clear();
+        }
+    }
 
     if (!unlocked) {
-        if (restoring || !attempted)
-            return (
-                <Waiting
-                    description="Restoring your keys on this device."
-                    slow={RESTORE_STEPS[restoreStep ?? 'rehydrate']}
-                />
-            );
+        if (restoring || !attempted) return <Opening />;
         return (
             <Centered>
-                <p className="eyebrow mb-3 text-muted-foreground">Locked</p>
-                <h1 className="text-2xl font-bold tracking-tight">Unlock this device</h1>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    Your files are encrypted with keys only you hold. Enter your password to open
-                    them here.
+                <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
+                    <LockKeyholeIcon className="size-5" aria-hidden="true" />
+                </span>
+                <h1 className="mt-5 text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
+                    HushOS is locked here
+                </h1>
+                <p className="mt-1.5 text-[15px] text-muted-foreground">
+                    Enter your password to open your files on this browser.
                 </p>
-                <UnlockDevice
-                    user={user}
-                    className="mt-6 w-full rounded-md border border-rule text-left"
-                />
+                <UnlockDevice user={user} className="mt-5 w-full" />
             </Centered>
         );
     }
-    if (opened.isPending) return <Waiting description="Unwrapping your folder keys." />;
+    if (opened.isPending) return <Opening />;
     if (opened.isError)
         return (
             <Centered>
-                <Alert variant="destructive" className="text-left">
-                    <AlertTitle>Drive could not open</AlertTitle>
-                    <AlertDescription>{driveError(opened.error)}</AlertDescription>
-                </Alert>
-                <Button variant="outline" className="mt-4" onClick={() => void opened.refetch()}>
-                    Try again
-                </Button>
+                <h1 className="text-[26px] leading-tight font-extrabold tracking-[-0.03em]">
+                    Your files didn’t open
+                </h1>
+                <p className="mt-1.5 text-[15px] text-muted-foreground">
+                    {driveError(opened.error)}
+                </p>
+                <div className="mt-5 flex gap-2">
+                    <Button onClick={() => void opened.refetch()}>Try again</Button>
+                    <Button variant="ghost" onClick={() => void signOut()}>
+                        Sign out
+                    </Button>
+                </div>
             </Centered>
         );
     return (
@@ -148,35 +158,31 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
 function Centered({ children }: { children: ReactNode }) {
     return (
         <div className="flex flex-1 items-center justify-center px-5 py-16 sm:px-8">
-            <div className="flex w-full max-w-md flex-col items-center text-center">{children}</div>
+            <div className="flex w-full max-w-[380px] flex-col items-start">{children}</div>
         </div>
     );
 }
 
-/* What each restore step is waiting on, in the words shown when it takes long. */
-const RESTORE_STEPS = {
-    rehydrate: 'Still reading saved settings on this device.',
-    session: 'Still checking your session with the server.',
-    'device-key': 'Still reading the saved device key from this browser’s storage.',
-    worker: 'Still unwrapping your account key.',
-} as const;
-
 /*
- * The waiting state names its step once it has taken longer than it should,
- * so a person stuck here can say what it was doing.
+ * One line while the account and the files open, and after a few seconds a
+ * second that says it is still going. Which step is slow is not something a
+ * person can act on, so it is not named.
  */
-function Waiting({ description, slow }: { description: string; slow?: string }) {
+function Opening() {
     const [late, setLate] = useState(false);
     useEffect(() => {
-        if (!slow) return;
         const timer = setTimeout(() => setLate(true), 4_000);
         return () => clearTimeout(timer);
-    }, [slow]);
+    }, []);
     return (
-        <Centered>
-            <Spinner className="size-4 text-muted-foreground" />
-            <p className="mt-4 text-sm text-muted-foreground">{description}</p>
-            {late && slow && <p className="mt-2 max-w-sm text-sm text-muted-foreground">{slow}</p>}
-        </Centered>
+        <div className="flex flex-1 items-center justify-center px-5 py-16 sm:px-8">
+            <output className="flex flex-col items-center gap-2 text-center">
+                <Spinner className="size-5 text-primary" />
+                <span className="text-base font-semibold">Opening your files…</span>
+                <span className="h-5 text-sm text-muted-foreground">
+                    {late ? 'Still opening. This can take a moment on a slow connection.' : ''}
+                </span>
+            </output>
+        </div>
     );
 }

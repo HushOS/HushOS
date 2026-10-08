@@ -1,5 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newContext, registerAccount, sampleFiles } from './helpers';
+import {
+    addContact,
+    grip,
+    newContext,
+    newFolder,
+    registerAccount,
+    rotationsDone,
+    sampleFiles,
+    shareWith,
+    waitForRotation,
+} from './helpers';
 
 /*
  * The catalogue: the tree mirrored on this device and opened, and what is
@@ -67,10 +77,7 @@ test('the mirror fills from the feed, grows with changes, and resumes from its c
     const first = await mirror(owner);
     expect(first.cursor).toBeGreaterThan(0);
 
-    await owner
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Project/inner');
     await owner.keyboard.press('Enter');
     await expect(row(owner, 'Project')).toBeVisible();
@@ -97,7 +104,7 @@ test('a tag applied to a folder is found by name and by tag, and a rename reache
     await expect(folder).toHaveAttribute('aria-selected', 'true');
     await owner.keyboard.press('t');
     await expect(dialog(owner)).toContainText('Tags for “Project”');
-    await dialog(owner).getByPlaceholder('Home, Tax, Travel…').fill('Client');
+    await dialog(owner).getByPlaceholder('Find or add a tag').fill('Client');
     await owner.keyboard.press('Enter');
     await expect(dialog(owner).getByRole('checkbox', { name: 'Client' })).toBeChecked();
     await dialog(owner)
@@ -141,11 +148,8 @@ test('a tag applied to a folder is found by name and by tag, and a rename reache
 test('after a revoked share is rotated, the rotated items are still found, through the feed and from the mirror', async () => {
     test.setTimeout(480_000);
     // Share the tagged folder, with a file in it, then take it back.
-    await owner.goto('/app/contacts');
-    await owner.getByLabel('Email').fill(guestEmail);
-    await owner.getByRole('button', { name: 'Look up' }).click();
-    await expect(owner.locator('[data-fingerprint]')).toBeVisible({ timeout: 60_000 });
-    await owner.getByRole('button', { name: 'Pin contact' }).click();
+    await owner.goto('/app/people');
+    await addContact(owner, guestEmail);
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 
     await owner.goto('/app/drive');
@@ -157,17 +161,17 @@ test('after a revoked share is rotated, the rotated items are still found, throu
     await owner.locator('[data-crumb-id]').first().click();
     await row(owner, 'Project').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('combobox', { name: 'Contact' }).click();
-    await owner.getByRole('option', { name: /E2E Tester/ }).click();
-    await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
+    await shareWith(owner, /E2E Tester/);
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await owner.keyboard.press('Escape');
 
     await owner.goto('/app/shared?view=by-me');
     const entry = owner.locator(`[data-by-me="${guestEmail}"]`);
     await expect(entry).toBeVisible({ timeout: 60_000 });
+    const rotated = await rotationsDone(owner);
     await entry.getByRole('button', { name: /Stop sharing Project/ }).click();
-    await expect(owner.getByText('Keys rotated')).toBeVisible({ timeout: 120_000 });
+    await owner.getByRole('alertdialog').getByRole('button', { name: 'Stop sharing' }).click();
+    await waitForRotation(owner, rotated);
 
     // Through the feed: the rotated envelopes arrive and reopen in place.
     await owner.goto('/app/drive');

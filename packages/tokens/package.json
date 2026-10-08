@@ -1,0 +1,24 @@
+{
+    "name": "@hushos/tokens",
+    "private": true,
+    "license": "AGPL-3.0-only",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./src/index.ts",
+            "default": "./src/index.ts"
+        },
+        "./tokens.css": "./generated/tokens.css"
+    },
+    "scripts": {
+        "generate": "bun scripts/generate.ts && oxfmt generated",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.1",
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
+    }
+}

@@ -1,6 +1,9 @@
 package com.hushos.app.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,22 +12,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.ui.Alignment
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.Icons
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -34,54 +34,79 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.hushos.app.data.Auth
+import com.hushos.tokens.AlpineSpace
 
-/* The web's sign-in card in Material form: our words, the system's controls. */
+private fun hostOf(origin: String) = runCatching { java.net.URI(origin).host }.getOrNull() ?: origin.substringAfter("://")
+
+/*
+ * Sign in: a heading, two fields with an eye on the password, one button. No
+ * claims about keys. Errors sit on the field they are about; a dropped connection
+ * says so. The server's address is behind the gear, for self-hosted HushOS only,
+ * and sign-in names the server once it isn't the usual one.
+ */
 @Composable
 fun SignInScreen(model: DriveViewModel, state: DriveState) {
+    val alpine = Alpine.colors
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var pending by rememberSaveable { mutableStateOf(false) }
-    var error by rememberSaveable { mutableStateOf("") }
+    var emailError by rememberSaveable { mutableStateOf<String?>(null) }
+    var passwordError by rememberSaveable { mutableStateOf<String?>(null) }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
     var showPassword by rememberSaveable { mutableStateOf(false) }
     var editingOrigin by rememberSaveable { mutableStateOf(false) }
-    var originDraft by rememberSaveable { mutableStateOf(state.origin) }
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
+    val custom = state.origin.trimEnd('/') != defaultOrigin().trimEnd('/')
 
     fun submit() {
         if (pending) return
         val address = email.trim()
-        if (!address.contains("@")) { error = "Enter your email address."; return }
-        if (password.isEmpty()) { error = "Enter your password."; return }
-        error = ""
+        emailError = if (!address.contains("@")) "Enter your email address." else null
+        passwordError = if (password.isEmpty()) "Enter your password." else null
+        error = null
+        if (emailError != null || passwordError != null) return
         pending = true
         model.signIn(address, password) { failure ->
             pending = false
-            if (failure != null) error = failure else password = ""
+            when (failure) {
+                null -> password = ""
+                Auth.MISMATCH -> passwordError = failure
+                else -> error = failure
+            }
         }
     }
 
+    // Self-hosting › Server address, from the gear: a screen of its own, as on iOS.
+    if (editingOrigin) { SelfHostingScreen(model, state, signedIn = false) { editingOrigin = false }; return }
     Column(
-        Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(AlpineSpace.S6),
+        verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3),
     ) {
-        Spacer(Modifier.height(48.dp))
-        Text("EXISTING ACCOUNT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("Welcome back", style = MaterialTheme.typography.displaySmall)
-        Text("Sign in to unlock your account on this device.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp))
-        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.height(56.dp))
+        Text("Welcome back", style = MaterialTheme.typography.headlineLarge)
+        if (custom) Text("Signing in to ${hostOf(state.origin)}", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
+        if (state.linkWaiting) Text("Sign in to open the link you followed.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
+        Spacer(Modifier.height(AlpineSpace.S2))
+        error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium) }
         OutlinedTextField(
-            value = email, onValueChange = { email = it }, label = { Text("Email") }, singleLine = true, enabled = !pending,
+            value = email, onValueChange = { email = it; emailError = null }, label = { Text("Email") }, placeholder = { Text("name@example.com") },
+            singleLine = true, enabled = !pending, isError = emailError != null, supportingText = emailError?.let { { Text(it) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next, autoCorrectEnabled = false),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
-            value = password, onValueChange = { password = it }, label = { Text("Password") }, singleLine = true, enabled = !pending,
+            value = password, onValueChange = { password = it; passwordError = null }, label = { Text("Password") }, singleLine = true, enabled = !pending,
+            isError = passwordError != null, supportingText = passwordError?.let { { Text(it) } },
             visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
                 IconButton(onClick = { showPassword = !showPassword }) {
@@ -92,33 +117,24 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
             keyboardActions = KeyboardActions(onGo = { submit() }),
             modifier = Modifier.fillMaxWidth(),
         )
-        Text("Password stays on this device. Your account key is unwrapped here and never sent.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = ::submit, enabled = !pending, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            Text(if (pending) "Unlocking…" else "Sign in")
+        Button(onClick = ::submit, enabled = !pending, modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
+            Text(if (pending) "Signing in…" else "Sign in")
         }
-        TextButton(onClick = {
-            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(state.origin + "/recover")))
-        }) { Text("Forgot your password?") }
-    }
-    // Advanced: which HushOS this phone talks to, behind a gear so nobody else has to read an address.
-    Box(Modifier.fillMaxSize().statusBarsPadding().padding(8.dp), contentAlignment = Alignment.TopEnd) {
-        IconButton(onClick = { originDraft = state.origin; editingOrigin = true }) {
-            Icon(Icons.Outlined.Settings, contentDescription = "Advanced", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Recovery happens here in the app now, with the kit or the 24 words (RecoverScreen).
+        TextButton(onClick = model::startRecovery) { Text("Forgot your password?") }
+        // Accounts are made on the web; said as plain text, with no link to plans or pricing.
+        Text("New to HushOS? Create an account at ${if (custom) hostOf(state.origin) else "hushos.com"}.", style = MaterialTheme.typography.bodyMedium,
+            color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S4))
+        // The server's privacy policy and terms, before anyone signs in.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { openWebPage(context, privacyUrl(state.origin)) }) { Text("Privacy policy") }
+            TextButton(onClick = { openWebPage(context, termsUrl(state.origin)) }) { Text("Terms") }
         }
     }
-    if (editingOrigin) {
-        AlertDialog(
-            onDismissRequest = { editingOrigin = false },
-            title = { Text("HushOS address") },
-            text = {
-                Column {
-                Text("Only for a self-hosted HushOS. Leave it alone otherwise.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
-                OutlinedTextField(value = originDraft, onValueChange = { originDraft = it }, singleLine = true, label = { Text("https://hush.example") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false))
-                }
-            },
-            confirmButton = { TextButton(onClick = { model.setOrigin(originDraft); editingOrigin = false }) { Text("Done") } },
-            dismissButton = { TextButton(onClick = { editingOrigin = false }) { Text("Cancel") } },
-        )
+    // Which HushOS this phone talks to, behind a gear (Self-hosting) so nobody else has to read an address.
+    Box(Modifier.fillMaxSize().statusBarsPadding().padding(AlpineSpace.S2), contentAlignment = Alignment.TopEnd) {
+        IconButton(onClick = { editingOrigin = true }) {
+            Icon(Icons.Outlined.Settings, contentDescription = "Self-hosting", tint = alpine.inkMuted)
+        }
     }
 }

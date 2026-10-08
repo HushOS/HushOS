@@ -1,11 +1,12 @@
 import type { AffiliateInput, AffiliateView } from '@hushos/billing/api';
 import { createFileRoute, redirect } from '@tanstack/react-router';
+import { cn } from 'cn';
+import { PlusIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { CopyValue } from '@/components/copy-value';
-import { FormActions, FormNote, FormRow, FormTable } from '@/components/form-rows';
-import { PendingLabel, Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { Spinner } from '@/components/motion';
+import { OperatorHeader, OperatorTable, td, th } from '@/components/operator';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -16,8 +17,15 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
     Select,
@@ -53,8 +61,6 @@ function AffiliatesPage() {
     );
 }
 
-const field = 'w-full';
-
 function message(error: unknown) {
     return error instanceof Error ? error.message : 'Please try again.';
 }
@@ -63,6 +69,7 @@ function Affiliates() {
     const queryClient = useQueryClient();
     const list = useQuery(affiliatesQueryOptions);
     const [busy, setBusy] = useState<string | null>(null);
+    const [adding, setAdding] = useState(false);
     async function act(id: string, run: () => Promise<unknown>, done: string) {
         setBusy(id);
         try {
@@ -70,78 +77,110 @@ function Affiliates() {
             await queryClient.invalidateQueries({ queryKey: affiliatesQueryOptions.queryKey });
             toast.add({ type: 'success', title: done });
         } catch (error) {
-            toast.add({ type: 'error', title: 'That did not work', description: message(error) });
+            toast.add({ type: 'error', title: 'That didn’t work', description: message(error) });
         } finally {
             setBusy(null);
         }
     }
     return (
-        <div className="flex flex-1 flex-col">
-            <PageHeader
-                eyebrow="Operator"
+        <div className="flex flex-1 flex-col pb-10">
+            <OperatorHeader
                 title="Affiliates"
-                description="Creators with a code and a page. Their discount is registered with the payment provider when you enrol them; their commission accrues on every paid order from people who signed up through them, and you mark it paid once you have sent it. An affiliate need not be a person: a campaign with a code and a page, and no commission, works the same way. A discount you create at Polar yourself has a page as well, at /go/<code>."
+                description="Creators who bring people in for a discount and a commission. Enrolling one registers the discount with the payment provider; their commission accrues on each paid order, and you mark it paid once you have sent it. A discount made at Polar directly has a page too, at /go/<code>."
+            >
+                <Button size="sm" onClick={() => setAdding(true)}>
+                    <PlusIcon />
+                    Add affiliate
+                </Button>
+            </OperatorHeader>
+            <AffiliateDialog
+                open={adding}
+                onOpenChange={setAdding}
+                onSaved={() =>
+                    queryClient.invalidateQueries({ queryKey: affiliatesQueryOptions.queryKey })
+                }
             />
-            <div className="flex flex-col gap-8 px-5 py-6 sm:px-8 sm:py-8">
-                <NewAffiliate
-                    onCreated={() =>
-                        queryClient.invalidateQueries({ queryKey: affiliatesQueryOptions.queryKey })
-                    }
-                />
+            <div className="flex flex-col gap-6 px-5 sm:px-8">
                 {list.isPending ? (
                     <div className="flex items-center justify-center py-10 text-muted-foreground">
                         <Spinner />
                     </div>
                 ) : list.isError ? (
-                    <FormNote tone="destructive">{message(list.error)}</FormNote>
+                    <p
+                        role="alert"
+                        className="rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"
+                    >
+                        {message(list.error)}
+                    </p>
                 ) : list.data.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No affiliates yet.</p>
+                    <p className="py-12 text-center text-sm text-muted-foreground">
+                        No affiliates yet.
+                    </p>
                 ) : (
-                    <ul className="flex flex-col gap-6">
-                        {list.data.map((affiliate) => (
-                            <AffiliateCard
-                                key={affiliate.id}
-                                affiliate={affiliate}
-                                busy={busy === affiliate.id}
-                                onToggle={() =>
-                                    void act(
-                                        affiliate.id,
-                                        () =>
-                                            growthApi.updateAffiliate(affiliate.id, {
-                                                active: !affiliate.active,
-                                            }),
-                                        affiliate.active ? 'Affiliate paused' : 'Affiliate active',
-                                    )
-                                }
-                                onPaid={() =>
-                                    void act(
-                                        affiliate.id,
-                                        () => growthApi.markAffiliatePaid(affiliate.id),
-                                        'Marked as paid',
-                                    )
-                                }
-                                onDelete={() =>
-                                    void act(
-                                        affiliate.id,
-                                        () => growthApi.deleteAffiliate(affiliate.id),
-                                        `${affiliate.name} removed`,
-                                    )
-                                }
-                                onSaved={() =>
-                                    queryClient.invalidateQueries({
-                                        queryKey: affiliatesQueryOptions.queryKey,
-                                    })
-                                }
-                            />
-                        ))}
-                    </ul>
+                    <OperatorTable>
+                        <thead>
+                            <tr>
+                                <th className={th}>Creator</th>
+                                <th className={th}>Code</th>
+                                <th className={th}>Status</th>
+                                <th className={cn(th, 'text-right')}>Sign-ups</th>
+                                <th className={cn(th, 'text-right')}>Paid orders</th>
+                                <th className={cn(th, 'text-right')}>Owed</th>
+                                <th className={cn(th, 'text-right')}>Paid out</th>
+                                <th className={th}>
+                                    <span className="sr-only">Actions</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {list.data.map((affiliate) => (
+                                <AffiliateRow
+                                    key={affiliate.id}
+                                    affiliate={affiliate}
+                                    busy={busy === affiliate.id}
+                                    onToggle={() =>
+                                        void act(
+                                            affiliate.id,
+                                            () =>
+                                                growthApi.updateAffiliate(affiliate.id, {
+                                                    active: !affiliate.active,
+                                                }),
+                                            affiliate.active
+                                                ? `${affiliate.name} paused`
+                                                : `${affiliate.name} resumed`,
+                                        )
+                                    }
+                                    onPaid={(owed) =>
+                                        void act(
+                                            affiliate.id,
+                                            () => growthApi.markAffiliatePaid(affiliate.id),
+                                            `${owed} marked paid to ${affiliate.name}`,
+                                        )
+                                    }
+                                    onDelete={() =>
+                                        void act(
+                                            affiliate.id,
+                                            () => growthApi.deleteAffiliate(affiliate.id),
+                                            `${affiliate.name} removed`,
+                                        )
+                                    }
+                                    onSaved={() =>
+                                        queryClient.invalidateQueries({
+                                            queryKey: affiliatesQueryOptions.queryKey,
+                                        })
+                                    }
+                                />
+                            ))}
+                        </tbody>
+                    </OperatorTable>
                 )}
             </div>
         </div>
     );
 }
 
-function AffiliateCard({
+/* One creator: a row of numbers and actions; Edit opens their fields underneath. */
+function AffiliateRow({
     affiliate,
     busy,
     onToggle,
@@ -152,7 +191,7 @@ function AffiliateCard({
     affiliate: AffiliateView;
     busy: boolean;
     onToggle: () => void;
-    onPaid: () => void;
+    onPaid: (owed: string) => void;
     onDelete: () => void;
     onSaved: () => Promise<unknown>;
 }) {
@@ -160,131 +199,134 @@ function AffiliateCard({
     const [editing, setEditing] = useState(false);
     const [deleting, setDeleting] = useState(false);
     return (
-        <li
-            className="divide-y divide-rule rounded-md border border-rule"
-            data-affiliate={affiliate.slug}
-        >
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                    <p className="flex flex-wrap items-center gap-2 text-base font-bold tracking-tight">
-                        {affiliate.name}
-                        <Badge variant={affiliate.active ? 'success' : 'warning'}>
-                            {affiliate.active ? 'active' : 'paused'}
-                        </Badge>
-                    </p>
-                    <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+        <>
+            <tr data-affiliate={affiliate.slug} className="hover:bg-muted">
+                <td className={cn(td, 'max-w-[260px]')}>
+                    <span className="block truncate pt-1 font-semibold">{affiliate.name}</span>
+                    <span className="block truncate pb-1 text-xs text-muted-foreground">
                         {describeDiscount(affiliate)} ·{' '}
-                        {describeCommission(affiliate.commissionBps)} commission · enrolled{' '}
-                        {formatWhen(affiliate.createdAt)}
-                    </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        aria-pressed={editing}
-                        disabled={busy}
-                        onClick={() => setEditing((on) => !on)}
-                    >
-                        Edit
-                    </Button>
-                    <Button variant="outline" size="sm" disabled={busy} onClick={onToggle}>
-                        {affiliate.active ? 'Pause' : 'Resume'}
-                    </Button>
-                    <Button
-                        variant="destructive-outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => setDeleting(true)}
-                    >
-                        Delete
-                    </Button>
-                    <Button size="sm" disabled={busy || owed === '–'} onClick={onPaid}>
-                        Mark paid
-                    </Button>
-                </div>
-            </div>
-            <AlertDialog open={deleting} onOpenChange={setDeleting}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Remove {affiliate.name}?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            {owed === '–'
-                                ? `Their page and code stop working, the discount is removed at the payment provider, and the record of what they were paid goes with them. People who signed up through them keep their accounts.`
-                                : `They are still owed ${owed}. Mark it paid first, or pause them instead.`}
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Keep them</AlertDialogCancel>
-                        <AlertDialogAction
-                            disabled={owed !== '–'}
-                            onClick={() => {
-                                setDeleting(false);
-                                onDelete();
-                            }}
+                        {describeCommission(affiliate.commissionBps)} commission
+                    </span>
+                </td>
+                <td className={cn(td, 'font-mono')}>
+                    <CopyValue value={affiliate.code} label="Code" />
+                </td>
+                <td className={cn(td, 'whitespace-nowrap')}>
+                    {!affiliate.providerDiscountId ? (
+                        <span
+                            className="font-semibold text-destructive"
+                            title="No discount is registered with the payment provider, so the code can’t be applied at checkout."
+                        >
+                            No discount
+                        </span>
+                    ) : affiliate.active ? (
+                        'Active'
+                    ) : (
+                        <span className="text-muted-foreground">Paused</span>
+                    )}
+                </td>
+                <td className={cn(td, 'text-right font-mono tabular-nums')}>
+                    {affiliate.stats.signups}
+                </td>
+                <td className={cn(td, 'text-right font-mono tabular-nums')}>
+                    {affiliate.stats.orders}
+                </td>
+                <td
+                    className={cn(
+                        td,
+                        'text-right font-mono tabular-nums',
+                        owed !== '–' && 'font-semibold',
+                    )}
+                >
+                    {owed}
+                </td>
+                <td className={cn(td, 'text-right font-mono tabular-nums')}>
+                    {money(affiliate.stats.earnings, 'paid')}
+                </td>
+                <td className={cn(td, 'text-right whitespace-nowrap')}>
+                    <span className="inline-flex gap-1">
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-label={`Edit ${affiliate.name}`}
+                            disabled={busy}
+                            onClick={() => setEditing(true)}
+                        >
+                            Edit
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-label={`${affiliate.active ? 'Pause' : 'Resume'} ${affiliate.name}`}
+                            disabled={busy}
+                            onClick={onToggle}
+                        >
+                            {affiliate.active ? 'Pause' : 'Resume'}
+                        </Button>
+                        {owed !== '–' && (
+                            <Button
+                                variant="ghost"
+                                size="xs"
+                                aria-label={`Mark ${owed} paid to ${affiliate.name}`}
+                                disabled={busy}
+                                onClick={() => onPaid(owed)}
+                            >
+                                Mark paid
+                            </Button>
+                        )}
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-label={`Remove ${affiliate.name}`}
+                            className="text-destructive hover:bg-destructive-soft hover:text-destructive"
+                            disabled={busy}
+                            onClick={() => setDeleting(true)}
                         >
                             Remove
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
-            {editing && (
-                <EditAffiliate
-                    affiliate={affiliate}
-                    onCancel={() => setEditing(false)}
-                    onSaved={async () => {
-                        await onSaved();
-                        setEditing(false);
-                    }}
-                />
-            )}
-            <div className="grid gap-y-3 px-4 py-3 sm:grid-cols-2 sm:gap-x-6">
-                <div className="min-w-0">
-                    <p className="eyebrow text-muted-foreground">Page</p>
-                    <CopyValue
-                        value={affiliate.url}
-                        label="Copy affiliate page"
-                        wrap
-                        className="mt-1"
-                    />
-                </div>
-                <div className="min-w-0">
-                    <p className="eyebrow text-muted-foreground">Code</p>
-                    <CopyValue value={affiliate.code} label="Copy code" className="mt-1" />
-                </div>
-            </div>
-            <dl className="grid grid-cols-2 gap-y-3 px-4 py-3 text-sm sm:grid-cols-4">
-                {[
-                    ['Sign-ups', String(affiliate.stats.signups)],
-                    ['Paid orders', String(affiliate.stats.orders)],
-                    ['Owed', owed],
-                    ['Paid out', money(affiliate.stats.earnings, 'paid')],
-                ].map(([label, value]) => (
-                    <div key={label} className="flex flex-col gap-1">
-                        <dt className="eyebrow text-muted-foreground">{label}</dt>
-                        <dd className="text-base font-bold tabular-nums">{value}</dd>
-                    </div>
-                ))}
-            </dl>
-            {affiliate.notes && (
-                <p className="px-4 py-3 text-sm leading-relaxed text-muted-foreground">
-                    {affiliate.notes}
-                </p>
-            )}
-            {!affiliate.providerDiscountId && (
-                <p className="rounded-b-md bg-destructive-soft px-4 py-3 text-sm leading-relaxed text-destructive">
-                    No discount is registered with the payment provider, so the code cannot be
-                    applied at checkout.
-                </p>
-            )}
-        </li>
+                        </Button>
+                    </span>
+                    <AlertDialog open={deleting} onOpenChange={setDeleting}>
+                        <AlertDialogContent>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>Remove {affiliate.name}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    {owed === '–'
+                                        ? 'Their page and code stop working, the discount is removed at the payment provider, and the record of what they were paid goes with them. People who signed up through them keep their accounts.'
+                                        : `They are still owed ${owed}. Mark it paid first, or pause them instead.`}
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>Keep them</AlertDialogCancel>
+                                {owed === '–' && (
+                                    <AlertDialogAction
+                                        variant="destructive"
+                                        onClick={() => {
+                                            setDeleting(false);
+                                            onDelete();
+                                        }}
+                                    >
+                                        Remove
+                                    </AlertDialogAction>
+                                )}
+                            </AlertDialogFooter>
+                        </AlertDialogContent>
+                    </AlertDialog>
+                </td>
+            </tr>
+            <AffiliateDialog
+                affiliate={affiliate}
+                open={editing}
+                onOpenChange={setEditing}
+                onSaved={onSaved}
+            />
+        </>
     );
 }
 
 const DURATIONS: { value: AffiliateInput['duration']; label: string }[] = [
-    { value: 'forever', label: 'For as long as they stay' },
-    { value: 'once', label: 'First payment only' },
-    { value: 'repeating', label: 'A number of months' },
+    { value: 'forever', label: 'Always' },
+    { value: 'once', label: 'First payment' },
+    { value: 'repeating', label: 'Some months' },
 ];
 
 const empty: AffiliateInput = {
@@ -299,73 +341,38 @@ const empty: AffiliateInput = {
     notes: '',
 };
 
-function NewAffiliate({ onCreated }: { onCreated: () => Promise<unknown> }) {
-    const id = useId();
-    const [form, setForm] = useState<AffiliateInput>(empty);
-    const [pending, setPending] = useState(false);
-    const [error, setError] = useState('');
-    async function submit(event: React.FormEvent) {
-        event.preventDefault();
-        setPending(true);
-        setError('');
-        try {
-            const created = await growthApi.createAffiliate(toInput(form));
-            setForm(empty);
-            toast.add({
-                type: 'success',
-                title: `${created.name} enrolled`,
-                description: created.url,
-            });
-            await onCreated();
-        } catch (cause) {
-            setError(message(cause));
-        } finally {
-            setPending(false);
-        }
-    }
-    return (
-        <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
-            <h2 className="text-lg font-bold">Enrol a creator</h2>
-            <FormTable>
-                <AffiliateFields id={id} form={form} onChange={setForm} />
-                {error && <FormNote tone="destructive">{error}</FormNote>}
-                <FormActions
-                    action={
-                        <Button type="submit" disabled={pending}>
-                            <PendingLabel pending={pending} idle="Enrol" busy="Enrolling" />
-                        </Button>
-                    }
-                >
-                    The discount is created at the payment provider first.
-                </FormActions>
-            </FormTable>
-        </form>
-    );
-}
-
-/* The card's own form: the same rows as enrolment, filled in, saved as one change. */
-function EditAffiliate({
+/*
+ * Enrol a creator, or change one: the same fields either way, in a dialog. A
+ * change to the code or the discount is made at the payment provider first.
+ */
+function AffiliateDialog({
     affiliate,
-    onCancel,
+    open,
+    onOpenChange,
     onSaved,
 }: {
-    affiliate: AffiliateView;
-    onCancel: () => void;
+    affiliate?: AffiliateView;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
     onSaved: () => Promise<unknown>;
 }) {
     const id = useId();
-    const [form, setForm] = useState<AffiliateInput>({
-        name: affiliate.name,
-        slug: affiliate.slug,
-        code: affiliate.code,
-        percentOff: affiliate.percentOff,
-        duration: affiliate.duration,
-        durationMonths: affiliate.durationMonths ?? 3,
-        commissionBps: affiliate.commissionBps,
-        // The account is shown by its id only; leaving the field empty keeps it, and a new email replaces it.
-        userEmail: '',
-        notes: affiliate.notes ?? '',
-    });
+    const initial = (): AffiliateInput =>
+        affiliate
+            ? {
+                  name: affiliate.name,
+                  slug: affiliate.slug,
+                  code: affiliate.code,
+                  percentOff: affiliate.percentOff,
+                  duration: affiliate.duration,
+                  durationMonths: affiliate.durationMonths ?? 3,
+                  commissionBps: affiliate.commissionBps,
+                  // The account is shown by its id only; leaving the field empty keeps it, and a new email replaces it.
+                  userEmail: '',
+                  notes: affiliate.notes ?? '',
+              }
+            : empty;
+    const [form, setForm] = useState<AffiliateInput>(initial);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     async function submit(event: React.FormEvent) {
@@ -374,12 +381,22 @@ function EditAffiliate({
         setError('');
         try {
             const input = toInput(form);
-            await growthApi.updateAffiliate(affiliate.id, {
-                ...input,
-                ...(input.userEmail ? { userEmail: input.userEmail } : {}),
-            });
-            toast.add({ type: 'success', title: `${input.name} updated` });
+            if (affiliate) {
+                await growthApi.updateAffiliate(affiliate.id, {
+                    ...input,
+                    ...(input.userEmail ? { userEmail: input.userEmail } : {}),
+                });
+                toast.add({ type: 'success', title: `${input.name} updated` });
+            } else {
+                const created = await growthApi.createAffiliate(input);
+                toast.add({
+                    type: 'success',
+                    title: `${created.name} enrolled`,
+                    description: created.url,
+                });
+            }
             await onSaved();
+            onOpenChange(false);
         } catch (cause) {
             setError(message(cause));
         } finally {
@@ -387,37 +404,74 @@ function EditAffiliate({
         }
     }
     return (
-        <form
-            onSubmit={(event) => void submit(event)}
-            className="flex flex-col gap-3 px-4 py-4"
-            aria-label={`Edit ${affiliate.name}`}
+        <Dialog
+            open={open}
+            onOpenChange={(next) => {
+                if (pending) return;
+                // Every opening starts from the creator as saved, or from empty.
+                if (next) {
+                    setForm(initial());
+                    setError('');
+                }
+                onOpenChange(next);
+            }}
         >
-            <FormTable>
-                <AffiliateFields
-                    id={id}
-                    form={form}
-                    onChange={setForm}
-                    accountPlaceholder={
-                        affiliate.userId
-                            ? 'Linked to an account. Enter another email to change it.'
-                            : 'Optional: the email of their HushOS account, to show earnings in their Drive'
-                    }
-                />
-                {error && <FormNote tone="destructive">{error}</FormNote>}
-                <FormActions
-                    action={
-                        <Button type="submit" disabled={pending}>
-                            <PendingLabel pending={pending} idle="Save" busy="Saving" />
+            <DialogContent className="sm:max-w-[560px]">
+                <form onSubmit={(event) => void submit(event)} className="contents" noValidate>
+                    <DialogHeader>
+                        <DialogTitle>
+                            {affiliate ? `Edit ${affiliate.name}` : 'Add an affiliate'}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {affiliate ? (
+                                <>
+                                    Their page is <span className="font-mono">{affiliate.url}</span>
+                                    , enrolled {formatWhen(affiliate.createdAt, { lower: true })}. A
+                                    changed code or discount is changed at the payment provider
+                                    first.
+                                </>
+                            ) : (
+                                'A creator, or a campaign, with a code and a page. The discount is created at the payment provider first.'
+                            )}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <AffiliateFields
+                        id={id}
+                        form={form}
+                        onChange={setForm}
+                        accountPlaceholder={
+                            affiliate?.userId
+                                ? 'Linked. Another email changes it.'
+                                : 'Optional: shows their earnings in their Drive'
+                        }
+                    />
+                    {error && (
+                        <p role="alert" className="text-[13px] text-destructive">
+                            {error}
+                        </p>
+                    )}
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={pending}
+                            onClick={() => onOpenChange(false)}
+                        >
+                            Cancel
                         </Button>
-                    }
-                >
-                    <button type="button" className="text-link cursor-pointer" onClick={onCancel}>
-                        Cancel
-                    </button>
-                    A changed code or discount is changed at the payment provider first.
-                </FormActions>
-            </FormTable>
-        </form>
+                        <Button type="submit" disabled={pending}>
+                            {pending
+                                ? affiliate
+                                    ? 'Saving…'
+                                    : 'Adding…'
+                                : affiliate
+                                  ? 'Save'
+                                  : 'Add affiliate'}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -431,11 +485,35 @@ function toInput(form: AffiliateInput): AffiliateInput {
     };
 }
 
+function Field({
+    id,
+    label,
+    wide,
+    children,
+}: {
+    id: string;
+    label: string;
+    wide?: boolean;
+    children: React.ReactNode;
+}) {
+    return (
+        <div className={cn('flex min-w-0 flex-col gap-1.5', wide && 'sm:col-span-2')}>
+            <label htmlFor={id} className="text-[13px] font-semibold">
+                {label}
+            </label>
+            {children}
+        </div>
+    );
+}
+
+const small = 'text-[15px]';
+
+/* Every field of a creator in a compact grid: one row on a wide screen, stacked on a phone. */
 function AffiliateFields({
     id,
     form,
     onChange,
-    accountPlaceholder = 'Optional: the email of their HushOS account, to show earnings in their Drive',
+    accountPlaceholder = 'Optional',
 }: {
     id: string;
     form: AffiliateInput;
@@ -445,22 +523,22 @@ function AffiliateFields({
     const set = <K extends keyof AffiliateInput>(key: K, value: AffiliateInput[K]) =>
         onChange((current) => ({ ...current, [key]: value }));
     return (
-        <>
-            <FormRow label="Name" htmlFor={`${id}-name`}>
+        <div className="grid gap-4 sm:grid-cols-2">
+            <Field id={`${id}-name`} label="Name" wide>
                 <Input
                     id={`${id}-name`}
-                    className={field}
+                    className={small}
                     value={form.name}
                     onChange={(event) => set('name', event.target.value)}
                     placeholder="Ada on YouTube"
                     required
                     maxLength={100}
                 />
-            </FormRow>
-            <FormRow label="Page slug" htmlFor={`${id}-slug`}>
+            </Field>
+            <Field id={`${id}-slug`} label="Page slug">
                 <Input
                     id={`${id}-slug`}
-                    className={`${field} font-mono`}
+                    className={cn(small, 'font-mono')}
                     value={form.slug}
                     onChange={(event) => set('slug', event.target.value)}
                     placeholder="ada"
@@ -468,11 +546,11 @@ function AffiliateFields({
                     maxLength={40}
                     pattern="[A-Za-z0-9-]+"
                 />
-            </FormRow>
-            <FormRow label="Code" htmlFor={`${id}-code`}>
+            </Field>
+            <Field id={`${id}-code`} label="Code">
                 <Input
                     id={`${id}-code`}
-                    className={`${field} font-mono uppercase`}
+                    className={cn(small, 'font-mono uppercase')}
                     value={form.code}
                     onChange={(event) => set('code', event.target.value)}
                     placeholder="ADA20"
@@ -481,11 +559,11 @@ function AffiliateFields({
                     maxLength={32}
                     pattern="[A-Za-z0-9]+"
                 />
-            </FormRow>
-            <FormRow label="Percent off" htmlFor={`${id}-percent`}>
+            </Field>
+            <Field id={`${id}-percent`} label="Percent off">
                 <Input
                     id={`${id}-percent`}
-                    className={field}
+                    className={cn(small, 'tabular-nums')}
                     type="number"
                     min={1}
                     max={100}
@@ -493,9 +571,24 @@ function AffiliateFields({
                     onChange={(event) => set('percentOff', Number(event.target.value))}
                     required
                 />
-            </FormRow>
-            <FormRow label="Lasts" htmlFor={`${id}-duration`}>
-                <div className="flex flex-wrap items-center gap-3">
+            </Field>
+            <Field id={`${id}-commission`} label="Commission %">
+                <Input
+                    id={`${id}-commission`}
+                    className={cn(small, 'tabular-nums')}
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.25}
+                    value={form.commissionBps / 100}
+                    onChange={(event) =>
+                        set('commissionBps', Math.round(Number(event.target.value) * 100))
+                    }
+                    required
+                />
+            </Field>
+            <Field id={`${id}-duration`} label="Discount lasts" wide>
+                <div className="flex gap-1">
                     <Select
                         value={form.duration}
                         onValueChange={(value) =>
@@ -505,8 +598,7 @@ function AffiliateFields({
                     >
                         <SelectTrigger
                             id={`${id}-duration`}
-                            aria-label="Lasts"
-                            className="w-full sm:w-64"
+                            className={cn(small, 'min-w-0 flex-1')}
                         >
                             <SelectValue />
                         </SelectTrigger>
@@ -521,7 +613,7 @@ function AffiliateFields({
                     {form.duration === 'repeating' && (
                         <Input
                             aria-label="Months"
-                            className="w-20 tabular-nums"
+                            className={cn(small, 'w-20 tabular-nums')}
                             type="number"
                             min={1}
                             max={36}
@@ -530,47 +622,27 @@ function AffiliateFields({
                         />
                     )}
                 </div>
-            </FormRow>
-            <FormRow label="Commission" htmlFor={`${id}-commission`}>
-                <div className="flex flex-wrap items-center gap-3">
-                    <Input
-                        id={`${id}-commission`}
-                        className="w-28 tabular-nums"
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.25}
-                        value={form.commissionBps / 100}
-                        onChange={(event) =>
-                            set('commissionBps', Math.round(Number(event.target.value) * 100))
-                        }
-                        required
-                    />
-                    <span className="text-sm text-muted-foreground">
-                        % of each paid order, net of tax
-                    </span>
-                </div>
-            </FormRow>
-            <FormRow label="Their account" htmlFor={`${id}-email`}>
+            </Field>
+            <Field id={`${id}-email`} label="Their account" wide>
                 <Input
                     id={`${id}-email`}
-                    className={field}
+                    className={small}
                     type="email"
                     value={form.userEmail ?? ''}
                     onChange={(event) => set('userEmail', event.target.value)}
                     placeholder={accountPlaceholder}
                 />
-            </FormRow>
-            <FormRow label="Notes" htmlFor={`${id}-notes`}>
+            </Field>
+            <Field id={`${id}-notes`} label="Notes" wide>
                 <Input
                     id={`${id}-notes`}
-                    className={field}
+                    className={small}
                     value={form.notes ?? ''}
                     onChange={(event) => set('notes', event.target.value)}
                     placeholder="How to pay them, agreed terms"
                     maxLength={2000}
                 />
-            </FormRow>
-        </>
+            </Field>
+        </div>
     );
 }

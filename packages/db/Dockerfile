@@ -13,6 +13,7 @@ COPY packages/drive/package.json ./packages/drive/package.json
 COPY packages/jobs/package.json ./packages/jobs/package.json
 COPY packages/logging/package.json ./packages/logging/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/tokens/package.json ./packages/tokens/package.json
 COPY packages/utils/package.json ./packages/utils/package.json
 
 FROM manifests AS migration-deps

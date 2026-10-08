@@ -57,11 +57,11 @@ describe('return-to', () => {
         expect(takeReturn(1_000 + 60 * 60 * 1000 + 1)).toBeNull();
     });
 
-    test('the saved return wins over the query parameter, which wins over Drive', () => {
+    test('the saved return wins over the query parameter, which wins over Home', () => {
         storage();
-        expect(returnTarget(null)).toBe('/app/drive');
+        expect(returnTarget(null)).toBe('/app');
         expect(returnTarget('/app/contacts')).toBe('/app/contacts');
-        expect(returnTarget('https://evil.example')).toBe('/app/drive');
+        expect(returnTarget('https://evil.example')).toBe('/app');
         rememberReturn('/s/abc#secret');
         expect(returnTarget('/app/contacts')).toBe('/s/abc#secret');
     });

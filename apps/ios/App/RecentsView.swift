@@ -22,76 +22,103 @@ enum HomeFilter: String, CaseIterable, Identifiable {
 }
 
 /*
- * Home: the search pill first, then type chips, then what changed most
- * recently across every folder. The layout of a cloud drive, not of Files.
+ * Home: the title, type chips, the tags row once a tag exists, what is on this
+ * phone, then what changed most recently. A folder in Recent opens on top of
+ * Home. Search and Account have their own tabs.
  */
 struct HomeView: View {
     @Environment(DriveStore.self) private var store
     @State private var loaded = false
-    @State private var query = ""
     @State private var filter: HomeFilter = .all
     @State private var tagFilter: String?
     @State private var tagged: [Opened] = []
     @State private var managingTags = false
     @State private var action: NodeAction?
-    @State private var preview: URL?
-    @FocusState private var searching: Bool
+    @State private var viewing: Opened?
+    @State private var showingImporter = false
+    @State private var showingPhone = false
+    @State private var showingPhotos = false
 
     private var rows: [Opened] {
-        let needle = query.trimmingCharacters(in: .whitespaces)
-        let base: [Opened]
-        if tagFilter != nil { base = tagged.filter { needle.isEmpty || $0.name.localizedCaseInsensitiveContains(needle) } }
-        else if needle.isEmpty { base = store.recents }
-        else { base = store.everything.filter { $0.name.localizedCaseInsensitiveContains(needle) }.sorted(by: Opened.byName) }
-        return base.filter(filter.matches)
+        (tagFilter != nil ? tagged : store.recents).filter(filter.matches)
     }
 
     private var heading: String {
         if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) { return tag.name }
-        return query.isEmpty ? "Recent" : "Results"
+        return filter == .all ? "Recent" : "Recent \(filter.rawValue.lowercased())"
+    }
+
+    private var kept: [Offline.Entry] {
+        _ = store.offlineVersion
+        return Offline.entries()
+    }
+
+    /* A brand-new account: nothing recent, nothing in the top folder, no tags, nothing kept. */
+    private var firstRun: Bool {
+        guard loaded, store.recents.isEmpty, store.tags.tags.isEmpty, kept.isEmpty, Offline.keptFolders().isEmpty, let root = store.rootId else { return false }
+        return store.folders[root]?.isEmpty == true
     }
 
     var body: some View {
         NavigationStack {
             List {
-                if showOffline {
-                    // One row into the kept files, not the files themselves: however many are kept, Recent stays in view.
+                if firstRun {
                     Section {
-                        NavigationLink { OfflineView() } label: { offlineLink }
-                    } header: {
-                        VStack(alignment: .leading, spacing: 12) {
-                            homeHeader
+                        EmptyStateView(symbol: "doc.badge.plus", title: "Nothing here yet", message: "Files you add or change show up here.") {
+                            VStack(spacing: Alpine.Space.s2) {
+                                Button { showingImporter = true } label: { Label("Upload files", systemImage: "doc.badge.plus").frame(maxWidth: .infinity) }
+                                    .buttonStyle(PrimaryCapsuleStyle())
+                                Button { showingPhotos = true } label: { Label("Upload photos", systemImage: "photo").frame(maxWidth: .infinity) }
+                                    .buttonStyle(SecondaryCapsuleStyle())
+                            }
+                            .frame(maxWidth: 280)
                         }
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
+                        .bareRow(top: Alpine.Space.s8)
+                    } header: {
+                        top(chips: false)
                     }
-                }
-                Section {
-                    ForEach(rows) { item in row(item) }
-                } header: {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if !showOffline { homeHeader }
-                        sectionTitle(heading)
+                } else {
+                    Section {
+                        NavigationLink { OnThisPhoneView() } label: { onThisPhone }.itemRow()
+                    } header: {
+                        top(chips: true)
                     }
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
-                }
-                if loaded && rows.isEmpty {
-                    ContentUnavailableView(
-                        query.isEmpty ? "Nothing here yet" : "No results",
-                        systemImage: query.isEmpty ? "clock" : "magnifyingglass",
-                        description: Text(query.isEmpty ? "Files you add or change show up here." : "Search covers the folders you have opened.")
-                    )
-                    .listRowBackground(Color.clear)
+                    Section {
+                        ForEach(rows) { item in row(item) }
+                        if loaded && rows.isEmpty { emptyRecent.bareRow(top: Alpine.Space.s4) }
+                    } header: {
+                        Text(heading).font(Theme.Text.title).foregroundStyle(Alpine.ink).textCase(nil)
+                            .padding(.horizontal, Alpine.Space.s1)
+                            .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s2, trailing: 0))
+                    }
                 }
             }
             .listStyle(.insetGrouped)
-            // The heading is drawn in the list like Files' own, so the two tabs start at the same height.
-            .toolbar(.hidden, for: .navigationBar)
-            .refreshable { await store.refreshRecents() }
+            .alpineGrouped()
+            .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
+            .listSectionSpacing(Alpine.Space.s4)
+            .screenChrome(title: "Home")
+            .navigationDestination(for: Opened.self) { folder in
+                FolderView(folderId: folder.id, title: folder.name)
+            }
+            // A tap on "“Lisbon” is on this phone".
+            .navigationDestination(isPresented: $showingPhone) { OnThisPhoneView() }
+            .onChange(of: TransferNotices.shared.opening, initial: true) { _, target in
+                guard target == .phone else { return }
+                TransferNotices.shared.opening = nil
+                showingPhone = true
+            }
+            .refreshable {
+                await store.refreshRecents()
+                await store.refreshSharing()
+                if let tagFilter { tagged = await store.items(tagged: tagFilter) }
+            }
             .nodeActionSheets(action: $action, store: store)
-            .quickLookPreview($preview)
+            .fileViewer($viewing, among: rows, store: store)
+            .uploadFlow(into: store.rootId, importer: $showingImporter, photos: $showingPhotos)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
             .task {
-                _ = await store.loadRoot()
+                if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()
                 await store.refreshTags()
                 loaded = true
@@ -99,226 +126,117 @@ struct HomeView: View {
         }
     }
 
-    private var offlineLink: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Offline")
-                Text(OfflineView.summary(offline)).font(.footnote).foregroundStyle(.secondary)
+    /* The title, the offline line, then the chips and tags: the furniture above On this phone. */
+    private func top(chips: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+            ScreenHeader(title: "Home")
+            if store.offline { OfflineCapsule() }
+            if chips {
+                TypeChips(value: $filter)
+                if !store.tags.tags.isEmpty { tagsRow }
             }
         }
+        .textCase(nil)
+        .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
     }
 
-    private var offline: [Offline.Entry] {
-        _ = store.offlineVersion
-        return Offline.entries()
-    }
-
-    private var showOffline: Bool { query.isEmpty && tagFilter == nil && !offline.isEmpty }
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text).font(.title3.weight(.semibold)).foregroundStyle(Color(.label)).textCase(nil).padding(.top, 4)
-    }
-
-    private var homeHeader: some View {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Home").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil)
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search in HushOS", text: $query)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled().focused($searching)
-                            if !query.isEmpty {
-                                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                                    .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 14).padding(.vertical, 11)
-                        .glassEffect(.regular, in: .capsule)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(HomeFilter.allCases) { option in
-                                    Button(option.rawValue) { filter = option }
-                                        .buttonStyle(.bordered)
-                                        .tint(filter == option ? Color.accentColor : Color.secondary)
-                                        .controlSize(.small)
-                                }
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Text("Tags").font(.subheadline.weight(.semibold))
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(store.tags.tags) { tag in
-                                        Button {
-                                            tagFilter = tagFilter == tag.id ? nil : tag.id
-                                            Task { tagged = tagFilter == nil ? [] : await store.items(tagged: tag.id) }
-                                        } label: {
-                                            TagPill(tag: tag, selected: tagFilter == tag.id)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    if store.tags.tags.isEmpty {
-                                        Text("None yet").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            Button("Manage") { managingTags = true }.font(.footnote)
-                        }
-                    }
-    }
-
-    private func open(_ item: Opened) {
-        if !item.isFolder { Task { preview = await store.download(item) } }
-    }
-
-    private func row(_ item: Opened) -> some View {
-        Button {
-            if !item.isFolder { Task { preview = await store.download(item) } }
-        } label: { NodeRow(item: item) }
-        .buttonStyle(.plain)
-        .nodeActions(item, action: $action, store: store)
-    }
-}
-
-/* Shared: what other people gave this account, each opened with the identity keys and browsable like a folder. */
-struct SharedView: View {
-    @Environment(DriveStore.self) private var store
-    @State private var mounts: [ShareMount] = []
-    @State private var loaded = false
-    @State private var failure: String?
-    @State private var linkText = ""
-    @State private var openingLink: String?
-    @State private var reporting: Opened?
-    @State private var showingContacts = false
-    @State private var byMe = false
-    @State private var mine: [SharedByMe] = []
-    @State private var managing: Opened?
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if byMe {
-                    Section {
-                    if loaded && mine.isEmpty { Text("You have not shared anything yet. Long-press an item and choose Share.").foregroundStyle(.secondary).listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 11, trailing: 20)) }
-                    ForEach(mine) { row in
+    private var tagsRow: some View {
+        HStack(spacing: Alpine.Space.s2) {
+            Text("Tags").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(store.tags.tags) { tag in
                         Button {
-                            if let item = row.item { managing = item }
+                            tagFilter = tagFilter == tag.id ? nil : tag.id
+                            Task { tagged = tagFilter == nil ? [] : await store.items(tagged: tag.id) }
                         } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: row.link != nil ? "link" : "person.crop.circle")
-                                    .font(.title3).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.item?.name ?? "Item outside this workspace").lineLimit(1)
-                                    Text(describe(row)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
+                            TagPill(tag: tag, selected: tagFilter == tag.id)
                         }
                         .buttonStyle(.plain)
-                        .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 11, trailing: 20))
                     }
-                    } header: { sharedHeader }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
-                } else {
-                Section {
-                    HStack {
-                        TextField("Paste a HushOS link", text: $linkText).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        Button("Open") { openingLink = linkText.trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .disabled(!linkText.contains("/s/"))
-                    }
-                    .listRowInsets(EdgeInsets(top: 11, leading: 20, bottom: 11, trailing: 20))
-                } header: {
-                    sharedHeader
                 }
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
-                if loaded && mounts.isEmpty && failure == nil {
-                    ContentUnavailableView("Nothing shared with you", systemImage: "person.2", description: Text("Folders and files others share with you appear here."))
-                        .listRowBackground(Color.clear)
-                }
-                if let failure { Text(failure).foregroundStyle(.secondary) }
-                if !byMe { ForEach(mounts) { mount in
-                    if let root = mount.root {
-                        NavigationLink(value: root) {
-                            HStack(spacing: 12) {
-                                Image(systemName: root.isFolder ? "folder.fill.badge.person.crop" : "doc")
-                                    .font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(root.name).lineLimit(1)
-                                    Text("From \(mount.share.granter.name.isEmpty ? mount.share.granter.email : mount.share.granter.name) · \(mount.share.role.capitalized)")
-                                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        }
-                        .contextMenu {
-                            Button("Report…", systemImage: "flag") { reporting = root }
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("From \(mount.share.granter.name.isEmpty ? mount.share.granter.email : mount.share.granter.name)")
-                            Text(mount.error ?? "This share could not be opened.").font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
-                } }
-                }
+                .padding(.vertical, 1)
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.top, 0, for: .scrollContent)
-            .navigationTitle("Shared")
-            .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showingContacts) { ContactsView().environment(store) }
-            .sheet(item: $managing, onDismiss: { Task { await load() } }) { item in ShareItemSheet(item: item).environment(store) }
-            .onChange(of: byMe) { _, _ in Task { await load() } }
-            .navigationDestination(for: Opened.self) { folder in
-                FolderView(folderId: folder.id, title: folder.name)
+            .scrollClipDisabled()
+            Button("Manage") { managingTags = true }.font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, Alpine.Space.s1)
+    }
+
+    /* Always there: how many files are on this phone, how much room they take, and why that matters. */
+    private var onThisPhone: some View {
+        HStack(spacing: Alpine.Space.s3) {
+            Image(systemName: "iphone").font(.body.weight(.medium)).foregroundStyle(Alpine.onTint)
+                .frame(width: Theme.mark, height: Theme.mark).background(Alpine.tint, in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("On this phone").font(Theme.Text.body).foregroundStyle(Alpine.ink)
+                Text(OnThisPhoneView.summary(kept, folders: Offline.keptFolders().count)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }
-            .navigationDestination(item: $openingLink) { url in
-                LinkBrowserView(url: url)
-            }
-            .sheet(item: $reporting) { item in
-                ReportSheet(item: item) { category, reason, email in
-                    try await store.vault.report(item, category: category, reason: reason, email: email)
-                }
-            }
-            .refreshable { await load() }
-            .task { await load() }
+        }
+        .frame(minHeight: Theme.row)
+    }
+
+    @ViewBuilder private var emptyRecent: some View {
+        if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) {
+            EmptyStateView(title: "Nothing tagged \(tag.name)", message: filter == .all ? "Nothing carries this tag yet." : "No \(filter.rawValue.lowercased()) carry this tag.")
+        } else if filter == .all {
+            EmptyStateView(title: "No recent files yet", message: "Files you add or change show up here.")
+        } else {
+            EmptyStateView(title: "No \(filter.rawValue.lowercased()) yet", message: "\(filter.rawValue) you add or change show up here.")
         }
     }
 
-    private var sharedHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Shared").font(.title.weight(.bold)).foregroundStyle(Color(.label)).textCase(nil)
-                Spacer()
-                Button { showingContacts = true } label: { Image(systemName: "person.crop.circle.badge.checkmark").font(.title3) }
+    @ViewBuilder private func row(_ item: Opened) -> some View {
+        // Offline, a file that isn't on this phone won't open: it dims and says so.
+        let away = store.offline && !item.isFolder && !kept.contains { $0.id == item.id }
+        if item.isFolder {
+            NavigationLink(value: item) { NodeRow(item: item) }
+                .nodeActions(item, action: $action, store: store)
+                .itemRow()
+        } else {
+            Button { Opener.open(item, store: store) { viewing = $0 } } label: {
+                NodeRow(item: item, note: away ? "Not on this phone" : nil).opacity(away ? 0.5 : 1)
             }
-            Picker("Which", selection: $byMe) {
-                Text("With me").tag(false)
-                Text("By me").tag(true)
-            }
-            .pickerStyle(.segmented)
+            .buttonStyle(.plain)
+            .nodeActions(item, action: $action, store: store)
+            .itemRow()
         }
-        .padding(.bottom, 4)
-    }
-
-    private func describe(_ row: SharedByMe) -> String {
-        if let share = row.share {
-            return "With \(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name) · \(share.role == "editor" ? "can edit" : "can view")"
-        }
-        if let link = row.link {
-            return "Link · " + (link.useCount == 1 ? "opened once" : "opened \(link.useCount) times") + (link.hasPassword ? " · password" : "")
-        }
-        return ""
-    }
-
-    private func load() async {
-        do {
-            if byMe { mine = try await store.vault.sharedByMe() } else { mounts = try await store.vault.mountShares() }
-            failure = nil
-        } catch {
-            failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-        loaded = true
     }
 }
+
+/* All, Folders, Images, Videos, Documents. The chosen one fills with ink and carries a check. */
+struct TypeChips: View {
+    @Binding var value: HomeFilter
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Alpine.Space.s2) {
+                ForEach(HomeFilter.allCases) { option in
+                    let on = value == option
+                    Button { value = option } label: {
+                        HStack(spacing: 6) {
+                            if on && option != .all { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
+                            Text(option.rawValue)
+                        }
+                        .font(Theme.Text.callout.weight(.semibold))
+                        .foregroundStyle(on ? Alpine.surface : Alpine.ink)
+                        .padding(.horizontal, Alpine.Space.s4).frame(height: 36)
+                        .background(on ? Alpine.ink : Alpine.surface, in: Capsule())
+                        .overlay { if contrast == .increased && !on { Capsule().strokeBorder(Alpine.rule, lineWidth: 1) } }
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+        }
+        .scrollClipDisabled()
+    }
+}
+
 
 struct TrashView: View {
     @Environment(DriveStore.self) private var store
@@ -328,54 +246,127 @@ struct TrashView: View {
     @State private var selecting = false
     @State private var selection: Set<String> = []
     @State private var confirmDelete = false
+    /* One row's Delete forever, asked first (swipe and menu alike). */
+    @State private var deleting: Opened?
+    /* The row tapped: its sheet with Restore and Delete forever. */
+    @State private var opened: TrashEntry?
+    /* Rows a batch restore couldn't bring back, marked until the banner goes. */
+    private var failedIds: Set<String> { Set(store.restoreProblem?.failed.map(\.entry.item.id) ?? []) }
+    @Environment(\.dismiss) private var dismissView
+
+    /* Select all and Done while selecting; otherwise Select and Empty, or how emptying is going. */
+    @ViewBuilder private var trashActions: some View {
+        if selecting {
+            let all = !store.trash.isEmpty && selection.count == store.trash.count
+            Button { selection = all ? [] : Set(store.trash.map(\.item.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
+                .buttonStyle(.plain)
+            Button { selecting = false; selection = [] } label: { HeaderWord(text: "Done") }
+                .buttonStyle(.plain)
+        } else if store.emptyingTrash {
+            EmptyView()
+        } else if !store.trash.isEmpty {
+            Button { selecting = true } label: { HeaderWord(text: "Select") }
+                .buttonStyle(.plain)
+            Button(role: .destructive) { confirmEmpty = true } label: { HeaderWord(text: "Empty Trash").foregroundStyle(Alpine.danger) }
+                .buttonStyle(.plain)
+        }
+    }
     private var picked: [(item: Opened, parentTrashed: Bool)] { store.trash.filter { selection.contains($0.item.id) } }
 
+    /* "Back to Work", or why it goes to Files instead: Android's words, the board's. */
+    private func restoreDetail(_ item: Opened, parentTrashed: Bool) -> String? {
+        if parentTrashed { return "Its folder “\(store.wasIn(item) ?? "its folder")” is in the Trash too." }
+        return store.wasIn(item).map { "Back to \($0)" }
+    }
+
     var body: some View {
-        List {
+        List { Section { Group {
             if loaded && store.trash.isEmpty {
-                ContentUnavailableView("Trash is empty", systemImage: "trash", description: Text("Items you delete stay here until you remove them."))
-                    .listRowBackground(Color.clear)
+                EmptyStateView(symbol: "trash", title: "Trash is empty", message: "Items you move to the Trash stay here for 30 days.")
+                    .bareRow(top: Alpine.Space.s12)
             }
             ForEach(store.trash, id: \.item.id) { entry in
-                // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
-                let working = store.emptyingTrash || store.trashWorking.contains(entry.item.id)
-                let note = parseDate(entry.item.node.trashedAt).map { "Trashed \($0.formatted(date: .abbreviated, time: .omitted))" }
+                // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action;
+                // only the row being deleted or restored spins.
+                let spinning = store.trashWorking.contains(entry.item.id)
+                let working = store.emptyingTrash || spinning
+                let failed = failedIds.contains(entry.item.id)
+                let note = spinning && store.emptyingTrash ? "Deleting forever…" : failed ? "Couldn’t be restored" : store.trashLine(entry.item)
                 if selecting {
                     Button {
                         if selection.contains(entry.item.id) { selection.remove(entry.item.id) } else { selection.insert(entry.item.id) }
                     } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: selection.contains(entry.item.id) ? "checkmark.circle.fill" : "circle")
-                                .font(.title3)
-                                .foregroundStyle(selection.contains(entry.item.id) ? Color.accentColor : Color.secondary)
-                            NodeRow(item: entry.item, note: note, working: working)
-                        }
+                        NodeRow(item: entry.item, note: note, working: spinning, selected: selection.contains(entry.item.id), access: false, noteIsProblem: failed)
                     }
                     .buttonStyle(.plain)
                     .disabled(working)
+                    .itemRow(selected: selection.contains(entry.item.id))
                 } else {
-                NodeRow(item: entry.item, note: note, working: working)
+                Button { opened = TrashEntry(item: entry.item, parentTrashed: entry.parentTrashed) } label: {
+                    NodeRow(item: entry.item, note: note, working: spinning, access: false, noteIsProblem: failed)
+                }
+                    .buttonStyle(.plain)
                     .disabled(working)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) { Task { await store.purge(entry.item) } } label: { Label("Delete", systemImage: "trash.slash") }
-                        Button { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }.tint(.green)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        // Token colours, and no full swipe: deleting for good is asked first.
+                        Button { deleting = entry.item } label: { Label("Delete forever", systemImage: "trash.slash") }.tint(Alpine.danger)
+                        Button { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }.tint(Alpine.primary)
                     }
                     .contextMenu {
-                        Button("Restore", systemImage: "arrow.uturn.backward") { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } }
-                        Button("Delete Now", systemImage: "trash.slash", role: .destructive) { Task { await store.purge(entry.item) } }
+                        // Where it goes, under the action, as the board's menu says it.
+                        Button { Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) } } label: {
+                            Label {
+                                Text(entry.parentTrashed ? "Restore to Files" : "Restore")
+                                Text(restoreDetail(entry.item, parentTrashed: entry.parentTrashed) ?? "")
+                            } icon: { Image(systemName: "arrow.uturn.backward") }
+                        }
+                        Button("Delete forever", systemImage: "trash.slash", role: .destructive) { deleting = entry.item }.tint(Alpine.danger)
                     }
+                    .itemRow()
                 }
             }
         }
+        .alpineRow() } header: {
+            VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+                ScreenHeader(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
+                if store.offline { OfflineCapsule() }
+                if let emptying = store.emptying {
+                    // The count and a bar while the rows go one by one.
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        HStack {
+                            Text("Emptying the Trash…").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+                            Spacer()
+                            Text("\(emptying.done) of \(emptying.total)").font(Theme.Text.callout.monospacedDigit()).foregroundStyle(Alpine.inkMuted)
+                        }
+                        ProgressView(value: emptying.total == 0 ? 1 : Double(emptying.done) / Double(emptying.total)).tint(Alpine.primary)
+                    }
+                    .padding(.horizontal, Alpine.Space.s1)
+                    .accessibilityElement(children: .combine)
+                } else if !store.trash.isEmpty {
+                    Text("Items stay here for 30 days, then they’re deleted for good.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                        .padding(.horizontal, Alpine.Space.s1)
+                }
+                if let problem = store.restoreProblem {
+                    RestoreProblemBanner(problem: problem) {
+                        let entries = problem.failed.map(\.entry)
+                        Task { await store.restoreMany(entries) }
+                    } dismiss: {
+                        store.restoreProblem = nil
+                    }
+                }
+            }
+            .textCase(nil)
+            .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
+        } }
+        .alpineGrouped()
         .listStyle(.insetGrouped)
         .navigationTitle("Trash")
-        .navigationBarTitleDisplayMode(.inline)
+        .screenChrome(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
         .refreshable {
             // A pull asks the server: the catalogue alone may not know yet.
             await store.sync()
             await store.refreshTrash()
         }
-        .navigationBarBackButtonHidden(selecting)
         .onChange(of: store.trash.map(\.item.id)) { _, ids in
             // Rows restored or deleted, here or elsewhere, leave the selection.
             selection.formIntersection(ids)
@@ -385,7 +376,7 @@ struct TrashView: View {
             if selecting {
                 // The same bar Files shows while selecting: what is picked, and what can be done with it.
                 HStack(spacing: 18) {
-                    Text("\(selection.count) selected").font(.footnote).foregroundStyle(.secondary)
+                    Text("\(selection.count) selected").font(.footnote).foregroundStyle(Alpine.inkMuted)
                     Spacer()
                     // Once acted on, select mode ends, as in Files, and the notice says how it went.
                     Button { let entries = picked; selecting = false; selection = []; Task { await store.restoreMany(entries) } } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
@@ -403,46 +394,40 @@ struct TrashView: View {
             selection.count == 1 ? "Delete this item forever?" : "Delete \(selection.count) items forever?",
             isPresented: $confirmDelete, titleVisibility: .visible
         ) {
-            Button(selection.count == 1 ? "Delete Forever" : "Delete \(selection.count) Items Forever", role: .destructive) {
+            Button("Delete forever", role: .destructive) {
                 let entries = picked
                 selecting = false
                 selection = []
                 Task { await store.purgeMany(entries) }
             }
         } message: {
-            Text("This cannot be undone.")
+            Text(selection.count == 1 ? "It can’t be restored after this." : "They can’t be restored after this.")
         }
-        .toolbar {
-            if selecting {
-                ToolbarItem(placement: .topBarLeading) {
-                    let all = !store.trash.isEmpty && selection.count == store.trash.count
-                    Button(all ? "Deselect All" : "Select All") {
-                        selection = all ? [] : Set(store.trash.map(\.item.id))
-                    }
-                }
-            } else if !store.trash.isEmpty, !store.emptyingTrash {
-                ToolbarItem(placement: .secondaryAction) {
-                    Button("Select", systemImage: "checkmark.circle") { selecting = true }
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                if selecting {
-                    Button("Done") { selecting = false; selection = [] }.fontWeight(.semibold)
-                } else if store.emptyingTrash {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text("Emptying…").font(.subheadline)
-                    }
-                } else {
-                    Button("Empty", role: .destructive) { confirmEmpty = true }.disabled(store.trash.isEmpty)
-                }
-            }
-        }
-        .confirmationDialog("Empty the trash?", isPresented: $confirmEmpty, titleVisibility: .visible) {
-            Button("Delete \(store.trash.count) items forever", role: .destructive) { Task { await store.emptyTrash() } }
+        .confirmationDialog("Empty the Trash?", isPresented: $confirmEmpty, titleVisibility: .visible) {
+            Button("Empty Trash", role: .destructive) { Task { await store.emptyTrash() } }
         } message: {
-            Text("This cannot be undone.")
+            Text(store.trash.count == 1 ? "It’s deleted for good. This can’t be undone." : "All \(store.trash.count) items are deleted for good. This can’t be undone.")
         }
+        .alert(deleting.map { "Delete “\($0.name)” forever?" } ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Cancel", role: .cancel) { deleting = nil }
+            Button("Delete forever", role: .destructive) {
+                if let item = deleting { Task { await store.purge(item) } }
+                deleting = nil
+            }
+        } message: {
+            Text(deleting?.isFolder == true ? "Everything inside goes too. It can’t be restored after this." : "It can’t be restored after this.")
+        }
+        .sheet(item: $opened) { entry in
+            TrashItemSheet(entry: entry, detail: restoreDetail(entry.item, parentTrashed: entry.parentTrashed)) {
+                opened = nil
+                Task { await store.restore(entry.item, parentTrashed: entry.parentTrashed) }
+            } delete: {
+                opened = nil
+                deleting = entry.item
+            }
+            .environment(store)
+        }
+        .onDisappear { store.restoreProblem = nil }
         .task {
             await store.refreshTrash()
             loaded = true
@@ -451,77 +436,128 @@ struct TrashView: View {
 }
 
 /* Every tag in the workspace: rename, recolour, delete, and how many items each names. */
+/*
+ * Manage tags: every tag in the list. Tap a dot for the five presets or a custom colour,
+ * tap a name or swipe to rename, swipe to remove. Removing says how many items lose the
+ * tag and asks once; the items themselves are never touched.
+ */
 struct TagManagerSheet: View {
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var newName = ""
-    @State private var renaming: Tag?
-    @State private var renameDraft = ""
     @State private var picking: Tag?
-    @State private var custom: Color = .blue
+    @State private var removing: Tag?
+    @State private var custom: Color = Alpine.primary
 
     var body: some View {
         NavigationStack {
             List {
-                if let tag = picking {
-                    Section {
-                        ColorPicker("Colour for \(tag.name)", selection: $custom, supportsOpacity: false)
-                        Button("Apply") {
-                            let hex = TagColour.hex(custom)
-                            picking = nil
-                            Task { await store.editTags { registry in registry.recolour(tag.id, to: hex) } }
-                        }
-                    }
-                }
                 Section {
                     HStack {
-                        TextField("New tag", text: $newName).submitLabel(.done).onSubmit(create)
-                        Button("Add", action: create).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        TextField("New tag", text: $newName).submitLabel(.done).onSubmit(create).foregroundStyle(Alpine.ink)
+                        Button("Add", action: create).fontWeight(.semibold).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
+                    .alpineRow()
                 }
                 Section {
-                    if store.tags.tags.isEmpty { Text("No tags yet. Tags group items across folders.").foregroundStyle(.secondary) }
+                    if store.tags.tags.isEmpty { Text("No tags yet. Tags group items across folders.").foregroundStyle(Alpine.inkMuted).alpineRow() }
                     ForEach(store.tags.tags) { tag in
-                        HStack(spacing: 12) {
+                        HStack(spacing: Alpine.Space.s3) {
                             Menu {
-                                ForEach(TagRegistry.presets, id: \.self) { preset in
-                                    Button(preset.capitalized) { Task { await store.editTags { registry in registry.recolour(tag.id, to: preset) } } }
+                                Section("Colour for \(tag.name)") {
+                                    ForEach(TagRegistry.presets, id: \.self) { preset in
+                                        Button { Task { await store.editTags { registry in registry.recolour(tag.id, to: preset) } } } label: {
+                                            if tag.colour == preset { Label(TagColour.label(preset), systemImage: "checkmark") } else { Text(TagColour.label(preset)) }
+                                        }
+                                    }
                                 }
-                                Divider()
-                                Button("Custom colour…", systemImage: "paintpalette") { picking = tag; custom = TagColour.swiftUI(tag.colour) }
+                                Button("Custom colour", systemImage: "paintpalette") { custom = TagColour.swiftUI(tag.colour); picking = tag }
                             } label: {
-                                Circle().fill(TagColour.swiftUI(tag.colour)).frame(width: 18, height: 18)
+                                TagDot(tag: tag, size: 18).frame(width: 32, height: 32).contentShape(Circle())
                             }
-                            Text(tag.name)
-                            Spacer()
-                            Text("\(store.tags.nodes(with: tag.id).count)").foregroundStyle(.secondary).font(.footnote)
+                            .accessibilityLabel("Colour for \(tag.name): \(TagColour.label(tag.colour))")
+                            Button { rename(tag) } label: {
+                                HStack {
+                                    Text(tag.name).foregroundStyle(Alpine.ink)
+                                    Spacer()
+                                    let count = store.tags.nodes(with: tag.id).count
+                                    Text(count == 1 ? "1 item" : "\(count) items").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { renameDraft = tag.name; renaming = tag }
                         .swipeActions {
-                            Button(role: .destructive) { Task { await store.editTags { registry in registry.remove(tag.id) } } } label: { Label("Delete", systemImage: "trash") }
-                            Button { renameDraft = tag.name; renaming = tag } label: { Label("Rename", systemImage: "pencil") }.tint(.orange)
+                            Button { removing = tag } label: { Label("Remove", systemImage: "trash") }.tint(Alpine.danger)
+                            Button { rename(tag) } label: { Label("Rename", systemImage: "pencil") }.tint(Alpine.primary)
                         }
+                        .alpineRow()
                     }
                 } footer: {
-                    Text("Tap a colour for the presets or a custom colour, a name to rename it. Tags live in a sealed workspace document, so people you share with never see them.")
+                    Text("Tags are only for you: people you share with never see them. Tap a dot for its colour. Swipe a tag to rename or remove it.")
                 }
             }
+            .listStyle(.insetGrouped)
+            .alpineGrouped()
             .navigationTitle("Tags")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .alert("Rename tag", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-                TextField("Name", text: $renameDraft)
-                Button("Cancel", role: .cancel) { renaming = nil }
-                Button("Save") {
-                    guard let tag = renaming else { return }
-                    let name = renameDraft
-                    renaming = nil
-                    Task { await store.editTags { registry in try registry.rename(tag.id, to: name) } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .sheet(item: $picking) { tag in
+                NavigationStack {
+                    Form {
+                        Section {
+                            ColorPicker("Custom colour", selection: $custom, supportsOpacity: false).alpineRow()
+                        } footer: {
+                            Text("Shown on the tag everywhere, only to you.")
+                        }
+                    }
+                    .alpineGrouped()
+                    .navigationTitle("Custom colour")
+                    .navigationSubtitle(Text(tag.name))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { picking = nil } }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Apply") {
+                                let hex = TagColour.hex(custom)
+                                picking = nil
+                                Task { await store.editTags { registry in registry.recolour(tag.id, to: hex) } }
+                            }
+                        }
+                    }
+                }
+                .presentationDetents([.medium])
+            }
+            .alert(removing.map { "Remove “\($0.name)”?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+                Button("Cancel", role: .cancel) { removing = nil }
+                Button("Remove tag", role: .destructive) {
+                    guard let tag = removing else { return }
+                    removing = nil
+                    Task {
+                        await store.editTags { registry in registry.remove(tag.id) }
+                        store.notify("“\(tag.name)” removed")
+                    }
+                }
+            } message: {
+                if let tag = removing {
+                    let count = store.tags.nodes(with: tag.id).count
+                    Text("It comes off \(count) \(count == 1 ? "item" : "items") and leaves your list. The items themselves aren’t touched.")
                 }
             }
         }
         .task { await store.refreshTags() }
+    }
+
+    private func rename(_ tag: Tag) {
+        let others = store.tags.tags.filter { $0.id != tag.id }.map(\.name)
+        TextPrompt.present(title: "Rename tag", message: "The new name shows everywhere at once.", text: tag.name, placeholder: "Name", action: "Rename", selectStem: false,
+                           validate: { name in
+                               let clean = name.trimmingCharacters(in: .whitespaces)
+                               if clean.isEmpty { return "Enter a name." }
+                               return others.contains { $0.caseInsensitiveCompare(clean) == .orderedSame } ? "You already have a tag called “\(clean)”." : nil
+                           }) { name in
+            Task { await store.editTags { registry in try registry.rename(tag.id, to: name) } }
+        }
     }
 
     private func create() {
@@ -532,51 +568,140 @@ struct TagManagerSheet: View {
     }
 }
 
-/* The files kept on this phone, newest first: they open without the network. */
-struct OfflineView: View {
+/*
+ * What is on this phone: the files kept here so they open without a connection.
+ * Touch and hold for Send a copy, Show in folder, or Remove from this phone,
+ * which leaves the file in HushOS.
+ */
+struct OnThisPhoneView: View {
     @Environment(DriveStore.self) private var store
     @State private var action: NodeAction?
     @State private var preview: URL?
-    /* The opened items behind the rows, so each gets the full menu. */
+    @State private var viewing: Opened?
+    @State private var showing: Opened?
+    /* The opened items behind the rows, for a full row and Send a copy. */
     @State private var items: [String: Opened] = [:]
+    @Environment(\.dismiss) private var dismissView
 
-    /* "3 files · 1.2 GB", the size left out when an entry never recorded one. */
-    static func summary(_ entries: [Offline.Entry]) -> String {
-        let count = entries.count == 1 ? "1 file" : "\(entries.count) files"
+    /* "1 folder · 3 files · 1.2 GB · open without a connection", the size left out when an entry never recorded one. */
+    static func summary(_ entries: [Offline.Entry], folders: Int = 0) -> String {
+        guard !entries.isEmpty || folders > 0 else { return "Nothing yet · files kept here open without a connection" }
+        var parts: [String] = []
+        if folders > 0 { parts.append(folders == 1 ? "1 folder" : "\(folders) folders") }
+        // Every kept file, those kept with a folder too: "1 folder · 2 files · 28.8 MB" (Android's words).
+        if !entries.isEmpty || folders == 0 { parts.append(entries.count == 1 ? "1 file" : "\(entries.count) files") }
         let sizes = entries.compactMap(\.size)
-        guard sizes.count == entries.count else { return count }
-        return "\(count) · \(formatBytes(Int64(sizes.reduce(0, +))))"
+        if sizes.count == entries.count, !entries.isEmpty { parts.append(formatBytes(Int64(sizes.reduce(0, +)))) }
+        return (parts + ["open without a connection"]).joined(separator: " · ")
     }
 
+    /* Files kept on their own; those kept with a folder are counted on the folder's row. */
     private var entries: [Offline.Entry] {
         _ = store.offlineVersion
-        return Offline.entries()
+        let folders = Set(Offline.keptFolders().map(\.id))
+        return Offline.entries().filter { $0.folderId.map { !folders.contains($0) } ?? true }
+    }
+
+    private var keptFolders: [Offline.KeptFolder] {
+        _ = store.offlineVersion
+        return Offline.keptFolders()
+    }
+
+    /* "12 files · 340 MB", or what is happening while the folder's files come down. */
+    private func folderLine(_ folder: Offline.KeptFolder) -> String {
+        let files = Offline.entries(keptWith: folder.id)
+        if case .fetching = store.keptState(folder.id) { return files.isEmpty ? "Keeping on this phone…" : "\(files.count) kept so far…" }
+        let count = files.count == 1 ? "1 file" : "\(files.count) files"
+        let size = files.compactMap(\.size).reduce(0, +)
+        let failed = Offline.keepFailures(in: folder.id).count
+        let base = files.isEmpty ? "No files yet" : "\(count) · \(formatBytes(Int64(size)))"
+        // Android's words, so both apps say the same.
+        guard failed > 0 else { return base }
+        return base + " · " + (failed == 1 ? "1 file couldn’t be kept" : "\(failed) files couldn’t be kept")
     }
 
     var body: some View {
         List {
-            ForEach(entries) { entry in
-                // The same menu as any other row: a kept file is still a file. One the tree has not opened
-                // on this device can at least drop its download.
-                if let item = items[entry.id] {
-                    row(entry).nodeActions(item, action: $action, store: store)
-                } else {
-                    row(entry).contextMenu {
-                        Button("Remove Download", systemImage: "icloud.slash", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 }
+            Section {} header: {
+                ScreenHeader(title: "On this phone", back: { dismissView() })
+                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
+            }
+            if entries.isEmpty && keptFolders.isEmpty {
+                EmptyStateView(symbol: "iphone", title: "Nothing on this phone yet",
+                               message: "Choose Keep on this phone on any file or folder to open it without a connection.")
+                    .bareRow(top: Alpine.Space.s20)
+            } else {
+                if !keptFolders.isEmpty {
+                    Section {
+                        ForEach(keptFolders) { folder in
+                            Button {
+                                Task { if let opened = await store.vault.openedItem(folder.id) ?? store.known(folder.id) { showing = opened } }
+                            } label: {
+                                HStack(spacing: Alpine.Space.s3) {
+                                    FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(folder.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
+                                        Text("\(KeptMark.text) \(Text(folderLine(folder)).foregroundStyle(Alpine.inkMuted))")
+                                            .font(Theme.Text.footnote).lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                    if case .fetching = store.keptState(folder.id) { ProgressView().controlSize(.small) }
+                                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
+                                }
+                                .frame(minHeight: Theme.row).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { removeFolder(folder) }.tint(Alpine.danger)
+                            }
+                            .swipeActions { Button("Remove", role: .destructive) { removeFolder(folder) } }
+                            .itemRow()
+                        }
+                    } header: {
+                        Text("Folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted).textCase(nil)
                     }
+                }
+                if !entries.isEmpty {
+                Section {
+                    ForEach(entries) { entry in
+                        row(entry)
+                            .contextMenu {
+                                // A kept file is still a file: the whole item menu, plus the way to its folder.
+                                if let item = items[entry.id] {
+                                    if let parent = item.node.parentId, let folder = store.known(parent) {
+                                        Button("Show in folder", systemImage: "folder") { showing = folder }
+                                        Divider()
+                                    }
+                                    NodeMenu(item: item, action: $action)
+                                } else {
+                                    // Kept from a share this session hasn't opened: dropping the copy is all it can do.
+                                    Button("Remove from this phone", systemImage: "iphone.slash", role: .destructive) { remove(entry) }.tint(Alpine.danger)
+                                }
+                            }
+                            .swipeActions { Button("Remove", role: .destructive) { remove(entry) } }
+                            .itemRow()
+                    }
+                } header: {
+                    if !keptFolders.isEmpty { Text("Files").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted).textCase(nil) }
+                } footer: {
+                    Text("These open without a connection. When one changes somewhere else, the copy here updates. Touch and hold to remove one.")
+                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                }
                 }
             }
         }
-        .overlay {
-            if entries.isEmpty {
-                ContentUnavailableView("Nothing kept", systemImage: "arrow.down.circle", description: Text("Files you keep downloaded open here without the network."))
-            }
+        .listStyle(.insetGrouped)
+        .alpineGrouped()
+        .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
+        .listSectionSpacing(Alpine.Space.s3)
+        .navigationTitle("On this phone")
+        .screenChrome(title: "On this phone", back: { dismissView() })
+        .navigationDestination(item: $showing) { folder in
+            FolderView(folderId: folder.id, title: folder.id == store.rootId ? "Files" : folder.name, isRoot: folder.id == store.rootId)
         }
-        .navigationTitle("Offline")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar(.visible, for: .navigationBar)
         .nodeActionSheets(action: $action, store: store)
         .quickLookPreview($preview)
+        .fileViewer($viewing, among: entries.compactMap { items[$0.id] }, store: store)
         .task(id: "\(store.offlineVersion)-\(store.catalogueVersion)") {
             var found: [String: Opened] = [:]
             for entry in entries { if let item = await store.vault.openedItem(entry.id) { found[entry.id] = item } }
@@ -584,22 +709,143 @@ struct OfflineView: View {
         }
     }
 
-    private func row(_ entry: Offline.Entry) -> some View {
+    @ViewBuilder private func row(_ entry: Offline.Entry) -> some View {
         Button {
-            if let item = items[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { Task { preview = await store.download(item) } }
+            if let item = items[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { Opener.open(item, store: store) { viewing = $0 } }
+            // Kept from a share this session hasn't opened: the copy on the phone is all there is.
             else { preview = Offline.file(for: entry) }
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Color.accentColor).frame(width: 40, height: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name).lineLimit(1)
-                    Text(entry.size.map { formatBytes(Int64($0)) } ?? "Kept downloaded")
-                        .font(.footnote).foregroundStyle(.secondary)
+            if let item = items[entry.id] {
+                NodeRow(item: item, note: entry.size.map { formatBytes(Int64($0)) })
+            } else {
+                // Kept from a share this session hasn't opened: the name and size are all the phone knows.
+                HStack(spacing: Alpine.Space.s3) {
+                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty)
+                        .frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
+                        if let size = entry.size { Text(formatBytes(Int64(size))).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                    }
+                    Spacer(minLength: 0)
                 }
+                .frame(minHeight: Theme.row)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .swipeActions { Button("Remove", role: .destructive) { Offline.forget(entry.id); store.offlineVersion += 1 } }
+    }
+
+    private func removeFolder(_ folder: Offline.KeptFolder) {
+        store.removeKeptFolder(folder.id)
+        store.notify("Removed “\(folder.name)” from this phone. It’s still in HushOS.")
+    }
+
+    private func remove(_ entry: Offline.Entry) {
+        Offline.forget(entry.id)
+        store.offlineVersion += 1
+        store.notify("Removed from this phone. It’s still in HushOS.")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty || count > 4 ? nil : self }
+}
+
+/* A trash row, identifiable for its sheet. */
+struct TrashEntry: Identifiable {
+    let item: Opened
+    let parentTrashed: Bool
+    var id: String { item.id }
+}
+
+/* Tapping a trashed row: what it is and where it was, Restore (or Restore to Files, with why), and Delete forever, which asks. */
+private struct TrashItemSheet: View {
+    @Environment(DriveStore.self) private var store
+    let entry: TrashEntry
+    let detail: String?
+    let restore: () -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Alpine.Space.s3) {
+                FileMark(item: entry.item, box: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.item.name).font(Theme.Text.headline).foregroundStyle(Alpine.ink).lineLimit(1)
+                    Text(store.trashLine(entry.item)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, Alpine.Space.s6).padding(.top, Alpine.Space.s6).padding(.bottom, Alpine.Space.s3)
+            Theme.divider.frame(height: 1).padding(.horizontal, Alpine.Space.s4)
+            row(entry.parentTrashed ? "Restore to Files" : "Restore", detail: detail, symbol: "arrow.uturn.backward", danger: false, action: restore)
+            row("Delete forever", detail: nil, symbol: "trash.slash", danger: true, action: delete)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Alpine.ground)
+        .presentationDetents([.height(250)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func row(_ title: String, detail: String?, symbol: String, danger: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Alpine.Space.s4) {
+                Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Theme.Text.body)
+                    if let detail { Text(detail).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(danger ? Alpine.danger : Alpine.ink)
+            .padding(.horizontal, Alpine.Space.s6).frame(minHeight: Theme.row).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/*
+ * A batch restore that partly failed, as the board draws it: it stays until dismissed,
+ * saying what came back, what didn't and why, what to do, and where an orphan went.
+ */
+private struct RestoreProblemBanner: View {
+    let problem: DriveStore.RestoreProblem
+    let retry: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Restored \(problem.restored) of \(problem.total)").font(.body.weight(.semibold)).foregroundStyle(Alpine.danger)
+            Text(failedLine).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+            if let movedLine { Text(movedLine).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted) }
+            HStack(spacing: Alpine.Space.s2) {
+                Button("Try again", action: retry).buttonStyle(PrimaryCapsuleStyle())
+                Button("Dismiss", action: dismiss).buttonStyle(SecondaryCapsuleStyle())
+            }
+            .padding(.top, Alpine.Space.s1)
+        }
+        .padding(Alpine.Space.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Alpine.dangerSoft, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .highContrastEdge(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isStaticText)
+    }
+
+    /* "“Old lease.pdf” couldn’t be restored because the connection dropped. Try again once you’re back online." */
+    private var failedLine: String {
+        let offline = problem.failed.contains { $0.reason == TransferWords.network }
+        let why = offline ? " because the connection dropped. Try again once you’re back online." : ". " + (problem.failed.first?.reason ?? "Try again.")
+        if problem.failed.count == 1 { return "“\(problem.failed[0].entry.item.name)” couldn’t be restored" + why }
+        return "\(problem.failed.count) items couldn’t be restored" + why
+    }
+
+    /* "“Budget 2025.xlsx” went back to Files, because its folder “Drafts” is still in the Trash." */
+    private var movedLine: String? {
+        guard let first = problem.moved.first else { return nil }
+        if problem.moved.count == 1 {
+            return "“\(first.item.name)” went back to Files, because its folder" + (first.folder.map { " “\($0)”" } ?? "") + " is still in the Trash."
+        }
+        return "\(problem.moved.count) items went back to Files, because their folders are still in the Trash."
     }
 }

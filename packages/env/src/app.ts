@@ -38,6 +38,48 @@ export const appEnv = createEnv({
         OPERATOR_JURISDICTION: z.string().trim().min(1).max(200).optional(),
         // An email address for privacy and legal requests, shown on the legal pages.
         OPERATOR_CONTACT: z.string().trim().email().max(200).optional(),
+        // The postal address and phone of whoever runs this instance, shown on /support (app
+        // stores ask for both). Write line breaks in the address as \n. Unset, they are not shown.
+        OPERATOR_ADDRESS: z.string().trim().min(1).max(500).optional(),
+        OPERATOR_PHONE: z
+            .string()
+            .trim()
+            .regex(/^\+?[0-9 ()\-.]{6,30}$/, 'Use a phone number such as +1 302 555 0100.')
+            .optional(),
+        // Where "Talk to us" on the website writes to, for teams and sales questions.
+        // Unset, the website shows no "Talk to us" at all.
+        SALES_CONTACT: z.string().trim().email().max(200).optional(),
+        // Where Help in the app's account menu writes to, for people using this instance.
+        // Unset, the account menu shows no Help.
+        HELP_CONTACT: z.string().trim().email().max(200).optional(),
+        // The iOS apps allowed to open this instance's links (universal links) and fill
+        // its passwords, as Team ID and bundle id: `ABCDE12345.com.hushos.app`, comma
+        // separated. Unset, /.well-known/apple-app-site-association is not served.
+        APPLE_APP_IDS: z
+            .string()
+            .trim()
+            .regex(
+                /^[A-Z0-9]{10}\.[A-Za-z0-9.-]+(,\s*[A-Z0-9]{10}\.[A-Za-z0-9.-]+)*$/,
+                'Use TEAMID.bundle.id, comma separated.',
+            )
+            .optional(),
+        // The Android app allowed to open this instance's links (app links): its package
+        // and the SHA-256 fingerprints of the certificates that sign it, comma separated
+        // (`keytool -list` or the Play Console). Unset, /.well-known/assetlinks.json is
+        // not served.
+        ANDROID_APP_PACKAGE: z
+            .string()
+            .trim()
+            .regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/)
+            .default('com.hushos.app'),
+        ANDROID_APP_CERT_SHA256: z
+            .string()
+            .trim()
+            .regex(
+                /^([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31})(,\s*[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31})*$/,
+                'Use colon-separated SHA-256 fingerprints, comma separated.',
+            )
+            .optional(),
         // Referrals, paid in storage and never money: what each side of an invite earns
         // when the invited account is set up, the most an inviter can earn that way in
         // total, what an inviter earns when someone they invited first pays for a plan,

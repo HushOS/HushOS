@@ -57,12 +57,12 @@ extension Auth {
         do {
             (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         } catch {
-            throw AuthError.message("Could not reach HushOS. Check your connection.")
+            throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
         }
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
             if (response as? HTTPURLResponse)?.statusCode == 401 { throw AuthError.message("Your session ended. Sign in again.") }
-            throw AuthError.message(parsed["message"] as? String ?? "Please try again.")
+            throw AuthError.message(parsed["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }
         return parsed
     }
@@ -107,7 +107,7 @@ extension Auth {
               let envelopeJson = challenge["envelope"] as? [String: Any]
         else { throw AuthError.message("Unexpected reply from HushOS.") }
         guard let finish = try opaqueFinishLogin(password: current, state: login.state, loginResponse: loginResponse) else {
-            throw AuthError.message("The current password is not right.")
+            throw AuthError.message("That isn’t your current password.")
         }
         let old = envelope(from: envelopeJson)
         let accountKey = try accountUnlock(userId: userId, exportKey: finish.exportKey, envelope: old)
@@ -134,7 +134,7 @@ extension Auth {
             throw AuthError.message("Unexpected reply from HushOS.")
         }
         guard let finish = try opaqueFinishLogin(password: password, state: login.state, loginResponse: loginResponse) else {
-            throw AuthError.message("The password is not right.")
+            throw AuthError.message("That isn’t your password.")
         }
         _ = try await call("/api/auth/delete/finish", method: "POST", body: ["attemptToken": attemptToken, "finishLoginRequest": finish.request])
         SharedKeychain.delete(SharedKeychain.sessionAccount)
@@ -143,7 +143,9 @@ extension Auth {
 
     /* Recovery needs the recovery phrase and runs on the web for now. */
     public static func recoveryURL(origin: String) -> URL? { URL(string: origin + "/recover") }
-    public static func billingURL(origin: String) -> URL? { URL(string: origin + "/app/billing") }
+    /* The signed-in server's policies (hushos.com's for the hosted service), opened in Safari; app=1 drops the site's links to plans. */
+    public static func privacyURL(origin: String) -> URL? { URL(string: origin + "/privacy?app=1") }
+    public static func termsURL(origin: String) -> URL? { URL(string: origin + "/terms?app=1") }
 
     // MARK: Key rotation
 
@@ -239,7 +241,7 @@ extension Auth {
               let identityJson = challenge["identity"] as? [String: Any], let workspacesJson = challenge["workspaces"] as? [[String: Any]]
         else { throw AuthError.message("Unexpected reply from HushOS.") }
         guard let finish = try opaqueFinishLogin(password: password, state: login.state, loginResponse: loginResponse) else {
-            throw AuthError.message("The password is not right.")
+            throw AuthError.message("That isn’t your password.")
         }
         let old = envelope(from: envelopeJson)
         let oldRoot = try accountUnlock(userId: userId, exportKey: finish.exportKey, envelope: old)

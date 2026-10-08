@@ -97,3 +97,26 @@ export const localeHintQueryOptions = queryOptions({
 export function billingHint(queryClient: QueryClient) {
     return queryClient.ensureQueryData(billingEnabledQueryOptions);
 }
+
+/*
+ * The free allowance (INITIAL_STORAGE_QUOTA_BYTES), as bytes in a string: known on the server, so
+ * the first document already says "Start free with 2 GB" instead of growing the words after the
+ * catalogue arrives. Dehydrated like the billing flag and never refetched.
+ */
+const getFreeQuotaServerFn = createServerFn().handler(() =>
+    appEnv.INITIAL_STORAGE_QUOTA_BYTES.toString(),
+);
+const readFreeQuota = createIsomorphicFn()
+    .server(() => appEnv.INITIAL_STORAGE_QUOTA_BYTES.toString())
+    .client(() => getFreeQuotaServerFn());
+
+const freeQuotaQueryOptions = queryOptions({
+    queryKey: ['billing', 'free-quota'],
+    queryFn: () => readFreeQuota(),
+    staleTime: Infinity,
+    gcTime: Infinity,
+});
+
+export function freeQuotaHint(queryClient: QueryClient) {
+    return queryClient.ensureQueryData(freeQuotaQueryOptions);
+}

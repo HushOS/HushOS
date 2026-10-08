@@ -24,9 +24,9 @@ export const MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? 'http://localhost:8025
 export const PASSWORD = 'correct-horse-battery-staple-9';
 
 /*
- * Where to click a row to select it: the padding before its icon. The name is a
- * link that opens the file, the icon becomes a checkbox once anything is
- * selected, and the name button is only as wide as its content.
+ * Where to click a row to select it: the padding before its thumbnail. The name
+ * is a link that opens the file, the thumbnail's corner badge adds to the
+ * selection, and the row's button is only as wide as its content.
  */
 export const grip = { position: { x: 16, y: 12 } } as const;
 
@@ -51,6 +51,73 @@ let contexts = 0;
 function clientAddress() {
     const n = ++contexts;
     return `10.${test.info().workerIndex % 256}.${(n >> 8) & 255}.${n & 255}`;
+}
+
+/*
+ * Key rotations this page has finished. They run quietly after a share or a link
+ * is stopped, so the page counts them on <html> instead of saying so.
+ */
+export async function rotationsDone(page: Page) {
+    return Number((await page.locator('html').getAttribute('data-key-rotations')) ?? 0);
+}
+
+/* Waits for the page to finish one more key rotation than it had `before`. */
+export async function waitForRotation(page: Page, before: number, timeout = 120_000) {
+    await expect.poll(() => rotationsDone(page), { timeout }).toBeGreaterThan(before);
+}
+
+/* Opens the New folder dialog from the folder's Add menu. */
+export async function newFolder(page: Page) {
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await page.getByRole('menuitem', { name: /new folder/i }).click();
+}
+
+/* In People you share with: adds someone by email after checking their twelve words are the ones shown. */
+export async function addContact(page: Page, email: string) {
+    await page.getByRole('button', { name: 'Add someone' }).click();
+    const sheet = page.locator('[data-slot=dialog-content]');
+    await sheet.getByLabel('Email').fill(email);
+    await sheet.getByRole('button', { name: 'Look up' }).click();
+    await expect(sheet.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
+    await sheet.getByRole('button', { name: 'They match' }).click();
+    await expect(sheet).toHaveCount(0);
+}
+
+/* In the share dialog: picks a contact from Add people, sets what they can do, and shares. */
+export async function shareWith(page: Page, name: string | RegExp, role?: 'Can edit') {
+    const sheet = page.locator('[data-slot=dialog-content]');
+    await sheet.getByRole('combobox', { name: 'Add people' }).click();
+    await page.getByRole('option', { name }).click();
+    if (role) {
+        await sheet
+            .getByRole('combobox', { name: /can do$/ })
+            .first()
+            .click();
+        await page.getByRole('option', { name: role }).click();
+    }
+    await sheet.getByRole('button', { name: 'Share', exact: true }).click();
+}
+
+/* In the share dialog: makes a new link, with a password when given, and returns its address. */
+export async function newLink(page: Page, password?: string) {
+    const sheet = page.locator('[data-slot=dialog-content]').first();
+    const before = await sheet.locator('[data-link]').count();
+    await sheet.getByRole('button', { name: 'New link' }).click();
+    const card = sheet.locator('[data-link]').nth(before);
+    const copy = card.locator('button[data-url]');
+    await expect(copy).toBeVisible({ timeout: 60_000 });
+    const url = (await copy.getAttribute('data-url'))!;
+    if (password) {
+        await card.getByRole('button', { name: 'More for this link' }).click();
+        await page.getByRole('menuitem', { name: 'Password and end date' }).click();
+        const options = page
+            .locator('[data-slot=dialog-content]')
+            .filter({ hasText: 'Password and end date' });
+        await options.getByLabel('Password', { exact: true }).fill(password);
+        await options.getByRole('button', { name: 'Save' }).click();
+        await expect(page.getByText('Link updated')).toBeVisible();
+    }
+    return url;
 }
 
 export function newContext(browser: Browser, options: BrowserContextOptions = {}) {
@@ -102,7 +169,7 @@ export async function verificationLink(email: string, pathPrefix: string) {
  * state, so the form submits it empty. A quiet network is not proof on a slow
  * runner: React marks the elements it owns with its props, and that is.
  */
-async function hydrated(element: Locator) {
+export async function hydrated(element: Locator) {
     await expect
         .poll(
             () =>
@@ -121,7 +188,7 @@ async function hydrated(element: Locator) {
  * still compiling, a click can land before React listens and change nothing, so
  * it is clicked again while it stays clear; never a second time once it ticks.
  */
-async function check(box: Locator) {
+export async function check(box: Locator) {
     await expect(async () => {
         if ((await box.getAttribute('aria-checked')) !== 'true') await box.click();
         await expect(box).toBeChecked({ timeout: 2_000 });
@@ -133,7 +200,7 @@ export async function registerAccount(
     page: Page,
     name = 'E2E Tester',
     email = `e2e-${Date.now()}-${randomBytes(3).toString('hex')}@hushos.local`,
-    // `landsOn`: where the finished sign-up should arrive, when it is not an empty Drive.
+    // `landsOn`: where the finished sign-up should arrive, when it is not Home.
     options: { viaCurrentPage?: boolean; landsOn?: RegExp } = {},
 ) {
     // A test that arrived at sign-up with a code in the URL stays on that page.
@@ -162,15 +229,43 @@ export async function registerAccount(
     // never reports it stable enough to click before the hook's budget is gone.
     await passwords.nth(1).press('Enter');
     await page.waitForURL(/\/setup\/recovery-key/, { timeout: 120_000 });
-    await check(page.getByRole('checkbox'));
-    await page.getByRole('button', { name: /continue to hushos/i }).click();
+    await saveKit(page);
     if (options.landsOn) {
         await page.waitForURL(options.landsOn, { timeout: 60_000 });
         return { email };
     }
-    await page.waitForURL(/\/app/);
+    // A finished sign-up lands on Home, empty for a new account; the tests start in Files.
+    await page.waitForURL(/\/app\/?$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
     await expect(page.getByText('Nothing here yet')).toBeVisible();
+    await page.goto('/app/drive', { waitUntil: 'networkidle' });
+    await expect(page.getByText('Nothing here yet')).toBeVisible({ timeout: 60_000 });
     return { email };
+}
+
+/*
+ * On the recovery kit page: note the words, tick that they are saved, then pick
+ * the three asked for back out of them, as a person with the kit in hand would.
+ */
+export async function saveKit(page: Page) {
+    const list = page.getByRole('list', { name: 'Recovery phrase' });
+    await expect(list).toBeVisible({ timeout: 60_000 });
+    const words = (await list.getByRole('listitem').allInnerTexts()).map((item) =>
+        item.trim().split(/\s+/).at(-1)!,
+    );
+    expect(words).toHaveLength(24);
+    await check(page.getByRole('checkbox'));
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    const questions = page.locator('fieldset', { hasText: /^Word \d+/ });
+    await expect(questions).toHaveCount(3);
+    for (const question of await questions.all()) {
+        const position = Number(
+            /Word (\d+)/.exec((await question.locator('legend').textContent())!)![1],
+        );
+        await question.getByRole('button', { name: words[position - 1], exact: true }).click();
+    }
+    // Exact: one of the words to pick can itself be “finish”.
+    await page.getByRole('button', { name: 'Finish', exact: true }).click();
 }
 
 /* Sample files with known content, written to a temporary directory. */

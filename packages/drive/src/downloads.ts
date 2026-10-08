@@ -62,6 +62,12 @@ export type FileReader = {
     size: number;
     read(offset: number, length: number): Promise<Uint8Array>;
     close(): Promise<void>;
+    /*
+     * Calls back with the bytes fetched so far, as they arrive, across every chunk
+     * read: a viewer reading the whole file shows how far it has got. Returns the
+     * unsubscribe.
+     */
+    watch?(listener: (fetched: number) => void): () => void;
 };
 
 export type ZipEntry = {
@@ -248,7 +254,12 @@ export function createDownloadManager(options: DownloadManagerOptions) {
      * and the worker's key opened once and closed once. `track` is the download
      * the bytes count towards; a reader for a preview passes none.
      */
-    function chunkSource(node: DriveNode, track: Internal | null) {
+    function chunkSource(
+        node: DriveNode,
+        track: Internal | null,
+        /* Bytes of one chunk fetched so far, for a reader that reports progress. */
+        onChunk?: (index: number, loaded: number) => void,
+    ) {
         const generation = track?.generation ?? 0;
         const version = node.currentVersion;
         if (!version) throw new Error(`“${node.name}” has no content yet.`);
@@ -316,6 +327,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                             idleTimeoutMs: 120_000,
                             onProgress: (raw) => {
                                 const progress = raw as DownloadChunkProgress;
+                                if (progress.objectId === objectId && progress.index === index)
+                                    onChunk?.(index, progress.loaded);
                                 if (
                                     track &&
                                     progress.objectId === objectId &&
@@ -329,6 +342,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                     track?.inFlight.delete(key);
                 }
                 if (result.ok) {
+                    onChunk?.(index, result.plaintext.byteLength);
                     if (track) {
                         track.completedBytes += result.plaintext.byteLength;
                         set(track, { loaded: loadedOf(track) });
@@ -405,7 +419,15 @@ export function createDownloadManager(options: DownloadManagerOptions) {
      * used, so a PDF paging back and forth or a video seeking does not refetch.
      */
     function openReader(node: DriveNode, cacheChunks = 4): FileReader {
-        const source = chunkSource(node, null);
+        // Per chunk, the most fetched so far: a chunk fetched again after eviction counts once.
+        const fetched = new Map<number, number>();
+        const listeners = new Set<(fetched: number) => void>();
+        const source = chunkSource(node, null, (index, loaded) => {
+            fetched.set(index, Math.max(fetched.get(index) ?? 0, loaded));
+            let total = 0;
+            for (const value of fetched.values()) total += value;
+            for (const listener of listeners) listener(Math.min(total, source.plaintextSize));
+        });
         const cache = new Map<number, Promise<Uint8Array>>();
         let closed = false;
         function chunk(index: number) {
@@ -447,7 +469,12 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             async close() {
                 closed = true;
                 cache.clear();
+                listeners.clear();
                 await source.close();
+            },
+            watch(listener) {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
             },
         };
     }

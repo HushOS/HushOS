@@ -628,6 +628,93 @@ export async function getAdminOverview(sessionToken: string | null) {
     };
 }
 
+const iso = (value: Date | string | null | undefined) =>
+    value ? new Date(value).toISOString() : null;
+
+/* Accounts for an operator to find someone: details and numbers, no content. */
+export async function listAdminAccounts(
+    sessionToken: string | null,
+    input: {
+        role?: 'admin' | 'member';
+        query?: string;
+        sort?: 'joined' | 'stored';
+        offset?: number;
+    },
+) {
+    await requireAdmin(sessionToken);
+    const { total, accounts } = await adminRepository.listAccounts(input);
+    return {
+        total,
+        pageSize: adminRepository.ADMIN_PAGE,
+        accounts: accounts.map((row) => ({
+            ...row,
+            suspendedAt: iso(row.suspendedAt),
+            createdAt: iso(row.createdAt)!,
+            lastSeenAt: iso(row.lastSeenAt),
+        })),
+    };
+}
+
+/*
+ * Suspends or reinstates an account from the console: sign-in is refused and
+ * its sessions end at once. Not yourself, and not another admin, whose role is
+ * taken away from the command line first.
+ */
+export async function setAdminAccountSuspended(
+    sessionToken: string | null,
+    userId: string,
+    suspended: boolean,
+) {
+    const operator = await requireAdmin(sessionToken);
+    if (userId === operator.id) throw new AuthError('You cannot suspend yourself.', 409);
+    const account = await adminRepository.getAccount(userId);
+    if (!account) throw new AuthError('This account does not exist.', 404);
+    if (suspended && account.role === 'admin')
+        throw new AuthError(
+            'This account is an admin. Take the role away from the command line first.',
+            409,
+        );
+    const result = await authRepository.setUserSuspended(userId, suspended);
+    if (!result) throw new AuthError('This account does not exist.', 404);
+    return { operatorId: operator.id, suspendedAt: iso(result.suspendedAt) };
+}
+
+export async function getAdminAccount(sessionToken: string | null, userId: string) {
+    await requireAdmin(sessionToken);
+    const account = await adminRepository.getAccount(userId);
+    if (!account) throw new AuthError('This account does not exist.', 404);
+    return {
+        ...account,
+        suspendedAt: iso(account.suspendedAt),
+        createdAt: iso(account.createdAt)!,
+        emailVerifiedAt: iso(account.emailVerifiedAt),
+        lastSeenAt: iso(account.lastSeenAt),
+        baseQuotaBytes: account.baseQuotaBytes?.toString() ?? null,
+        usedBytes: account.usedBytes?.toString() ?? null,
+        reservedBytes: account.reservedBytes?.toString() ?? null,
+        grants: account.grants.map((grant) => ({
+            ...grant,
+            quotaBytes: grant.quotaBytes.toString(),
+            startsAt: iso(grant.startsAt)!,
+            expiresAt: iso(grant.expiresAt),
+            revokedAt: iso(grant.revokedAt),
+        })),
+    };
+}
+
+export async function listAdminWorkspaces(
+    sessionToken: string | null,
+    input: { sort?: 'stored' | 'created'; offset?: number },
+) {
+    await requireAdmin(sessionToken);
+    const { total, workspaces } = await adminRepository.listWorkspaces(input);
+    return {
+        total,
+        pageSize: adminRepository.ADMIN_PAGE,
+        workspaces: workspaces.map((row) => ({ ...row, createdAt: iso(row.createdAt)! })),
+    };
+}
+
 export async function updateProfile(sessionToken: string | null, input: { name: string }) {
     const { user } = await requireSession(sessionToken, 'Sign in to update your profile.');
     const updated = await authRepository.updateUserName(user.id, normalizeName(input.name));

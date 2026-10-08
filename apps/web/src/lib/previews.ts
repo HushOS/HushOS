@@ -174,13 +174,32 @@ export function openReader(node: DriveNode) {
     return downloads.openReader(node);
 }
 
-/* Everything, in chunk-sized reads, up to `limit` bytes. */
-export async function readAll(reader: FileReader, limit: number) {
+export type ReadProgress = { done: number; total: number };
+
+/* Everything, in chunk-sized reads, up to `limit` bytes, saying how far it has got. */
+export async function readAll(
+    reader: FileReader,
+    limit: number,
+    onProgress?: (progress: ReadProgress) => void,
+) {
     const size = Math.min(reader.size, limit);
     const out = new Uint8Array(size);
+    // One download chunk per read: a smaller step would only re-read the same cached chunk.
     const step = 8 * 1024 * 1024;
-    for (let offset = 0; offset < size; offset += step)
-        out.set(await reader.read(offset, Math.min(step, size - offset)), offset);
+    onProgress?.({ done: 0, total: size });
+    // The reader says how much has arrived as it streams; without that, a chunk at a time.
+    const unwatch = onProgress
+        ? reader.watch?.((fetched) => onProgress({ done: Math.min(fetched, size), total: size }))
+        : undefined;
+    try {
+        for (let offset = 0; offset < size; offset += step) {
+            const length = Math.min(step, size - offset);
+            out.set(await reader.read(offset, length), offset);
+            if (!unwatch) onProgress?.({ done: offset + length, total: size });
+        }
+    } finally {
+        unwatch?.();
+    }
     return { bytes: out, truncated: reader.size > limit };
 }
 

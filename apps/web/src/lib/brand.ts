@@ -53,3 +53,44 @@ const LETTERING =
 export function wordmarkSvg(fill = '#000000', background?: string) {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-60 -60 1600 539" width="1600" height="539" fill="none">${backdrop(background, 1480, 419)}${paths(fill)}<path fill="${fill}" d="${LETTERING}"/></svg>`;
 }
+
+/*
+ * The logo as people see it: the white mark on the blue square, corners at 30%
+ * of the side (the board's 8px on 26px), the mark 58% of the square's height.
+ * This is what the brand menu copies; the one-colour marks above are for
+ * one-ink print and other people's backgrounds.
+ */
+export const BRAND_BLUE = '#2c428e';
+const BADGE = 539;
+const MARK_SCALE = (BADGE * 0.58) / 419;
+
+function badge(blue: string) {
+    const width = 300 * MARK_SCALE;
+    const height = 419 * MARK_SCALE;
+    return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${blue}"/><g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths('#ffffff')}</g>`;
+}
+
+export function badgeSvg(blue = BRAND_BLUE) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(blue)}</svg>`;
+}
+
+export const BADGE_SIDE = BADGE;
+
+/*
+ * The colour wordmark: the badge, then the name, set as on the site: the
+ * capitals 48% of the badge's height, centred on it, a third of it apart.
+ */
+const LETTER_SCALE = (BADGE * 0.485) / 200.4;
+const LETTER_LEFT = BADGE * (1 + 1 / 3);
+const LETTER_WIDTH = 1055.1 * LETTER_SCALE;
+export const BRAND_WORDMARK_SIZE = {
+    width: Math.ceil(LETTER_LEFT + LETTER_WIDTH),
+    height: BADGE,
+};
+
+export function brandWordmarkSvg(ink = '#141a33', blue = BRAND_BLUE) {
+    const x = LETTER_LEFT - 418 * LETTER_SCALE;
+    const y = BADGE / 2 - 213.8 * LETTER_SCALE;
+    const { width, height } = BRAND_WORDMARK_SIZE;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" fill="none">${badge(blue)}<path fill="${ink}" transform="translate(${x} ${y}) scale(${LETTER_SCALE})" d="${LETTERING}"/></svg>`;
+}

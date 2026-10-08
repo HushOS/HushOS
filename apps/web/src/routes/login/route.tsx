@@ -6,12 +6,10 @@ import {
     type SearchSchemaInput,
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { ArrowRightIcon } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
-import { AuthActions, AuthFields, AuthLayout, AuthNote, Stamp } from '@/components/auth-layout';
-import { PendingLabel } from '@/components/motion';
+import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
@@ -45,7 +43,7 @@ export const Route = createFileRoute('/login')({
                 : undefined;
         throw rotated
             ? redirect({ to: '/setup/recovery-key', search: { reason: rotated } })
-            : redirect({ href: search.redirect ?? '/app/drive' });
+            : redirect({ href: search.redirect ?? '/app' });
     },
     headers: () => ({
         'Cache-Control': 'private, no-store',
@@ -57,7 +55,7 @@ export const Route = createFileRoute('/login')({
             { title: 'Sign in · HushOS' },
             {
                 name: 'description',
-                content: 'Sign in to unlock your HushOS account on this device.',
+                content: 'Sign in to HushOS.',
             },
             { name: 'robots', content: 'noindex' },
             { name: 'referrer', content: 'no-referrer' },
@@ -101,21 +99,27 @@ function LoginPage() {
                 } else await router.navigate({ href: returnTarget(returnTo), replace: true });
             } catch (error) {
                 cue('error');
-                setError(authError(error));
+                setError(authError(error, { signIn: true }));
             } finally {
                 setPending(false);
             }
         },
     });
+    const notice = securityChanged ? notices[securityChanged] : null;
     return (
         <AuthLayout
             title="Welcome back"
-            stamp="Existing account"
-            description="Sign in to unlock your account on this device."
             footer={
                 <>
-                    <Stamp tone="warning">Password stays on this device</Stamp>
-                    <Stamp>Keys wrapped in your browser</Stamp>
+                    New to HushOS?{' '}
+                    <Link
+                        to="/register"
+                        className={authLink}
+                        // Signing up instead still ends on the page that sent them here.
+                        onClick={() => returnTo && rememberReturn(returnTo)}
+                    >
+                        Create an account
+                    </Link>
                 </>
             }
         >
@@ -128,15 +132,12 @@ function LoginPage() {
                 noValidate
             >
                 <AuthFields>
-                    {securityChanged && (
-                        <AuthNote>
-                            {securityChanged === 'password'
-                                ? 'Password changed. Sign in with your new password.'
-                                : securityChanged === 'uncertain'
-                                  ? 'The connection dropped before your security change was confirmed. It may have been applied: try your new password first, then the old one.'
-                                  : 'Your keys were rotated. Sign in to save your new recovery phrase.'}
+                    {notice && (
+                        <AuthNote tone={notice.tone} title={notice.title}>
+                            {notice.text}
                         </AuthNote>
                     )}
+                    {error && <AuthNote tone="danger">{error}</AuthNote>}
                     <form.Field name="email">
                         {(field) => (
                             <AuthInput
@@ -145,7 +146,7 @@ function LoginPage() {
                                 name={field.name}
                                 type="email"
                                 autoComplete="username"
-                                placeholder="you@example.com"
+                                placeholder="name@example.com"
                                 value={field.state.value}
                                 onChange={(event) => field.handleChange(event.target.value)}
                                 onBlur={field.handleBlur}
@@ -160,6 +161,11 @@ function LoginPage() {
                         {(field) => (
                             <AuthInput
                                 label="Password"
+                                action={
+                                    <Link to="/recover" className={authLink}>
+                                        Forgot your password?
+                                    </Link>
+                                }
                                 id="password"
                                 name={field.name}
                                 type="password"
@@ -174,32 +180,39 @@ function LoginPage() {
                             />
                         )}
                     </form.Field>
-                    {error && <AuthNote tone="destructive">{error}</AuthNote>}
                     <AuthActions
                         action={
                             <Button type="submit" size="lg" disabled={pending}>
-                                <PendingLabel pending={pending} idle="Sign in" busy="Unlocking…" />
-                                <ArrowRightIcon aria-hidden="true" />
+                                {pending ? 'Signing in…' : 'Sign in'}
                             </Button>
                         }
-                    >
-                        <Link to="/recover" className="text-link">
-                            Forgot your password?
-                        </Link>
-                        <span>
-                            New here?{' '}
-                            <Link
-                                to="/register"
-                                className="text-link"
-                                // Signing up instead still ends on the page that sent them here.
-                                onClick={() => returnTo && rememberReturn(returnTo)}
-                            >
-                                Create an account
-                            </Link>
-                        </span>
-                    </AuthActions>
+                    />
                 </AuthFields>
             </form>
         </AuthLayout>
     );
 }
+
+/* Why someone is back at sign in, said once above the form. */
+const notices = {
+    password: {
+        tone: 'success',
+        title: 'Password changed',
+        text: 'Sign in with your new password.',
+    },
+    'master-key': {
+        tone: 'info',
+        title: 'Sharing keys reset',
+        text: 'Sign in to save your new recovery phrase.',
+    },
+    'recovery-key': {
+        tone: 'info',
+        title: 'New recovery phrase made',
+        text: 'Sign in to save it.',
+    },
+    uncertain: {
+        tone: 'warning',
+        title: 'We lost the connection',
+        text: 'Your change may not have saved. Try your new password first, then the old one.',
+    },
+} as const;

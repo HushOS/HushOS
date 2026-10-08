@@ -30,6 +30,20 @@ export const operatorNameQueryOptions = queryOptions({
     queryFn: () => getOperatorNameServerFn(),
     staleTime: Number.POSITIVE_INFINITY,
 });
+/* Where Help in the account menu writes to (HELP_CONTACT), or nothing when unset. */
+const getHelpContactServerFn = createServerFn().handler(() => appEnv.HELP_CONTACT ?? null);
+export const helpContactQueryOptions = queryOptions({
+    queryKey: ['help', 'contact'],
+    queryFn: () => getHelpContactServerFn(),
+    staleTime: Number.POSITIVE_INFINITY,
+});
+/* Where "Talk to us" writes to (SALES_CONTACT), or nothing when unset, as on most self-hosted servers. */
+const getSalesContactServerFn = createServerFn().handler(() => appEnv.SALES_CONTACT ?? null);
+export const salesContactQueryOptions = queryOptions({
+    queryKey: ['sales', 'contact'],
+    queryFn: () => getSalesContactServerFn(),
+    staleTime: Number.POSITIVE_INFINITY,
+});
 export function operatorHint(queryClient: QueryClient) {
     return queryClient.ensureQueryData(operatorNameQueryOptions);
 }
@@ -114,9 +128,9 @@ export function pageSocialMeta(input: {
 }
 
 export function publicSocialMeta(origin: string) {
-    const title = 'HushOS · You hold the only key.';
+    const title = 'HushOS · Nobody else can look inside.';
     const description =
-        'Private storage for your files, personal or work, that is simple to use. Locked on your device; open source; run it yourself if you like.';
+        'Private storage that works like the drive you already use. Everything is locked on your device first. Open source; run it yourself if you like.';
     const image = new URL('/og.jpg', origin).href;
     return [
         { title },

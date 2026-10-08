@@ -399,6 +399,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             ? catalogue.search({ query, limit })
             : [];
     }
+    /* Home's Recent: answers while rows are still opening, like search. */
+    function recent(limit: number, keep?: (node: DriveNode) => boolean) {
+        return catalogueState.phase === 'ready' || catalogueState.phase === 'opening'
+            ? catalogue.recent(limit, keep)
+            : [];
+    }
     /* Root first, the node's parent last, as far as the catalogue knows. */
     function ancestorsOf(nodeId: string) {
         return catalogue.ancestors(nodeId);
@@ -1445,6 +1451,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         localListing,
         byTags,
         search,
+        recent,
         ancestorsOf,
         tagCounts,
         tags,

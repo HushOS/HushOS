@@ -14,7 +14,6 @@ import {
     FolderPlusIcon,
     FolderInputIcon,
     HistoryIcon,
-    HouseIcon,
     LayoutGridIcon,
     ListIcon,
     LockKeyholeIcon,
@@ -33,7 +32,8 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useStore } from 'zustand';
-import { operator, workspace } from '@/components/app-sidebar';
+import { operator, organise, workspace } from '@/components/app-sidebar';
+import { openDeviceDialog } from '@/components/device-control';
 import { Highlight } from '@/components/drive/highlight';
 import { Kbd } from '@/components/drive/hotkey-hints';
 import { keyLabel, shortcuts } from '@/components/drive/shortcuts';
@@ -134,7 +134,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     const billing = useBillingEnabled();
     const { theme, setTheme } = useTheme();
     const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
-    const [confirm, setConfirm] = useState<'empty-trash' | 'lock' | null>(null);
+    const [confirm, setConfirm] = useState<'empty-trash' | null>(null);
     const [busy, setBusy] = useState(false);
     useHotkey('Mod+K', () => setPaletteOpen(!open));
     useHotkey('/', () => setPaletteOpen(true), { ignoreInputs: true, preventDefault: true });
@@ -151,36 +151,23 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     async function emptyTrash() {
         setBusy(true);
         try {
-            const purged = await emptyTrashAll(queryClient, user.id);
+            await emptyTrashAll(queryClient, user.id);
             cue('droplet');
             toast.add({
                 type: 'success',
-                title: purged === 1 ? 'Trash emptied: 1 item' : `Trash emptied: ${purged} items`,
+                title: 'Trash emptied',
+                description: 'Their space frees up in a moment.',
             });
         } catch (error) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: 'Could not empty the trash',
+                title: 'The Trash couldn’t be emptied',
                 description: driveError(error),
             });
         } finally {
             setBusy(false);
             setConfirm(null);
-        }
-    }
-    async function lock() {
-        setConfirm(null);
-        try {
-            await authClient.lock();
-            cue('droplet');
-        } catch {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title: 'Could not lock this device',
-                description: 'Saved device access could not be removed. Try signing out.',
-            });
         }
     }
     async function signOut() {
@@ -197,6 +184,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
 
     const places = [
         ...workspace,
+        ...organise,
         ...account.filter((item) => !item.billing || billing),
         ...(user.role === 'admin' ? operator.filter((item) => !item.billing || billing) : []),
     ];
@@ -241,7 +229,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                 />
                 <CommandList>
                     <CommandEmpty>
-                        {typed && indexing ? 'Still indexing your Drive…' : 'Nothing matches.'}
+                        {typed && indexing ? 'Search is still getting ready.' : 'Nothing matches.'}
                     </CommandEmpty>
                     {chosen && (
                         <CommandGroup>
@@ -425,7 +413,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                         <CommandGroup heading="Go to">
                             {context && (
                                 <CommandItem onSelect={go('/app/drive')}>
-                                    <HouseIcon />
+                                    <FolderIcon />
                                     Top folder
                                 </CommandItem>
                             )}
@@ -449,10 +437,6 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                                     {item.label}
                                 </CommandItem>
                             ))}
-                            <CommandItem value="tags manage" onSelect={go('/app/tags')}>
-                                <TagIcon />
-                                Tags
-                            </CommandItem>
                             <CommandItem value="shared with me" onSelect={go('/app/shared')}>
                                 <Share2Icon />
                                 Shared with me
@@ -475,18 +459,18 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                                     onSelect={run(() => setConfirm('empty-trash'))}
                                 >
                                     <Trash2Icon />
-                                    Empty trash…
+                                    Empty Trash
                                 </CommandItem>
                             </CommandGroup>
                             <CommandSeparator />
                             <CommandGroup heading="This device">
                                 {unlocked && (
                                     <CommandItem
-                                        value="lock device"
-                                        onSelect={run(() => setConfirm('lock'))}
+                                        value="lock device browser"
+                                        onSelect={run(openDeviceDialog)}
                                     >
                                         <LockKeyholeIcon />
-                                        Lock this device…
+                                        Lock on this browser
                                     </CommandItem>
                                 )}
                                 {(
@@ -545,26 +529,19 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
             >
                 <AlertDialogContent>
                     <AlertDialogHeader>
-                        <AlertDialogTitle>
-                            {confirm === 'lock' ? 'Lock this device?' : 'Empty the trash?'}
-                        </AlertDialogTitle>
+                        <AlertDialogTitle>Empty the Trash?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            {confirm === 'lock'
-                                ? 'Your keys leave this browser. Unlocking again needs your password.'
-                                : 'Everything in the trash is deleted for good. This cannot be undone.'}
+                            Everything in it is deleted for good. This can’t be undone.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
                         <AlertDialogAction
+                            variant="destructive"
                             disabled={busy}
-                            onClick={() => void (confirm === 'lock' ? lock() : emptyTrash())}
+                            onClick={() => void emptyTrash()}
                         >
-                            {confirm === 'lock'
-                                ? 'Lock device'
-                                : busy
-                                  ? 'Emptying…'
-                                  : 'Empty trash'}
+                            {busy ? 'Emptying the Trash…' : 'Empty Trash'}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>

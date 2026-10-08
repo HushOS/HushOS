@@ -1,5 +1,9 @@
 HushOS brand assets
 
+hushos-logo-colour.svg     the logo: white mark on the blue square. Use this first
+hushos-wordmark-colour*.svg  the logo with HushOS beside it, for light or dark pages
+
+One colour, for one-ink print or a background that is not yours:
 hushos-logo.svg            ink mark, transparent background
 hushos-logo-blue.svg       blue mark, transparent background
 hushos-logo-on-dark.svg    light mark on the dark desk

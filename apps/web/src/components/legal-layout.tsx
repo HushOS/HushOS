@@ -1,39 +1,64 @@
+import { cn } from 'cn';
 import { createContext, useContext, type ComponentType, type ReactNode } from 'react';
 import type { Operator } from '@/lib/social';
 import { Mdx } from '@/components/mdx';
+import { Contents } from '@/components/security-page';
+import { container, H1, Lede } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { formatDate } from '@/lib/content';
+
+/*
+ * A document page (about, the legal pages, the blog): laid out like the
+ * security page, the heading and the text held to the same width at the
+ * site's left edge, with no box around them.
+ */
+export type Heading = { id: string; title: string };
 
 export function ReadingPage({
     eyebrow,
     title,
     summary,
+    headings = [],
     children,
 }: {
     eyebrow: ReactNode;
     title: string;
     summary?: string;
+    /* The document's sections; two or more get a contents list, as on the security page. */
+    headings?: Heading[];
     children: ReactNode;
 }) {
+    const contents = headings.length >= 2;
     return (
-        <div className="flex min-h-svh flex-col">
+        <div className="flex min-h-svh flex-col bg-card">
             <SiteHeader />
-            <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-8 sm:px-8 sm:py-14">
-                {/* One sheet for the whole document, the text held to a reading measure inside it. */}
-                <article className="sheet px-6 py-10 sm:px-12 sm:py-14">
-                    <div className="mx-auto max-w-[70ch]">
-                        <p className="eyebrow text-muted-foreground">{eyebrow}</p>
-                        <h1 className="mt-4 text-3xl font-bold tracking-tight text-balance sm:text-4xl">
-                            {title}
-                        </h1>
-                        {summary && (
-                            <p className="mt-4 text-lg leading-relaxed text-pretty text-muted-foreground">
-                                {summary}
-                            </p>
-                        )}
-                        <div className="mt-8 border-t border-rule pt-4">{children}</div>
+            <main className="flex-1">
+                <div className={cn(container, 'pt-12 pb-10 sm:pt-16 lg:pt-20 lg:pb-14')}>
+                    <div className="flex max-w-[780px] flex-col gap-5">
+                        <p className="text-[15px] text-muted-foreground">{eyebrow}</p>
+                        <H1>{title}</H1>
+                        {summary && <Lede>{summary}</Lede>}
                     </div>
-                </article>
+                </div>
+                <div
+                    className={cn(
+                        container,
+                        'pb-16 lg:pb-24',
+                        contents &&
+                            'lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start lg:gap-16',
+                    )}
+                >
+                    {contents && (
+                        <Contents
+                            items={Object.fromEntries(
+                                headings.map((heading) => [heading.id, heading.title]),
+                            )}
+                        />
+                    )}
+                    <article className="max-w-[760px] min-w-0 text-[17px] [&>h2:first-child]:mt-0">
+                        {children}
+                    </article>
+                </div>
             </main>
             <SiteFooter />
         </div>
@@ -64,10 +89,12 @@ export function OperatorContact({ generic }: { generic: string }) {
 export function LegalLayout({
     document,
     frontmatter,
+    headings,
     operator = null,
 }: {
     document: ComponentType;
     frontmatter: Record<string, unknown>;
+    headings?: Heading[];
     operator?: Operator;
 }) {
     const updated = String(frontmatter.updated);
@@ -77,6 +104,7 @@ export function LegalLayout({
                 eyebrow={`Last updated ${formatDate(updated)}`}
                 title={String(frontmatter.title)}
                 summary={String(frontmatter.summary)}
+                headings={headings}
             >
                 <Mdx document={document} />
             </ReadingPage>

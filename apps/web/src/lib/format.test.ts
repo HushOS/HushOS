@@ -1,19 +1,19 @@
 import { describe, expect, test } from 'vitest';
-import { formatGiB, formatMoney } from './format';
+import { formatQuota, formatMoney } from './format';
 
 const GIB = 1_073_741_824n;
 
-describe('formatGiB', () => {
-    test('switches to TiB at exactly 1024 GiB and not before', () => {
-        expect(formatGiB((1024n * GIB).toString(), 'en-US')).toBe('1 TiB');
-        expect(formatGiB((1024n * GIB - 1n).toString(), 'en-US')).toBe('1,024 GiB');
-        expect(formatGiB((1536n * GIB).toString(), 'en-US')).toBe('1.5 TiB');
+describe('formatQuota', () => {
+    test('switches to TB at exactly 1024 GB and not before', () => {
+        expect(formatQuota((1024n * GIB).toString(), 'en-US')).toBe('1 TB');
+        expect(formatQuota((1024n * GIB - 1n).toString(), 'en-US')).toBe('1,024 GB');
+        expect(formatQuota((1536n * GIB).toString(), 'en-US')).toBe('1.5 TB');
     });
 
-    test('keeps GiB values readable at the sizes we sell and at zero', () => {
-        expect(formatGiB((200n * GIB).toString(), 'en-US')).toBe('200 GiB');
-        expect(formatGiB('0', 'en-US')).toBe('0 GiB');
-        expect(formatGiB(String(GIB / 2n), 'en-US')).toBe('0.5 GiB');
+    test('keeps GB values readable at the sizes we sell and at zero', () => {
+        expect(formatQuota((200n * GIB).toString(), 'en-US')).toBe('200 GB');
+        expect(formatQuota('0', 'en-US')).toBe('0 GB');
+        expect(formatQuota(String(GIB / 2n), 'en-US')).toBe('0.5 GB');
     });
 });
 

@@ -1,7 +1,16 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newContext, PASSWORD, registerAccount, sampleFiles, sha256 } from './helpers';
+import {
+    grip,
+    newContext,
+    newFolder,
+    newLink,
+    PASSWORD,
+    registerAccount,
+    sampleFiles,
+    sha256,
+} from './helpers';
 
 /*
  * Reports, end to end as three people: an owner links a folder, a visitor with
@@ -43,7 +52,7 @@ async function openReportContent(page: Page, id: string) {
     try {
         await page.goto(`/app/admin/reports/${id}`);
         const open = page.getByRole('button', { name: 'Open the content' });
-        const locked = page.getByRole('heading', { name: 'Unlock this device' });
+        const locked = page.getByRole('heading', { name: 'HushOS is locked here' });
         try {
             await expect(open.or(locked)).toBeVisible({ timeout: 45_000 });
         } catch {
@@ -77,10 +86,7 @@ test.beforeAll(async ({ browser }) => {
 
     owner = await (await newContext(browser)).newPage();
     ownerEmail = (await registerAccount(owner)).email;
-    await owner
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Dropbox');
     await owner.keyboard.press('Enter');
     await row(owner, 'Dropbox').getByRole('link', { name: 'Dropbox' }).click();
@@ -90,9 +96,7 @@ test.beforeAll(async ({ browser }) => {
     await owner.locator('[data-crumb-id]').first().click();
     await row(owner, 'Dropbox').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
-    await dialog(owner).getByRole('button', { name: 'Create link' }).click();
-    linkUrl = (await dialog(owner).locator('button[aria-label="Copy Link"]').textContent())!.trim();
+    linkUrl = await newLink(owner);
     await dialog(owner).getByRole('button', { name: 'Done' }).first().click();
     await owner.keyboard.press('Escape');
 });
@@ -111,7 +115,7 @@ test('a visitor with no account reports what a link shows', async ({ browser }) 
     await expect(dialog(visitor).getByRole('button', { name: 'Send report' })).toBeDisabled();
     await dialog(visitor).getByRole('combobox', { name: 'Category' }).click();
     await visitor.getByRole('option', { name: 'Harassment or threats' }).click();
-    await dialog(visitor).getByLabel('What is wrong').fill('The notes file threatens someone.');
+    await dialog(visitor).getByLabel('What’s wrong').fill('The notes file threatens someone.');
     await dialog(visitor).getByLabel('Your email').fill('witness@hushos.local');
     await dialog(visitor).getByRole('button', { name: 'Send report' }).click();
     await expect(visitor.getByText('Report sent')).toBeVisible({ timeout: 60_000 });
@@ -120,7 +124,7 @@ test('a visitor with no account reports what a link shows', async ({ browser }) 
     await visitor.getByRole('button', { name: 'Report' }).click();
     await dialog(visitor).getByRole('combobox', { name: 'Category' }).click();
     await visitor.getByRole('option', { name: 'Something else' }).click();
-    await dialog(visitor).getByLabel('What is wrong').fill('Again.');
+    await dialog(visitor).getByLabel('What’s wrong').fill('Again.');
     await dialog(visitor).getByRole('button', { name: 'Send report' }).click();
     await expect(visitor.getByText('Already reported')).toBeVisible({ timeout: 60_000 });
     await visitor.context().close();
@@ -191,10 +195,9 @@ test('removing the content stops the link and the owner’s restore; suspending 
 
     const visitor = await (await newContext(browser)).newPage();
     await visitor.goto(linkUrl);
-    await expect(visitor.locator('[data-slot=alert-title]')).toHaveText(
-        'This link no longer works',
-        { timeout: 60_000 },
-    );
+    await expect(visitor.getByRole('heading', { name: 'This link no longer works' })).toBeVisible({
+        timeout: 60_000,
+    });
     await visitor.context().close();
 
     await owner.goto('/app/trash');

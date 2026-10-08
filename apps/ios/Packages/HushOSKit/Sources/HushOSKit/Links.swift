@@ -210,7 +210,7 @@ public actor LinkVault {
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
         nodeKeys[node.id] = key
-        let root = Opened(node: node, metadata: metadata)
+        let root = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.id] = root
         return root
     }
@@ -227,7 +227,7 @@ public actor LinkVault {
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
         nodeKeys[node.id] = key
-        let result = Opened(node: node, metadata: metadata)
+        let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.id] = result
         return result
     }
@@ -290,5 +290,36 @@ public actor LinkVault {
         guard let nodeKey = nodeKeys[item.id] else { throw DriveAPIError.server(500, "Node not opened") }
         let body = try await Reports.body(api: api, item: item, nodeKey: nodeKey, category: category, reason: reason, email: email, via: ["link": token])
         return try await api.post("/reports", body: body, as: ReportFiled.self).duplicate
+    }
+}
+
+extension DriveAPI {
+    /* PATCH /links/:id: a new seal (a password set, changed or removed) and or a new end date; the URL stays. */
+    public func updateLink(_ linkId: String, body: [String: Any]) async throws -> LinkView {
+        try await performPublic(try mutationPublic("/links/\(linkId)", method: "PATCH", body: body), as: LinkResponse.self).link
+    }
+}
+
+extension Vault {
+    /*
+     * Changes a link's password or end date, as the web's `updateLink` does. `password` nil leaves it,
+     * `.some(nil)` removes it, `.some(text)` sets it; `expiresAt` the same way. The secret and token stay,
+     * so whoever already has the link keeps the same address.
+     */
+    public func updateLink(_ link: LinkView, for item: Opened, password: String?? = nil, expiresAt: Date?? = nil) async throws -> LinkView {
+        var body: [String: Any] = ["workspaceId": item.node.workspaceId, "keyEpoch": link.keyEpoch]
+        if let password {
+            guard let nodeKey = nodeKeys[item.id], let sealed = link.secretEnvelope else {
+                throw DriveAPIError.server(400, "This link can’t be changed. Make a new one.")
+            }
+            let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: link.keyEpoch, linkId: link.id)
+            let resealed = try linkReseal(ctx: ctx, nodeKey: nodeKey, secretEnvelope: try base64urlDecode(value: sealed), password: password)
+            body["seal"] = [
+                "linkEnvelope": resealed.linkEnvelope, "linkSalt": resealed.linkSalt,
+                "hasPassword": resealed.hasPassword, "secretEnvelope": resealed.secretEnvelope,
+            ]
+        }
+        if let expiresAt { body["expiresAt"] = expiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull() }
+        return try await api.updateLink(link.id, body: body)
     }
 }

@@ -1,79 +1,49 @@
-import { deflateSync } from 'node:zlib';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
-import { PASSWORD, grip, newContext, registerAccount } from './helpers';
+import {
+    expect,
+    test,
+    type Browser,
+    type BrowserContextOptions,
+    type Page,
+} from '@playwright/test';
+import {
+    addContact,
+    grip,
+    newContext as baseContext,
+    newFolder,
+    newLink,
+    PASSWORD,
+    registerAccount,
+    shareWith,
+} from './helpers';
+import { ZONE } from './morning-zone';
 
 /*
  * Not a test: the screenshots for the app manifest and the marketing pages,
  * taken from a fresh account with real-looking files, so they never show
- * anyone's data. Run on demand with `SCREENSHOTS=1 bunx playwright test
+ * anyone's data. The photos are CC0 from Wikimedia Commons (e2e/fixtures/photos/README.md). Run on demand with `SCREENSHOTS=1 bunx playwright test
  * e2e/screenshots.spec.ts --project=chromium`; the suite skips it otherwise.
- * Output lands in apps/web/public/screenshots.
+ * Output lands in apps/web/src/screenshots, where the site imports it with hashed names; the
+ * light 2x pictures the web app's manifest names are also copied to apps/web/public/screenshots.
  */
 
 test.skip(!process.env.SCREENSHOTS, 'Screenshots are taken on demand.');
 test.describe.configure({ mode: 'serial' });
 
 const OUT = 'apps/web/src/screenshots';
+const PHOTOS = 'e2e/fixtures/photos';
+/* The pictures show times, so they are taken in a timezone where it is mid-morning now. */
+const newContext = (browser: Browser, options: BrowserContextOptions = {}) =>
+    baseContext(browser, { timezoneId: ZONE, ...options });
+const toasts = (p: Page) => p.locator('[data-slot=toast]');
+/* The pictures apps/web/public/manifest.json shows when the web app is installed; it needs fixed URLs. */
+const MANIFEST = 'apps/web/public/screenshots';
+const IN_MANIFEST = new Set(['drive-wide', 'drive-grid', 'preview', 'drive-narrow', 'phone-grid']);
 const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
-
-/* A soft two-colour gradient with a horizon, enough for a thumbnail to look like a photo. */
-function gradientPng(
-    width: number,
-    height: number,
-    top: [number, number, number],
-    bottom: [number, number, number],
-    horizon = 0.62,
-) {
-    const stride = width * 3 + 1;
-    const raw = Buffer.alloc(stride * height);
-    for (let y = 0; y < height; y++) {
-        raw[y * stride] = 0;
-        const t = y / height;
-        const mix = t < horizon ? t / horizon : 1;
-        const shade = t < horizon ? 1 : 0.55 + 0.45 * ((1 - t) / (1 - horizon));
-        for (let x = 0; x < width; x++) {
-            const offset = y * stride + 1 + x * 3;
-            const wave = t < horizon ? 0 : Math.sin(x / 23 + y / 7) * 6;
-            raw[offset] = Math.round((top[0] + (bottom[0] - top[0]) * mix) * shade + wave);
-            raw[offset + 1] = Math.round((top[1] + (bottom[1] - top[1]) * mix) * shade + wave);
-            raw[offset + 2] = Math.round((top[2] + (bottom[2] - top[2]) * mix) * shade + wave);
-        }
-    }
-    const crcTable = Array.from({ length: 256 }, (_, n) => {
-        let c = n;
-        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-        return c >>> 0;
-    });
-    const crc32 = (buf: Buffer) => {
-        let c = 0xffffffff;
-        for (const byte of buf) c = crcTable[(c ^ byte) & 0xff]! ^ (c >>> 8);
-        return (c ^ 0xffffffff) >>> 0;
-    };
-    const chunk = (type: string, data: Buffer) => {
-        const length = Buffer.alloc(4);
-        length.writeUInt32BE(data.length);
-        const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-        const crc = Buffer.alloc(4);
-        crc.writeUInt32BE(crc32(body));
-        return Buffer.concat([length, body, crc]);
-    };
-    const header = Buffer.alloc(13);
-    header.writeUInt32BE(width, 0);
-    header.writeUInt32BE(height, 4);
-    header[8] = 8;
-    header[9] = 2;
-    return Buffer.concat([
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-        chunk('IHDR', header),
-        chunk('IDAT', deflateSync(raw)),
-        chunk('IEND', Buffer.alloc(0)),
-    ]);
-}
 
 /* A one-page PDF with a title and a few lines, valid enough for any reader. */
 function simplePdf(title: string, lines: string[]) {
@@ -114,6 +84,12 @@ function fixtures() {
         writeFileSync(path, bytes);
         return path;
     };
+    // The trip photos, under the names the demo gives them.
+    const photo = (name: string, source: string) => {
+        const path = join(dir, name);
+        copyFileSync(join(PHOTOS, source), path);
+        return path;
+    };
     return {
         readingList: write(
             'Reading list.md',
@@ -141,19 +117,18 @@ function fixtures() {
             'Trip plan.md',
             '# Lisbon, 3 to 9 October\n\n## Flights\n\n- Out: Thursday 07:40, arrive 10:15\n- Back: Wednesday 18:30\n\n## Days\n\n1. Alfama and the castle\n2. Belém: the tower, the monastery, and the pastéis\n3. Sintra by train\n4. Free day; LX Factory in the evening\n5. Cascais by the coast road\n',
         ),
-        belem: write(
-            'Belém at sunset.png',
-            gradientPng(960, 640, [252, 176, 96], [86, 52, 92], 0.6),
-        ),
-        tram: write('Tram 28.png', gradientPng(960, 640, [142, 196, 232], [200, 168, 120], 0.55)),
-        alfama: write(
-            'Tiles in Alfama.png',
-            gradientPng(960, 640, [60, 110, 168], [230, 220, 200], 0.45),
-        ),
-        sintra: write(
-            'Sintra palace.png',
-            gradientPng(960, 640, [120, 160, 120], [244, 208, 88], 0.5),
-        ),
+        belem: photo('Belém at sunset.jpg', 'belem.jpg'),
+        tram: photo('Tram 28.jpg', 'tram.jpg'),
+        tiles: photo('Azulejos.jpg', 'tiles.jpg'),
+        sintra: photo('Sintra palace.jpg', 'sintra.jpg'),
+        view: photo('Miradouro view.jpg', 'view.jpg'),
+        harbour: photo('Cascais harbour.jpg', 'harbour.jpg'),
+        coast: photo('Cascais coast.jpg', 'coast.jpg'),
+        cloister: photo('Jerónimos cloister.jpg', 'cloister.jpg'),
+        nata: photo('Pastéis de nata.jpg', 'nata.jpg'),
+        regaleira: photo('Quinta da Regaleira.jpg', 'regaleira.jpg'),
+        bridge: photo('Ponte 25 de Abril.jpg', 'bridge.jpg'),
+        fado: photo('Museu do Fado.jpg', 'fado.jpg'),
         report: write(
             'Q3 report.md',
             '# Q3 report\n\n## Summary\n\nRevenue grew in every region. Costs held flat. Two hires start in October.\n\n## Numbers\n\n| Region | Q2 | Q3 |\n| --- | --- | --- |\n| North | 1,200 | 1,480 |\n| South | 3,400 | 3,910 |\n| East | 900 | 1,050 |\n',
@@ -186,11 +161,8 @@ async function signInAgain(p: Page) {
     await expect(row(p, 'Family')).toBeVisible({ timeout: 60_000 });
 }
 
-async function newFolder(p: Page, path: string) {
-    await p
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+async function folderAt(p: Page, path: string) {
+    await newFolder(p);
     await p.getByPlaceholder('Reports/2026').fill(path);
     await p.keyboard.press('Enter');
     await expect(dialog(p)).toHaveCount(0);
@@ -203,13 +175,14 @@ async function upload(p: Page, paths: string[], last: string) {
 async function settle(p: Page) {
     const clear = p.getByRole('button', { name: 'Clear finished' });
     if (await clear.count()) await clear.click();
+    await expect(toasts(p)).toHaveCount(0, { timeout: 30_000 });
     await p.mouse.move(0, 0);
     await p.waitForTimeout(600);
 }
 async function into(p: Page, name: string) {
     await row(p, name).getByRole('link', { name }).click();
     await expect(p).toHaveURL(/\/app\/drive\/f\//);
-    await expect(p.locator('nav[aria-label=breadcrumb] li').last()).toHaveText(name);
+    await expect(p.locator('nav[aria-label="Folder path"] h1')).toHaveText(name);
 }
 async function up(p: Page) {
     await p.locator('[data-crumb-id]').first().click();
@@ -224,7 +197,7 @@ async function tag(p: Page, name: string, tags: string[]) {
     await p.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
     await expect(target).toHaveAttribute('aria-selected', 'true');
     await p.keyboard.press('t');
-    const input = dialog(p).getByPlaceholder('Home, Tax, Travel…');
+    const input = dialog(p).getByPlaceholder('Find or add a tag');
     for (const label of tags) {
         await input.fill(label);
         await p.keyboard.press('Enter');
@@ -244,24 +217,47 @@ async function tag(p: Page, name: string, tags: string[]) {
 test.beforeAll(async ({ browser }) => {
     test.setTimeout(600_000);
     files = fixtures();
+    console.log(`Times in the pictures are in ${ZONE}.`);
     page = await (
         await newContext(browser, { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 })
     ).newPage();
     // A fresh account each run; the address is unique in the part the sidebar truncates.
-    ({ email } = await registerAccount(
-        page,
-        'Maya Lindqvist',
-        `maya.lindqvist@mail-${Date.now().toString(36)}.example.com`,
-    ));
-    await newFolder(page, 'Family/Lisbon 2026');
-    await newFolder(page, 'Finances');
-    await newFolder(page, 'Recipes');
-    await newFolder(page, 'Work/Q3 planning');
+    const domain = `mail-${Date.now().toString(36)}.example.com`;
+    // Someone for Maya to share with, so the share dialog shows a person as well as a link.
+    const jonas = await (await newContext(browser)).newPage();
+    const { email: jonasEmail } = await registerAccount(
+        jonas,
+        'Jonas Berg',
+        `jonas.berg@${domain}`,
+    );
+    await jonas.context().close();
+    ({ email } = await registerAccount(page, 'Maya Lindqvist', `maya.lindqvist@${domain}`));
+    await folderAt(page, 'Family/Lisbon 2026');
+    await folderAt(page, 'Finances');
+    await folderAt(page, 'Recipes');
+    await folderAt(page, 'Work/Q3 planning');
     await upload(page, [files.readingList, files.lease, files.trip], 'Trip plan.md');
     await into(page, 'Family');
     await into(page, 'Lisbon 2026');
-    await upload(page, [files.belem, files.tram, files.alfama, files.sintra], 'Sintra palace.png');
-    await expect(row(page, 'Belém at sunset.png').locator('img')).toBeVisible({ timeout: 60_000 });
+    await upload(
+        page,
+        [
+            files.belem,
+            files.tram,
+            files.tiles,
+            files.sintra,
+            files.view,
+            files.harbour,
+            files.coast,
+            files.cloister,
+            files.nata,
+            files.regaleira,
+            files.bridge,
+            files.fado,
+        ],
+        'Sintra palace.jpg',
+    );
+    await expect(row(page, 'Belém at sunset.jpg').locator('img')).toBeVisible({ timeout: 60_000 });
     await up(page);
     await into(page, 'Finances');
     await upload(page, [files.budget], 'Budget 2026.csv');
@@ -277,6 +273,22 @@ test.beforeAll(async ({ browser }) => {
     await tag(page, 'Finances', ['Tax']);
     await tag(page, 'Lease agreement.pdf', ['Tax', 'Home']);
     await tag(page, 'Trip plan.md', ['Travel']);
+    await page.goto('/app/people', { waitUntil: 'networkidle' });
+    await addContact(page, jonasEmail);
+    await page.goto('/app/drive', { waitUntil: 'networkidle' });
+    await expect(row(page, 'Family')).toBeVisible({ timeout: 60_000 });
+    await row(page, 'Family').locator('button').first().click(grip);
+    await page.getByRole('button', { name: 'Share', exact: true }).click();
+    await shareWith(page, /Jonas Berg/);
+    await expect(dialog(page).getByText('Jonas Berg')).toBeVisible({ timeout: 60_000 });
+    // A link from the start, so every picture of Family says who can open it the same way.
+    await newLink(page);
+    await page.keyboard.press('Escape');
+    await expect(dialog(page)).toHaveCount(0);
+    // Opening the share dialog selected the row; the pictures start with nothing selected.
+    await page.keyboard.press('Escape');
+    await expect(row(page, 'Family')).not.toHaveAttribute('aria-selected', 'true');
+    await expect(toasts(page)).toHaveCount(0, { timeout: 30_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
@@ -292,6 +304,10 @@ async function shoot(p: Page, name: string, scale: Scale) {
     if (scale === 2) {
         await p.screenshot({ path: `${OUT}/${name}.png` });
         await p.screenshot({ path: `${OUT}/${name}@1x.png`, scale: 'css' });
+        if (IN_MANIFEST.has(name)) {
+            mkdirSync(MANIFEST, { recursive: true });
+            copyFileSync(`${OUT}/${name}.png`, `${MANIFEST}/${name}.png`);
+        }
     } else await p.screenshot({ path: `${OUT}/${name}@1.5x.png` });
 }
 
@@ -316,7 +332,7 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     await into(p, 'Lisbon 2026');
     const grid = p.getByRole('button', { name: /show as grid/i });
     if (await grid.count()) await grid.click();
-    await expect(row(p, 'Belém at sunset.png').locator('img')).toBeVisible({ timeout: 60_000 });
+    await expect(row(p, 'Belém at sunset.jpg').locator('img')).toBeVisible({ timeout: 60_000 });
     await settle(p);
     await shoot(p, `drive-grid${suffix}`, scale);
     await p.getByRole('button', { name: /show as list/i }).click();
@@ -335,9 +351,19 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     await p.setViewportSize({ width: 1280, height: 1040 });
     await row(p, 'Family').locator('button').first().click(grip);
     await p.getByRole('button', { name: 'Share', exact: true }).click();
-    await dialog(p).getByRole('button', { name: 'Link', exact: true }).click();
-    await dialog(p).getByRole('button', { name: 'Create link' }).click();
-    await expect(dialog(p).locator('button[aria-label="Copy Link"]')).toBeVisible();
+    // Each pass makes a link for its picture; the one before goes, so Family ends with one link.
+    const links = dialog(p).locator('[data-link]');
+    // Setup gave Family a link, so wait for the list to load before counting it.
+    await expect(links.first()).toBeVisible({ timeout: 60_000 });
+    while ((await links.count()) > 0) {
+        const before = await links.count();
+        await links.first().getByRole('button', { name: 'More for this link' }).click();
+        await p.getByRole('menuitem', { name: 'Turn off link' }).click();
+        await p.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+        await expect(links).toHaveCount(before - 1, { timeout: 30_000 });
+    }
+    await dialog(p).getByRole('button', { name: 'New link' }).click();
+    await expect(dialog(p).locator('button[data-url]')).toBeVisible();
     // The link carries this page's origin; the picture should show the hosted one.
     await p.evaluate(() => {
         const walker = document.createTreeWalker(
@@ -366,7 +392,7 @@ async function phoneShots(p: Page, suffix: string, scale: Scale) {
     await into(p, 'Lisbon 2026');
     const grid = p.getByRole('button', { name: /show as grid/i });
     if (await grid.count()) await grid.click();
-    await expect(row(p, 'Belém at sunset.png').locator('img')).toBeVisible({ timeout: 60_000 });
+    await expect(row(p, 'Belém at sunset.jpg').locator('img')).toBeVisible({ timeout: 60_000 });
     await p.waitForTimeout(600);
     await shoot(p, `phone-grid${suffix}`, scale);
 }

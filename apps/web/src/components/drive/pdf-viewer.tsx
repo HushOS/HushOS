@@ -1,10 +1,12 @@
 import type { FileReader } from '@hushos/drive/downloads';
 import type * as Pdfjs from 'pdfjs-dist';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
-import { useEffect, useRef, useState } from 'react';
-import { Spinner } from '@/components/motion';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { PREVIEW_LIMITS, readAll, rememberPreview } from '@/lib/previews';
+import { FileQuestionIcon, LockIcon } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Notice, Opening } from '@/components/drive/viewer-parts';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { PREVIEW_LIMITS, readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import '@/components/drive/pdf-viewer.css';
 
 /*
@@ -14,6 +16,7 @@ import '@/components/drive/pdf-viewer.css';
  * the byte ranges it needs and the reader decrypts the chunks that cover them,
  * so the first page shows before the file has finished downloading. Pages
  * render to a canvas as they scroll into view, with a text layer over each.
+ * A PDF with a password asks for it in place; it is only handed to pdf.js.
  */
 
 let pdfjsModule: Promise<typeof Pdfjs> | null = null;
@@ -33,13 +36,23 @@ const MAX_RENDER_SCALE = 2;
 export function PdfViewer({
     source,
     versionId,
+    name,
+    onDownload,
 }: {
     /* The file to read, or its bytes when a previous open remembered them. */
     source: FileReader | Uint8Array;
     versionId: string | null;
+    name: string;
+    onDownload: () => void;
 }) {
     const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    const [broken, setBroken] = useState(false);
+    const [progress, setProgress] = useState<ReadProgress | null>(null);
+    /* pdf.js waits on this to be called with the password; `wrong` after a miss. */
+    const [locked, setLocked] = useState<{
+        answer: (password: string) => void;
+        wrong: boolean;
+    } | null>(null);
     const [firstPage, setFirstPage] = useState<{ width: number; height: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [width, setWidth] = useState(0);
@@ -56,7 +69,11 @@ export function PdfViewer({
                     !(source instanceof Uint8Array) &&
                     source.size <= PREVIEW_LIMITS.document
                 ) {
-                    const { bytes } = await readAll(source, PREVIEW_LIMITS.document);
+                    const { bytes } = await readAll(
+                        source,
+                        PREVIEW_LIMITS.document,
+                        (value) => active && setProgress(value),
+                    );
                     if (!active) return;
                     data = bytes;
                     if (versionId)
@@ -85,6 +102,10 @@ export function PdfViewer({
                           disableStream: true,
                       });
                 loading = task;
+                task.onPassword = (answer: (password: string) => void, reason: number) => {
+                    // 2 is pdf.js's INCORRECT_PASSWORD; 1, the first ask.
+                    if (active) setLocked({ answer, wrong: reason === 2 });
+                };
                 const loaded = await task.promise;
                 if (!active) return;
                 const page = await loaded.getPage(1);
@@ -92,13 +113,8 @@ export function PdfViewer({
                 if (!active) return;
                 setFirstPage({ width: viewport.width, height: viewport.height });
                 setDocument(loaded);
-            } catch (cause) {
-                if (active)
-                    setError(
-                        cause instanceof Error && cause.name === 'PasswordException'
-                            ? 'This PDF is password protected.'
-                            : 'This PDF could not be read.',
-                    );
+            } catch {
+                if (active) setBroken(true);
             }
         })();
         return () => {
@@ -117,14 +133,30 @@ export function PdfViewer({
         return () => observer.disconnect();
     }, []);
 
-    if (error)
+    if (broken)
         return (
-            <div className="flex flex-1 items-center justify-center p-6">
-                <Alert variant="destructive" className="max-w-md">
-                    <AlertTitle>No preview</AlertTitle>
-                    <AlertDescription>{error}</AlertDescription>
-                </Alert>
-            </div>
+            <Notice
+                icon={
+                    <FileQuestionIcon
+                        className="size-8 text-muted-foreground"
+                        strokeWidth={1.6}
+                        aria-hidden="true"
+                    />
+                }
+                title="This PDF can’t be shown"
+                text="It may be damaged or use something the viewer doesn’t support. Download it to try another app."
+                onDownload={onDownload}
+            />
+        );
+    if (locked && !document)
+        return (
+            <PdfPassword
+                wrong={locked.wrong}
+                onSubmit={(password) => {
+                    locked.answer(password);
+                    setLocked(null);
+                }}
+            />
         );
     // Pages sit on a narrow column at reading width; the scale follows the column.
     const pageWidth = Math.min(Math.max(width - 48, 0), 960);
@@ -132,8 +164,8 @@ export function PdfViewer({
     return (
         <div ref={containerRef} className="flex-1 overflow-auto bg-background">
             {!document || !firstPage ? (
-                <div className="flex h-full items-center justify-center text-muted-foreground">
-                    <Spinner />
+                <div className="flex h-full">
+                    <Opening name={name} progress={progress} />
                 </div>
             ) : (
                 <div className="mx-auto flex flex-col items-center gap-4 px-6 py-6">
@@ -155,6 +187,63 @@ export function PdfViewer({
                 </div>
             )}
         </div>
+    );
+}
+
+function PdfPassword({
+    wrong,
+    onSubmit,
+}: {
+    wrong: boolean;
+    onSubmit: (password: string) => void;
+}) {
+    const id = useId();
+    const [value, setValue] = useState('');
+    return (
+        <Notice
+            icon={
+                <LockIcon
+                    className="size-8 text-muted-foreground"
+                    strokeWidth={1.6}
+                    aria-hidden="true"
+                />
+            }
+            title="This PDF has a password"
+            text="Whoever made it set one. Type it to open the PDF here."
+        >
+            <form
+                className="flex w-full flex-col gap-1.5 pt-1 text-left"
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    if (value) onSubmit(value);
+                }}
+            >
+                <span className="flex w-full gap-2">
+                    <Input
+                        id={id}
+                        type="password"
+                        autoComplete="off"
+                        // oxlint-disable-next-line jsx-a11y/no-autofocus -- the only thing to do here
+                        autoFocus
+                        value={value}
+                        onChange={(event) => setValue(event.target.value)}
+                        aria-label="PDF password"
+                        aria-invalid={wrong}
+                        aria-describedby={wrong ? `${id}-wrong` : undefined}
+                        placeholder="Password"
+                        className="flex-1 text-[15px]"
+                    />
+                    <Button type="submit" disabled={!value}>
+                        Open
+                    </Button>
+                </span>
+                {wrong && (
+                    <span id={`${id}-wrong`} role="alert" className="text-[13px] text-destructive">
+                        That password didn’t open it. Check it and try again.
+                    </span>
+                )}
+            </form>
+        </Notice>
     );
 }
 

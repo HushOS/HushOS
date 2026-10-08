@@ -24,15 +24,21 @@ export function ThemeRadioItems() {
         <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
             <DropdownMenuLabel>Appearance</DropdownMenuLabel>
             {Object.entries(themeOptions).map(([value, { label, icon: OptionIcon }]) => (
-                <DropdownMenuRadioItem key={value} value={value} closeOnClick>
-                    <OptionIcon aria-hidden="true" /> {label}
+                <DropdownMenuRadioItem
+                    key={value}
+                    value={value}
+                    closeOnClick
+                    className="whitespace-nowrap"
+                >
+                    <OptionIcon aria-hidden="true" />{' '}
+                    {value === 'system' ? 'Same as this computer' : label}
                 </DropdownMenuRadioItem>
             ))}
         </DropdownMenuRadioGroup>
     );
 }
 
-/* The header's appearance control: a quiet label that reads as part of the bar. */
+/* The site header's appearance control: one quiet icon button. */
 export function ThemeToggle() {
     const { theme, isPending, error } = useTheme();
     const Icon = themeOptions[theme].icon;
@@ -41,16 +47,15 @@ export function ThemeToggle() {
         <div className="relative flex">
             <DropdownMenu>
                 <DropdownMenuTrigger
-                    className="eyebrow flex cursor-pointer items-center gap-2 px-4 text-muted-foreground transition-colors hover:text-foreground aria-expanded:text-foreground disabled:opacity-50"
-                    aria-label={`Appearance: ${themeOptions[theme].label}`}
-                    title={`Appearance: ${themeOptions[theme].label}`}
+                    className="flex size-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-expanded:bg-muted aria-expanded:text-foreground disabled:opacity-50"
+                    aria-label={`Appearance: ${theme === 'system' ? 'Same as this computer' : themeOptions[theme].label}`}
+                    title="Appearance"
                     disabled={isPending}
                     aria-busy={isPending}
                 >
-                    <Icon className="size-3.5" aria-hidden="true" />
-                    <span className="hidden sm:inline">{themeOptions[theme].label}</span>
+                    <Icon className="size-[18px]" aria-hidden="true" />
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" sideOffset={4} className="min-w-44">
+                <DropdownMenuContent align="end" sideOffset={4} className="w-auto min-w-44">
                     <ThemeRadioItems />
                 </DropdownMenuContent>
             </DropdownMenu>

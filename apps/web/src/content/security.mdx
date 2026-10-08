@@ -1,20 +1,41 @@
 ---
-title: Security model
+title: How HushOS protects your files
+heading: How HushOS protects your files.
 updated: 2026-09-15
-summary: How HushOS authenticates you, derives your keys, encrypts your files, shares them, and handles reports, written so you can check each claim against the code.
+summary: How HushOS signs you in, makes and keeps your keys, locks your files, shares them, and handles reports, in plain words with the exact terms underneath so you can check each claim against the code.
+lede: What happens to a file from the moment you add it, in plain words. Each step keeps the exact terms underneath for anyone who wants to check them against the code. Where this page and the code disagree, the code is right and this page has a bug.
 ---
 
-import { Ledger, Note } from '../components/mdx';
+import { Body, Contents, Exact, Section, Step, Terms } from '../components/security-page';
+import { TextLink } from '../components/site';
 
-## Scope
+export const contents = {
+    password: 'Your password never leaves your device',
+    keys: 'Your keys are made on your device',
+    recovery: 'Your recovery phrase gets you back in',
+    files: 'Your files are locked before they’re sent',
+    sharing: 'Sharing gives one person their own key',
+    links: 'Links keep their secret out of our sight',
+    stop: 'Stopping a share really stops it',
+    reports: 'Anything shared can be reported',
+    sees: 'What the server can see',
+    where: 'Where it runs',
+    limits: 'What this can’t do',
+};
 
-This page describes what is implemented. The first half covers accounts: sign-in, password changes, account and recovery-key rotation, identity keys, the workspace key, recovery, and remembered browser unlock. The second half covers Drive: folder and file keys, uploads and downloads, sharing with people and by link, what happens when sharing stops, reports, and what the server can see. The byte-level protocols live in the `@hushos/crypto` package and are specified in `docs/opaque-auth-design.md` and `docs/drive-design.md` in the repository. Where this page and the code disagree, the code is right and this page has a bug.
+<Contents items={contents} />
 
-## Sign-in without sending a password
+<Body>
 
-HushOS uses OPAQUE, a password-authenticated key exchange, through the Serenity implementation. During registration your browser and the server run a short protocol that leaves the server with a record it can use to verify future sign-ins. The password never leaves the browser, not even as a hash.
+<Step id="password" n={1} title={contents.password}>
 
-<Ledger
+When you sign in, your device proves it knows your password without sending it, not even in a scrambled form. For your password, we keep only a record that can check that proof. Guessing your password from that record means trying passwords one at a time, and each try is slowed down on purpose. Signing in with an email that has no account gets the same kind of answer, so the sign-in page doesn’t reveal who has one.
+
+Once you’re in, your browser holds a session that ends after 7 days unused, or after 30 days at most.
+
+<Exact open>
+
+<Terms
     rows={[
         ['Protocol', 'OPAQUE (Ristretto), Serenity implementation'],
         ['Hardening', 'Argon2id, 65,536 KiB memory, 3 iterations, parallelism 4'],
@@ -26,11 +47,36 @@ HushOS uses OPAQUE, a password-authenticated key exchange, through the Serenity 
 
 OPAQUE produces two secrets. The **session key** is shared with the server; HushOS uses a separate random token for its application sessions. The **export key** is known only to the client. Only the export key is used to wrap the account key, and only after a further derivation step.
 
-## The account key
+<Terms
+    title="Sessions and transport"
+    rows={[
+        [
+            'Verification links',
+            '32 random bytes, sent in a URL fragment, stored only as SHA-256, valid 30 minutes',
+        ],
+        ['Login attempts', 'Random handles, stored hashed, consumed after 5 minutes or one finish'],
+        ['Sessions', '7 days idle, 30 days at most, 32-byte token, only its SHA-256 stored'],
+        ['Cookies', 'HttpOnly, SameSite=Lax, Secure with the __Host- prefix under HTTPS'],
+        ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, per-address rate limits'],
+        ['Responses', 'private, no-store and no-referrer'],
+    ]}
+/>
 
-Your account key, also called the master key, is 32 random bytes generated in your browser. It is not derived from your password, so changing the password does not change the key. Two independent wrappings of the same key exist:
+</Exact>
 
-<Ledger
+</Step>
+
+<Step id="keys" n={2} title={contents.keys}>
+
+When you sign up, your device makes the key for your account. Your password locks one copy of it and your recovery phrase locks another. Changing your password locks the same key again, so nothing else has to change.
+
+Your device also makes your identity keys, which are what other people lock things to when they share with you, and a key for your workspace. Every folder and file hangs off the workspace key, each with a key of its own.
+
+<Exact>
+
+Your account key, also called the master key, is 32 random bytes generated in your browser. It is not derived from your password. Two independent wrappings of the same key exist:
+
+<Terms
     rows={[
         ['Password wrap', 'HKDF-SHA-256 over the OPAQUE export key, then XChaCha20-Poly1305'],
         ['Recovery wrap', 'HKDF-SHA-256 over the recovery secret, then XChaCha20-Poly1305'],
@@ -41,13 +87,10 @@ Your account key, also called the master key, is 32 random bytes generated in yo
 
 Every envelope carries associated data that names its purpose, version, and owner. An envelope moved to another account or another version fails to open.
 
-## Identity keys
+At signup the browser also generates an X25519 key pair for encryption, an Ed25519 key pair for signatures, and an ML-KEM-768 key pair, the post-quantum key exchange NIST standardised as FIPS 203. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. The X25519 and ML-KEM keys together are what a share is sealed to, and what a report’s keys are escrowed to.
 
-At signup the browser also generates an X25519 key pair for encryption, an Ed25519 key pair for signatures, and an ML-KEM-768 key pair, the post-quantum key exchange NIST standardised as FIPS 203. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. The X25519 and ML-KEM keys together are what a share is sealed to, and what a report's keys are escrowed to. Both are described below.
-
-The ML-KEM public key is signed by the identity's Ed25519 key, and the server refuses to store one without that signature. It is not folded into the fingerprint, so the fingerprint two people compare stays the X25519 one.
-
-<Ledger
+<Terms
+    title="Identity keys"
     rows={[
         ['Encryption', 'X25519, libsodium'],
         [
@@ -62,11 +105,12 @@ The ML-KEM public key is signed by the identity's Ed25519 key, and the server re
     ]}
 />
 
-## The workspace key
+The server refuses to store an ML-KEM public key without that signature. It is not folded into the fingerprint, so the fingerprint two people compare stays the X25519 one.
 
-Every account starts with a personal workspace, and every workspace has its own 32-byte key, generated in your browser. It is random, not derived from your account key, so it can be granted to another person later without giving them anything of yours. What you hold is a **grant**: the workspace key wrapped under a key derived from your account key.
+Every workspace has its own 32-byte key, generated in your browser. It is random, not derived from your account key, so it can be granted to another person later without giving them anything of yours. What you hold is a **grant**: the workspace key wrapped under a key derived from your account key.
 
-<Ledger
+<Terms
+    title="Workspace key"
     rows={[
         ['Workspace key', '32 random bytes, created on your device when the workspace is'],
         ['Grant wrap', 'HKDF-SHA-256 over the account key, then XChaCha20-Poly1305'],
@@ -80,70 +124,86 @@ Every account starts with a personal workspace, and every workspace has its own 
 
 Folder and file keys hang off the workspace key, not off your account key. That is what keeps rotation cheap: replacing your account key rewraps one grant per workspace you belong to, and nothing beneath it moves.
 
-## Recovery
+<Terms
+    title="In your browser"
+    rows={[
+        ['Account key', 'Held in plaintext only inside a Web Worker, never in application state'],
+        [
+            'Remembered unlock',
+            'The worker wraps the account key with a non-exportable AES-256-GCM device key held in IndexedDB; locking or signing out clears it across tabs in that browser',
+        ],
+        [
+            'Tree mirror',
+            'Your tree as the server holds it, ciphertext only, kept in IndexedDB so search and folder listings run on the device; cleared when you leave the workspace',
+        ],
+    ]}
+/>
 
-A 32-byte recovery secret is generated on your device and displayed as 24 English BIP39 words. It wraps the same account key, so recovering with the phrase preserves everything the key protects. A backup of the secret is stored encrypted by the account key, which is how the phrase can be shown again while your device is unlocked.
+How remembered unlock and the account key rotations work, step by step, is in the [accounts and keys design document](https://github.com/HushOS/HushOS/blob/main/docs/opaque-auth-design.md).
 
-Resetting a password requires a verified email link and the phrase. The browser proves it holds the phrase by signing the reset with a key derived from it, re-registers with OPAQUE under the new password, and rewraps the unchanged account key. The server checks the signature and every binding, replaces the credentials in one transaction, and revokes all existing sessions. A reset issues a new recovery phrase, then signs you in with the new password.
+</Exact>
 
-<Note title="What recovery cannot do">
-    Replacing a phrase stops it from authorising future resets. An old downloaded kit still contains
-    its phrase and encrypted account key, so it can open that root offline. Password recovery and
-    recovery-key rotation preserve that root; master-key rotation creates a different one. Email
-    alone can never restore a lost key. If you lose your password, your remembered devices, and your
-    recovery kit, the key is gone and so is access to what it protects.
-</Note>
+</Step>
 
-## Password changes and key rotation
+<Step id="recovery" n={3} title={contents.recovery}>
 
-[Account settings](/app/account) offers three actions. Each requires your current password through a fresh OPAQUE exchange. The password stays on your device, and the server receives only protocol messages and encrypted key bundles.
+The 24 words you save at sign-up lock their own copy of your account key. With the phrase and a link we email you, you can set a new password and your files stay as they were. Email alone can never get you back in. Resetting your password this way gives you a new phrase and signs you out everywhere else.
 
-<Ledger
+In [Account](/app/account) you can also change your password, make a new recovery phrase, or reset your sharing keys (a new account key). Each one asks for your current password and signs you out of your other browsers.
+
+<Exact>
+
+<Terms
+    rows={[
+        ['Phrase', 'A 32-byte secret made on your device, shown as 24 English BIP39 words'],
+        [
+            'Backup',
+            'The secret is also stored encrypted by the account key, so the phrase can be shown again while your device is unlocked',
+        ],
+        ['Reset needs', 'A verified email link and a signature from a key derived from the phrase'],
+        [
+            'After a reset',
+            'The unchanged account key is rewrapped, every session is revoked, a new phrase is issued, and you are signed in with the new password',
+        ],
+    ]}
+/>
+
+During a reset the browser re-registers with OPAQUE under the new password and rewraps the unchanged account key. The server checks the signature and every binding and replaces the credentials in one transaction.
+
+<Terms
+    title="In Account"
     rows={[
         [
             'Change password',
             'Rewraps the same master key; preserves the recovery phrase and identity keys',
         ],
         [
-            'Rotate recovery key',
+            'Make a new phrase',
             'Creates new 24-word recovery credentials; preserves the password, master key, and identity keys',
         ],
         [
-            'Rotate master key',
+            'Reset sharing keys',
             'Generates a new master key and recovery phrase; rewraps the existing identity keys and every workspace grant, and preserves the password',
         ],
     ]}
 />
 
-The server replaces the affected records in one transaction and rejects stale concurrent changes. Each action revokes existing sessions and pending recovery attempts. Your browser then signs in again and saves a fresh device-unlock bundle. If that sign-in fails, the sign-in page confirms the change and explains which password to use. After either rotation, save and confirm the new recovery phrase before continuing into the app.
+Each action needs your current password through a fresh OPAQUE exchange, revokes existing sessions and pending recovery attempts, and rejects stale concurrent changes. After either rotation, save and confirm the new recovery phrase before continuing into the app. The full sequence is in the [accounts and keys design document](https://github.com/HushOS/HushOS/blob/main/docs/opaque-auth-design.md).
 
-Master-key rotation rewraps every workspace grant you hold in the same transaction, so the workspace keys, and everything that will hang off them, stay unchanged. Rotating a master key cannot erase old ciphertext, or revoke private identity keys someone already extracted from an older key bundle.
+</Exact>
 
-## Remembered browser unlock
+</Step>
 
-The plaintext account key lives only inside a Web Worker. To let a browser reopen your account without the password, the worker wraps the key with a non-exportable AES-256-GCM device key held in IndexedDB. What is persisted is a versioned encrypted bundle and a lock revision; the key itself never enters application state. Locking or signing out clears remembered access across tabs in that browser. The browser also keeps a mirror of your tree in IndexedDB, exactly as the server holds it, ciphertext only, so search and folder listings can be answered on the device; it is opened with your keys each session and cleared when you leave the workspace. Password changes, password recovery, and either key rotation revoke sessions on other browsers too. Those browsers lose access when they next check the session; revocation cannot erase keys already held offline.
+<Step id="files" n={4} title={contents.files}>
 
-## Sessions and transport
+Your device locks each file, and its name, type and modified time, before any of it leaves. From a locked copy itself, our servers learn only roughly how large the file is. The locked pieces go straight from your device to storage; our app server never handles them. Thumbnails are made on your device and locked inside the file itself. Downloads come back the same way and are unlocked on your device, and previews fetch only the parts they need.
 
-<Ledger
-    rows={[
-        [
-            'Verification links',
-            '32 random bytes, sent in a URL fragment, stored only as SHA-256, valid 30 minutes',
-        ],
-        ['Login attempts', 'Random handles, stored hashed, consumed after 5 minutes or one finish'],
-        ['Sessions', '7 days idle, 30 days at most, 32-byte token, only its SHA-256 stored'],
-        ['Cookies', 'HttpOnly, SameSite=Lax, Secure with the __Host- prefix under HTTPS'],
-        ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, per-address rate limits'],
-        ['Responses', 'private, no-store and no-referrer'],
-    ]}
-/>
+<Exact>
 
-## Folder and file keys
+Every folder and file in Drive has its own key, wrapped under its parent’s key; the root folder’s key is wrapped under the workspace key. A file’s key locks its details and wraps a separate content key for each version of the file. The server holds a tree of ids and envelopes.
 
-Every folder and file in Drive is a node with its own random 32-byte key, generated in your browser and wrapped under its parent's key; the root folder's key is wrapped under the workspace key. A file's node key encrypts the file's metadata (its name, type, size and modification time) and wraps a separate content key for each version of the file. Nothing about a file is stored in the clear: the server holds a tree of ids and envelopes.
-
-<Ledger
+<Terms
+    title="Folder and file keys"
     rows={[
         ['Node key', '32 random bytes per folder or file, wrapped under the parent node key'],
         [
@@ -159,19 +219,16 @@ Every folder and file in Drive is a node with its own random 32-byte key, genera
     ]}
 />
 
-Every envelope carries associated data naming where it belongs, so an envelope moved to another folder, another version or another workspace fails to open. A key epoch counts each time a node's key changes; it is what lets a rotation (below) tell old envelopes from new ones.
+An envelope moved to another folder, another version or another workspace fails to open. A key epoch counts each time a node’s key changes; it is what lets a rotation tell old envelopes from new ones.
 
-## Uploads and downloads
-
-A file is encrypted in your browser's crypto worker before any of it is sent, in independent 8 MiB chunks, each with its own authentication tag. The encrypted chunks go straight from your browser to the object store using short-lived signed URLs, so the application server never handles file bytes. Downloads come back the same way and are decrypted on your device; previews read only the ranges they need.
-
-<Ledger
+<Terms
+    title="Uploads and downloads"
     rows={[
         ['Cipher', 'XChaCha20-Poly1305, one 16-byte tag per 8 MiB chunk'],
         ['Chunk nonces', 'Derived from a 16-byte per-object nonce and the chunk index'],
         [
             'Transfer',
-            'Browser to object store directly; URLs valid 15 minutes for shared content, an hour otherwise',
+            'Browser to object store directly, by signed URLs valid 15 minutes for shared content, an hour otherwise',
         ],
         ['Resume', 'A journal on your device records each chunk’s digest before it is sent'],
         [
@@ -187,13 +244,21 @@ A file is encrypted in your browser's crypto worker before any of it is sent, in
 
 Independent chunks are what make ranged previews and resumed uploads plain arithmetic. A chunk is never re-encrypted under the same key and nonce with different bytes: a resumed upload proves the file is the same one, chunk digest by chunk digest, or starts over with fresh material.
 
-## Sharing with people
+</Exact>
 
-Sharing a folder or file with another HushOS account seals that node's key to their identity keys, on your device. The server stores the sealed box and never holds the key. The recipient opens it with their private identity keys, which only their devices hold, and mounts the shared item as a root of its own under "Shared with me".
+</Step>
 
-The seal is hybrid: an X25519 agreement between your identity key and theirs, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves, so a copy of the database taken today stays shut even if a quantum computer later breaks X25519.
+<Step id="sharing" n={5} title={contents.sharing}>
 
-<Ledger
+Sharing a folder or file with another HushOS account locks a copy of its key for that one person, on your device, so only their devices can open it. The lock uses two methods together, one of them designed to resist future quantum computers, so a copy of our database taken today stays shut even if the older method is broken later.
+
+We hand out the keys people share to, so HushOS lets you check them. The first time you share with someone, their key is remembered, and you can both compare a short fingerprint. If their key ever changes, HushOS shows a warning and uses the new key only after you accept it.
+
+<Exact>
+
+The seal is hybrid: an X25519 agreement between your identity key and theirs, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves. The recipient mounts the shared item as a root of its own under “Shared with me”.
+
+<Terms
     rows={[
         [
             'Seal',
@@ -201,7 +266,7 @@ The seal is hybrid: an X25519 agreement between your identity key and theirs, an
         ],
         ['Envelope', '1160 bytes: nonce, the 1088-byte ML-KEM ciphertext, and the sealed node key'],
         ['Whose key', 'A contact key you pinned, with a fingerprint you can compare in person'],
-        ['Roles', "Viewer, or editor; an editor's uploads land in your storage"],
+        ['Roles', 'Viewer, or editor; an editor’s uploads land in your storage'],
         [
             'Authorization',
             'Checked on every request by walking up the tree to the nearest live share',
@@ -210,13 +275,21 @@ The seal is hybrid: an X25519 agreement between your identity key and theirs, an
     ]}
 />
 
-Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: the first time you use someone's key it is recorded in your encrypted settings, both of you can compare a fingerprint, and a later change is shown as a warning that you must accept, never applied silently. The fingerprint covers the X25519 key; the post-quantum key is vouched for by the contact's signing key, checked on your device before it is used, and its digest joins the pin. A different post-quantum key served later is refused like any changed key, and one that goes missing is refused as a downgrade. Every path that seals to a contact goes through the pin, including the re-keying that follows a revocation, so nothing is ever sealed to a key you did not vouch for.
+Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: the first key you use is recorded in your encrypted settings, and a later change is shown as a warning that you must accept, never applied silently. The fingerprint covers the X25519 key; the post-quantum key is vouched for by the contact’s signing key, checked on your device before it is used, and its digest joins the pin. A different post-quantum key served later is refused like any changed key, and one that goes missing is refused as a downgrade. Every path that seals to a contact goes through the pin, including the re-keying that follows a revocation.
 
-## Links for anyone
+</Exact>
 
-A link is a share without a recipient. Your browser makes a 32-byte secret and puts it in the URL after the `#`, which browsers never send to servers. The node key is sealed under a key derived from that secret and, if you set one, a password stretched with Argon2id on the visitor's device. The server holds the sealed box and a hash of the link's path; it can open nothing, and it cannot tell whether a password was set.
+</Step>
 
-<Ledger
+<Step id="links" n={6} title={contents.links}>
+
+The secret part of a link sits after the # in the address, which browsers never send to a server. If you add a password, it is needed too, and we can’t tell whether there is one. Links can end on a date up to a year away, and you can turn one off at any time. Anyone with the link opens it in their own browser, without an account.
+
+<Exact>
+
+A link is a share without a recipient. The node key is sealed under a key derived from the link’s secret and, if you set one, a password stretched with Argon2id on the visitor’s device. The server holds the sealed box and a hash of the link’s path; it can open nothing.
+
+<Terms
     rows={[
         ['Secret', '32 random bytes in the URL fragment, never sent to the server'],
         ['Password', 'Argon2id (64 MiB, 3 iterations) with a per-link salt, mixed into the key'],
@@ -226,27 +299,55 @@ A link is a share without a recipient. Your browser makes a 32-byte secret and p
     ]}
 />
 
-## When sharing stops
+</Exact>
 
-Stopping a share or a link does two things. The server refuses that person on the next request, on every route. Then your browser rotates: the shared item and everything beneath it get fresh keys under a new epoch, every remaining share and link is re-sealed under the new keys, to the pinned keys of each remaining person, and the old keys are gone. Whoever was cut off holds nothing that still opens anything. Content is not re-encrypted; the guarantee is about keys and authorization, and download links already issued expire within 15 minutes.
+</Step>
 
-<Note title="What revocation cannot do">
-    A person who downloaded a file while they had access has that file. Rotation stops future
-    access; it cannot reach into someone else's device.
-</Note>
+<Step id="stop" n={7} title={contents.stop}>
 
-## Reports
+When you stop a share or turn off a link, that person is refused on their next request. Then your device changes the keys for that folder and everything in it, and locks them again for everyone who still has access. Nothing the removed person kept opens anything new.
 
-Anyone who can see something through a link or a share can report it. Reporting is the one path by which an operator can see content, and it is built so that only a report opens it: when you report an item, your browser seals that item's key to the identity key of each current operator of the service. The report records what was reported and holds the bytes past the owner's deletion so the report can be acted on. An operator opens it under their own identity, and can dismiss it, remove the content, hold it, suspend the uploader, or file it with the relevant authority.
+<Exact>
 
-<Ledger
+<Terms
+    rows={[
+        ['Refused', 'On the next request, on every route'],
+        [
+            'Keys',
+            'The shared item and everything beneath it get fresh keys under a new epoch; the old keys are gone',
+        ],
+        [
+            'Re-sealed',
+            'Every remaining share and link, under the new keys, to the pinned keys of each remaining person',
+        ],
+        ['Content', 'Not re-encrypted; the guarantee is about keys and authorization'],
+        ['Download links', 'Already issued ones expire within 15 minutes'],
+    ]}
+/>
+
+How a rotation visits every item, survives moves made while it runs, and keeps older envelopes apart is in the [Drive design document](https://github.com/HushOS/HushOS/blob/main/docs/drive-design.md).
+
+</Exact>
+
+</Step>
+
+<Step id="reports" n={8} title={contents.reports}>
+
+Anyone who can see something through a share or a link can report it. Reporting is the only way the people who run the service can see a file: the reporter’s device locks that one item’s key to them. They can then dismiss the report, remove the content, hold it, suspend the uploader, or pass it to the relevant authority. Nothing you haven’t shared can be reported, because nobody else can see it.
+
+<Exact>
+
+<Terms
     rows={[
         ['Who can report', 'Anyone with access through a share or a link'],
         [
             'What is sealed',
-            "The reported item's key, sealed on the reporter's device to each operator's X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone",
+            'The reported item’s key, sealed on the reporter’s device to each operator’s X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone',
         ],
-        ['What is kept', 'A snapshot of the reported tree and a hold on its stored bytes'],
+        [
+            'What is kept',
+            'A snapshot of the reported tree and a hold on its stored bytes, past the owner’s deletion',
+        ],
         [
             'Evidence',
             'Optionally copied to a separate write-once bucket the application cannot delete from',
@@ -255,17 +356,17 @@ Anyone who can see something through a link or a share can report it. Reporting 
     ]}
 />
 
-Nothing you do not share can be reported, because nobody but you can see it.
+An operator opens a report under their own identity.
 
-## What the server can see
+</Exact>
 
-<Ledger
+</Step>
+
+<Section id="sees" title={contents.sees}>
+
+<Terms
     rows={[
         ['Never', 'File names, contents, thumbnails, folder names, or any key'],
-        [
-            'Later, with a quantum computer',
-            'Hybrid share and report envelopes still need the ML-KEM private key, even if X25519 is broken. Legacy envelopes sealed under X25519 alone, including reports to operators without an ML-KEM key, do not have that protection.',
-        ],
         [
             'Always',
             'Your email, the shape of your tree (ids and parents), the size of each encrypted object, times, and how much you store',
@@ -280,13 +381,62 @@ Nothing you do not share can be reported, because nobody but you can see it.
             'That a sealed tag list exists, its size in coarse steps, and when it was last saved; not a name, which items carry a tag, or how many. Tags are never written on an item, so someone you share with sees none of them.',
         ],
         ['Reports', 'The content of an item, once someone with access reports it'],
+        [
+            'Later, with a quantum computer',
+            'Hybrid share and report envelopes still need the ML-KEM private key, even if X25519 is broken. Legacy envelopes sealed under X25519 alone, including reports to operators without an ML-KEM key, do not have that protection.',
+        ],
     ]}
 />
 
-## Pages and headers
+</Section>
 
-Every page carries a Content Security Policy: scripts run only from the app's own origin, under a per-request nonce, with WebAssembly allowed and `eval` not. The page may connect only to itself and to the object store. Every response carries `X-Content-Type-Options`, `X-Frame-Options: DENY`, a referrer policy, a cross-origin opener policy, a permissions policy that switches off camera, microphone, location and payment, and, over HTTPS, HSTS for a year.
+<Section id="where" title={contents.where}>
 
-## What comes next
+HushOS is open source, and anyone can run their own copy. Who runs the copy you use decides where it runs.
 
-The rest of the suite is built on the same keys and the same rules: content encrypted on your device under keys wrapped beneath your workspace, sealed to identities when shared, documented here in the same detail when it ships.
+<Terms
+    rows={[
+        [
+            'hushos.com',
+            'Run by HushOS, a company incorporated in Delaware, United States, with its servers and storage in the European Union',
+        ],
+        [
+            'A self-hosted copy',
+            'Run by whoever set it up, on their own servers, under their own terms',
+        ],
+    ]}
+/>
+
+Either way, your browser sends locked files straight to the object store, and the app server never handles file bytes. Every page is served with a content security policy that limits which scripts run and where the page can connect, and with the usual protective headers.
+
+<Exact>
+
+Every page carries a Content Security Policy: scripts run only from the app’s own origin, under a per-request nonce, with WebAssembly allowed and `eval` not. The page may connect only to itself and to the object store. Every response carries `X-Content-Type-Options`, `X-Frame-Options: DENY`, a referrer policy, a cross-origin opener policy, a permissions policy that switches off camera, microphone, location and payment, and, over HTTPS, HSTS for a year.
+
+</Exact>
+
+</Section>
+
+<Section id="limits" title={contents.limits}>
+
+- If you lose your password, your recovery phrase and every browser that remembers you, your files are gone. Nobody can get them back, including us.
+- Someone who downloaded a file while they had access keeps that copy. Stopping a share protects what comes next; it can’t reach into someone else’s device.
+- Signing out other browsers takes effect when they next check in with the server. It can’t erase keys a device already holds offline.
+- Replacing your recovery phrase stops the old one from resetting your password. A recovery kit you downloaded earlier still holds the old phrase and your account key as it was then, so it can still open that key offline. Password resets and a new recovery phrase keep the same account key; only replacing the account key makes a different one.
+- Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
+- The server sees what’s listed above: your email, sizes, times and how your folders nest.
+- A share made before the other person had a post-quantum key uses X25519 alone until your device locks it again with both. A report to an operator without a post-quantum key uses X25519 alone.
+
+</Section>
+
+<Section id="code" title="Check it yourself">
+
+The byte-level protocols live in the `@hushos/crypto` package and are specified in two design documents beside it: one for [accounts and keys](https://github.com/HushOS/HushOS/blob/main/docs/opaque-auth-design.md), including key rotation and remembered browser unlock, and one for [Drive](https://github.com/HushOS/HushOS/blob/main/docs/drive-design.md), including folder keys, uploads, sharing and rotation. The rest of the suite will be built on the same keys and rules, and documented here in the same detail when it ships.
+
+<TextLink href="https://github.com/HushOS/HushOS" className="mt-6">
+    {'Read the code on GitHub'}
+</TextLink>
+
+</Section>
+
+</Body>

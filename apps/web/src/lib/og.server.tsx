@@ -1,5 +1,5 @@
 import '@/lib/server-only';
-import atkinsonFont from '@fontsource-variable/atkinson-hyperlegible-next/files/atkinson-hyperlegible-next-latin-wght-normal.woff2?inline';
+import sansFont from '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?inline';
 import { Renderer } from 'takumi-js/node';
 import { fromJsx } from 'takumi-js/helpers/jsx';
 import { prepareImages } from 'takumi-js/helpers';
@@ -17,9 +17,9 @@ type Card = { title: string; description: string; label: string };
 
 const fixed: Record<string, Card> = {
     home: {
-        title: 'You hold\nthe only key.',
-        description: 'Private storage that is simple to use. Open source. Yours to run.',
-        label: 'HushOS',
+        title: 'Nobody else can\nlook inside.',
+        description: 'Private storage that works like the drive you already use. Open source.',
+        label: 'HushOS Drive',
     },
     about: {
         title: 'Make the private choice\nthe easy choice.',
@@ -36,6 +36,12 @@ const fixed: Record<string, Card> = {
         title: 'Start free.\nPay only for space.',
         description: 'Every plan is protected the same way. Self-hosting is free.',
         label: 'HushOS · Pricing',
+    },
+    teams: {
+        title: 'Private files\nfor small teams.',
+        description:
+            'Share folders with the people you work with. Locked on your devices first, so nobody outside the team can open it.',
+        label: 'HushOS · For teams',
     },
     blog: {
         title: 'The HushOS blog.',
@@ -99,78 +105,70 @@ export async function socialImage(key: string) {
         // A title the copy did not break by hand wraps by itself; long ones set smaller.
         const long = Math.max(...card.title.split('\n').map((line) => line.length)) > 22;
         image = fromJsx(
-            // The desk, and one sheet lying on it.
+            // The site as it looks: a white page, the colour wordmark, the heading in
+            // the site's heading style, and the page's name under a hairline.
             <div
                 style={{
                     width: 1200,
                     height: 630,
-                    padding: 36,
-                    backgroundColor: '#e6e2d9',
+                    padding: '60px 72px 52px',
+                    backgroundColor: '#ffffff',
+                    color: '#17203a',
                     display: 'flex',
-                    fontFamily: 'Atkinson Hyperlegible Next',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    fontFamily: 'Geist',
                 }}
             >
-                <div
-                    style={{
-                        flexGrow: 1,
-                        padding: '44px 56px 36px',
-                        backgroundColor: '#fcfbf7',
-                        color: '#1c2848',
-                        border: '1px solid #d3d1ca',
-                        borderRadius: 4,
-                        boxShadow: '0 14px 30px -22px rgba(28, 40, 72, 0.45)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                    }}
-                >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
                     <div
                         style={{
+                            width: 56,
+                            height: 56,
+                            borderRadius: 17,
+                            backgroundColor: '#2c428e',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: 16,
-                            fontSize: 32,
-                            fontWeight: 700,
-                            letterSpacing: -0.5,
+                            justifyContent: 'center',
                         }}
                     >
-                        <Logo width={30} height={42} style={{ color: '#2c428e' }} />
-                        HushOS
+                        <Logo width={23} height={32} style={{ color: '#ffffff' }} />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                        <div
-                            style={{
-                                fontSize: long ? 62 : 84,
-                                lineHeight: 1.06,
-                                letterSpacing: long ? -1.5 : -2.5,
-                                fontWeight: 700,
-                                whiteSpace: 'pre-line',
-                            }}
-                        >
-                            {card.title}
-                        </div>
-                        <div style={{ fontSize: 26, lineHeight: 1.4, color: '#5a6483' }}>
-                            {card.description}
-                        </div>
-                    </div>
+                    <div style={{ fontSize: 36, fontWeight: 700, letterSpacing: -0.5 }}>HushOS</div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
                     <div
                         style={{
-                            borderTop: '1px solid #d3d1ca',
-                            paddingTop: 20,
-                            fontSize: 20,
-                            color: '#5a6483',
+                            fontSize: long ? 64 : 88,
+                            lineHeight: 1.02,
+                            letterSpacing: long ? -2.2 : -3.5,
+                            fontWeight: 800,
+                            whiteSpace: 'pre-line',
                         }}
                     >
-                        {card.label}
+                        {card.title}
                     </div>
+                    <div style={{ fontSize: 28, lineHeight: 1.4, color: '#5a6380' }}>
+                        {card.description}
+                    </div>
+                </div>
+                <div
+                    style={{
+                        borderTop: '1px solid #e2e5ee',
+                        paddingTop: 20,
+                        fontSize: 20,
+                        color: '#5a6380',
+                    }}
+                >
+                    {card.label}
                 </div>
             </div>,
         )
             .then(async ({ node, css }) => {
                 const renderer = new Renderer();
                 await renderer.registerFont({
-                    name: 'Atkinson Hyperlegible Next',
-                    data: Buffer.from(atkinsonFont.slice(atkinsonFont.indexOf(',') + 1), 'base64'),
+                    name: 'Geist',
+                    data: Buffer.from(sansFont.slice(sansFont.indexOf(',') + 1), 'base64'),
                 });
                 return renderer.render(node, {
                     width: 1200,

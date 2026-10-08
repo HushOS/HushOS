@@ -3,4 +3,8 @@
     <cache-path name="opened" path="opened/" />
     <cache-path name="links" path="links/" />
     <files-path name="offline" path="offline/" />
+    <!-- Take photo: the camera app writes here, then the photo is uploaded and the file removed. -->
+    <cache-path name="camera" path="camera/" />
+    <!-- Save the kit: the recovery kit file, handed to the share sheet and removed when the page closes. -->
+    <cache-path name="kit" path="kit/" />
 </paths>

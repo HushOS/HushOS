@@ -1,53 +1,72 @@
-import QuickLook
+import UniformTypeIdentifiers
 import HushOSKit
 import SwiftUI
+import UIKit
 
-/* What a context menu or swipe offers on a node; the sheets that carry them out. */
+/*
+ * The item menu, one list in one order on every client (DESIGN.md):
+ * get it out, organise it, about it, report, and Move to Trash last and red. What
+ * shows depends on whose the item is: someone else's folder hides Share and Tags,
+ * adds Save a copy and Report, and a viewer loses Rename, Move and Trash.
+ */
 enum NodeAction: Identifiable {
-    case rename(Opened)
-    case move(Opened)
+    case move([Opened])
     case share(Opened)
-    case link(Opened)
+    case sendCopy(Opened)
     case versions(Opened)
     case tags(Opened)
     case info(Opened)
+    case report(Opened)
 
     var id: String {
         switch self {
-        case .rename(let item): return "rename-\(item.id)"
-        case .move(let item): return "move-\(item.id)"
+        case .move(let items): return "move-" + items.map(\.id).joined(separator: ",")
         case .share(let item): return "share-\(item.id)"
-        case .link(let item): return "link-\(item.id)"
+        case .sendCopy(let item): return "send-\(item.id)"
         case .versions(let item): return "versions-\(item.id)"
         case .tags(let item): return "tags-\(item.id)"
         case .info(let item): return "info-\(item.id)"
+        case .report(let item): return "report-\(item.id)"
         }
     }
 }
 
 extension View {
-    func nodeActions(_ item: Opened, action: Binding<NodeAction?>, store: DriveStore) -> some View {
+    /* Long-press for the menu; swipe for Move, Rename and Move to Trash at the edge (a full swipe trashes). */
+    func nodeActions(_ item: Opened, action: Binding<NodeAction?>, store: DriveStore, select: (() -> Void)? = nil) -> some View {
         self
             .contextMenu {
-                NodeMenu(item: item, action: action)
+                NodeMenu(item: item, action: action, select: select)
             }
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) { Task { await store.trash(item) } } label: { Label("Trash", systemImage: "trash") }
-                Button { action.wrappedValue = .rename(item) } label: { Label("Rename", systemImage: "pencil") }.tint(.orange)
-                Button { action.wrappedValue = .move(item) } label: { Label("Move", systemImage: "folder") }.tint(.indigo)
+            // From the leading edge, a file goes out as a plain copy through the system share sheet.
+            .swipeActions(edge: .leading) {
+                if !item.isFolder {
+                    Button { action.wrappedValue = .sendCopy(item) } label: { Label("Send a copy", systemImage: "square.and.arrow.up") }.tint(Alpine.primary)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: store.role(of: item) != .viewer) {
+                if store.role(of: item) != .viewer {
+                    Button(role: .destructive) { Task { await store.trash(item) } } label: { Label("Move to Trash", systemImage: "trash") }.tint(Alpine.danger)
+                    Button { Rename.ask(item, store: store) } label: { Label("Rename", systemImage: "pencil") }.tint(Alpine.primary)
+                    Button { action.wrappedValue = .move([item]) } label: { Label("Move", systemImage: "folder") }.tint(Alpine.ink)
+                }
             }
     }
 
     func nodeActionSheets(action: Binding<NodeAction?>, store: DriveStore) -> some View {
-        self.sheet(item: action) { action in
-            switch action {
-            case .rename(let item): RenameSheet(item: item).environment(store)
-            case .move(let item): MoveSheet(item: item).environment(store)
-            case .share(let item): SendCopySheet(item: item).environment(store)
-            case .link(let item): ShareItemSheet(item: item).environment(store)
+        // Sharing may have changed who can open what; the rows and banners ask again.
+        self.sheet(item: action, onDismiss: { Task { await store.refreshSharing() } }) { shown in
+            switch shown {
+            case .move(let items): MovePicker(items: items).environment(store)
+            case .share(let item): ShareItemSheet(item: item).environment(store)
+            case .sendCopy(let item): SendCopySheet(item: item).environment(store)
             case .versions(let item): VersionsSheet(item: item).environment(store)
-            case .tags(let item): TagsSheet(item: item).environment(store)
-            case .info(let item): InfoSheet(item: item).environment(store)
+            case .tags(let item): ItemTagsSheet(item: item).environment(store)
+            case .info(let item): InfoSheet(item: item) { next in action.wrappedValue = next }.environment(store)
+            case .report(let item):
+                ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
+                    try await store.vault.report(item, category: category, reason: reason, email: email)
+                }
             }
         }
     }
@@ -57,145 +76,279 @@ struct NodeMenu: View {
     @Environment(DriveStore.self) private var store
     let item: Opened
     @Binding var action: NodeAction?
+    /* In a folder list, Select starts picking with this item. */
+    var select: (() -> Void)? = nil
 
     var body: some View {
-        // Sharing first, as the drives order it: it is what a long press is most often for.
-        Button("Share…", systemImage: "link") { action = .link(item) }
-        if !item.isFolder {
-            Button("Send a copy", systemImage: "square.and.arrow.up") { action = .share(item) }
-            switch store.keptState(item.id) {
-            case .none:
-                Button("Keep Downloaded", systemImage: "arrow.down.circle") { Task { await store.setKeptDownloaded(item, true) } }
-            case .fetching(let queued?):
-                Button("Cancel Download", systemImage: "xmark.circle") { Task { await BackgroundTransfers.shared.cancel(queued) } }
-            case .fetching(nil):
-                Button("Downloading…", systemImage: "arrow.down.circle.dotted") {}.disabled(true)
-            case .kept:
-                Button("Remove Download", systemImage: "icloud.slash") { Task { await store.setKeptDownloaded(item, false) } }
+        let role = store.role(of: item)
+        let mine = role == .owner
+        let canEdit = role != .viewer
+        if let select {
+            Section { Button("Select", systemImage: "checkmark.circle", action: select) }
+        }
+        Section {
+            if mine { Button("Share", systemImage: "person.badge.plus") { action = .share(item) } }
+            if item.isFolder {
+                // A folder keeps every file inside it, and stays kept as they change; a folder shared with
+                // you too (its files list through the share, and go if the share stops).
+                if true {
+                switch store.keptState(item.id) {
+                case .none:
+                    Button("Keep on this phone", systemImage: "arrow.down.circle") { Task { await store.keepFolder(item) } }
+                case .fetching:
+                    Button("Keeping on this phone…", systemImage: "arrow.down.circle.dotted") {}.disabled(true)
+                case .kept:
+                    Button("Remove from this phone", systemImage: "iphone.slash") {
+                        store.removeKeptFolder(item.id)
+                        store.notify("Removed “\(item.name)” from this phone. It’s still in HushOS.")
+                    }
+                }
+                }
+            } else if let folder = store.keptWith(item) {
+                Button("Open in…", systemImage: "arrow.up.forward.app") { OpenIn.present(item, store: store) }
+                Button("Send a copy", systemImage: "square.and.arrow.up") { action = .sendCopy(item) }
+                // Kept with its folder: only the folder can take it off the phone, and the menu says so.
+                if let failure = store.keepFailure(item) {
+                    // The rest of the folder is kept; this one says why and can go again now.
+                    Button("Couldn’t be kept: \(failure.reason)", systemImage: "exclamationmark.circle") {}.disabled(true)
+                    Button("Retry", systemImage: "arrow.clockwise") { Task { await store.retryKeep(item) } }
+                } else if Offline.isKept(item.id) {
+                    Button("Kept with “\(folder.name)”", systemImage: "iphone") {}.disabled(true)
+                } else {
+                    Button("Keeping with “\(folder.name)”…", systemImage: "arrow.down.circle.dotted") {}.disabled(true)
+                }
+                Button("Remove “\(folder.name)” from this phone", systemImage: "iphone.slash") {
+                    store.removeKeptFolder(folder.id)
+                    store.notify("Removed “\(folder.name)” from this phone. It’s still in HushOS.")
+                }
+            } else {
+                Button("Open in…", systemImage: "arrow.up.forward.app") { OpenIn.present(item, store: store) }
+                Button("Send a copy", systemImage: "square.and.arrow.up") { action = .sendCopy(item) }
+                switch store.keptState(item.id) {
+                case .none:
+                    Button("Keep on this phone", systemImage: "arrow.down.circle") { Task { await store.setKeptDownloaded(item, true) } }
+                case .fetching(let queued):
+                    Button(keepingLabel(queued), systemImage: "arrow.down.circle.dotted") {}.disabled(true)
+                    if let queued {
+                        Button("Stop downloading", systemImage: "xmark.circle") { Task { await BackgroundTransfers.shared.cancel(queued) } }
+                    }
+                case .kept:
+                    Button("Remove from this phone", systemImage: "iphone.slash") {
+                        Task {
+                            await store.setKeptDownloaded(item, false)
+                            store.notify("Removed from this phone. It’s still in HushOS.")
+                        }
+                    }
+                }
+            }
+            if !mine { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
+        }
+        Section {
+            if canEdit {
+                Button("Rename", systemImage: "pencil") { Rename.ask(item, store: store) }
+                Button("Move", systemImage: "folder") { action = .move([item]) }
+            }
+            Button("Copy", systemImage: "doc.on.doc") {
+                store.copy([item])
+                // In a folder the paste bar says it; elsewhere (Home, Search) nothing would.
+                if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
+            }
+            if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
+        }
+        Section {
+            if !item.isFolder && canEdit { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
+            Button("Info", systemImage: "info.circle") { action = .info(item) }
+        }
+        if !mine {
+            Section { Button("Report", systemImage: "flag") { action = .report(item) } }
+        }
+        if canEdit {
+            Section {
+                Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await store.trash(item) } }.tint(Alpine.danger)
             }
         }
-        Divider()
-        Button("Rename", systemImage: "pencil") { action = .rename(item) }
-        Button("Move to…", systemImage: "folder") { action = .move(item) }
-        Button("Copy", systemImage: "doc.on.doc") { store.copy([item]) }
-        Button("Cut", systemImage: "scissors") { store.cut([item]) }
-        if !item.isFolder { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }
-        Button("Tags", systemImage: "tag") { action = .tags(item) }
-        Button("Get Info", systemImage: "info.circle") { action = .info(item) }
-        Divider()
-        Button("Move to Trash", systemImage: "trash", role: .destructive) { Task { await store.trash(item) } }
+    }
+
+    /* "Downloading… 40%" while a kept copy comes down; the queue knows how far. */
+    private func keepingLabel(_ queued: UUID?) -> String {
+        guard let queued, let record = BackgroundTransfers.shared.records.first(where: { $0.id == queued }) else { return "Downloading…" }
+        return "Downloading… \(Int(BackgroundTransfers.shared.fraction(of: record) * 100))%"
     }
 }
 
-struct RenameSheet: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let item: Opened
-    @State private var name = ""
+/* Rename and New folder: a plain alert with the name selected up to its extension, and the clash said in place. */
+@MainActor
+enum Rename {
+    static func ask(_ item: Opened, store: DriveStore) {
+        let siblings = (item.node.parentId.flatMap { store.folders[$0] } ?? []).filter { $0.id != item.id }.map(\.name)
+        TextPrompt.present(
+            title: "Rename", message: nil, text: item.name, placeholder: "Name", action: "Rename", selectStem: !item.isFolder,
+            validate: { name in problem(name, among: siblings) }
+        ) { name in
+            guard name != item.name else { return }
+            Task { await store.rename(item, to: name) }
+        }
+    }
+
+    static func newFolder(in folderId: String, named folderName: String, store: DriveStore) {
+        let taken = (store.folders[folderId] ?? []).map(\.name)
+        TextPrompt.present(
+            title: "New folder", message: "In “\(folderName)”", text: DriveStore.freeName("Untitled folder", among: taken),
+            placeholder: "Name", action: "Create", selectStem: false,
+            validate: { name in problem(name, among: taken) }
+        ) { name in
+            Task { await store.createFolder(named: name, in: folderId) }
+        }
+    }
+
+    static func problem(_ name: String, among taken: [String]) -> String? {
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        if clean.isEmpty { return "Enter a name." }
+        if clean.contains("/") { return "A name can’t contain “/”." }
+        if taken.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) { return "“\(clean)” is already in this folder. Try another name." }
+        return nil
+    }
+}
+
+/*
+ * One name to type, in a short sheet rather than an alert: an alert can't show what
+ * is wrong in the danger colour while the person types. The field selects the name
+ * up to its extension, so typing replaces the name and keeps ".jpg".
+ */
+@MainActor
+enum TextPrompt {
+    static func present(title: String, message: String?, text: String, placeholder: String, action: String, selectStem: Bool,
+                        validate: @escaping (String) -> String?, done: @escaping (String) -> Void) {
+        let host = UIHostingController(rootView: AnyView(EmptyView()))
+        let dismiss: () -> Void = { [weak host] in host?.dismiss(animated: true) }
+        host.rootView = AnyView(
+            PromptSheet(title: title, message: message, original: text, placeholder: placeholder, action: action, selectStem: selectStem,
+                        validate: validate, done: { value in dismiss(); done(value) }, cancel: dismiss)
+                .tint(Alpine.primary)
+        )
+        host.modalPresentationStyle = .pageSheet
+        if let sheet = host.sheetPresentationController {
+            sheet.detents = [.custom(identifier: .init("prompt")) { _ in message == nil ? 196 : 228 }]
+            sheet.prefersGrabberVisible = false
+        }
+        topController()?.present(host, animated: true)
+    }
+
+    static func topController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        var top = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top
+    }
+}
+
+private struct PromptSheet: View {
+    let title: String
+    let message: String?
+    let original: String
+    let placeholder: String
+    let action: String
+    let selectStem: Bool
+    let validate: (String) -> String?
+    let done: (String) -> Void
+    let cancel: () -> Void
+    @State private var value = ""
+
+    /* Unchanged, a name is fine for Rename; anything typed is checked as it is typed. */
+    private var problem: String? {
+        let clean = value.trimmingCharacters(in: .whitespaces)
+        if action == "Rename" && clean == original { return nil }
+        return validate(clean)
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
-                TextField("Name", text: $name).submitLabel(.done).onSubmit(save)
+            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                if let message { Text(message).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).padding(.horizontal, Alpine.Space.s1) }
+                PromptField(text: $value, original: original, placeholder: placeholder, selectStem: selectStem, invalid: problem != nil) { submit() }
+                    .frame(height: Theme.control)
+                    .padding(.horizontal, Alpine.Space.s3)
+                    .background(Alpine.surface, in: RoundedRectangle(cornerRadius: Alpine.Radius.control, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Alpine.Radius.control, style: .continuous)
+                        .strokeBorder(problem != nil ? Alpine.danger : Alpine.field.opacity(0.5), lineWidth: problem != nil ? 2 : 1))
+                if let problem {
+                    Label(problem, systemImage: "exclamationmark.circle").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
+                        .padding(.horizontal, Alpine.Space.s1)
+                        .accessibilityLabel("Error: \(problem)")
+                }
+                Spacer(minLength: 0)
             }
-            .navigationTitle("Rename")
+            .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s1)
+            .background(Alpine.ground.ignoresSafeArea())
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Save", action: save).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) }
+                ToolbarItem(placement: .confirmationAction) { Button(action, action: submit).disabled(problem != nil) }
             }
         }
-        .presentationDetents([.medium])
-        .onAppear { name = item.name }
+        .onAppear { value = original }
     }
 
-    private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != item.name else { dismiss(); return }
-        dismiss()
-        Task { await store.rename(item, to: trimmed) }
+    private func submit() {
+        guard problem == nil else { return }
+        done(value.trimmingCharacters(in: .whitespaces))
     }
 }
 
-/* Pick a destination folder by walking the tree from the root. */
-struct MoveSheet: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let items: [Opened]
+/* A UIKit field, for the one thing SwiftUI's can't do: select part of its text when it opens. */
+private struct PromptField: UIViewRepresentable {
+    @Binding var text: String
+    let original: String
+    let placeholder: String
+    let selectStem: Bool
+    let invalid: Bool
+    let submit: () -> Void
 
-    init(item: Opened) { items = [item] }
-    init(items: [Opened]) { self.items = items }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if let rootId = store.rootId, let first = items.first {
-                    MoveFolderList(folderId: rootId, title: "HushOS", moving: first, excluded: Set(items.map(\.id))) { destination in
-                        dismiss()
-                        Task { await store.move(items, to: destination) }
-                    }
-                } else {
-                    ProgressView()
-                }
+    func makeUIView(context: Context) -> UITextField {
+        let field = UITextField()
+        field.text = original
+        field.placeholder = placeholder
+        field.font = .preferredFont(forTextStyle: .body)
+        field.adjustsFontForContentSizeCategory = true
+        field.textColor = UIColor(Alpine.ink)
+        field.autocapitalizationType = .sentences
+        // Names are what the person types: no autocorrect turning "photos alpine" into something else.
+        field.autocorrectionType = .no
+        field.clearButtonMode = .whileEditing
+        field.returnKeyType = .done
+        field.delegate = context.coordinator
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        DispatchQueue.main.async {
+            field.becomeFirstResponder()
+            let stem = selectStem ? (original as NSString).deletingPathExtension.count : original.count
+            if let start = field.position(from: field.beginningOfDocument, offset: 0),
+               let end = field.position(from: field.beginningOfDocument, offset: max(0, stem)) {
+                field.selectedTextRange = field.textRange(from: start, to: end)
             }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
+        return field
     }
-}
 
-struct MoveFolderList: View {
-    @Environment(DriveStore.self) private var store
-    let folderId: String
-    let title: String
-    let moving: Opened
-    var excluded: Set<String> = []
-    let choose: (String) -> Void
-
-    var body: some View {
-        List {
-            Section {
-                Button { choose(folderId) } label: {
-                    Label(folderId == moving.node.parentId ? "Already here" : "Move here", systemImage: "arrow.down.to.line")
-                }
-                .disabled(folderId == moving.node.parentId || folderId == moving.id)
-            }
-            Section {
-                ForEach((store.folders[folderId] ?? []).filter { $0.isFolder && $0.id != moving.id && !excluded.contains($0.id) }) { folder in
-                    NavigationLink(value: folder) { Label(folder.name, systemImage: "folder.fill") }
-                }
-            }
-        }
-        .navigationTitle(title)
-        .navigationDestination(for: Opened.self) { folder in
-            MoveFolderList(folderId: folder.id, title: folder.name, moving: moving, excluded: excluded, choose: choose)
-        }
-        .task { if store.folders[folderId] == nil { await store.refresh(folder: folderId) } }
+    func updateUIView(_ field: UITextField, context: Context) {
+        context.coordinator.parent = self
+        field.accessibilityValue = invalid ? "Not valid" : nil
     }
-}
 
-/* Decrypts the file, then hands it to the system share sheet. */
-struct SendCopySheet: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let item: Opened
-    @State private var url: URL?
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    var body: some View {
-        Group {
-            if let url {
-                ActivityView(url: url) { dismiss() }
-            } else {
-                ProgressView("Decrypting…").padding()
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .task {
-            url = await store.download(item)
-            if url == nil { dismiss() }
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: PromptField
+        init(parent: PromptField) { self.parent = parent }
+        @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            parent.submit()
+            return false
         }
     }
 }
 
+/* The system share sheet for one file. */
 struct ActivityView: UIViewControllerRepresentable {
     let url: URL
     let done: () -> Void
@@ -209,154 +362,7 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-struct VersionsSheet: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let item: Opened
-    @State private var versions: [VersionListView] = []
-    @State private var sizes: [String: UInt64] = [:]
-    @State private var loaded = false
-    @State private var preview: URL?
-
-    var body: some View {
-        NavigationStack {
-            List {
-                if loaded && versions.isEmpty { Text("No versions yet.").foregroundStyle(.secondary) }
-                ForEach(versions) { version in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(parseDate(version.createdAt)?.formatted(date: .abbreviated, time: .shortened) ?? version.createdAt)
-                            Text([version.current ? "Current version" : (version.status == "ready" ? "Earlier version" : version.status.capitalized),
-                                  sizes[version.id].map { formatBytes(Int64($0)) }].compactMap { $0 }.joined(separator: " · "))
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if version.current {
-                            Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                        } else if version.status == "ready" {
-                            Menu {
-                                Button("Preview", systemImage: "eye") { Task { preview = await store.download(item, version: version) } }
-                                Button("Restore", systemImage: "arrow.uturn.backward") {
-                                    dismiss()
-                                    Task { await store.restoreVersion(version, of: item) }
-                                }
-                            } label: { Image(systemName: "ellipsis.circle") }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Versions")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .quickLookPreview($preview)
-        }
-        .task {
-            versions = (try? await store.vault.versions(of: item.id)) ?? []
-            loaded = true
-            // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.
-            for version in versions {
-                if let opened = try? await store.vault.openVersion(item, version: version) { sizes[version.id] = opened.content.plaintextSize }
-            }
-        }
-    }
-}
-
-struct InfoSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let item: Opened
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    LabeledContent("Name", value: item.name)
-                    LabeledContent("Kind", value: item.isFolder ? "Folder" : (NodeRow.type(for: item).localizedDescription ?? "File"))
-                    if let size = item.size { LabeledContent("Size", value: formatBytes(Int64(size))) }
-                    if let modified = item.modified { LabeledContent("Modified", value: modified.formatted(date: .long, time: .shortened)) }
-                    if let created = parseDate(item.node.createdAt) { LabeledContent("Created", value: created.formatted(date: .long, time: .shortened)) }
-                }
-            }
-            .navigationTitle("Info")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-        }
-    }
-}
-
-/* Which tags an item carries: toggle the existing ones, or make a new one and apply it. */
-struct TagsSheet: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let item: Opened
-    @State private var selected: Set<String> = []
-    @State private var newName = ""
-    @State private var loaded = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    HStack {
-                        TextField("New tag", text: $newName).submitLabel(.done).onSubmit(create)
-                        Button("Add", action: create).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
-                Section {
-                    if loaded && store.tags.tags.isEmpty {
-                        Text("No tags yet. Tags group items across folders.").foregroundStyle(.secondary)
-                    }
-                    ForEach(store.tags.tags) { tag in
-                        Button {
-                            if selected.contains(tag.id) { selected.remove(tag.id) } else { selected.insert(tag.id) }
-                        } label: {
-                            HStack {
-                                TagPill(tag: tag, selected: selected.contains(tag.id))
-                                Spacer()
-                                if selected.contains(tag.id) { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-                            }
-                        }
-                    }
-                    .onDelete { offsets in
-                        let ids = offsets.map { store.tags.tags[$0].id }
-                        Task { await store.editTags { registry in for id in ids { registry.remove(id) } } }
-                    }
-                }
-            }
-            .navigationTitle(item.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let ids = Array(selected)
-                        let nodeId = item.id
-                        dismiss()
-                        Task { await store.editTags { registry in try registry.assign(nodeId, tagIds: ids) } }
-                    }
-                }
-            }
-        }
-        .task {
-            await store.refreshTags()
-            selected = Set(store.tags.tags(of: item.id).map(\.id))
-            loaded = true
-        }
-    }
-
-    private func create() {
-        let name = newName
-        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        newName = ""
-        Task {
-            await store.editTags { registry in _ = try registry.add(name: name) }
-            if let created = store.tags.tags.first(where: { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame }) {
-                selected.insert(created.id)
-            }
-        }
-    }
-}
-
-/* Paper's tag colours: the presets, or the hex a person picked here or on the web. */
+/* Tag colours: the presets, or the hex a person picked here or on the web. */
 enum TagColour {
     static func hex(_ color: Color) -> String {
         let components = UIColor(color).cgColor.components ?? [0, 0, 0]
@@ -366,17 +372,66 @@ enum TagColour {
         return String(format: "#%02x%02x%02x", Int(round(r * 255)), Int(round(g * 255)), Int(round(b * 255)))
     }
 
+    /*
+     * The tag yellow, the same on every client: apps/web/src/styles.css `--tag-yellow` is the
+     * source (light, dark, high contrast light, high contrast dark). Its own dark value, so it
+     * is not lightened again like the other presets.
+     */
+    static let yellow = Color(alpineLight: 0xFFB8860B, dark: 0xFFE3B341, lightHigh: 0xFF6B4D00, darkHigh: 0xFFFFD966)
+
+    /* Presets with their own dark value (yellow) are not lightened again in the dark. */
+    static func hasDarkValue(_ value: String) -> Bool { value == "yellow" }
+
     static func swiftUI(_ value: String) -> Color {
         switch value {
         case "blue": return Color(red: 0.173, green: 0.259, blue: 0.557)
         case "ink": return Color(red: 0.110, green: 0.157, blue: 0.282)
-        case "yellow": return Color(red: 0.788, green: 0.635, blue: 0.153)
+        case "yellow": return yellow
         case "teal": return Color(red: 0.165, green: 0.498, blue: 0.498)
         case "coral": return Color(red: 0.851, green: 0.388, blue: 0.290)
         default:
             let hex = value.dropFirst()
-            guard hex.count == 6, let number = UInt32(hex, radix: 16) else { return .secondary }
+            guard hex.count == 6, let number = UInt32(hex, radix: 16) else { return Alpine.inkMuted }
             return Color(red: Double((number >> 16) & 0xff) / 255, green: Double((number >> 8) & 0xff) / 255, blue: Double(number & 0xff) / 255)
+        }
+    }
+
+    static func label(_ value: String) -> String {
+        TagRegistry.presets.contains(value) ? value.prefix(1).uppercased() + value.dropFirst() : "Custom"
+    }
+}
+
+/*
+ * Open in…: the decrypted copy handed to an app that opens its type (Excel, Numbers, Pages,
+ * a PDF reader), from the system's own list, so a file can be edited where it belongs.
+ * QuickLook stays the tap; this is the way out when previewing isn't enough.
+ */
+@MainActor
+enum OpenIn {
+    /* Held while the system's list is up: it goes away when the controller does. */
+    private static var controller: UIDocumentInteractionController?
+
+    static func present(_ item: Opened, store: DriveStore) {
+        Task {
+            let file: URL
+            do { file = try await store.fetch(item) } catch {
+                store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
+                return
+            }
+            let interaction = UIDocumentInteractionController(url: file)
+            let ext = (item.name as NSString).pathExtension
+            interaction.uti = (UTType(filenameExtension: ext) ?? UTType(mimeType: item.metadata.mime ?? "") ?? .data).identifier
+            interaction.name = item.name
+            controller = interaction
+            guard let top = TextPrompt.topController() else { return }
+            let anchor = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY - 80, width: 1, height: 1)
+            if !interaction.presentOpenInMenu(from: anchor, in: top.view, animated: true) {
+                controller = nil
+                // Android's words: no app here takes this type, so the copy goes somewhere else.
+                store.notify("No app on this iPhone opens “\(item.name)”. Send a copy to open it somewhere else.", undo: {
+                    TextPrompt.topController()?.present(UIActivityViewController(activityItems: [file], applicationActivities: nil), animated: true)
+                }, actionLabel: "Send a copy")
+            }
         }
     }
 }

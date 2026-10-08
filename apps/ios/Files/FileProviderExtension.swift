@@ -47,16 +47,37 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         }
     }
 
-    /* The session in the keychain wins: a sign-in from the Files sheet or the app replaces a vault built on the old token. */
+    /*
+     * The session in the keychain wins: a sign-in from the Files sheet or the app, or a new
+     * session after a password change or key reset, replaces a vault built on the old token.
+     * Signed out, or another account in: the files this extension decrypted for the last
+     * one go too, so Files never answers from an account that has left the phone.
+     */
     private func requireVault() throws -> Vault {
         let session = SharedKeychain.session
         if let vault, let session, vault.api.session == session { return vault }
+        Self.forgetDecrypted(unlessOwnedBy: session?.userId)
         guard session != nil, let fresh = Vault.fromKeychain() else {
             vault = nil
             throw NSFileProviderError(.notAuthenticated)
         }
         vault = fresh
         return fresh
+    }
+
+    /*
+     * This extension's temporary folder holds decrypted downloads Files has not moved into
+     * place yet. It records whose they are; signed out, or another account in, they go.
+     */
+    private static func forgetDecrypted(unlessOwnedBy userId: String?) {
+        let temporary = FileManager.default.temporaryDirectory
+        let marker = temporary.appendingPathComponent("account-owner")
+        let owner = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let userId, let owner, owner.caseInsensitiveCompare(userId) == .orderedSame { return }
+        for item in (try? FileManager.default.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
+            try? FileManager.default.removeItem(at: item)
+        }
+        if let userId { try? Data(userId.utf8).write(to: marker, options: .atomic) }
     }
 
     func item(for identifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest,

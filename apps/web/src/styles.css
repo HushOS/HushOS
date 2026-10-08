@@ -1,14 +1,17 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
-@import '@fontsource-variable/atkinson-hyperlegible-next';
+@import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
+@import '@hushos/tokens/tokens.css';
 
-/* Local Arial stretched to Atkinson Hyperlegible Next's average Latin advance, so the swap barely moves a line. */
+/* Local Arial resized to Geist's metrics (measured on running text), so the swap barely moves a line. */
 @font-face {
-    font-family: 'Atkinson Fallback';
+    font-family: 'Geist Fallback';
     src: local('Arial');
-    size-adjust: 103%;
+    ascent-override: 95.64%;
+    descent-override: 28.07%;
     line-gap-override: 0%;
+    size-adjust: 105.08%;
 }
 
 @custom-variant dark {
@@ -23,7 +26,7 @@
 }
 
 @theme inline {
-    --font-sans: 'Atkinson Hyperlegible Next Variable', 'Atkinson Fallback', sans-serif;
+    --font-sans: 'Geist Variable', 'Geist Fallback', sans-serif;
     --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
     --color-background: var(--background);
     --color-foreground: var(--foreground);
@@ -63,82 +66,153 @@
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-ring: var(--sidebar-ring);
-    --radius-xs: 2px;
-    --radius-sm: 2px;
-    --radius-md: 3px;
-    --radius-lg: 3px;
-    --radius-xl: 4px;
-    --radius-2xl: 4px;
-    /* A sheet lying on the desk; a card or an overlay lifted a little higher. */
-    --shadow-sheet: 0 1px 0 var(--shade-a), 0 14px 30px -22px var(--shade-b);
-    --shadow-overlay: 0 1px 0 var(--shade-a), 0 22px 44px -20px var(--shade-c);
+    /*
+     * Corners from the Alpine scale only: chips 6 (badges, checkboxes, segments inside
+     * a control), controls 10 (buttons, inputs, menu items), cards 16 (the page panel,
+     * menus, popovers, toasts, banners), sheets 20 (dialogs). xs and lg fold onto the
+     * scale so no off-scale corner can be asked for.
+     */
+    --radius-xs: var(--radius-chip);
+    --radius-sm: var(--radius-chip);
+    --radius-md: var(--radius-control);
+    --radius-lg: var(--radius-control);
+    --radius-xl: var(--radius-card);
+    --radius-2xl: var(--radius-sheet);
+    /* The page panel rests on the ground; menus and dialogs lift higher. None in high contrast. */
+    --shadow-sheet: var(--elevation-sm);
+    --shadow-overlay: var(--elevation-lg);
     --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
     --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
     --ease-in-out-cubic: cubic-bezier(0.645, 0.045, 0.355, 1);
 }
 
 /*
- * The Paper palette. The page is a warm desk; content is a sheet lying on it;
- * a dialog or a menu is a card lifted a little higher. Text is ink-blue, never
- * black, and the same blue does all the pointing. Rules are hairlines of ink.
- * Status colours are ink-strength, read on their soft fills. No gradients, no
- * textures: the metaphor is carried by shape and shadow alone. See DESIGN.md.
+ * Alpine. The colours come from @hushos/tokens (light, dark and the two high
+ * contrast schemes, which follow prefers-contrast or .hc); these are shadcn's
+ * role names pointed at them, so the components stay stock. See DESIGN.md.
  */
 :root {
-    color-scheme: light dark;
-    --radius: 3px;
+    --radius: 10px;
 
-    --ink: light-dark(#1c2848, #dfe3f2);
-    --desk: light-dark(#e6e2d9, #13151b);
-    --background: var(--desk);
+    --desk: var(--ground);
+    --background: var(--ground);
     --foreground: var(--ink);
 
-    --card: light-dark(#fcfbf7, #1c1f28);
-    --card-foreground: var(--foreground);
-    --popover: light-dark(#fffef9, #21242e);
-    --popover-foreground: var(--foreground);
+    --card: var(--surface);
+    --card-foreground: var(--ink);
+    --popover: var(--surface);
+    --popover-foreground: var(--ink);
 
-    --primary: light-dark(#2c428e, #aab8f4);
-    --primary-hover: light-dark(#24387a, #bcc7f8);
-    --primary-foreground: light-dark(#fcfbf7, #121833);
+    --primary-hover: var(--primary-pressed);
+    --primary-foreground: var(--on-primary);
 
+    /* The inverse button: ink with the surface on it. */
     --secondary: var(--ink);
-    --secondary-foreground: var(--card);
+    --secondary-foreground: var(--surface);
 
-    --muted: light-dark(#f1efe7, #252935);
-    --muted-foreground: light-dark(#5a6483, #969eb8);
+    --muted: var(--ground);
+    --muted-foreground: var(--ink-muted);
 
     /* The highlighter: a selected row, the open folder, a chosen option. */
-    --accent: light-dark(#e3e7f5, #262c45);
-    --accent-foreground: light-dark(#2c428e, #b3c0f7);
+    --accent: var(--tint);
+    --accent-foreground: var(--on-tint);
 
-    --success: light-dark(#2a7a5e, #7fd1ad);
-    --success-foreground: light-dark(#fcfbf7, #0d1f18);
-    --success-soft: light-dark(#dcede4, #1a2f29);
-    --warning: light-dark(#9a5a12, #e8b774);
-    --warning-foreground: light-dark(#fcfbf7, #241707);
-    --warning-soft: light-dark(#f4e6cf, #33291a);
-    --destructive: light-dark(#a8322a, #f09a90);
-    --destructive-foreground: light-dark(#fcfbf7, #2a0f0c);
-    --destructive-soft: light-dark(#f5dfdb, #3a2020);
+    --success-foreground: var(--surface);
+    --warning-foreground: var(--surface);
+    --destructive: var(--danger);
+    --destructive-foreground: var(--surface);
+    --destructive-soft: var(--danger-soft);
 
-    --rule: light-dark(rgb(28 40 72 / 0.16), rgb(223 227 242 / 0.2));
-    --border: light-dark(#d3d1ca, #30343f);
-    --input: light-dark(#b0b4c6, #4a5168);
+    --border: var(--rule);
+    --input: var(--field);
     --ring: var(--primary);
 
-    --shade-a: light-dark(rgb(28 40 72 / 0.12), rgb(0 0 0 / 0.5));
-    --shade-b: light-dark(rgb(28 40 72 / 0.45), rgb(0 0 0 / 0.9));
-    --shade-c: light-dark(rgb(28 40 72 / 0.55), rgb(0 0 0 / 0.95));
-
-    --sidebar: var(--desk);
-    --sidebar-foreground: var(--muted-foreground);
+    --sidebar: var(--ground);
+    --sidebar-foreground: var(--ink);
     --sidebar-primary: var(--primary);
-    --sidebar-primary-foreground: var(--primary-foreground);
-    --sidebar-accent: var(--card);
-    --sidebar-accent-foreground: var(--foreground);
-    --sidebar-border: var(--border);
+    --sidebar-primary-foreground: var(--on-primary);
+    --sidebar-accent: var(--tint);
+    --sidebar-accent-foreground: var(--on-tint);
+    --sidebar-border: var(--rule);
     --sidebar-ring: var(--ring);
+}
+
+/*
+ * Warnings and the yellow tag have colours of their own rather than the tokens'
+ * `open` (links no longer have a colour), so `open` can be renamed or removed
+ * without touching the web. The warning values are the ones `open` had, already
+ * checked for contrast; the yellow tag carries ink that reads on it at AA, or AAA
+ * in high contrast. Same four schemes, selectors and order as @hushos/tokens.
+ */
+:root,
+.light {
+    --warning: #87530d;
+    --warning-soft: #f7eddc;
+    --tag-yellow: #b8860b;
+    --on-tag-yellow: #17203a;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not(.light) {
+        --warning: #e3b46a;
+        --warning-soft: #33281a;
+        --tag-yellow: #e3b341;
+        --on-tag-yellow: #121833;
+    }
+}
+.dark {
+    --warning: #e3b46a;
+    --warning-soft: #33281a;
+    --tag-yellow: #e3b341;
+    --on-tag-yellow: #121833;
+}
+@media (prefers-contrast: more) {
+    :root:not(.dark) {
+        --warning: #5e3700;
+        --warning-soft: #f7eddc;
+        --tag-yellow: #6b4d00;
+        --on-tag-yellow: #ffffff;
+    }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+    :root:not(.light) {
+        --warning: #ffd38f;
+        --warning-soft: #2b1f0b;
+        --tag-yellow: #ffd966;
+        --on-tag-yellow: #000000;
+    }
+}
+.hc:not(.dark) {
+    --warning: #5e3700;
+    --warning-soft: #f7eddc;
+    --tag-yellow: #6b4d00;
+    --on-tag-yellow: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+    .hc:not(.light) {
+        --warning: #ffd38f;
+        --warning-soft: #2b1f0b;
+        --tag-yellow: #ffd966;
+        --on-tag-yellow: #000000;
+    }
+}
+.dark.hc {
+    --warning: #ffd38f;
+    --warning-soft: #2b1f0b;
+    --tag-yellow: #ffd966;
+    --on-tag-yellow: #000000;
+}
+
+/*
+ * In the dark, the ground is darker than the panel, so a hover or a quiet fill
+ * drawn in it reads as pressed in. There, muted is a lift from the panel instead.
+ */
+@media (prefers-color-scheme: dark) {
+    :root:not(.light) {
+        --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
+    }
+}
+:root.dark {
+    --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
 }
 
 :root.light {
@@ -149,13 +223,38 @@
     color-scheme: dark;
 }
 
+/*
+ * Printing a page that has a sheet marked data-print (the recovery kit, a child
+ * of body) prints that sheet alone, on one page; its padding is the paper margin.
+ */
+@media print {
+    body:has(> [data-print]) {
+        background: white;
+    }
+    body:has(> [data-print]) > :not([data-print]) {
+        display: none !important;
+    }
+    body > [data-print] {
+        padding: 16mm 18mm;
+    }
+}
+
 @layer base {
+    code,
+    kbd,
+    pre,
+    samp,
+    .font-mono {
+        font-feature-settings: normal;
+    }
     * {
         @apply border-border outline-ring;
     }
     html {
         text-rendering: optimizeLegibility;
         -webkit-tap-highlight-color: transparent;
+        /* On a phone the page itself scrolls: rows scrolled to land above the selection bar. */
+        scroll-padding-bottom: var(--selection-room, 0px);
     }
     body {
         @apply m-0 min-h-svh bg-background font-sans text-foreground antialiased;
@@ -193,7 +292,7 @@
     @apply font-sans text-xs leading-none font-semibold tracking-normal normal-case;
 }
 
-/* A sheet of paper on the desk: the surface that holds a page's content. */
+/* The surface that holds a page's content, raised from the ground. */
 @utility sheet {
     @apply rounded-xs bg-card shadow-sheet;
 }

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher shortcuts, in the + menu's words (iOS's quick actions use the same). -->
+    <string name="shortcut_upload_files">Upload files</string>
+    <string name="shortcut_upload_photos">Upload photos</string>
+    <string name="shortcut_new_folder">New folder</string>
+    <string name="shortcut_search">Search</string>
+</resources>

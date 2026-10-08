@@ -38,6 +38,40 @@ object TransferQueue {
     const val UPLOAD = "upload"
     const val KEEP = "keep"
     private const val CHANNEL = "transfers"
+    /* The notification's tap: MainActivity opens the transfers sheet. */
+    const val OPEN_TRANSFERS = "com.hushos.app.OPEN_TRANSFERS"
+    /* An upload refused because the account is out of room: Retry can't help; Make room can. */
+    const val NO_ROOM = "Not enough room for this file."
+
+    /* Whether a failure's words are the out-of-room refusal (the server's own sentence too). */
+    fun isNoRoom(message: String?): Boolean =
+        message != null && (message == NO_ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
+
+    /*
+     * A name short enough for a notification's line, cut in the middle so its start and its
+     * extension both show: "Quarterly report for the…final draft.pdf".
+     */
+    fun shortName(name: String, max: Int = 32): String {
+        if (name.length <= max) return name
+        val dot = name.lastIndexOf('.').takeIf { it > 0 && name.length - it <= 8 } ?: name.length
+        val tail = (name.length - dot) + minOf(6, dot)
+        val head = max - 1 - tail
+        return if (head < 4) name.take(max - 1) + "…" else name.take(head) + "…" + name.takeLast(tail)
+    }
+
+    /* A failure's reason in words that say what to do: the transfers sheet's and the notification's. */
+    fun reasonWords(message: String?): String {
+        val said = message.orEmpty()
+        return when {
+            said.contains("reach", ignoreCase = true) || said.contains("network", ignoreCase = true) -> "Couldn’t reach HushOS. Check your connection, then retry."
+            said.contains("gone", ignoreCase = true) || said.contains("Pick it again") -> "The file isn’t there any more. Pick it again."
+            said.contains("Sign in", ignoreCase = true) -> "Sign in again to finish this."
+            said.contains("downloaded copy") -> "Couldn’t update the copy on this phone. Retry, or keep it again later."
+            isNoRoom(said) -> NO_ROOM
+            said.isEmpty() || said == "The transfer failed." -> "This kept failing. Retry, or remove it from the list."
+            else -> said
+        }
+    }
 
     private fun constraints() = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
@@ -50,14 +84,30 @@ object TransferQueue {
         return enqueueUpload(context, id, file, name, mime, folderId, replacingId)
     }
 
+
     /*
-     * Queues a failed upload again from the copy it kept, as a new job; `failed` is
-     * the job's output, which carries its inputs. False when the copy is gone.
+     * Sends a failed transfer again from the app's own record: an upload from the copy it
+     * staged (false when that copy is gone: pick the file again), a keep by its item. The
+     * record goes once the new job is queued.
      */
-    fun retryUpload(context: Context, failed: androidx.work.Data): Boolean {
-        val file = failed.getString("file")?.let(::File)?.takeIf { it.exists() } ?: return false
-        enqueueUpload(context, UUID.randomUUID(), file, failed.getString("name") ?: file.name, failed.getString("mime"), failed.getString("folder") ?: return false, failed.getString("replacing"))
+    fun retry(context: Context, failed: FailedTransfer): Boolean {
+        val records = FailedTransfers.of(context)
+        when (failed.kind) {
+            UPLOAD -> {
+                if (failed.sourceGone() || failed.folder == null) return false
+                enqueueUpload(context, UUID.randomUUID(), File(failed.file!!), failed.name, failed.mime, failed.folder, failed.replacing)
+            }
+            KEEP -> keep(context, failed.node ?: return false, failed.name, folder = failed.isFolder, again = true, shareRoot = failed.shareRoot)
+            else -> return false
+        }
+        records.forget(failed.id)
         return true
+    }
+
+    /* Removed from the list: the record, and the copy an upload kept for its retry. */
+    fun dismiss(context: Context, failed: FailedTransfer) {
+        FailedTransfers.of(context).forget(failed.id)
+        if (failed.kind == UPLOAD) discard(failed.file)
     }
 
     /* Removes the copy a failed upload kept for a retry. */
@@ -72,8 +122,10 @@ object TransferQueue {
      */
     fun sweep(context: Context, inUse: Set<String>) {
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
+        // A failed upload on the app's own record keeps its copy for Retry, however old its job.
+        val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
         File(context.filesDir, "queue").listFiles()?.forEach { dir ->
-            if (dir.path !in inUse && dir.lastModified() < cutoff) dir.deleteRecursively()
+            if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) dir.deleteRecursively()
         }
     }
 
@@ -90,15 +142,20 @@ object TransferQueue {
         return id
     }
 
-    /* Queues a file to be kept downloaded; one job per file, so asking twice does not fetch it twice. */
-    fun keep(context: Context, nodeId: String, name: String) {
+    /*
+     * Queues a file or a folder to be kept on this phone; one job per item, so asking twice
+     * does not fetch it twice. `again`: a kept folder changed, so it runs once more after any
+     * run under way (which may have missed the change) rather than being dropped.
+     */
+    fun keep(context: Context, nodeId: String, name: String, folder: Boolean = false, again: Boolean = false, shareRoot: String? = null) {
         val request = OneTimeWorkRequestBuilder<KeepWorker>()
             .setConstraints(constraints())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "name" to name))
+            .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "name" to name, "folder" to folder, "share" to shareRoot))
             .addTag(TAG).addTag("kind:$KEEP").addTag("name:$name").addTag("node:$nodeId")
+            .apply { if (folder) addTag("folder") }
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
     }
 
     /* Stops a queued or running transfer and drops an upload's copy. */
@@ -107,13 +164,25 @@ object TransferQueue {
         file?.let { File(it).parentFile?.deleteRecursively() }
     }
 
-    internal fun foreground(context: Context, id: Int, title: String, fraction: Float): ForegroundInfo {
+    /*
+     * The ongoing notification Android requires while a job runs: the up arrow for uploads,
+     * the down arrow for keeping a file on this phone, and a tap that opens the transfers sheet.
+     * No Cancel here: cancelling asks first, in the app.
+     */
+    internal fun foreground(context: Context, id: Int, title: String, fraction: Float, keeping: Boolean = false, detail: String? = null): ForegroundInfo {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL) == null)
             manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW))
+        val open = android.app.PendingIntent.getActivity(
+            context, 0,
+            android.content.Intent(context, com.hushos.app.MainActivity::class.java).setAction(OPEN_TRANSFERS).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         val notification = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload)
             .setContentTitle(title)
+            .setContentText(detail ?: if (fraction > 0f) "${(fraction * 100).toInt()}%" else null)
+            .setContentIntent(open)
             .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
             .setOngoing(true)
             .setSilent(true)
@@ -131,21 +200,36 @@ private fun jobVault(context: Context): Vault? = Vault.fromShared(context)?.also
  */
 private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY): androidx.work.ListenableWorker.Result = when {
     Resumable.retryable(error) && error !is NotAuthenticated -> androidx.work.ListenableWorker.Result.retry()
-    else -> androidx.work.ListenableWorker.Result.failure(
-        androidx.work.Data.Builder().putAll(inputs)
-            .putString("message", if (error is NotAuthenticated) "Sign in to HushOS again to finish this." else error.message ?: "The transfer failed.")
-            .build(),
-    )
+    else -> failed(when {
+        error is NotAuthenticated -> "Sign in again to finish this."
+        error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM
+        else -> error.message ?: "The transfer failed."
+    }, inputs)
+}
+
+/*
+ * A job that failed for good: it goes on the app's own record (FailedTransfers), so its row
+ * and its Retry outlive WorkManager pruning finished jobs after a day, and a reboot.
+ */
+private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data = inputData): androidx.work.ListenableWorker.Result {
+    val kind = inputData.getString("kind") ?: TransferQueue.UPLOAD
+    FailedTransfers.of(applicationContext).record(FailedTransfer(
+        id = id.toString(), kind = kind, name = inputData.getString("name") ?: "File", reason = message, at = System.currentTimeMillis(),
+        file = inputData.getString("file"), mime = inputData.getString("mime"), folder = inputData.getString("folder"), replacing = inputData.getString("replacing"),
+        node = inputData.getString("node"), isFolder = kind == TransferQueue.KEEP && inputData.getBoolean("folder", false), shareRoot = inputData.getString("share"),
+    ))
+    TransferNotices.ended(applicationContext, TransferNotices.Outcome(id.toString(), inputData.getString("name") ?: "File", kind == TransferQueue.UPLOAD, TransferQueue.reasonWords(message), inputData.getString("folder")))
+    return androidx.work.ListenableWorker.Result.failure(androidx.work.Data.Builder().putAll(inputs).putString("message", message).build())
 }
 
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     private val name get() = inputData.getString("name") ?: "File"
 
-    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading $name", 0f)
+    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading “${TransferQueue.shortName(name)}”", 0f)
 
     override suspend fun doWork(): Result {
-        val file = File(inputData.getString("file") ?: return Result.failure())
-        if (!file.exists()) return Result.failure(workDataOf("message" to "The file to upload is gone."))
+        val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
+        if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
         runCatching { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         return withContext(Dispatchers.IO) {
@@ -160,10 +244,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
                         shown = percent
-                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading $name", fraction)) }
+                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading “${TransferQueue.shortName(name)}”", fraction)) }
                     }
                 }
                 file.parentFile?.deleteRecursively()
+                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                 Result.success()
             } catch (error: Exception) {
                 // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
@@ -176,15 +261,39 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     private val name get() = inputData.getString("name") ?: "File"
 
-    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Keeping $name", 0f)
+    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Keeping “${TransferQueue.shortName(name)}” on this phone", 0f, keeping = true)
 
     override suspend fun doWork(): Result {
         runCatching { setForeground(getForegroundInfo()) }
-        val vault = jobVault(applicationContext) ?: return Result.failure(workDataOf("message" to "Sign in to HushOS to keep files."))
+        val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
         return withContext(Dispatchers.IO) {
             try {
-                val item = vault.resolve(inputData.getString("node")!!)
-                vault.keepDownloaded(item) { fraction -> setProgressAsync(workDataOf("fraction" to fraction)) }
+                val id = inputData.getString("node")!!
+                val folder = inputData.getBoolean("folder", false)
+                val shareRoot = inputData.getString("share")
+                val item = try {
+                    if (folder) vault.openKeptFolder(id, shareRoot) else vault.resolve(id)
+                } catch (error: NotFound) {
+                    // A kept folder deleted from the drive: its files leave the phone with it.
+                    if (folder) { Offline.forgetFolder(applicationContext, id); return@withContext Result.success() }
+                    throw error
+                }
+                if (item == null) {
+                    // The share stopped: what was kept from it goes, and the app says so.
+                    Offline.forgetFolder(applicationContext, id)
+                    return@withContext Result.success(workDataOf("unshared" to name))
+                }
+                var shown = 0
+                val report = { fraction: Float, done: Int, total: Int ->
+                    setProgressAsync(workDataOf("fraction" to fraction, "done" to done, "total" to total))
+                    val percent = (fraction * 100).toInt()
+                    if (percent - shown >= 5) {
+                        shown = percent
+                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, this@KeepWorker.id.hashCode(), "Keeping “${TransferQueue.shortName(name)}” on this phone", fraction, keeping = true)) }
+                    }
+                }
+                if (item.isFolder) vault.keepFolder(item, shareRoot, report) else vault.keepDownloaded(item) { report(it, 0, 1) }
+                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
                 Result.success()
             } catch (error: Exception) {
                 outcome(error)

@@ -1,19 +1,22 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { AuthLayout } from '@/components/auth-layout';
+import { AuthActions, AuthLayout } from '@/components/auth-layout';
+import { buttonVariants } from '@/components/ui/button';
 export const Route = createFileRoute('/account-deleted')({
     head: () => ({
         meta: [{ title: 'Account deleted · HushOS' }, { name: 'robots', content: 'noindex' }],
     }),
     component: () => (
         <AuthLayout
-            notes={false}
             title="Your account is deleted"
-            stamp="Closed"
-            description="Your profile, personal workspace, encryption-key bundles, and sessions have been removed. There is nothing left to recover."
+            description="Your files, shares, links and account are gone from HushOS. This can’t be undone."
         >
-            <Link to="/" className="text-link">
-                Return to HushOS
-            </Link>
+            <AuthActions
+                action={
+                    <Link to="/" className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                        Go to the HushOS home page
+                    </Link>
+                }
+            />
         </AuthLayout>
     ),
 });

@@ -5,25 +5,30 @@ import UniformTypeIdentifiers
 /* A small JPEG for the Files app and the in-app lists, as the web makes one at upload; nil when the file is not an image or it would not fit. */
 public enum Thumbnails {
     public static let maxBytes = 65_536
-    public static let side = 256
+    /* The long edge, as the web's: large enough for a grid tile on a dense screen. */
+    public static let side = 512
 
     public static func make(for fileURL: URL, mime: String?) -> Data? {
         let type = mime.flatMap { UTType(mimeType: $0) } ?? UTType(filenameExtension: fileURL.pathExtension)
         guard let type, type.conforms(to: .image), let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: side,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-        guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        // JPEG has no alpha: transparent images sit on the sheet colour, not on black.
-        guard let image = flattened(decoded) else { return nil }
-        for quality in [0.7, 0.5, 0.3] {
-            let out = NSMutableData()
-            guard let destination = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
-            CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-            guard CGImageDestinationFinalize(destination) else { return nil }
-            if out.length <= maxBytes { return out as Data }
+        // Size first, then quality, as the web does: a sharp picture a little smaller beats a large smeared one.
+        // The smallest step keeps the old 256 and its qualities, so nothing that fitted before stops fitting.
+        for edge in [side, side * 3 / 4, side / 2] {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: edge,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+            ]
+            guard let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            // JPEG has no alpha: transparent images sit on the sheet colour, not on black.
+            guard let image = flattened(decoded) else { return nil }
+            for quality in edge == side / 2 ? [0.7, 0.5, 0.3] : [0.7, 0.5] {
+                let out = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+                CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+                guard CGImageDestinationFinalize(destination) else { return nil }
+                if out.length <= maxBytes { return out as Data }
+            }
         }
         return nil
     }

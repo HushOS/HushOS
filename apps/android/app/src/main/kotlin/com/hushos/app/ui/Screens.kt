@@ -1,5 +1,8 @@
 package com.hushos.app.ui
 
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.heightIn
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -82,6 +85,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.material3.LinearProgressIndicator
+import com.hushos.tokens.AlpineSpace
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberTopAppBarState
@@ -105,590 +115,140 @@ import com.hushos.app.data.SharedByMe
 import kotlinx.coroutines.launch
 
 /* Opens a decrypted file with whatever app handles its type. */
-fun openWith(context: android.content.Context, uri: android.net.Uri, mime: String?) {
-    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    runCatching { context.startActivity(Intent.createChooser(intent, null)) }
-}
-
-/* The tree: the root folder, each folder pushed on a simple stack, with the actions a cloud drive offers. */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
-@Composable
-fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null, onLeave: (() -> Unit)? = null) {
-    // With `start` the screen browses a shared folder: the same tools, in the granter's workspace.
-    val stack = remember(start?.id) { mutableStateListOf<Opened>().apply { start?.let { add(it) } } }
-    val current = stack.lastOrNull()
-    val folderId = current?.id ?: state.rootId
-    val floor = if (start != null) 1 else 0
-    var fabOpen by rememberSaveable { mutableStateOf(false) }
-    DisposableEffect(fabOpen) {
-        model.addMenu(fabOpen)
-        onDispose { if (fabOpen) model.addMenu(false) }
-    }
-    var newFolder by rememberSaveable { mutableStateOf<String?>(null) }
-    var selected by remember { mutableStateOf<Opened?>(null) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var pendingUploads by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
-    var clashes by remember { mutableStateOf<List<String>>(emptyList()) }
-    var renames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isEmpty() || folderId == null) return@rememberLauncherForActivityResult
-        val names = uris.mapNotNull { uri -> model.displayName(uri) }
-        val existing = (state.folders[folderId] ?: emptyList()).filter { !it.isFolder }.map { it.name.lowercase() }.toSet()
-        val found = names.filter { it.lowercase() in existing }
-        if (found.isEmpty()) model.upload(uris, folderId) else { pendingUploads = uris; clashes = found }
-    }
-    LaunchedEffect(Unit) { model.loadRoot(); model.refreshTags() }
-    LaunchedEffect(folderId) { if (folderId != null && !state.folders.containsKey(folderId)) model.refresh(folderId) }
-    BackHandler(enabled = stack.size > floor || onLeave != null) { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }
-    // Declared after the folder handler so it wins: Back closes the add menu before it leaves a folder or the app.
-    BackHandler(enabled = fabOpen) { fabOpen = false }
-    var query by rememberSaveable { mutableStateOf("") }
-    var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var movingMany by rememberSaveable { mutableStateOf(false) }
-    // Per folder: a bar hidden by scrolling one folder must not stay hidden in the next, where an empty
-    // list cannot scroll to bring it (and its back arrow) back.
-    val scroll = TopAppBarDefaults.enterAlwaysScrollBehavior(androidx.compose.runtime.key(folderId) { rememberTopAppBarState() })
-    // How this drive's lists are ordered, kept across launches; folders always come first.
-    val prefs = LocalContext.current.getSharedPreferences("files", android.content.Context.MODE_PRIVATE)
-    var sortKey by rememberSaveable { mutableStateOf(prefs.getString("sortKey", "name") ?: "name") }
-    var sortAscending by rememberSaveable { mutableStateOf(prefs.getBoolean("sortAscending", true)) }
-    var sortMenu by remember { mutableStateOf(false) }
-    // A tag filter belongs to the folder it was set in; opening another folder starts unfiltered.
-    var filteredIn by rememberSaveable { mutableStateOf(folderId) }
-    LaunchedEffect(folderId) { if (filteredIn != folderId) { filteredIn = folderId; tagFilter = null } }
-    val listState = androidx.compose.runtime.key(folderId) { rememberLazyListState() }
-    // A new order starts at the top, once the list holds it; scrolling earlier would still follow the anchored row.
-    var sortSeen by remember { mutableStateOf(sortKey to sortAscending) }
-    LaunchedEffect(sortKey, sortAscending) {
-        if (sortSeen != (sortKey to sortAscending)) { sortSeen = sortKey to sortAscending; listState.scrollToItem(0) }
-    }
-    val unfiltered = if (query.isBlank()) sortItems(folderId?.let { state.folders[it] } ?: emptyList(), sortKey, sortAscending)
-        else state.everything.filter { it.name.contains(query.trim(), ignoreCase = true) }.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-    val items = tagFilter?.let { id -> unfiltered.filter { it.id in state.tags.nodesWith(id) } } ?: unfiltered
-    Scaffold(
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = {
-            if (picked.isNotEmpty()) {
-                // Everything picked at once: the contextual bar the drives show while selecting.
-                val chosen = (folderId?.let { state.folders[it] } ?: emptyList()).filter { it.id in picked }
-                TopAppBar(
-                    title = { Text("${picked.size} selected") },
-                    navigationIcon = { IconButton(onClick = { picked = emptySet() }) { Icon(Icons.Outlined.Close, "Done") } },
-                    actions = {
-                        IconButton(onClick = { model.copy(chosen); picked = emptySet() }) { Icon(Icons.Outlined.ContentCopy, "Copy") }
-                        IconButton(onClick = { model.cut(chosen); picked = emptySet() }) { Icon(Icons.Outlined.ContentCut, "Cut") }
-                        IconButton(onClick = { movingMany = true }) { Icon(Icons.Outlined.DriveFileMove, "Move") }
-                        IconButton(onClick = { model.trashAll(chosen); picked = emptySet() }) { Icon(Icons.Outlined.Delete, "Trash") }
-                    },
-                )
-            } else {
-                TopAppBar(
-                    title = { Text(current?.name ?: "Files") },
-                    navigationIcon = { if (current != null) IconButton(onClick = { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
-                    actions = {
-                        // One control for how the list is shown: its label is the order, its menu sorts and filters by a tag
-                        // (only the tags this folder's items carry), and nothing on the page comes and goes.
-                        Box {
-                            val here = folderId?.let { state.folders[it] } ?: emptyList()
-                            val folderTags = state.tags.tags.filter { tag -> here.any { it.id in state.tags.nodesWith(tag.id) } }
-                            // The funnel says the menu filters as well as sorts; the words say the order in force.
-                            TextButton(onClick = { sortMenu = true }, modifier = Modifier.semantics { contentDescription = "Sort and filter" }) {
-                                Icon(Icons.Outlined.FilterList, null, modifier = Modifier.padding(end = 6.dp).size(18.dp),
-                                    tint = if (tagFilter != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(sortLabel(sortKey))
-                                Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.padding(start = 4.dp).size(16.dp))
-                            }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                Text("Sort by", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-                                for (key in listOf("name", "modified", "size")) DropdownMenuItem(
-                                    text = { Text(sortLabel(key)) },
-                                    trailingIcon = { if (key == sortKey) Icon(if (sortAscending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward, null, modifier = Modifier.size(16.dp)) },
-                                    onClick = {
-                                        if (key == sortKey) sortAscending = !sortAscending else { sortKey = key; sortAscending = key == "name" }
-                                        prefs.edit().putString("sortKey", sortKey).putBoolean("sortAscending", sortAscending).apply()
-                                        sortMenu = false
-                                    },
-                                )
-                                androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                                Text("Tag", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-                                if (folderTags.isEmpty()) DropdownMenuItem(text = { Text("No tags in this folder") }, enabled = false, onClick = {})
-                                for (tag in folderTags) DropdownMenuItem(
-                                    text = { TagPill(tag, selected = tag.id == tagFilter) },
-                                    trailingIcon = { if (tag.id == tagFilter) Icon(Icons.Outlined.Check, null, modifier = Modifier.size(16.dp)) },
-                                    onClick = { tagFilter = if (tagFilter == tag.id) null else tag.id; sortMenu = false },
-                                )
-                            }
-                        }
-                    },
-                    scrollBehavior = scroll,
-                    // Scrolling (or pulling to refresh) must not tint the bar: the sheet stays one colour.
-                    colors = TopAppBarDefaults.topAppBarColors(scrolledContainerColor = MaterialTheme.colorScheme.surface),
-                )
-            }
-        },
-        floatingActionButton = {
-            // The menu pads its button a second time; pull it back to the usual 16dp from the edges.
-            FloatingActionButtonMenu(
-                modifier = Modifier.offset(x = 16.dp, y = 16.dp),
-                expanded = fabOpen,
-                button = {
-                    ToggleFloatingActionButton(checked = fabOpen, onCheckedChange = { fabOpen = it }) {
-                        val icon = if (checkedProgress > 0.5f) Icons.Outlined.Close else Icons.Outlined.Add
-                        Icon(icon, contentDescription = "Add", modifier = Modifier.animateIcon({ checkedProgress }))
-                    }
-                },
-            ) {
-                state.clipboard?.takeIf { folderId != null && model.canPaste(folderId) }?.let { (items, cut) ->
-                    FloatingActionButtonMenuItem(onClick = { fabOpen = false; folderId?.let { model.paste(it) } }, icon = { Icon(if (cut) Icons.Outlined.ContentCut else Icons.Outlined.ContentPaste, null) }, text = { Text(if (items.size > 1) "Paste ${items.size} items" else "Paste ${items.first().name}") })
-                }
-                FloatingActionButtonMenuItem(onClick = { fabOpen = false; newFolder = "" }, icon = { Icon(Icons.Outlined.CreateNewFolder, null) }, text = { Text("New folder") })
-                if (items.isNotEmpty()) FloatingActionButtonMenuItem(onClick = { fabOpen = false; picked = setOf(items.first().id) }, icon = { Icon(Icons.Outlined.Checklist, null) }, text = { Text("Select items") })
-                FloatingActionButtonMenuItem(onClick = { fabOpen = false; picker.launch(arrayOf("*/*")) }, icon = { Icon(Icons.Outlined.UploadFile, null) }, text = { Text("Upload files") })
-            }
-        },
-    ) { padding ->
-        Column(Modifier.padding(padding)) {
-        TextField(
-            value = query, onValueChange = { query = it }, singleLine = true,
-            placeholder = { Text(if (current == null) "Search in HushOS" else "Search in ${current.name}") },
-            leadingIcon = { Icon(Icons.Outlined.Search, null) },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Clear") } },
-            shape = CircleShape,
-            colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp),
-        )
-        if (folderId != null && folderId in state.loading && !state.folders.containsKey(folderId)) {
-            androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
-        }
-        state.tags.tags.firstOrNull { it.id == tagFilter }?.let { tag ->
-            // The filter says so where the rows are, so a shorter list never looks like missing files.
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Filtered by", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
-                TagPill(tag, selected = true)
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = { tagFilter = null }) { Text("Clear") }
-            }
-        }
-        state.clipboard?.let { (clip, cut) ->
-            // Something on the clipboard: say so where it can be pasted, not only inside the add menu.
-            androidx.compose.material3.Surface(tonalElevation = 3.dp, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (cut) Icons.Outlined.ContentCut else Icons.Outlined.ContentPaste, null, modifier = Modifier.padding(end = 8.dp))
-                    Text(if (clip.size > 1) "${clip.size} items ready to ${if (cut) "move" else "copy"}" else "${clip.first().name} ready to ${if (cut) "move" else "copy"}", modifier = Modifier.weight(1f), maxLines = 1)
-                    TextButton(enabled = folderId != null && model.canPaste(folderId), onClick = { folderId?.let { model.paste(it) } }) { Text(folderId?.let { model.pasteProblem(it) } ?: "Paste here") }
-                    IconButton(onClick = { model.clearClipboard() }) { Icon(Icons.Outlined.Close, "Cancel") }
-                }
-            }
-        }
-        // The spinner follows the refresh, not every write: an upload waiting out a dead network must not look like a stuck pull.
-        PullToRefreshBox(isRefreshing = folderId != null && folderId in state.loading, onRefresh = { folderId?.let { model.refresh(it) } }) {
-            if (query.isBlank() && folderId != null && state.folders.containsKey(folderId) && items.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    // A filter that hides everything says so, rather than calling a full folder empty.
-                    val filteredBy = state.tags.tags.firstOrNull { it.id == tagFilter }?.name
-                    Text(if (filteredBy != null && unfiltered.isNotEmpty()) "Nothing tagged $filteredBy in this folder." else "Nothing here yet. Add files with the button, or from the Files app.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
-                }
-            } else if (query.isBlank() && (folderId == null || !state.folders.containsKey(folderId)) && state.unreachable && folderId !in state.loading) {
-                // Nothing on this phone for this folder and no network to fetch it: say so instead of a blank sheet.
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("This folder has not been opened on this phone yet. It will load when you are back online.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
-                }
-            }
-            LazyColumn(Modifier.fillMaxSize(), state = listState) {
-                items(items, key = { it.id }) { item ->
-                    // No checkbox column: while selecting, a tap toggles and a picked row shows its tint and check.
-                    NodeRow(model, state, item,
-                        onClick = {
-                            if (picked.isNotEmpty()) picked = if (item.id in picked) picked - item.id else picked + item.id
-                            else if (item.isFolder) { query = ""; stack.add(item) }
-                            else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } }
-                        },
-                        onLongClick = { if (picked.isEmpty()) selected = item else picked = if (item.id in picked) picked - item.id else picked + item.id },
-                        selected = item.id in picked)
-                }
-            }
-        }
-        }
-    }
-    if (clashes.isNotEmpty() && folderId != null) {
-        AlertDialog(
-            onDismissRequest = { clashes = emptyList(); pendingUploads = emptyList() },
-            title = { Text(if (clashes.size == 1) "“${clashes[0]}” already exists here" else "${clashes.size} of these already exist here") },
-            text = {
-                Column {
-                    Text("Replacing keeps the earlier version under Versions.")
-                    TextButton(onClick = { model.upload(pendingUploads, folderId, DriveViewModel.Conflict.REPLACE); clashes = emptyList() }) { Text("Replace (keep as new version)") }
-                    TextButton(onClick = { renames = clashes.associateWith { model.freeName(it, (state.folders[folderId] ?: emptyList()).map { f -> f.name.lowercase() }.toSet()) }; clashes = emptyList() }) { Text("Keep both…") }
-                    TextButton(onClick = { model.upload(pendingUploads, folderId, DriveViewModel.Conflict.SKIP); clashes = emptyList() }) { Text("Skip those") }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { clashes = emptyList(); pendingUploads = emptyList() }) { Text("Cancel") } },
-        )
-    }
-    if (renames.isNotEmpty() && folderId != null) {
-        val taken = (state.folders[folderId] ?: emptyList()).map { it.name.lowercase() }.toSet()
-        val valid = renames.values.all { it.isNotBlank() && it.trim().lowercase() !in taken }
-        AlertDialog(
-            onDismissRequest = { renames = emptyMap(); pendingUploads = emptyList() },
-            title = { Text("Keep both") },
-            text = {
-                Column {
-                    for ((original, name) in renames) OutlinedTextField(value = name, onValueChange = { renames = renames + (original to it) }, singleLine = true, label = { Text(original) }, modifier = Modifier.padding(top = 8.dp))
-                }
-            },
-            confirmButton = { TextButton(enabled = valid, onClick = { model.upload(pendingUploads, folderId, DriveViewModel.Conflict.KEEP_BOTH, renames.mapValues { it.value.trim() }); renames = emptyMap() }) { Text("Upload") } },
-            dismissButton = { TextButton(onClick = { renames = emptyMap(); pendingUploads = emptyList() }) { Text("Cancel") } },
-        )
-    }
-    newFolder?.let { draft ->
-        AlertDialog(
-            onDismissRequest = { newFolder = null },
-            title = { Text("New folder") },
-            text = { OutlinedTextField(value = draft, onValueChange = { newFolder = it }, singleLine = true, label = { Text("Name") }) },
-            confirmButton = { TextButton(enabled = draft.isNotBlank(), onClick = { folderId?.let { model.createFolder(draft.trim(), it) }; newFolder = null }) { Text("Create") } },
-            dismissButton = { TextButton(onClick = { newFolder = null }) { Text("Cancel") } },
-        )
-    }
-    selected?.let { item -> ItemActions(model, state, item, onSelect = { picked = picked + item.id }) { selected = null } }
-}
-
-private enum class HomeFilter(val label: String) { ALL("All"), FOLDERS("Folders"), IMAGES("Images"), VIDEOS("Videos"), DOCUMENTS("Documents") }
-
-private fun HomeFilter.matches(item: Opened): Boolean {
-    val mime = mimeOf(item) ?: ""
-    return when (this) {
-        HomeFilter.ALL -> true
-        HomeFilter.FOLDERS -> item.isFolder
-        HomeFilter.IMAGES -> mime.startsWith("image/")
-        HomeFilter.VIDEOS -> mime.startsWith("video/")
-        HomeFilter.DOCUMENTS -> !item.isFolder && (mime == "application/pdf" || mime.startsWith("text/") || mime.contains("document") || mime.contains("presentation") || mime.contains("sheet"))
+fun openWith(context: android.content.Context, uri: android.net.Uri, mime: String?, model: DriveViewModel? = null, name: String? = null) {
+    val type = name?.let { mimeFor(it, mime) } ?: mime
+    // Straight to the app Android picks for this type: the person's default, or Android's own
+    // "Just once / Always" when there is none, so a default sticks.
+    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    // A kind nobody named (no type, or raw bytes) counts as none: apps that claim raw bytes (Google
+    // Wallet's pass importer, for one) take the file and close without a word.
+    val unknown = type == null || type == "application/octet-stream"
+    if (model != null && unknown) { model.noApp(name ?: "this file", uri, type); return }
+    try {
+        context.startActivity(intent)
+    } catch (error: android.content.ActivityNotFoundException) {
+        // No app for this kind: HushOS says so and offers Send a copy, not the system's bare "No apps can perform this action".
+        model?.noApp(name ?: "this file", uri, type)
     }
 }
 
-/*
- * Home: the search pill first, then type chips, then what changed most
- * recently across every folder. The layout of a cloud drive, not of Files.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun HomeScreen(model: DriveViewModel, state: DriveState) {
-    var query by rememberSaveable { mutableStateOf("") }
-    var filter by rememberSaveable { mutableStateOf(HomeFilter.ALL) }
-    var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var tagged by remember { mutableStateOf<List<Opened>>(emptyList()) }
-    var managingTags by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<Opened?>(null) }
-    var showingOffline by rememberSaveable { mutableStateOf(false) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    if (showingOffline) {
-        OfflineScreen(model, state) { showingOffline = false }
-        return
-    }
-    LaunchedEffect(Unit) { model.refreshRecents(); model.refreshTags(); model.refreshOffline() }
-    val base = when {
-        tagFilter != null -> tagged.filter { query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) }
-        query.isBlank() -> state.recents
-        else -> state.everything.filter { it.name.contains(query.trim(), ignoreCase = true) }
-            .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-    }
-    val rows = base.filter { filter.matches(it) }
-    val heading = tagFilter?.let { id -> state.tags.tags.firstOrNull { it.id == id }?.name } ?: if (query.isBlank()) "Recent" else "Results"
-    Column(Modifier.fillMaxSize()) {
-        // Titled like the other tabs; the search pill sits under it rather than in its place.
-        TopAppBar(title = { Text("Home") })
-        TextField(
-            value = query, onValueChange = { query = it }, singleLine = true,
-            placeholder = { Text("Search in HushOS") },
-            leadingIcon = { Icon(Icons.Outlined.Search, null) },
-            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Clear") } },
-            shape = CircleShape,
-            colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 12.dp),
-        )
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (option in HomeFilter.entries) FilterChip(selected = filter == option, onClick = { filter = option }, label = { Text(option.label) })
-        }
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(end = 8.dp))
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (tag in state.tags.tags) TagPill(tag, selected = tagFilter == tag.id) {
-                    tagFilter = if (tagFilter == tag.id) null else tag.id
-                    scope.launch { tagged = if (tagFilter == null) emptyList() else model.tagged(tag.id) }
-                }
-                if (state.tags.tags.isEmpty()) Text("None yet", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            androidx.compose.material3.TextButton(onClick = { managingTags = true }) { Text("Manage") }
-        }
-        PullToRefreshBox(isRefreshing = "recents" in state.loading, onRefresh = { model.refreshRecents() }) {
-            LazyColumn(Modifier.fillMaxSize()) {
-                if (query.isBlank() && tagFilter == null && state.offline.isNotEmpty()) {
-                    // One row into the kept files, not the files themselves: however many are kept, Recent stays in view.
-                    item(key = "offline") {
-                        androidx.compose.material3.ListItem(
-                            headlineContent = { Text("Offline") },
-                            supportingContent = { Text(offlineSummary(state.offline)) },
-                            leadingContent = { Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)) } },
-                            trailingContent = { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                            modifier = Modifier.clickable { showingOffline = true },
-                        )
-                    }
-                }
-                item { Text(heading, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
-                if ("recents" in state.loading && rows.isEmpty()) item(key = "loading") { androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
-                // The empty word sits in the list under its heading, never over the rows above it.
-                if (rows.isEmpty() && "recents" !in state.loading) item(key = "empty") {
-                    Text(if (query.isBlank()) "Files you add or change show up here." else "No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp))
-                }
-                items(rows, key = { it.id }) { item ->
-                    NodeRow(model, state, item,
-                        onClick = { if (!item.isFolder) scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } } },
-                        onLongClick = { selected = item })
-                }
-            }
-        }
-    }
-    selected?.let { item -> ItemActions(model, state, item) { selected = null } }
-    if (managingTags) TagManagerSheet(model, state) { managingTags = false }
-}
-
-/* "3 files · 1.2 GB", the size left out when an entry never recorded one. */
-private fun offlineSummary(entries: List<com.hushos.app.data.Offline.Entry>): String {
-    val count = if (entries.size == 1) "1 file" else "${entries.size} files"
-    val sizes = entries.mapNotNull { it.size }
-    return if (sizes.size == entries.size) "$count · ${formatBytes(sizes.sum())}" else count
-}
-
-/* The files kept on this phone, newest first: they open without the network. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun OfflineScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
-    var selected by remember { mutableStateOf<Opened?>(null) }
-    var forgetting by remember { mutableStateOf<com.hushos.app.data.Offline.Entry?>(null) }
-    val context = LocalContext.current
-    BackHandler(onBack = onBack)
-    LaunchedEffect(Unit) { model.refreshOffline() }
-    Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Offline") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } })
-        if (state.offline.isEmpty()) {
-            Text("Files you keep downloaded open here without the network.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 24.dp))
-        }
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(state.offline, key = { it.id }) { entry ->
-                androidx.compose.material3.ListItem(
-                    headlineContent = { Text(entry.name) },
-                    supportingContent = { Text(entry.size?.let { formatBytes(it) } ?: "Kept downloaded") },
-                    leadingContent = { Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.DownloadForOffline, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)) } },
-                    // The same menu as any other row: a kept file is still a file (share, rename, remove the download).
-                    modifier = Modifier.combinedClickable(
-                        onClick = {
-                            val file = com.hushos.app.data.Offline.file(context, entry)
-                            if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime)
-                        },
-                        onLongClick = { model.item(entry.id)?.let { selected = it } ?: run { forgetting = entry } },
-                    ),
-                )
-            }
-        }
-    }
-    selected?.let { item -> ItemActions(model, state, item) { selected = null } }
-    // A kept file this device cannot name in the tree (not opened yet): the one thing it can still do.
-    forgetting?.let { entry ->
-        AlertDialog(
-            onDismissRequest = { forgetting = null },
-            title = { Text(entry.name) },
-            text = { Text("Remove the downloaded copy from this phone? The file stays in HushOS.") },
-            confirmButton = { TextButton(onClick = { model.forgetOffline(entry.id); forgetting = null }) { Text("Remove download") } },
-            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
-        )
-    }
-}
-
-/* Every tag in the workspace: rename, recolour, delete, and how many items each names. */
+/* Every tag in the workspace: rename, recolour, remove (which asks first), and how many items each names. */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
+    val alpine = Alpine.colors
     var newName by rememberSaveable { mutableStateOf("") }
     var renaming by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     var renameDraft by rememberSaveable { mutableStateOf("") }
+    var deleting by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var colouring by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     LaunchedEffect(Unit) { model.refreshTags() }
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = dismiss) {
-        Text("Tags", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+    Sheet(onDismissRequest = dismiss) {
+        Text("Tags", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true, label = { Text("New tag") }, modifier = Modifier.weight(1f))
-            TextButton(enabled = newName.isNotBlank(), onClick = { val name = newName; newName = ""; model.editTags { it.add(name) } }) { Text("Add") }
+            androidx.compose.material3.FilledTonalButton(enabled = newName.isNotBlank(), onClick = { val name = newName; newName = ""; model.editTags { it.add(name) } }, modifier = Modifier.padding(start = 8.dp)) { Text("Add") }
         }
-        if (state.tags.tags.isEmpty()) Text("No tags yet. Tags group items across folders.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
+        if (state.tags.tags.isEmpty()) Text("No tags yet. Tags group items across folders.", color = alpine.inkMuted, modifier = Modifier.padding(24.dp))
         LazyColumn {
             items(state.tags.tags, key = { it.id }) { tag ->
-                var colours by remember { mutableStateOf(false) }
-                androidx.compose.material3.ListItem(
-                    headlineContent = { TagPill(tag) },
-                    supportingContent = { Text("${state.tags.nodesWith(tag.id).size} items") },
-                    leadingContent = {
-                        Box(Modifier.size(22.dp).background(tagColour(tag.colour), CircleShape).clickable { colours = true })
-                        if (colours) ColourDialog(current = tag.colour, onPick = { colour -> colours = false; model.editTags { it.recolour(tag.id, colour) } }, onDismiss = { colours = false })
-                    },
-                    trailingContent = {
-                        Row {
-                            IconButton(onClick = { renameDraft = tag.name; renaming = tag }) { Icon(androidx.compose.material.icons.Icons.Outlined.Edit, "Rename") }
-                            IconButton(onClick = { model.editTags { it.remove(tag.id) } }) { Icon(androidx.compose.material.icons.Icons.Outlined.Delete, "Delete") }
-                        }
-                    },
-                )
+                val count = state.tags.nodesWith(tag.id).size
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { colouring = tag }) { TagDot(tag.colour, 18.dp) }
+                    Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                        Text(tag.name, style = MaterialTheme.typography.bodyLarge)
+                        Text(if (count == 1) "1 item" else "$count items", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                    }
+                    IconButton(onClick = { renameDraft = tag.name; renaming = tag }) { Icon(androidx.compose.material.icons.Icons.Outlined.Edit, "Rename ${tag.name}") }
+                    IconButton(onClick = { deleting = tag }) { Icon(androidx.compose.material.icons.Icons.Outlined.Delete, "Remove ${tag.name}") }
+                }
             }
             item {
-                Text("Tags live in a sealed workspace document, so people you share with never see them.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp))
+                Text("Tags are only for you: people you share with never see them.",
+                    style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(24.dp))
             }
         }
     }
+    colouring?.let { tag -> ColourDialog(tag.name, current = tag.colour, onPick = { colour -> colouring = null; model.editTags { it.recolour(tag.id, colour) } }, onDismiss = { colouring = null }) }
     renaming?.let { tag ->
         AlertDialog(
             onDismissRequest = { renaming = null },
             title = { Text("Rename tag") },
-            text = { OutlinedTextField(value = renameDraft, onValueChange = { renameDraft = it }, singleLine = true) },
+            text = {
+                Column {
+                    Text("The new name shows everywhere at once.", modifier = Modifier.padding(bottom = 12.dp))
+                    OutlinedTextField(value = renameDraft, onValueChange = { renameDraft = it }, singleLine = true, label = { Text("Name") })
+                }
+            },
             confirmButton = { TextButton(enabled = renameDraft.isNotBlank(), onClick = { val name = renameDraft; renaming = null; model.editTags { it.rename(tag.id, name) } }) { Text("Save") } },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
+    deleting?.let { tag ->
+        val count = state.tags.nodesWith(tag.id).size
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Remove “${tag.name}”?") },
+            text = { Text("The tag comes off ${if (count == 1) "1 item" else "$count items"} and leaves your list. The items themselves aren’t touched.") },
+            confirmButton = { TextButton(onClick = { deleting = null; model.editTags { it.remove(tag.id) } }) { Text("Remove tag", color = alpine.danger) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
+    }
 }
 
-/* The presets, a palette, or any hex colour typed in, as the web offers. */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+/* The presets the web offers, as round swatches with a check, or a custom colour typed as a hex. */
 @Composable
-fun ColourDialog(current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val alpine = Alpine.colors
+    var choice by rememberSaveable { mutableStateOf(current) }
     var hex by rememberSaveable { mutableStateOf(if (current.startsWith("#")) current else "") }
-    val palette = com.hushos.app.data.TagRegistry.PRESETS + listOf("#d92d20", "#f79009", "#12b76a", "#0ba5ec", "#6172f3", "#9e77ed", "#dd2590", "#7a5c3a", "#475467", "#101828")
+    val valid = choice in OFFERED_TAG_COLOURS || Regex("^#[0-9a-fA-F]{6}$").matches(choice)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tag colour") },
         text = {
             Column {
-                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (colour in palette) Box(
-                        Modifier.size(34.dp).background(tagColour(colour), CircleShape)
-                            .then(if (colour == current) Modifier.border(3.dp, MaterialTheme.colorScheme.onSurface, CircleShape) else Modifier)
-                            .clickable { onPick(colour) },
-                    )
+                Text("For “$name”", modifier = Modifier.padding(bottom = 16.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    for (colour in OFFERED_TAG_COLOURS) {
+                        val on = colour == choice
+                        Box(
+                            Modifier.size(44.dp)
+                                .then(if (on) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier)
+                                .padding(4.dp).background(tagColour(colour), CircleShape).clip(CircleShape)
+                                .selectable(selected = on, role = androidx.compose.ui.semantics.Role.RadioButton) { choice = colour; hex = "" }
+                                .semantics { contentDescription = colour.replaceFirstChar { it.uppercase() } },
+                            contentAlignment = Alignment.Center,
+                        ) { if (on) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(20.dp)) }
+                    }
                 }
-                OutlinedTextField(value = hex, onValueChange = { hex = it.lowercase() }, singleLine = true, label = { Text("Any colour, as #rrggbb") }, modifier = Modifier.padding(top = 16.dp).fillMaxWidth())
+                OutlinedTextField(
+                    value = hex, onValueChange = { hex = it.trim(); if (Regex("^#[0-9a-fA-F]{6}$").matches(hex)) choice = hex.lowercase() },
+                    singleLine = true, label = { Text("Custom colour") }, placeholder = { Text("#7c5cbf") },
+                    leadingIcon = { if (choice.startsWith("#")) TagDot(choice, 18.dp) },
+                    modifier = Modifier.padding(top = 16.dp).fillMaxWidth(),
+                )
             }
         },
-        confirmButton = { TextButton(enabled = Regex("^#[0-9a-f]{6}$").matches(hex), onClick = { onPick(hex) }) { Text("Use colour") } },
+        confirmButton = { TextButton(enabled = valid, onClick = { onPick(choice) }) { Text("Use colour") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
-/* Shared: what other people gave this account, each opened with the identity keys and browsable like a folder. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SharedScreen(model: DriveViewModel, state: DriveState) {
-    val stack = remember { mutableStateListOf<Opened>() }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var selected by remember { mutableStateOf<Opened?>(null) }
-    var linkText by remember { mutableStateOf("") }
-    var openLink by remember { mutableStateOf<String?>(null) }
-    var reporting by remember { mutableStateOf<Opened?>(null) }
-    var showingContacts by remember { mutableStateOf(false) }
-    var byMe by rememberSaveable { mutableStateOf(false) }
-    var mine by remember { mutableStateOf<List<SharedByMe>?>(null) }
-    var managing by remember { mutableStateOf<Opened?>(null) }
-    LaunchedEffect(byMe, managing) { if (byMe && managing == null) mine = model.sharedByMe() }
-    openLink?.let { url ->
-        LinkBrowser(state.origin, url) { openLink = null }
-        return
-    }
-    stack.firstOrNull()?.let { root ->
-        // A shared folder gets the full browse screen: search, select, paste, add, all in the granter's workspace.
-        BrowseScreen(model, state, start = root) { stack.clear() }
-        return
-    }
-    LaunchedEffect(Unit) { model.refreshShares() }
-    val current = stack.lastOrNull()
-    LaunchedEffect(current?.id) { current?.let { if (!state.folders.containsKey(it.id)) model.refresh(it.id) } }
-    BackHandler(enabled = stack.isNotEmpty()) { stack.removeAt(stack.lastIndex) }
-    Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = {
-        TopAppBar(title = { Text(current?.name ?: "Shared") },
-            navigationIcon = { if (current != null) IconButton(onClick = { stack.removeAt(stack.lastIndex) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
-            actions = { if (current == null) IconButton(onClick = { showingContacts = true }) { Icon(Icons.Outlined.Contacts, "Contacts") } })
-    }) { padding ->
-        if (current != null) {
-            val items = state.folders[current.id] ?: emptyList()
-            LazyColumn(Modifier.padding(padding).fillMaxSize()) {
-                items(items, key = { it.id }) { item ->
-                    NodeRow(model, state, item,
-                        onClick = { if (item.isFolder) stack.add(item) else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item)) } } },
-                        onLongClick = { selected = item })
-                }
-            }
-        } else {
-            PullToRefreshBox(isRefreshing = state.busy, onRefresh = { model.refreshShares() }, modifier = Modifier.padding(padding)) {
-                val shares = state.shares
-                if (shares != null && shares.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Folders and files others share with you appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(32.dp))
-                }
-                LazyColumn(Modifier.fillMaxSize()) {
-                    item(key = "which") {
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            SegmentedButton(selected = !byMe, onClick = { byMe = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("With me") }
-                            SegmentedButton(selected = byMe, onClick = { byMe = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("By me") }
-                        }
-                    }
-                    if (byMe) {
-                        val rows = mine
-                        if (rows != null && rows.isEmpty()) item { Text("You have not shared anything yet. Long-press an item and choose Share.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(24.dp)) }
-                        items(rows.orEmpty(), key = { it.id }) { row ->
-                            val detail = row.share?.let { "With " + it.granteeName.ifEmpty { it.granteeEmail } + " · " + (if (it.role == "editor") "can edit" else "can view") }
-                                ?: row.link?.let { "Link · " + (if (it.useCount == 1) "opened once" else "opened ${it.useCount} times") + (if (it.hasPassword) " · password" else "") } ?: ""
-                            androidx.compose.material3.ListItem(
-                                headlineContent = { Text(row.item?.name ?: "Item outside this workspace") },
-                                supportingContent = { Text(detail) },
-                                leadingContent = { Icon(if (row.link != null) Icons.Outlined.Link else Icons.Outlined.Person, null, tint = MaterialTheme.colorScheme.primary) },
-                                modifier = Modifier.clickable(enabled = row.item != null) { managing = row.item },
-                            )
-                        }
-                        return@LazyColumn
-                    }
-                    item(key = "open-link") {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            OutlinedTextField(value = linkText, onValueChange = { linkText = it }, singleLine = true, label = { Text("Paste a HushOS link") }, modifier = Modifier.weight(1f))
-                            TextButton(enabled = linkText.contains("/s/"), onClick = { openLink = linkText.trim() }, modifier = Modifier.padding(start = 8.dp)) { Text("Open") }
-                        }
-                    }
-                    items(shares.orEmpty(), key = { it.share.id }) { mount ->
-                        val granter = mount.share.granterName.ifEmpty { mount.share.granterEmail }
-                        androidx.compose.material3.ListItem(
-                            headlineContent = { Text(mount.root?.name ?: "Shared folder") },
-                            supportingContent = { Text(mount.error ?: "From $granter · " + mount.share.role.replaceFirstChar { it.uppercase() }) },
-                            leadingContent = { Icon(if (mount.share.isFolder) Icons.Outlined.Folder else Icons.Outlined.UploadFile, null, tint = MaterialTheme.colorScheme.primary) },
-                            trailingContent = { if (mount.root != null) IconButton(onClick = { reporting = mount.root }) { Icon(Icons.Outlined.Flag, "Report") } },
-                            modifier = Modifier.clickable(enabled = mount.root != null) {
-                                mount.root?.let { root -> if (root.isFolder) stack.add(root) else scope.launch { model.download(root)?.let { openWith(context, it, mimeOf(root)) } } }
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-    selected?.let { item -> ItemActions(model, state, item) { selected = null } }
-    reporting?.let { item -> ReportDialog(item, dismiss = { reporting = null }) { category, reason, email -> model.report(item, category, reason, email) } }
-    if (showingContacts) ContactsSheet(model) { showingContacts = false }
-    managing?.let { item -> LinkSheet(model, item) { managing = null } }
-}
-
+/*
+ * Trash, as the board draws it on every client: a line saying how long things
+ * stay, rows saying where each was and when it went, a tap for the item's sheet
+ * (Restore, or Restore to Files when its folder is gone, and Delete forever,
+ * which asks), long press to select, and Empty Trash, which asks with the count.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
+    val alpine = Alpine.colors
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var deleting by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
     // Rows picked to restore or delete together; a long press starts it, as in Files.
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmMany by rememberSaveable { mutableStateOf(false) }
@@ -698,6 +258,9 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
     val chosen = state.trash.filter { it.item.id in picked }
     BackHandler(enabled = picked.isNotEmpty()) { picked = emptySet() }
     LaunchedEffect(Unit) { model.refreshTrash() }
+    // A partial restore's banner lasts while Trash is open: leaving clears it, a rotation or a theme change doesn't.
+    val activity = LocalContext.current.let { generateSequence(it) { c -> (c as? android.content.ContextWrapper)?.baseContext }.filterIsInstance<android.app.Activity>().firstOrNull() }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) model.clearRestoreProblem() } }
     Scaffold(contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0), topBar = {
         if (picked.isNotEmpty()) TopAppBar(
             title = { Text("${picked.size} selected") },
@@ -708,64 +271,155 @@ fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? 
                 IconButton(enabled = !busy, onClick = { model.restoreMany(chosen); picked = emptySet() }) { Icon(Icons.Outlined.Restore, "Restore") }
                 IconButton(enabled = !busy, onClick = { confirmMany = true }) { Icon(Icons.Outlined.DeleteForever, "Delete forever") }
             },
-        ) else TopAppBar(title = { Text("Trash") }, navigationIcon = { onBack?.let { IconButton(onClick = it) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } } }, actions = {
-            if (state.emptyingTrash) Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 16.dp)) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Text("Emptying…", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 8.dp))
-            } else TextButton(enabled = state.trash.isNotEmpty(), onClick = { confirmEmpty = true }) { Text("Empty") }
-        })
+        ) else DestinationBar("Trash", onBack = onBack) {
+            if (!state.emptyingTrash && state.trash.isNotEmpty()) TextButton(onClick = { confirmEmpty = true }) { Text("Empty Trash") }
+        }
     }) { padding ->
-        PullToRefreshBox(isRefreshing = state.refreshingTrash, onRefresh = { model.refreshTrash(pulled = true) }, modifier = Modifier.padding(padding)) {
-            if (state.trash.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Items you delete stay here until you remove them.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            LazyColumn(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(padding)) {
+        if (state.unreachable) OfflineCapsule()
+        PullToRefreshBox(isRefreshing = state.refreshingTrash, onRefresh = { model.refreshTrash(pulled = true) }, modifier = Modifier.weight(1f)) {
+            if (state.trash.isEmpty()) EmptyState("Trash is empty", "Items you move to the Trash stay here for 30 days.", icon = Icons.Outlined.Delete,
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
+            else LazyColumn(Modifier.fillMaxSize()) {
+                // Emptying: the count and a bar under the top bar; otherwise how long things stay.
+                val emptying = state.emptying
+                if (emptying != null) item(key = "emptying") {
+                    Column(Modifier.padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S3).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                        verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                        Row(Modifier.fillMaxWidth()) {
+                            Text("Emptying the Trash…", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                            Text("${emptying.first} of ${emptying.second}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                        }
+                        LinearProgressIndicator(progress = { if (emptying.second == 0) 1f else emptying.first / emptying.second.toFloat() }, modifier = Modifier.fillMaxWidth(),
+                            color = alpine.primary, trackColor = alpine.tint, drawStopIndicator = {})
+                    }
+                } else item(key = "retention") {
+                    Text("Items stay here for 30 days, then they’re deleted for good.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+                        modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+                }
+                state.restoreProblem?.let { problem ->
+                    item(key = "restore-problem") {
+                        RestoreProblemBanner(problem, retry = { model.restoreMany(problem.failed.map { it.first }) }, dismiss = model::clearRestoreProblem)
+                    }
+                }
                 items(state.trash, key = { it.item.id }) { entry ->
-                    val trashed = entry.item.node.trashedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
-                        ?.let { "Trashed " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(it)) }
-                    // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action.
-                    val working = state.emptyingTrash || entry.item.id in state.trashWorking
+                    // Mid-way through a restore or delete, or while the whole trash empties, a row takes no second action;
+                    // only the row being deleted spins.
+                    val spinning = entry.item.id in state.trashWorking
+                    val failed = state.restoreProblem?.failed?.any { it.first.item.id == entry.item.id } == true
+                    val working = state.emptyingTrash || spinning
                     val toggle = { picked = if (entry.item.id in picked) picked - entry.item.id else picked + entry.item.id }
                     NodeRow(
                         model, state, entry.item,
                         onClick = { if (!working) { if (picked.isNotEmpty()) toggle() else selected = entry } },
                         onLongClick = { if (!working) toggle() },
-                        note = trashed, working = working, selected = entry.item.id in picked,
+                        note = if (failed) "Couldn’t be restored" else trashLine(entry), noteIsProblem = failed, working = spinning, selected = entry.item.id in picked,
                     )
                 }
             }
         }
+        }
     }
     selected?.let { entry ->
+        Sheet(onDismissRequest = { selected = null }) {
+            Column(Modifier.padding(bottom = AlpineSpace.S4)) {
+                ItemHeader(model, state, entry.item, subtitle = trashLine(entry))
+                HorizontalDivider(Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1), color = alpine.divider)
+                TrashSheetRow(
+                    if (entry.parentTrashed) "Restore to Files" else "Restore",
+                    if (entry.parentTrashed) "Its folder “${entry.wasIn ?: "its folder"}” is in the Trash too." else entry.wasIn?.let { "Back to $it" },
+                    Icons.Outlined.Restore,
+                ) { model.restore(entry); selected = null }
+                TrashSheetRow("Delete forever", null, Icons.Outlined.DeleteForever, danger = true) { deleting = entry; selected = null }
+            }
+        }
+    }
+    deleting?.let { entry ->
         AlertDialog(
-            onDismissRequest = { selected = null },
-            title = { Text(entry.item.name) },
-            text = { Text(if (entry.parentTrashed) "Its folder is in the trash too; restoring puts it at the top level." else "Restore it, or delete it forever.") },
-            confirmButton = { TextButton(onClick = { model.restore(entry); selected = null }) { Text("Restore") } },
-            dismissButton = { TextButton(onClick = { model.purge(entry); selected = null }) { Text("Delete forever", color = MaterialTheme.colorScheme.error) } },
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete “${entry.item.name}” forever?") },
+            text = { Text(if (entry.item.isFolder) "Everything inside goes too. It can’t be restored after this." else "It can’t be restored after this.") },
+            confirmButton = { TextButton(onClick = { model.purge(entry); deleting = null }) { Text("Delete forever", color = alpine.danger) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
     }
     if (confirmMany) {
         AlertDialog(
             onDismissRequest = { confirmMany = false },
             title = { Text(if (chosen.size == 1) "Delete “${chosen[0].item.name}” forever?" else "Delete ${chosen.size} items forever?") },
-            text = { Text("This cannot be undone.") },
-            confirmButton = { TextButton(onClick = { model.purgeMany(chosen); confirmMany = false; picked = emptySet() }) { Text("Delete forever", color = MaterialTheme.colorScheme.error) } },
+            text = { Text(if (chosen.size == 1) "It can’t be restored after this." else "They can’t be restored after this.") },
+            confirmButton = { TextButton(onClick = { model.purgeMany(chosen); confirmMany = false; picked = emptySet() }) { Text("Delete forever", color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { confirmMany = false }) { Text("Cancel") } },
         )
     }
     if (confirmEmpty) {
         AlertDialog(
             onDismissRequest = { confirmEmpty = false },
-            title = { Text("Empty the trash?") },
-            text = { Text("${state.trash.size} items will be deleted forever. This cannot be undone.") },
-            confirmButton = { TextButton(onClick = { model.emptyTrash(); confirmEmpty = false }) { Text("Empty", color = MaterialTheme.colorScheme.error) } },
+            title = { Text("Empty the Trash?") },
+            text = { Text(if (state.trash.size == 1) "The 1 item in it is deleted for good. This can’t be undone." else "All ${state.trash.size} items are deleted for good. This can’t be undone.") },
+            confirmButton = { TextButton(onClick = { model.emptyTrash(); confirmEmpty = false }) { Text("Empty Trash", color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Cancel") } },
         )
     }
 }
 
-fun sortLabel(key: String) = when (key) { "modified" -> "Modified"; "size" -> "Size"; else -> "Name" }
+/*
+ * A batch restore that partly failed, as the board draws it: it stays until dismissed,
+ * saying what came back, what didn't and why, what to do, and where an orphan went.
+ */
+@Composable
+private fun RestoreProblemBanner(problem: RestoreProblem, retry: () -> Unit, dismiss: () -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(16.dp)
+    val why = if (problem.offline) " because the connection dropped. Try again once you’re back online." else ". " + (problem.failed.firstOrNull()?.second ?: "Try again.")
+    val failedLine = (if (problem.failed.size == 1) "“${problem.failed[0].first.item.name}” couldn’t be restored" else "${problem.failed.size} items couldn’t be restored") + why
+    val movedLine = problem.moved.firstOrNull()?.let { (item, folder) ->
+        if (problem.moved.size == 1) "“${item.name}” went back to Files, because its folder${folder?.let { " “$it”" } ?: ""} is still in the Trash."
+        else "${problem.moved.size} items went back to Files, because their folders are still in the Trash."
+    }
+    Column(
+        Modifier.padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S2).fillMaxWidth()
+            .background(alpine.dangerSoft, shape)
+            .then(if (alpine.high) Modifier.border(1.dp, alpine.edge, shape) else Modifier)
+            .semantics(mergeDescendants = false) { liveRegion = LiveRegionMode.Polite }
+            .padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S4, bottom = AlpineSpace.S2),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("Restored ${problem.restored} of ${problem.total}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = alpine.danger)
+        Text(failedLine, style = MaterialTheme.typography.bodyMedium, color = alpine.ink, modifier = Modifier.padding(end = AlpineSpace.S2))
+        movedLine?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S2)) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2, Alignment.End)) {
+            TextButton(onClick = dismiss) { Text("Dismiss") }
+            androidx.compose.material3.FilledTonalButton(onClick = retry) { Text("Try again") }
+        }
+    }
+}
+
+/* "Was in Work · Trashed today": where it was and when it went, so Restore isn't a guess. */
+private fun trashLine(entry: com.hushos.app.data.TrashItem): String {
+    val trashed = entry.item.node.trashedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
+        ?.let { whenText(it) }?.let { if (it.startsWith("Today")) "today" else if (it == "Yesterday") "yesterday" else it }
+    return listOfNotNull(entry.wasIn?.let { "Was in $it" }, trashed?.let { "Trashed $it" }).joinToString(" · ")
+}
+
+/* A trashed item's sheet row: the action and, under it, where it goes. */
+@Composable
+private fun TrashSheetRow(label: String, detail: String?, icon: androidx.compose.ui.graphics.vector.ImageVector, danger: Boolean = false, onClick: () -> Unit) {
+    val alpine = Alpine.colors
+    val color = if (danger) alpine.danger else alpine.ink
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick).padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = color)
+        Column(Modifier.padding(start = AlpineSpace.S4)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, color = color)
+            detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
+        }
+    }
+}
+
+fun sortLabel(key: String) = when (key) { "modified" -> "Changed"; "size" -> "Size"; else -> "Name" }
 
 /* Orders a folder's items by `key`; folders come first whichever key is chosen, as every drive does it. */
 fun sortItems(items: List<Opened>, key: String, ascending: Boolean): List<Opened> {

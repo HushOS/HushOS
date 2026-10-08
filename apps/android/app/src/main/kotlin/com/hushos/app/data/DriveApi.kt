@@ -71,6 +71,8 @@ data class UploadBegun(val uploadId: String, val parts: List<PartUrl>)
 data class VersionListView(
     val id: String, val objectId: String, val contentKeyEnvelope: String, val status: String, val contentSuite: UInt,
     val contentNonce: String, val plaintextSize: String?, val current: Boolean, val createdAt: String,
+    /* When a newer version replaced it; the server deletes it 30 days later. */
+    val supersededAt: String? = null,
 )
 data class StorageBreakdown(val trashBytes: Long, val trashItems: Int, val supersededBytes: Long, val supersededVersions: Int)
 data class ShareView(
@@ -83,7 +85,7 @@ data class ShareView(
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
 /* The Drive API over HttpURLConnection with the stored session cookie; every method is one route. */
-class DriveApi(val session: Shared.Session) {
+class DriveApi(val session: Shared.Session) : RootApi {
     private val origin = session.origin
     private val cookie = (if (origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
@@ -154,7 +156,8 @@ class DriveApi(val session: Shared.Session) {
         get("/nodes/$nodeId/versions" + q("workspaceId" to workspaceId)).getJSONArray("versions").objects().map {
             VersionListView(it.getString("id"), it.getString("objectId"), it.getString("contentKeyEnvelope"), it.getString("status"),
                 it.getInt("contentSuite").toUInt(), it.getString("contentNonce"),
-                it.optString("plaintextSize").takeIf { _ -> !it.isNull("plaintextSize") }, it.getBoolean("current"), it.getString("createdAt"))
+                it.optString("plaintextSize").takeIf { _ -> !it.isNull("plaintextSize") }, it.getBoolean("current"), it.getString("createdAt"),
+                if (it.isNull("supersededAt")) null else it.optString("supersededAt").takeIf { s -> s.isNotEmpty() })
         }
 
     fun trashListing(workspaceId: String, after: String?): TrashListing =
@@ -194,6 +197,14 @@ class DriveApi(val session: Shared.Session) {
         get("/nodes/$nodeId/links" + q("workspaceId" to workspaceId)).getJSONArray("links").objects().map(LinkView::from)
 
     fun createLink(nodeId: String, body: JSONObject): LinkView = LinkView.from(send("/nodes/$nodeId/links", body).getJSONObject("link"))
+
+    /* A new password (sealed again on this device) and or end date for a link; its address stays the same. */
+    fun updateLink(linkId: String, body: JSONObject): LinkView = LinkView.from(send("/links/$linkId", body, "PATCH").getJSONObject("link"))
+
+    /* Deletes an earlier version for good; the current one cannot be. */
+    fun discardVersion(versionId: String, workspaceId: String) {
+        send("/versions/$versionId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+    }
 
     fun revokeLink(linkId: String, workspaceId: String) {
         send("/links/$linkId", JSONObject().put("workspaceId", workspaceId), "DELETE")
@@ -266,8 +277,12 @@ class DriveApi(val session: Shared.Session) {
 
     // Writes
 
-    fun allocateEpoch(workspaceId: String): ULong =
+    override fun allocateEpoch(workspaceId: String): ULong =
         send("/workspaces/$workspaceId/epochs", JSONObject().put("count", 1)).getLong("from").toULong()
+
+    override fun createRoot(workspaceId: String, root: RootInput): NodeView =
+        NodeView.from(send("/workspaces/$workspaceId/root", JSONObject().put("id", root.id).put("keyEpoch", root.keyEpoch.toLong())
+            .put("parentKeyEpoch", root.parentKeyEpoch.toLong()).put("keyEnvelope", root.keyEnvelope).put("metadataEnvelope", root.metadataEnvelope)).getJSONObject("root"))
 
     fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
         NodeView.from(send("/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
@@ -300,6 +315,10 @@ class DriveApi(val session: Shared.Session) {
     /* One batch of the trash, as the server takes it; `remaining` says whether to ask again. */
     fun emptyTrash(workspaceId: String): EmptyTrashResult =
         send("/workspaces/$workspaceId/trash/empty", JSONObject()).let { EmptyTrashResult(it.getInt("purged"), it.getInt("remaining")) }
+
+    /* Removes every file's earlier version now, a batch at a time; the same shape as emptying the trash. */
+    fun discardSuperseded(workspaceId: String): EmptyTrashResult =
+        send("/workspaces/$workspaceId/versions/discard-superseded", JSONObject()).let { EmptyTrashResult(it.optInt("purged"), it.optInt("remaining")) }
 
     fun restoreVersion(versionId: String, workspaceId: String): NodeView =
         NodeView.from(send("/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))

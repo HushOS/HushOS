@@ -1,5 +1,5 @@
 import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { OperatorHeader } from '@/components/operator';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -33,8 +33,8 @@ export const Route = createFileRoute('/_authenticated/app/admin/reports/')({
     },
     validateSearch: (
         search: Record<string, unknown>,
-    ): { status?: 'all'; category?: ReportCategory } => ({
-        ...(search.status === 'all' ? { status: 'all' as const } : {}),
+    ): { status?: 'all' | 'held'; category?: ReportCategory } => ({
+        ...(search.status === 'all' || search.status === 'held' ? { status: search.status } : {}),
         ...((REPORT_CATEGORIES as readonly string[]).includes(String(search.category))
             ? { category: search.category as ReportCategory }
             : {}),
@@ -61,12 +61,11 @@ const statusTone = {
 function ReportsPage() {
     const search = Route.useSearch();
     const navigate = Route.useNavigate();
-    const status: ReportStatus | 'all' = search.status ?? 'open';
+    const status: ReportStatus | 'all' | 'held' = search.status ?? 'open';
     const reports = useQuery(reportsQueryOptions({ status, category: search.category }));
     return (
         <div className="flex flex-1 flex-col">
-            <PageHeader
-                eyebrow="Operator"
+            <OperatorHeader
                 title="Reports"
                 description="What people reported through a link or a share. Opening one hands you its key, sealed to you by the reporter's device, and puts the look on the record."
             >
@@ -87,6 +86,15 @@ function ReportsPage() {
                         </Link>
                         <Link
                             to="/app/admin/reports"
+                            search={{ status: 'held', category: search.category }}
+                            role="tab"
+                            aria-selected={status === 'held'}
+                            className={`${tab} ${status === 'held' ? tabChosen : tabIdle}`}
+                        >
+                            On hold
+                        </Link>
+                        <Link
+                            to="/app/admin/reports"
                             search={{ status: 'all', category: search.category }}
                             role="tab"
                             aria-selected={status === 'all'}
@@ -100,7 +108,7 @@ function ReportsPage() {
                         onValueChange={(value) =>
                             void navigate({
                                 search: {
-                                    ...(status === 'all' ? { status: 'all' as const } : {}),
+                                    ...(status === 'all' || status === 'held' ? { status } : {}),
                                     ...(value && value !== 'any'
                                         ? { category: value as ReportCategory }
                                         : {}),
@@ -122,7 +130,7 @@ function ReportsPage() {
                         </SelectContent>
                     </Select>
                 </div>
-            </PageHeader>
+            </OperatorHeader>
             {reports.isPending && (
                 <div className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
                     <Spinner />
@@ -148,7 +156,11 @@ function ReportsPage() {
                     </p>
                     {reports.data.reports.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
-                            {status === 'open' ? 'Nothing open.' : 'No reports match.'}
+                            {status === 'open'
+                                ? 'Nothing open.'
+                                : status === 'held'
+                                  ? 'Nothing on hold.'
+                                  : 'No reports match.'}
                         </p>
                     ) : (
                         <div className="overflow-x-auto rounded-md border border-rule">

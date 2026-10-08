@@ -1,5 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, mailSubjects, newContext, registerAccount, sampleFiles } from './helpers';
+import {
+    grip,
+    mailSubjects,
+    newContext,
+    newFolder,
+    newLink,
+    registerAccount,
+    rotationsDone,
+    sampleFiles,
+    shareWith,
+    waitForRotation,
+} from './helpers';
 
 /*
  * Sharing to an account, end to end as two people: the owner pins the other
@@ -36,20 +47,20 @@ test.afterAll(async () => {
 });
 
 test('the owner pins the guest and shares a folder as editor', async () => {
-    await owner.goto('/app/contacts');
-    await owner.getByLabel('Email').fill(guestEmail);
-    await owner.getByRole('button', { name: 'Look up' }).click();
-    await expect(owner.locator('[data-fingerprint]')).toBeVisible({ timeout: 60_000 });
+    await owner.goto('/app/people');
+    await owner.getByRole('button', { name: 'Add someone' }).click();
+    await dialog(owner).getByLabel('Email').fill(guestEmail);
+    await dialog(owner).getByRole('button', { name: 'Look up' }).click();
+    await expect(dialog(owner).locator('[data-fingerprint-words]')).toBeVisible({
+        timeout: 60_000,
+    });
     // The guest's post-quantum key is served with a binding their identity signed.
-    await expect(owner.locator('[data-kem]')).toHaveAttribute('data-kem', 'signed');
-    await owner.getByRole('button', { name: 'Pin contact' }).click();
+    await expect(dialog(owner).locator('[data-kem]')).toHaveAttribute('data-kem', 'signed');
+    await dialog(owner).getByRole('button', { name: 'They match' }).click();
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 
     await owner.goto('/app/drive');
-    await owner
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Project');
     await owner.keyboard.press('Enter');
     await row(owner, 'Project').getByRole('link', { name: 'Project' }).click();
@@ -61,22 +72,18 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await owner.locator('[data-crumb-id]').first().click();
     await row(owner, 'Project').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await expect(dialog(owner)).toContainText('Share “Project”');
-    await dialog(owner).getByRole('combobox', { name: 'Contact' }).click();
-    await owner.getByRole('option', { name: /E2E Tester/ }).click();
-    await dialog(owner).getByRole('radio', { name: 'Can edit' }).check();
-    await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(dialog(owner)).toContainText('Who can open this?');
+    await expect(dialog(owner)).toContainText('Project');
+    await shareWith(owner, /E2E Tester/, 'Can edit');
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
-    await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('can edit');
-    // Sealed hybrid: X25519 and ML-KEM-768 together, which the dialog says.
-    await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText(
-        'post-quantum',
+    await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('Can edit');
+    // Sealed hybrid: X25519 and ML-KEM-768 together.
+    await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toHaveAttribute(
+        'data-suite',
+        '2',
     );
     // A link too, with a password: it has to survive the rotation that follows the revocation.
-    await dialog(owner).getByRole('button', { name: 'Link', exact: true }).click();
-    await dialog(owner).getByLabel('Password').fill('open sesame');
-    await dialog(owner).getByRole('button', { name: 'Create link' }).click();
-    linkUrl = (await dialog(owner).locator('button[aria-label="Copy Link"]').textContent())!.trim();
+    linkUrl = await newLink(owner, 'open sesame');
     await dialog(owner).getByRole('button', { name: 'Done' }).first().click();
     await owner.keyboard.press('Escape');
     await expect(dialog(owner)).toHaveCount(0);
@@ -90,9 +97,9 @@ test('the guest sees the share, opens it with the owner’s key pinned on first 
     await guest.goto('/app/shared');
     const item = guest.locator('[data-shared="Project"]');
     await expect(item).toBeVisible({ timeout: 60_000 });
-    await expect(item).toContainText('you can edit');
+    await expect(item).toContainText('From E2E · can edit');
     // First use pinned the owner: the contacts page now lists them.
-    await guest.goto('/app/contacts');
+    await guest.goto('/app/people');
     await expect(guest.locator('[data-contact]')).toHaveCount(1, { timeout: 60_000 });
 
     await guest.goto('/app/shared');
@@ -101,7 +108,9 @@ test('the guest sees the share, opens it with the owner’s key pinned on first 
     await expect(row(guest, 'notes.md')).toBeVisible({ timeout: 60_000 });
     // The breadcrumb starts at the share, with a way back to the list; nothing above it shows.
     await expect(
-        guest.locator('nav[aria-label=breadcrumb]').getByRole('link', { name: 'Shared with me' }),
+        guest
+            .locator('nav[aria-label="Folder path"]')
+            .getByRole('link', { name: 'Shared with me' }),
     ).toBeVisible();
     await expect(guest.locator('[data-crumb-id]')).toHaveCount(0);
     // The guest cannot share what is not theirs.
@@ -109,7 +118,7 @@ test('the guest sees the share, opens it with the owner’s key pinned on first 
         .locator('button')
         .first()
         .click({ ...grip, button: 'right' });
-    await expect(guest.getByRole('menuitem', { name: 'Share…' })).toHaveCount(0);
+    await expect(guest.getByRole('menuitem', { name: 'Share', exact: true })).toHaveCount(0);
     await guest.keyboard.press('Escape');
 
     // Preview decrypts on the guest's device with the key the share carried.
@@ -137,12 +146,12 @@ test('a shared folder in the trash leaves both lists, without breaking either, a
     await expect(row(owner, 'Project')).toHaveCount(0);
 
     await owner.goto('/app/shared?view=by-me');
-    await expect(owner.getByText('You are not sharing anything yet.')).toBeVisible({
+    await expect(owner.getByText('You haven’t shared anything yet')).toBeVisible({
         timeout: 60_000,
     });
-    await expect(owner.getByText('Could not load')).toHaveCount(0);
+    await expect(owner.getByText('Couldn’t load what’s shared')).toHaveCount(0);
     await guest.goto('/app/shared');
-    await expect(guest.getByText('Nothing shared with you yet.')).toBeVisible({ timeout: 60_000 });
+    await expect(guest.getByText('Nothing shared with you yet')).toBeVisible({ timeout: 60_000 });
 
     await owner.goto('/app/trash');
     await owner
@@ -150,7 +159,7 @@ test('a shared folder in the trash leaves both lists, without breaking either, a
         .filter({ hasText: 'Project' })
         .getByRole('button', { name: /^Restore/ })
         .click();
-    await expect(owner.getByText('“Project” restored')).toBeVisible();
+    await expect(owner.getByText('Restored “Project” to My files')).toBeVisible();
     await owner.goto('/app/shared?view=by-me');
     await expect(owner.locator(`[data-by-me="${guestEmail}"]`)).toContainText('Project', {
         timeout: 60_000,
@@ -167,16 +176,19 @@ test('stopping the share, from the Shared page’s “by me” view, cuts the gu
     const entry = owner.locator(`[data-by-me="${guestEmail}"]`);
     await expect(entry).toBeVisible({ timeout: 60_000 });
     await expect(entry).toContainText('Project');
+    const rotated = await rotationsDone(owner);
     await entry.getByRole('button', { name: /Stop sharing Project/ }).click();
-    await expect(owner.getByText(/Sharing with E2E Tester stopped/)).toBeVisible();
+    await owner.getByRole('alertdialog').getByRole('button', { name: 'Stop sharing' }).click();
+    await expect(owner.getByText(/E2E Tester can’t open “Project” any more/)).toBeVisible();
     await expect(entry).toHaveCount(0);
-    // Revocation stops the server; the rotation that follows shuts the door.
-    await expect(owner.getByText('Keys rotated')).toBeVisible({ timeout: 120_000 });
-    await expect(owner.getByText(/re-keyed and re-sealed/)).toBeVisible();
+    // Revocation stops the server; the rotation that follows shuts the door, quietly:
+    // stopping already said what happened, so no toast narrates the re-keying.
+    await waitForRotation(owner, rotated);
+    await expect(owner.getByText(/Rotating the keys|Keys rotated|re-keyed/)).toHaveCount(0);
 
     const url = guest.url();
     await guest.goto('/app/shared');
-    await expect(guest.getByText('Nothing shared with you yet.')).toBeVisible({ timeout: 60_000 });
+    await expect(guest.getByText('Nothing shared with you yet')).toBeVisible({ timeout: 60_000 });
     await guest.goto(url);
     await expect(guest.getByText('This item no longer exists.')).toBeVisible({ timeout: 60_000 });
 });
@@ -217,17 +229,15 @@ test('a shared file, with no folder to open it from, opens in the viewer on both
     await expect(row(owner, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await row(owner, 'notes.md').locator('button').first().click(grip);
     await owner.getByRole('button', { name: 'Share', exact: true }).click();
-    await expect(dialog(owner)).toContainText('Share “notes.md”');
-    await dialog(owner).getByRole('combobox', { name: 'Contact' }).click();
-    await owner.getByRole('option', { name: /E2E Tester/ }).click();
-    await dialog(owner).getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(dialog(owner)).toContainText('notes.md');
+    await shareWith(owner, /E2E Tester/);
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await owner.keyboard.press('Escape');
 
     await guest.goto('/app/shared');
     const received = guest.locator('[data-shared="notes.md"]');
     await expect(received).toBeVisible({ timeout: 60_000 });
-    await received.getByRole('button', { name: 'notes.md' }).click();
+    await received.getByRole('button', { name: 'notes.md', exact: true }).click();
     await expect(dialog(guest).locator('.rt-markdown')).toContainText('Notes', { timeout: 60_000 });
     await guest.keyboard.press('Escape');
 

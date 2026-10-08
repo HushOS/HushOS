@@ -1,360 +1,413 @@
 ---
 version: alpha
-name: HushOS Paper
-description: Design system for HushOS, an open-source, self-hostable, end-to-end encrypted productivity suite. Your files are documents, so the drive is a desk. A warm desk, sheets of paper lying on it, ink-blue text, one blue, hairline rules. Dark tokens carry a -dark suffix.
+name: HushOS Alpine
+description: Design system for HushOS, an open-source, self-hostable, end-to-end encrypted productivity suite, on the web, iOS and Android. Hush blue on navy-tinted neutrals, white surfaces on a cool ground, calm 56px rows, one brand colour. Every colour role has four schemes; dark, light high contrast and dark high contrast carry the -dark, -light-high and -dark-high suffixes.
 colors:
+    surface: '#ffffff'
+    surface-dark: '#161a26'
+    surface-light-high: '#ffffff'
+    surface-dark-high: '#0a0d16'
+    ground: '#f3f4f8'
+    ground-dark: '#0e111a'
+    ground-light-high: '#f2f4f9'
+    ground-dark-high: '#000000'
+    ink: '#17203a'
+    ink-dark: '#e4e8f4'
+    ink-light-high: '#070b18'
+    ink-dark-high: '#ffffff'
+    ink-muted: '#5a6380'
+    ink-muted-dark: '#9aa3be'
+    ink-muted-light-high: '#2e3650'
+    ink-muted-dark-high: '#d3d9ea'
+    rule: '#e2e5ee'
+    rule-dark: '#262b3a'
+    rule-light-high: '#5f6886'
+    rule-dark-high: '#8d95af'
+    field: '#7a8299'
+    field-dark: '#6a7390'
+    field-light-high: '#1b2238'
+    field-dark-high: '#d3d9ea'
     primary: '#2c428e'
-    primary-hover: '#24387a'
-    on-primary: '#fcfbf7'
     primary-dark: '#aab8f4'
-    primary-hover-dark: '#bcc7f8'
+    primary-light-high: '#1a2c6b'
+    primary-dark-high: '#c9d3ff'
+    primary-pressed: '#24387a'
+    primary-pressed-dark: '#bcc7f8'
+    primary-pressed-light-high: '#0f1e52'
+    primary-pressed-dark-high: '#e0e6ff'
+    on-primary: '#ffffff'
     on-primary-dark: '#121833'
-    ink: '#1c2848'
-    ink-dark: '#dfe3f2'
-    background: '#e6e2d9'
-    background-dark: '#13151b'
-    foreground: '#1c2848'
-    foreground-dark: '#dfe3f2'
-    surface: '#fcfbf7'
-    surface-dark: '#1c1f28'
-    surface-raised: '#fffef9'
-    surface-raised-dark: '#21242e'
-    muted: '#f1efe7'
-    muted-dark: '#252935'
-    on-muted: '#5a6483'
-    on-muted-dark: '#969eb8'
-    accent: '#e3e7f5'
-    accent-dark: '#262c45'
-    on-accent: '#2c428e'
-    on-accent-dark: '#b3c0f7'
-    border: '#d3d1ca'
-    border-dark: '#30343f'
-    input-border: '#b9bccb'
-    input-border-dark: '#3a4052'
-    success: '#2a7a5e'
+    on-primary-light-high: '#ffffff'
+    on-primary-dark-high: '#05081a'
+    tint: '#dce3f7'
+    tint-dark: '#232a44'
+    tint-light-high: '#dce2f5'
+    tint-dark-high: '#1f2849'
+    on-tint: '#2c428e'
+    on-tint-dark: '#c0cbf8'
+    on-tint-light-high: '#122057'
+    on-tint-dark-high: '#e6ebff'
+    folder-back: '#8b9bd3'
+    folder-back-dark: '#3d4c80'
+    folder-back-light-high: '#3e52a0'
+    folder-back-dark-high: '#7d8fd6'
+    folder-front: '#b9c4ea'
+    folder-front-dark: '#52629a'
+    folder-front-light-high: '#5a6db8'
+    folder-front-dark-high: '#aebbee'
+    warning: '#87530d'
+    warning-dark: '#e3b46a'
+    warning-light-high: '#5e3700'
+    warning-dark-high: '#ffd38f'
+    warning-soft: '#f7eddc'
+    warning-soft-dark: '#33281a'
+    warning-soft-light-high: '#f7eddc'
+    warning-soft-dark-high: '#2b1f0b'
+    success: '#24704f'
     success-dark: '#7fd1ad'
-    on-success: '#fcfbf7'
-    on-success-dark: '#0d1f18'
-    success-soft: '#dcede4'
-    success-soft-dark: '#1a2f29'
-    warning: '#9a5a12'
-    warning-dark: '#e8b774'
-    on-warning: '#fcfbf7'
-    on-warning-dark: '#241707'
-    warning-soft: '#f4e6cf'
-    warning-soft-dark: '#33291a'
-    error: '#a8322a'
-    error-dark: '#f09a90'
-    on-error: '#fcfbf7'
-    on-error-dark: '#2a0f0c'
-    error-soft: '#f5dfdb'
-    error-soft-dark: '#3a2020'
+    success-light-high: '#0c4a30'
+    success-dark-high: '#a3ebc8'
+    success-soft: '#ddefe5'
+    success-soft-dark: '#16302a'
+    success-soft-light-high: '#ddefe5'
+    success-soft-dark-high: '#0e2a20'
+    danger: '#b3261e'
+    danger-dark: '#f2a69f'
+    danger-light-high: '#7e120c'
+    danger-dark-high: '#ffb8b0'
+    danger-soft: '#f8e3e1'
+    danger-soft-dark: '#3a1f1d'
+    danger-soft-light-high: '#f8e3e1'
+    danger-soft-dark-high: '#3d1512'
+    snackbar: '#1e2638'
+    snackbar-dark: '#e4e8f4'
+    snackbar-light-high: '#070b18'
+    snackbar-dark-high: '#ffffff'
+    on-snackbar: '#f1f3f9'
+    on-snackbar-dark: '#17203a'
+    on-snackbar-light-high: '#ffffff'
+    on-snackbar-dark-high: '#05081a'
+    snackbar-action: '#aab8f4'
+    snackbar-action-dark: '#2c428e'
+    snackbar-action-light-high: '#c9d3ff'
+    snackbar-action-dark-high: '#1a2c6b'
+    edge: '#17203a14'
+    edge-dark: '#ffffff14'
+    edge-light-high: '#1b2238'
+    edge-dark-high: '#d3d9ea'
+    avatar1: '#dce3f7'
+    avatar1-dark: '#2a3358'
+    avatar1-light-high: '#dce2f5'
+    avatar1-dark-high: '#1f2849'
+    on-avatar1: '#2c428e'
+    on-avatar1-dark: '#c9d3ff'
+    on-avatar1-light-high: '#122057'
+    on-avatar1-dark-high: '#e6ebff'
+    avatar2: '#eadff3'
+    avatar2-dark: '#3a2c4a'
+    avatar2-light-high: '#e8dcf3'
+    avatar2-dark-high: '#2e2040'
+    on-avatar2: '#563f6e'
+    on-avatar2-dark: '#e2cff4'
+    on-avatar2-light-high: '#3b2453'
+    on-avatar2-dark-high: '#f1e5ff'
+    avatar3: '#f5e6cc'
+    avatar3-dark: '#3d2f17'
+    avatar3-light-high: '#f5e3c4'
+    avatar3-dark-high: '#33240a'
+    on-avatar3: '#6e460c'
+    on-avatar3-dark: '#f3d6a6'
+    on-avatar3-light-high: '#4e2f00'
+    on-avatar3-dark-high: '#ffe2b0'
+    avatar4: '#d9ede3'
+    avatar4-dark: '#183a2d'
+    avatar4-light-high: '#d3eadf'
+    avatar4-dark-high: '#0e2a20'
+    on-avatar4: '#1f6446'
+    on-avatar4-dark: '#a8e6c8'
+    on-avatar4-light-high: '#0c4a30'
+    on-avatar4-dark-high: '#bff3da'
+    scrim: '#17203a59'
+    scrim-dark: '#00000099'
+    scrim-light-high: '#070b1880'
+    scrim-dark-high: '#000000cc'
 typography:
-    headline-display:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 60px
-        fontWeight: 700
-        lineHeight: 1.05
-        letterSpacing: -0.025em
-    headline-lg:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 24px
+    display:
+        fontFamily: Geist Variable
+        fontSize: 72px
+        fontWeight: 800
+        lineHeight: 1.02
+        letterSpacing: -0.035em
+    title-large:
+        fontFamily: Geist Variable
+        fontSize: 34px
+        fontWeight: 800
+        lineHeight: 1.1
+        letterSpacing: -0.03em
+    title:
+        fontFamily: Geist Variable
+        fontSize: 22px
         fontWeight: 700
         lineHeight: 1.25
-        letterSpacing: -0.025em
-    headline-md:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 18px
-        fontWeight: 700
-        lineHeight: 1.35
-    body-lg:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 18px
+        letterSpacing: -0.015em
+    headline:
+        fontFamily: Geist Variable
+        fontSize: 17px
+        fontWeight: 600
+        lineHeight: 1.3
+    body:
+        fontFamily: Geist Variable
+        fontSize: 16px
         fontWeight: 400
-        lineHeight: 1.6
-    body-md:
-        fontFamily: Atkinson Hyperlegible Next Variable
+        lineHeight: 1.55
+    callout:
+        fontFamily: Geist Variable
         fontSize: 15px
         fontWeight: 400
-        lineHeight: 1.6
-    body-sm:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 14px
-        fontWeight: 400
-        lineHeight: 1.6
-    value-mono:
-        fontFamily: Geist Mono Variable
+        lineHeight: 1.45
+    footnote:
+        fontFamily: Geist Variable
         fontSize: 13px
         fontWeight: 400
-        lineHeight: 1.5
-    eyebrow:
-        fontFamily: Atkinson Hyperlegible Next Variable
+        lineHeight: 1.35
+    label:
+        fontFamily: Geist Variable
         fontSize: 12px
         fontWeight: 600
         lineHeight: 1
-    button:
-        fontFamily: Atkinson Hyperlegible Next Variable
-        fontSize: 14px
-        fontWeight: 600
-        lineHeight: 1
+        letterSpacing: 0.06em
+    code:
+        fontFamily: Geist Mono Variable
+        fontSize: 13px
+        fontWeight: 400
+        lineHeight: 1.35
 rounded:
-    xs: 2px
-    md: 3px
-    xl: 4px
+    chip: 6px
+    control: 10px
+    card: 16px
+    sheet: 20px
     full: 9999px
 spacing:
-    base: 4px
-    xs: 4px
-    sm: 8px
-    md: 16px
-    lg: 24px
-    xl: 32px
-    2xl: 48px
-    gutter: 20px
-    gutter-desktop: 40px
-    row-height: 48px
-    control-height: 40px
-    control-height-sm: 32px
-    control-height-lg: 48px
-    sidebar-width: 256px
-    sidebar-width-icon: 48px
-    container-reading: 672px
-    container-auth: 672px
+    space-1: 4px
+    space-2: 8px
+    space-3: 12px
+    space-4: 16px
+    space-6: 24px
+    space-8: 32px
+    space-12: 48px
+    space-20: 80px
+    control: 44px
+    row: 56px
+    row-large: 64px
 components:
-    sheet:
-        backgroundColor: '{colors.surface}'
-        rounded: '{rounded.xs}'
-    card:
-        backgroundColor: '{colors.surface-raised}'
-        rounded: '{rounded.md}'
     button-primary:
         backgroundColor: '{colors.primary}'
         textColor: '{colors.on-primary}'
-        rounded: '{rounded.md}'
-        height: '{spacing.control-height}'
-        padding: 16px
-        typography: '{typography.button}'
-    button-primary-hover:
-        backgroundColor: '{colors.primary-hover}'
+        rounded: '{rounded.control}'
+        height: 36px
+        padding: 14px
+    button-primary-pressed:
+        backgroundColor: '{colors.primary-pressed}'
     button-secondary:
         backgroundColor: '{colors.ink}'
         textColor: '{colors.surface}'
-        rounded: '{rounded.md}'
-        height: '{spacing.control-height}'
+        rounded: '{rounded.control}'
+        height: 36px
     button-outline:
         backgroundColor: '{colors.surface}'
-        textColor: '{colors.foreground}'
-        rounded: '{rounded.md}'
-        height: '{spacing.control-height}'
-        padding: 16px
-    button-outline-hover:
-        backgroundColor: '{colors.muted}'
-    button-ghost:
-        backgroundColor: transparent
-        textColor: '{colors.foreground}'
-        height: '{spacing.control-height}'
+        textColor: '{colors.ink}'
+        rounded: '{rounded.control}'
+        height: 36px
     button-destructive:
-        backgroundColor: '{colors.error}'
-        textColor: '{colors.on-error}'
-        rounded: '{rounded.md}'
-        height: '{spacing.control-height}'
+        backgroundColor: '{colors.danger}'
+        textColor: '{colors.surface}'
+        rounded: '{rounded.control}'
+        height: 36px
     input:
         backgroundColor: '{colors.surface}'
-        textColor: '{colors.foreground}'
-        rounded: '{rounded.md}'
-        height: '{spacing.control-height}'
-        padding: 12px
-        typography: '{typography.body-md}'
-    badge:
-        rounded: '{rounded.xs}'
-        height: 22px
-        padding: 8px
-        typography: '{typography.eyebrow}'
-        backgroundColor: '{colors.accent}'
-        textColor: '{colors.on-accent}'
-    badge-success:
-        backgroundColor: '{colors.success-soft}'
-        textColor: '{colors.success}'
-    badge-warning:
-        backgroundColor: '{colors.warning-soft}'
-        textColor: '{colors.warning}'
-    badge-error:
-        backgroundColor: '{colors.error-soft}'
-        textColor: '{colors.error}'
+        textColor: '{colors.ink}'
+        rounded: '{rounded.control}'
+        height: '{spacing.control}'
+        padding: 14px
+        typography: '{typography.callout}'
+    row:
+        backgroundColor: '{colors.surface}'
+        textColor: '{colors.ink}'
+        height: '{spacing.row}'
     row-selected:
-        backgroundColor: '{colors.accent}'
-    nav-item:
-        textColor: '{colors.on-muted}'
-        backgroundColor: '{colors.background}'
-    nav-item-active:
+        backgroundColor: '{colors.tint}'
+        textColor: '{colors.on-tint}'
+    mark:
+        size: 36px
+    chip:
+        backgroundColor: '{colors.tint}'
+        textColor: '{colors.on-tint}'
+        rounded: '{rounded.chip}'
+        height: 22px
+        typography: '{typography.label}'
+    card:
         backgroundColor: '{colors.surface}'
-        textColor: '{colors.foreground}'
-    checkbox:
-        size: 18px
-        rounded: '{rounded.xs}'
+        rounded: '{rounded.card}'
+    sheet:
         backgroundColor: '{colors.surface}'
-    checkbox-checked:
-        backgroundColor: '{colors.primary}'
-        textColor: '{colors.on-primary}'
-    menu:
-        backgroundColor: '{colors.surface-raised}'
-        rounded: '{rounded.md}'
-        padding: 4px
-    menu-item:
-        height: 36px
-        padding: 8px
-        typography: '{typography.body-sm}'
-    sidebar:
-        backgroundColor: '{colors.background}'
-        width: '{spacing.sidebar-width}'
+        rounded: '{rounded.sheet}'
+    toast:
+        backgroundColor: '{colors.snackbar}'
+        textColor: '{colors.on-snackbar}'
+        rounded: '{rounded.card}'
+    link-mark:
+        textColor: '{colors.primary}'
+        size: 14px
+    logo:
+        backgroundColor: '#2c428e'
+        textColor: '#ffffff'
+        rounded: 30%
 ---
 
-# HushOS Paper
+# HushOS Alpine
 
-HushOS asks people to put private things in it. Before any feature, the interface has one job: make that feel like a reasonable decision. Paper is how it does that. Your files are documents, so the drive is a desk: a warm ground, a sheet of paper lying on it that holds the page, and a card lifted a little higher when something needs an answer. It is the calmest register a screen can have, and the most legible one. The tokens above are normative; the prose explains how to apply them.
+HushOS asks people to put private things in it. Before any feature, the interface has one job: make that feel like a reasonable decision. Alpine does it with restraint: one blue, white surfaces on a cool ground, rows that say who can open each thing, and words a layperson reads without help. The tokens above are normative; the prose explains how to apply them.
 
-It applies to `apps/web`. Tokens are implemented in `apps/web/src/styles.css` as single `light-dark()` values; the hex values above are the same values. Primitives live in `apps/web/src/components/ui` (shadcn Base UI, retuned) and the product pieces in `apps/web/src/components` (`site-header.tsx`, `auth-layout.tsx`, `app-sidebar.tsx`, `drive/file-mark.tsx`). Brand assets live in `apps/web/public/brand` and are generated from `apps/web/src/lib/brand.ts` with `bun run brand:assets`. This document is served publicly at `/design.md`.
+The tokens live in `packages/tokens/src/index.ts`, the only place a colour, size or typeface is decided. `bun run tokens` generates CSS custom properties (`packages/tokens/generated/tokens.css`), SwiftUI (`Alpine`) and Compose (`com.hushos.tokens`). The web maps shadcn's role names onto them in `apps/web/src/styles.css`; iOS reads them through `apps/ios/App/Theme.swift`, Android through `apps/android/.../ui/Theme.kt`. This document is served publicly at `/design.md`.
 
 ## Overview
 
-HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite, beginning with Drive. Its first audience is ordinary people who want their files private without learning anything to get it, for personal life as much as for work; its second is the people who would rather verify than trust: developers, privacy-minded professionals, self-hosters. Copy on public pages is written for the first audience; the security page is written for the second.
-
-The personality is calm, legible and plain-spoken. Think of a tidy desk with one document on it: a warm ground, a clean sheet, ink-blue writing, a highlighter, a few ruled lines. The metaphor is carried by shape and shadow only. There are no paper textures, no torn edges, no stamps made to look inked, no serif faces, no illustrations.
+HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite, beginning with Drive. Its first audience is ordinary people who want their files private without learning anything to get it; its second is the people who would rather verify than trust. Copy everywhere is written for the first; the security page is written for the second.
 
 Principles:
 
-1. **Desk, sheet, card.** The page ground is the desk. Content lies on a sheet (`sheet`: the sheet colour, a 2px radius, the sheet shadow), one sheet per page region, never a sheet per row. Anything lifted above the sheet (a dialog, a menu, a popover, the details panel, a toast) is a card: the raised colour and the overlay shadow.
-2. **Ink-blue, never black.** Text is ink-blue. Links, the primary button, focus and the one accent are the same blue. Nothing else points.
-3. **Few lines.** Rules are hairlines of translucent ink between rows on a sheet. Spacing separates everything else; vertical dividers appear only between two genuinely different regions.
-4. **Set to be read.** One humanist sans, in sentence case, for headings, labels, buttons and copy. Mono is kept for characters read one by one.
-5. **Say only what the code does.** Copy describes implemented behaviour (OPAQUE sign-in, client-side key wrapping, recovery phrase, open source). It never claims more than the code does.
-6. **State is a soft fill with a word in it.** Locked, unlocked, verified, failed: an ink-strength colour on its own soft fill, and one sentence next to it.
-7. **Quiet motion, quiet sound.** Short transitions, no overshoot, a small acoustic signature on presses. Both respect user preferences.
+1. **Private is the default; show the exceptions.** Every list says who can open each thing, but only when it differs from its folder. No lock icons on everything.
+2. **One blue.** Hush blue (`primary`) is the brand, the primary button, links, focus, the active place and the link mark. Nothing else is coloured for attention.
+3. **Say it the way a person would.** GB, not GiB. "Who can open", not "ACL". Keys, epochs and rotation stay out of sight until someone opens Technical details.
+4. **One product on three platforms.** The same menus in the same order, the same words, the same states. Each platform keeps its own furniture: iOS menus and glass, Material sheets and FABs, web dialogs and the command palette.
+5. **Say only what the code does.** Never claim a feature that is not built, and no assurance blurbs.
+6. **State is never colour alone.** A selected row is tint plus a check; a status is its colour plus a word.
 
 ## Colors
 
-Light mode is a warm desk with off-white paper on it; dark mode is the same desk with the lamp off: a blue-black ground, sheets a step lighter, pale ink. Neither uses gradients. In code every value is one `light-dark()` pair, so a component never names a theme.
+Every role has four values: light, dark, light high contrast, dark high contrast. High contrast follows `prefers-contrast: more` (or `.hc` on the web), iOS Increase Contrast and Android's contrast setting, and meets WCAG AAA: 7:1 for every text role, 4.5:1 for control edges, focus and meaningful marks. Standard schemes meet AA. A component names a role, never a hex value and never a scheme.
 
-- **Desk / background (#e6e2d9, dark #13151b):** the page ground, the sidebar, the space around a sheet.
-- **Sheet / surface (#fcfbf7, dark #1c1f28):** the surface that holds a page's content; also the active nav tab, outline buttons and fields.
-- **Card / surface-raised (#fffef9, dark #21242e):** dialogs, menus, popovers, toasts, the details panel. Always with the overlay shadow.
-- **Ink (#1c2848, dark #dfe3f2):** all text, and the solid fill of the secondary button and the avatar.
-- **Muted (#f1efe7, dark #252935):** the hover fill on a sheet and the quiet fill of a field or a file mark. **Muted text (#5a6483, dark #969eb8)** is for labels and metadata only.
-- **Primary (#2c428e, dark #aab8f4; hover #24387a, dark #bcc7f8):** the one blue. The primary button, links, focus outlines, the checked checkbox, a folder's edge. Text on it is #fcfbf7 in light and #121833 in dark.
-- **Accent, the highlighter (#e3e7f5, dark #262c45; text #2c428e, dark #b3c0f7):** the selected row, the open folder, a chosen option, a folder's face, the default badge.
-- **Rule (ink at 13% alpha):** hairlines on a sheet. **Border (#d3d1ca, dark #30343f)** is the solid hairline for edges that sit on the desk. **Input (#b9bccb, dark #3a4052)** is the slightly stronger edge of a field or an outline button.
-- **Success (#2a7a5e, dark #7fd1ad), Warning (#9a5a12, dark #e8b774), Error (#a8322a, dark #f09a90):** ink-strength, so they read as text. Each has a soft fill (success #dcede4 / #1a2f29, warning #f4e6cf / #33291a, error #f5dfdb / #3a2020) for blocks and pills, and an on-colour (#fcfbf7 in light; #0d1f18, #241707, #2a0f0c in dark) for the rare solid fill.
-- **Shadows** are ink-tinted in light (ink at 12%, 45% and 55% alpha) and near-black in dark.
+- **Ground (#f3f4f8, dark #0e111a):** the screen background, the web sidebar, behind grouped lists. **Surface (#ffffff, dark #161a26):** the page panel, cards, sheets, list groups, inputs, menus.
+- **Ink (#17203a, dark #e4e8f4):** text and icons. Never black. **Ink muted (#5a6380, dark #9aa3be):** metadata and labels only, never anything clickable.
+- **Rule (#e2e5ee, dark #262b3a):** hairlines between rows. **Field (#7a8299, dark #6a7390):** input and outline-button edges, 3:1 against the surface. **Edge:** the outline on raised surfaces, ink at 8% (white at 8% in dark), a solid line in high contrast where shadows are dropped.
+- **Primary, Hush blue (#2c428e, dark #aab8f4; pressed #24387a / #bcc7f8):** the one brand colour. Text on it is `on-primary`.
+- **Tint (#dce3f7, dark #232a44) with on-tint (#2c428e / #c0cbf8):** selection, hover, active navigation, soft chips. Never the only sign of a state: selected rows add a check; navigation and segmented controls add a solid fill or a heavier label.
+- **Folder back and front:** the two sheets of the folder mark, the back darker.
+- **Success, danger:** ink-strength, readable as text, each with a soft fill for notices. **Warning (#87530d, dark #e3b46a) and warning-soft:** cautions only, such as a fair password. It is never used for links.
+- **Snackbar, on-snackbar, snackbar-action:** the dark notice (toast, snackbar) in light mode and its inverse in dark.
+- **Avatar 1–4 with on-avatar 1–4:** four tones that tell people apart without a second accent. **Scrim:** behind sheets and dialogs.
+
+Tags have five presets and any colour of your own: Blue (`primary`), Ink (`ink`), Yellow, Teal (#23766d) and Coral (#b4503b) on the web. Yellow has its own value per scheme on the web (`--tag-yellow`, #b8860b in light) with ink that reads on it; it is a tag colour, not the warning. A custom hex gets ink or white text, whichever contrasts more.
 
 ## Typography
 
-Atkinson Hyperlegible Next Variable carries everything that is read; Geist Mono Variable carries what is read character by character. Both are bundled from Fontsource; the sans has a local Arial fallback stretched to 103% so the swap barely moves a line.
+The web sets everything in **Geist Variable** (Geist Sans), with a local Arial fallback resized to Geist's metrics so the swap barely moves a line. Geist's capital I and lowercase l are close, so anything a person must read character by character goes in mono. **Geist Mono Variable** is for characters read one by one: recovery words, fingerprints and their twelve words shown as code, IDs, object keys, invite codes, `kbd` and `code`. Both are bundled from Fontsource. The phones keep the system face (SF Pro, Roboto): iOS maps the scale onto Dynamic Type text styles (`largeTitle` heavy, `title2` bold, `headline`, `body`, `subheadline`, `footnote`, `caption` semibold); Android uses Material 3's roles at Material's sizes, with one Alpine size, the 34 extra-bold large title.
 
-- **Page title** (`headline-lg`, 24px, 700, tight). **Section title** (`headline-md`, 18px, 700). **Marketing hero** (`headline-display`, 48px rising to 60px, 700, tight, balanced).
-- **Body** is 14 to 18px at 1.6 line height.
-- **Eyebrow** (`eyebrow`, 12px, 600, sentence case) is the small label: column heads, keys in a list, the name of a section.
-- **Button** (14px, 600). Small buttons go to 13px, large to 15px.
-- **Mono** (`value-mono`, 13px) only where characters are read one by one: fingerprints, recovery words, IDs, tokens, invite and offer codes, URLs shown for copying, the extension in a file mark, sizes and dates in a technical detail block, `kbd` and `code`, terminal snippets, the security page's tables. Dates and sizes in ordinary lists are the sans with tabular figures.
-- **Links** (`text-link`) are blue and underlined, in the text face.
+- **Display** (72, 800, −0.035em) is the site's hero only. **Title large** (34, 800) is a phone tab's title. **Title** (22, 700) is a section or a dialog. Web page titles are 20px rising to 28px, 800, −0.03em.
+- **Headline** (17, 600) for row names on the phones; web rows use 15px at 500.
+- **Body** (16, 1.55) for reading; **callout** (15) for list text and controls; **footnote** (13) for row subtitles and metadata.
+- **Label** (12, 600) in sentence case: form labels, badges, menu group labels, column heads (`eyebrow` on the web). Never uppercase: labels include tag names and people's words.
 
-Everything is sentence case. Nothing is uppercase, and nothing is letter-spaced wide. Bold (700) is for headings, `strong` and the active nav tab; 600 for labels and buttons.
+Everything is sentence case. Nothing in product UI is uppercase. Sizes and dates in lists use tabular figures in the text face, not mono.
 
 ## Layout
 
-The page is a desk with a sheet on it, not a grid of cells.
-
-- **Public pages.** A quiet header on the desk: the mark and name, the nav, the appearance control. The content sits on a sheet or directly on the desk in a reading column. Footers are plain lines of small text.
-- **Auth pages.** One sheet, centred, holding the form; beside or beneath it, "What happens when you…" in three plain sentences for that flow (sign in, create an account, recover). Explain, never reassure: no status dots, no assurance blurbs.
-- **Forms.** A label above its field, a hint or error line under it, fields stacked with 16 to 20px between them. Secondary links sit beside the one primary button at the end.
-- **The app shell.** A collapsible sidebar (256px, 48px in icon mode) in the desk colour with the mark, nav items, a storage meter, and the profile menu at the bottom. The content region is one sheet. The active nav item is a tab cut into the sheet's edge: it takes the sheet colour with bold ink text and square right corners, so it reads as joined to the sheet.
-- **Lists.** Rows on a sheet, 48px, a rule hairline between them, no vertical dividers. Key and value lists use dotted leaders: a dotted rule under each row, key on the left in muted text, value on the right.
-- **Reading pages** (legal, blog) are a single 672px column.
-- Page gutters are 20px, 40px from the small breakpoint.
+- **Web app shell.** A collapsible sidebar on the ground (256px, 48px as icons, a 288px sheet on phones): Home, My files, Shared, Trash; then Tags and People you share with; an Operator group for admins; the storage meter ("487 MB of 1 GB used", "537 MB free", a Plan and storage link) at the foot. The active place is tint, a semibold label and a heavier icon. The page is one surface panel, inset 10px from the window with `card` corners on a desk-sized screen and full-bleed on a phone, scrolling inside. Its 64px header holds the search box (opens the command palette, `/` or ⌘K) and the account avatar, which opens the account menu.
+- **Page header.** Title on the left, the page's few actions on the right. Gutters are 20px, 32px from the small breakpoint.
+- **Lists.** Rows of 56px with 36px marks and a rule hairline between them; no vertical lines. Columns: Name, Who can open (from the large breakpoint), Changed, Size. A shared folder starts with an access banner that begins with "You": "You and anyone with the link can open everything in this folder." Rows then say who can open only when it differs; otherwise "Same as folder" on the web and nothing on the phones.
+- **Details.** A 320px panel beside the list on wide windows (Info), a dialog on narrow ones: who can open in a full sentence, the plain facts, tags, then two folds, Keep your own copy and Technical details.
+- **Phones.** A bottom bar of Home, Files, Shared, Account (iOS adds its Search tab). Every tab root and folder has a one-row header: the large title and its actions on one row right under the status bar, back in front of the title on a pushed screen; never an actions row above the title. Grouped lists sit on the ground. Trash lives in Account, as a row with its item count and size. Home has no setup nudges.
+- **Reading pages** (legal, blog, security) are one column of about 70 characters.
 
 ## Elevation & Depth
 
-There are three levels and two shadows. The desk is flat. A sheet lies on it with `shadow-sheet` (a 1px ink edge below and a soft, tight drop: `0 1px 0` at 12% ink, `0 14px 30px -22px` at 45%). A card floats above with `shadow-overlay` (`0 1px 0`, `0 22px 44px -20px` at 55%). Rows, inline cards, buttons and fields have no shadow. Focus is a 2px outline in primary, inset by 2px. In dark mode the steps are the same and the shadows go to near-black.
+Four shadows, tinted with ink in light and near-black with a faint top highlight in dark: `sm` for resting controls and the page panel, `md` for raised cards, glass bars and floating buttons, `lg` for menus, popovers, selection bars and toasts, `xl` for dialogs and sheets (values in `packages/tokens`). On the web, `shadow-sheet` is `sm` and `shadow-overlay` is `lg`. Rows, inline cards and fields have no shadow. In high contrast every shadow is `none` and the `edge` role becomes a solid border, so depth never depends on a shadow. Focus is a 2px primary outline, inset 2px on the web.
 
 ## Shapes
 
-Corners are barely turned: 2px for sheets, badges, checkboxes and file marks, 3px for buttons, fields, menus and cards, 4px at most. Fully round is for avatars and tag dots only. Icons are 16px stroke icons, paired with text.
+The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing else. `chip`: badges, tags, checkboxes, swatches, and a segment inside a segmented control. `control`: buttons, inputs, segmented controls, menu items, small inner cells. `card`: the web page panel, menus, popovers, toasts, banners and alerts, the details panel, grid tiles, admin fact boxes. `sheet`: dialogs and sheets. On the web Tailwind's `rounded-xs`/`sm` map to chip, `md`/`lg` to control, `xl` to card and `2xl` to sheet, so an off-scale corner can't be asked for. Avatars, switches, tag dots and the phones' capsule buttons are fully round.
 
-- **A file** is a small sheet with its top-right corner turned (`clip-path: polygon(0 0, 68% 0, 100% 24%, 100% 100%, 0 100%)`), 24 by 30px in a row, in the muted fill with a hairline edge and its lowercase extension in 7.5px mono at the foot. An image keeps its thumbnail, clipped to the same shape.
-- **A folder** is a tabbed folder (`clip-path: polygon(0 0, 44% 0, 54% 18%, 100% 18%, 100% 100%, 0 100%)`), 30 by 24px, in the highlighter colour with a primary hairline.
-- Both come from `FileMark` in `components/drive/file-mark.tsx`, which also has a large size for the grid and the details panel. There is one implementation.
+- **Folder:** two solid sheets, `folder-back` behind `folder-front`. **File:** a white sheet with a turned corner and its type, unless a thumbnail exists: a photo as itself, a PDF as its first page with a type badge, a video as a frame with a play badge. Marks are 32 in compact lists, 36 in file rows, 72 in grids and the details panel; one implementation per client (`FileMark` on the web).
+- **Logo:** the white mark on a Hush blue (#2c428e) square whose corners are 30% of its side, the same in both schemes. Brand assets are generated from `apps/web/src/lib/brand.ts` with `bun run brand:assets`.
+- **Icons:** Lucide stroke icons on the web (16px in controls, 18px in navigation), SF Symbols on iOS, Material Symbols on Android, always beside a word or with an accessible name.
 
 ## Components
 
-- **Button.** 3px radius, the text face at 600. `default` is the blue fill and there is one per screen. `secondary` is an ink fill. `outline` is a sheet-coloured button with the input edge; `ghost` has no edge and fills with muted on hover; `row` (with `size="row"`) is the full-width 56px row used in account settings: ink label on the left, blue arrow on the right. `destructive` is the one solid status fill, for confirming a destructive action; `destructive-outline` opens a dangerous flow; `link` is an inline text link. Sizes are 28, 32, 40 and 48px. Buttons move 1px on press and carry press and release sounds; links get the same cues through delegation. Do not pile typographic classes onto a button where it is used.
-- **Input.** 40px, the sheet colour, the input edge, 3px radius, the text face; 16px text on small screens so iOS does not zoom. Mono only when the value is a code.
-- **Checkbox.** 18px, 2px radius, input edge, blue fill when checked. Its toggle sound plays from `onCheckedChange`, so label clicks sound the same.
-- **Selected row.** A highlighter band: the accent colour inset a little top and bottom (12% and 88%), with no side bar and no ring. It is the only gradient in the system, and it has hard stops.
-- **Badge.** A 22px eyebrow pill with a 2px radius. `default` is the highlighter; `success`, `warning` and `destructive` are the status colour on its soft fill; `outline` and `secondary` are neutral.
-- **Alert.** A soft status fill with the status colour for its icon and title, 3px radius, no shadow; enters with a 4px drop. Inline, for anything the user must act on.
-- **Tag.** A small solid chip in the tag's own colour with text that reads on it. The five presets map to tokens and follow the theme; a custom hex colour gets ink or sheet-coloured text, whichever contrasts more.
-- **Toast** (`ui/toast.tsx`, Base UI). A card at the bottom right with the overlay shadow: a status icon, a title, a description, a close button. Toasts only confirm something that already happened (a value copied, a kit downloaded), dismiss themselves after 3.5s, and stack with an 8px peek. Call `toast.add({ type, title, description })`.
-- **Dialogs, menus, popovers.** Cards: raised colour, 3px radius, overlay shadow. Menu items are 36px in the text face with eyebrow group labels; the highlighted item takes the highlighter. The profile menu holds appearance, interface sounds, account links, and sign out. Right-clicking the mark opens the brand menu with an in-place "Copied" state.
-- **Account rows.** Each account-settings section is a row (56px, label left, blue arrow right) that collapses into its inline form: change password, rotate recovery phrase, rotate master key, delete account. An editable value (the name) is a row that is itself the control and swaps in place for its form. Only one form is open at a time; opening another closes the rest. Every form asks for the current password, and its button reads the same as the row that opened it.
-- **Sidebar.** shadcn sidebar retuned: desk colour, muted-text items that turn to ink on hover, the active item as the tab described under Layout, tooltips when collapsed, storage meter and profile trigger in the footer, state persisted in the `sidebar_state` cookie and read on the server for the first paint.
-- **Ledger**, **Note** and **Cta** are the MDX components available to content authors: a key and value list with dotted leaders, a soft-filled aside, and a closing call to action.
+- **Button.** 36px, 44px on touch (`pointer-coarse`), `control` radius, 14px at 600. `default` is Hush blue, one per screen. `secondary` is ink. `outline` is the surface with the field edge; `ghost` fills with muted on hover; `row` is the full-width 56px settings row with a blue arrow; `destructive` is the one solid danger fill, for the confirm; `destructive-outline` opens a dangerous flow; `link` is inline text. Buttons move 1px on press. No ellipsis on a label except an in-progress state ("Sharing…", "Locking…").
+- **Input.** 44px, surface, field edge, `control` radius, 16px text on phones so iOS does not zoom; a 2px inset ring on focus, danger edge and ring when invalid. Label above, one hint or error line below.
+- **Checkbox** 18px; **switch**; **segmented control:** the chosen segment is a solid fill or bold, never tint alone.
+- **Selection.** A selected row is tint plus a filled check. On the web the selection bar floats over the list with labelled actions in menu order (Share, Download, Move, Copy, Rename, Tags, Move to Trash) and More. On the phones the bar replaces the tab bar with labelled buttons.
+- **Who can open.** Only you: quiet text, no icon. People: up to three overlapping avatars, then a name or a count. Anyone with the link: a 14px link icon in `primary` before muted words; the words are never coloured. In Info and other key-value lists it is the full sentence ("You, Sam and anyone with the link"), wrapping, with no icon.
+- **Share.** The sheet is "Share" on every client. People first, each with a role select (Can view, Can edit) and Stop sharing last, asked once. Links are one row each with Copy link and a ⋯ menu: Password and end date, Show as QR code, Turn off link (asked once). Turning a link off or stopping a share rotates the keys quietly; only a failure is said.
+- **People you share with.** Add someone by the email they use for HushOS (Look up), then Check it's them: twelve words read aloud on a call or in person. Your own twelve words are on the same page. A changed account is a tint notice with Check it's them and Accept change.
+- **Kept on this phone.** A small phone icon ("Kept on this phone"), never a pin. Folders can be kept, including folders shared with you; a file kept with its folder says "Kept with “Lisbon 2026”" and offers "Remove “Lisbon 2026” from this phone". A failure says "Couldn't be kept" with Retry, and the folder row "1 file couldn't be kept".
+- **Paste bar** (phones). Copy fills the clipboard and the bar says "Paste 2 items here", or why it can't ("They're already in this folder", "Can't paste a folder into itself"). Copying in a folder shows no notice; the bar is the confirmation.
+- **Toast and snackbar.** A dark notice at the bottom right (web) or bottom (phones): one line, an optional description, at most one way back such as Undo. It confirms what already happened and goes after 3.5s on the web. Notices sit above the paste bar and selection bar, never over them. Anything the person must act on is an inline alert instead: the status colour on its soft fill, a title, a sentence, and at most one action.
+- **Empty and error states.** A quiet mark, a short title, one line, then the actions ("Nothing here yet", Upload files, New folder; "This folder couldn't be opened", Try again). Loading lists show skeleton rows.
+- **Menus and dialogs.** Menus are surface cards with `lg` shadow and 36px items; destructive items are danger text, last. Dialogs are `sheet` radius with `xl` shadow over the scrim; the confirm button repeats the verb ("Stop sharing", "Turn off link", "Delete forever").
+- **Command palette** (web). Search files and folders or run a command; groups Files and folders, Here, Go to, Trash, This device, Folders here.
+- **Transfers.** One headline everywhere ("Uploading 3 files", "Keeping 4 files on this phone"), a row per file with what to do when it fails, and Cancel always asks.
 
 ## Do's and Don'ts
 
-- Do put a page's content on one sheet, and lift only what interrupts.
-- Do use one blue button per screen, at the end of the form.
-- Do set everything in sentence case in the text face; keep mono for characters read one by one.
-- Do check light and dark; both come from the same tokens, and a component never hard-codes a colour or adds a `dark:` colour override. The white ground behind a QR code and the black behind a video or PDF canvas are the only exceptions.
-- Do make clickable things look clickable: muted text is for labels and metadata only. Anything interactive is set in ink or blue, fills on hover, and is either a button or underlined. On a row, the arrow is blue.
-- Do show status as the status colour on its soft fill, with a word.
-- Do keep security claims to what the code does, and units binary (KiB, MiB, GiB).
-- Don't add a paper texture, a torn or deckled edge, a skeuomorphic stamp, a serif face, a gradient, a glow, a decorative illustration, an icon tile, a pulsing dot, an emoji or an exclamation mark.
-- Don't write assurance blurbs ("bank-grade", "your data is safe with us"), and never a timeline claim on a public page.
-- Don't set text in black, or a heading, label, button or paragraph in mono or uppercase.
-- Don't draw a grid of lines; a rule between rows is enough.
-- Don't give a row, an inline card or a button a shadow, or round anything past 4px except an avatar or a tag dot.
-- Don't use a solid status fill for anything but the destructive confirm button and a tag.
-- Don't set a link, nav item, or row label in muted text; if it reads like a label, nobody clicks it.
-- Don't use sheet-coloured text on primary in dark mode; use the on-primary token.
+- Do name a role, not a colour; check all four schemes.
+- Do keep one blue button per screen, and make clickable things ink or blue, never muted.
+- Do mark a link with the blue link icon and keep its words muted.
+- Do pair every icon with a word or an accessible name, and every state with a word.
+- Do keep units in KB, MB, GB and TB counted in 1024s, and quotas whole ("1 GB", "200 GB").
+- Do say what happened and what to do next, in one or two plain sentences.
+- Don't use amber or any colour of its own for links, or `warning` for anything but a caution.
+- Don't use tint alone for selection or the active place.
+- Don't add icon tiles for decoration, stat grids, pulsing dots, gradients, glows, illustrations, emoji or exclamation marks.
+- Don't write assurance blurbs ("bank-grade", "your data is safe with us") or name protocols in primary UI; that belongs on the security page and under Technical details.
+- Don't put an ellipsis on a button except while it works.
+- Don't draw an actions row above a large title on the phones, or an avatar as the way into Account.
+- Don't show "Same as folder" on every phone row, or a setup nudge on Home.
+- Don't claim anything that is not built: account creation and recovery in the apps, invite by email, widgets, the share extension and transfer notifications are not built; Photos is not planned.
 
 ## Motion
 
-Motion has a purpose or it does not ship: feedback for a press, a state that changed, content that arrived, or a change that would otherwise be jarring. Nothing animates on page load except the one auth-sheet entrance, and nothing animates on hover except colour.
+Motion has a purpose or it does not ship: feedback for a press, a state that changed, content that arrived. Nothing animates on page load except the auth entrance, and nothing animates on hover except colour.
 
-- **Tooling.** CSS first. Motion for React (`motion/react`) is used only where CSS cannot: exit animations, height to auto, and interruptible state swaps. Helpers live in `components/motion.tsx`: `TextSwap`, `IconSwap`, `Collapse`, `PendingLabel`, `Spinner`, and `MotionProvider`, which sets the default spring and `reducedMotion="user"`.
-- **Springs.** State swaps use `duration: 0.3, bounce: 0`. Content that arrives may use `duration: 0.45, bounce: 0.15`. If a spring looks wrong, raise damping.
-- **Curves.** Entrances and exits use `ease-out-expo`; on-screen moves use `ease-in-out-cubic`; colour and border use `ease-out-soft` at 150ms. Never `ease-in`.
-- **Durations.** 150ms press and colour, 200ms enter of errors and alerts, 220ms icon swaps, 300ms text swaps, 400ms the auth entrance and the account-settings collapses (delete, password, key rotation), 500ms progress fills.
-- **Navigation bar.** A 2px `primary` hairline across the top of the window while the router loads a page under `/app` (`components/navigation-bar.tsx`). It waits 150ms, so a navigation that resolves at once never shows it; then it grows toward 85% over 8s on `ease-out-expo`, never reaching the end on its own, and on arrival fills and fades in 200ms. CSS transforms only, so it stays smooth while the next page's script is parsed. Fixed and inert: it takes no room and catches no clicks. It follows route loading only; a page that fetches after it appears still owns its own loading state.
-- **Text swaps** crossfade with a 10px lift and a 2px blur. **Icon swaps** scale from 0.6. **Recovery words** stagger in at 25ms. **Menus** scale from 0.95 at their trigger's transform origin over 100ms.
-- `prefers-reduced-motion` collapses every CSS animation, and `MotionConfig` limits Motion to opacity and colour.
+- **Tooling.** CSS first; Motion for React only for exits, height to auto and interruptible swaps (`components/motion.tsx`: `TextSwap`, `IconSwap`, `Collapse`, `PendingLabel`, `Spinner`, `MotionProvider` with `reducedMotion="user"`).
+- **Springs.** Swaps `duration 0.3, bounce 0`; arrivals `0.45, bounce 0.15`; icon swaps `0.22`; collapses `0.4`.
+- **Curves.** `ease-out-expo` for entrances and exits, `ease-in-out-cubic` for moves, `ease-out-soft` at 150ms for colour and borders. Never `ease-in`.
+- **Navigation bar.** A 2px primary hairline across the top while a page under `/app` loads; it waits 150ms, creeps toward 85%, then fills and fades in 200ms.
+- `prefers-reduced-motion` collapses CSS animation to nothing and limits Motion to opacity and colour. The phones follow the system's Reduce Motion.
 
 ## Sound
 
-Sound confirms that something happened. It never announces that something might: there is no sound for a hover, a press, a toggle or a tick. Cues come from Cuelume, synthesised on the device, and are all played from code through `cue()` in `lib/sounds.ts`, so every flow sounds the same.
-
-| Moment                                         | Cue       |
-| ---------------------------------------------- | --------- |
-| An action succeeded: saved, copied, shared     | `success` |
-| A recoverable error is shown                   | `error`   |
-| Email verified, recovery confirmed             | `ready`   |
-| Something was put away: locked, stopped, moved | `droplet` |
-
-Sound is **off until the person turns it on**, in the account menu; the choice persists in `localStorage` under `hushos-sounds`. A product called Hush does not make noise at someone who has not asked for it. Global volume is 0.55; confirmations play quieter. Never add a sound to a change the person did not start, and never on page load.
+Sound confirms that something happened; nothing sounds for a hover, a press or a page load. Cues are synthesised on the device by Cuelume and played only through `cue()` in `apps/web/src/lib/sounds.ts`: `success` (saved, copied, shared), `error` (a recoverable error is shown), `ready` (email verified, recovery confirmed), `droplet` (something put away: removed, locked, stopped). Sound is off until the person turns on Interface sounds in the account menu (`localStorage` key `hushos-sounds`). The phones make no interface sounds.
 
 ## Content
 
-Legal pages and blog posts are MDX under `apps/web/src/content`, compiled at build time and server-rendered. Documents use relative imports for components (the `@/` alias is not resolved inside MDX). Every post carries `title`, `description`, `date`, `author` in front matter and ships Article structured data; legal pages carry `title`, `updated`, `summary`. The public site also serves `/robots.txt`, `/sitemap.xml`, `/llms.txt`, and `/design.md`.
+The voice is plain, calm and specific. Sentence case. Contractions are fine. One idea per sentence; no jargon in primary UI.
+
+- **Words, the same on every client:** Share; Who can open; Only you; Same as folder; Anyone with the link; Stop sharing; Turn off link; Copy link; People you share with; Check it's them; Move to Trash; Restore; Delete forever; Empty Trash; Keep on this phone; Remove from this phone; Send a copy (the system share sheet); Open in… (iOS); Info; Versions; My files; Account; Plan and storage; Lock on this browser (web).
+- **Trash** keeps items for 30 days, and says so. Removing a file from the phone says it stays in HushOS.
+- **Dates**, on every client: "Today, 14:02", "Yesterday", "29 Sept" this year, "29 Sept 2025" in another; day and month the en-GB way, the time on the person's own 12 or 24 hour clock. In a sentence: "Added today, 14:02", "on 3 Sept", "until 12 Oct". Web helpers: `formatWhen`, `formatDay`, `formatTime` in `apps/web/src/lib/drive.ts`.
+- **Sizes:** "1.6 KB", "487 MB of 1 GB used", "537 MB free"; quotas never show decimals they don't have.
+- **Errors** say what happened and what to do: "Couldn't reach HushOS. Check your connection, then retry."
+- Legal pages and blog posts are MDX under `apps/web/src/content`. The site also serves `/robots.txt`, `/sitemap.xml`, `/llms.txt` and `/design.md`.
+
+## Platforms
+
+- **Web** (`apps/web`, TanStack Start, shadcn Base UI retuned to Alpine). Home is at `/app` and is where sign-in lands. Keyboard: `/` and ⌘K search, ⇧N new folder, F2 rename, M move, C copy, T tags, I info, ⌫ Move to Trash, ⌘A select all. The grid view, marquee selection, drag onto folders and crumbs, folder upload, the details panel, Tags pages, the command palette and the operator console (no ink strip; its own sidebar group) are web furniture. Billing and admin live only on the web. Locking the browser and appearance (Light, Dark, Same as this computer, high contrast) are in Account.
+- **iOS** (SwiftUI, iOS 26 Liquid Glass). Tabs Home, Files, Shared, Account and the Search tab. Header actions sit in one glass capsule; 44pt targets. Tapping a file opens QuickLook with HushOS around it; Open in… and Send a copy are in the viewer and the item menu. The Files app location, a Live Activity for transfers, and background prompts (Background App Refresh, Low Power Mode, Live Activities) when a long transfer starts; "Not now" waits a week, and Account › Advanced shows each setting's state.
+- **Android** (Compose, Material 3 Expressive). Bottom bar Home, Files, Shared, Account. Long press starts selection; ⋮ opens the item sheet and the folder menu (Select, sort, show only). The add menu is Paste (when something is cut or copied), New folder, Take photo, Upload photos, Upload files. Files open in their default app directly, with no forced chooser. A DocumentsProvider, a foreground transfer notification, and background prompts (notifications, battery optimisation, Data Saver) with their state in Account.
+- **Both phones** open `hushos://` and `https` app links to share links (`/s/…`) and app pages (`/app`, `/app/drive`, `/app/shared`, `/app/trash`); make the drive's top folder on first open if the web never did; remove everything of an account on sign-out and before another signs in, and say "Files kept on this phone are removed." when it applies. Account creation and recovery happen on the web.
 
 ## Email
 
-Transactional emails (`packages/emails`) are Paper in table form: a desk-coloured body, one sheet-coloured container with a hairline border and a 3px radius, the mark on a small blue square beside the name, ink-blue text, the facts about the link as a key and value list with dotted leaders (purpose, expiry, uses, "password sent: never"), and one blue button with a 3px radius. Mono appears only on the link printed for copying. Dark mode swaps to the dark desk and sheet via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial because mail clients do not load web fonts. Templates are rendered once at build time (`bun run email:render`) and filled at send time; preview with `bun run email:preview` on port 3001.
+Transactional emails (`packages/emails`) look like the site: the light ground, a white card with 16px corners and a rule header holding the logo square (26px, 8px corners) beside the name, ink text, the facts about a link as ruled rows, and one plain Hush blue button with 10px corners. Mono appears only on a link printed for copying. Dark mode follows the tokens via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial. Templates render at build time (`bun run email:render`); preview with `bun run email:preview`. Social cards (`/og.jpg`, `/og/<page>.jpg`, 1200×630, Takumi) are a white page, the colour wordmark and the heading style; a share link's card is generic.
 
 ## Accessibility
 
-- Atkinson Hyperlegible Next is chosen for its distinct letterforms; body text never drops below 14px, and text pairs meet WCAG AA on their grounds in both themes.
-- Every interactive element has a visible focus outline.
-- Status changes use `aria-live="polite"` on the element that reflects them; status is never colour alone.
-- Icons are `aria-hidden` and paired with text; icon-only controls carry `aria-label`.
-- Forms use `noValidate`, validate on submit, re-validate on change, and render errors inline with `role="alert"`.
-- Inputs are 16px on small screens; the viewport is never locked, so pinch zoom stays available.
-- Hit targets are at least 40px, 48px for list rows and 56px for account rows.
+- High contrast meets AAA (7:1 text, 4.5:1 edges, focus and marks); standard schemes meet AA. Shadows never carry meaning.
+- Every interactive element has a visible focus outline; nothing hides it.
+- State is never colour alone: selection is tint plus a check, the active place adds weight, status adds a word.
+- Targets are 44px on touch (36px buttons grow to 44 on coarse pointers); rows are 56.
+- The phones scale with Dynamic Type and Android font size; row subtitles wrap at large sizes rather than truncating meaning.
+- Icon-only controls carry an accessible name; decorative icons are hidden.
+- Status changes use `aria-live="polite"`; errors render inline with `role="alert"`.
+- Inputs are 16px on phones and the viewport is never locked, so pinch zoom works. Reduced motion is respected everywhere.

@@ -1,23 +1,91 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
-import { ArrowRightIcon, DownloadIcon, QrCodeIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { cn } from 'cn';
+import { CopyIcon, DownloadIcon, PrinterIcon } from 'lucide-react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
-import { AuthLayout } from '@/components/auth-layout';
-import { CopyCheckIcon } from '@/components/copy-button';
+import { AuthLayout, AuthNote } from '@/components/auth-layout';
+import { LogoBadge } from '@/components/brand';
 import { QrCode } from '@/components/qr-code';
-import { FormNote, FormTable } from '@/components/form-rows';
-import { PendingLabel, TextSwap } from '@/components/motion';
+import { Spinner } from '@/components/motion';
 import { returnTarget } from '@/lib/return-to';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
 
 export type RecoveryReason = 'master-key' | 'recovery-key';
+
+/*
+ * The phrase is a query: one attempt per account, credential and lock, asked
+ * again after an unlock rather than counted, and never kept once the view
+ * showing it is gone. A lock changes the key, so the phrase goes with it.
+ */
+export function useRecoveryBackup(user: SessionUser) {
+    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
+    const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const key = ['auth', 'recovery-backup', user.id, user.credentialVersion, lockRevision];
+    const query = useQuery({
+        queryKey: key,
+        queryFn: () =>
+            authClient
+                .restore(user, { validated: true })
+                .then(() => authClient.recoveryBackup(user)),
+        staleTime: Infinity,
+        gcTime: 0,
+        retry: false,
+    });
+    return {
+        key,
+        query,
+        lockRevision,
+        unlocked: unlockedUserId === user.id,
+        backup: query.data ?? null,
+        loadError: query.error ? authError(query.error) : '',
+    };
+}
+
+type Backup = NonNullable<ReturnType<typeof useRecoveryBackup>['backup']>;
+
+/* The kit as a text file, downloaded. */
+export function downloadKit(user: SessionUser, backup: Backup) {
+    const content = kitText({ email: user.email, id: user.id }, backup.phrase, backup.recovery);
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'hushos-recovery-kit.txt';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    cue('success', { volume: 0.4 });
+}
+
+/* The 24 words, numbered, in the order they must be typed. */
+export function PhraseGrid({ phrase }: { phrase: string }) {
+    return (
+        <ol
+            aria-label="Recovery phrase"
+            className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4 print:grid-cols-4"
+        >
+            {phrase.split(' ').map((word, index) => (
+                <li
+                    key={`${index}-${word}`}
+                    className="flex items-baseline gap-2 rounded-md bg-muted px-3 py-2.5 animate-in fade-in slide-in-from-bottom-1 fill-mode-backwards duration-300 ease-out-expo print:border print:border-rule print:bg-transparent"
+                    style={{ animationDelay: `${index * 20}ms` }}
+                >
+                    <span className="w-5 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">
+                        {index + 1}
+                    </span>
+                    <span className="font-mono text-[15px] font-medium">{word}</span>
+                </li>
+            ))}
+        </ol>
+    );
+}
 
 export function RecoveryPhrase({
     user,
@@ -31,28 +99,20 @@ export function RecoveryPhrase({
     const router = useRouter();
     const queryClient = useQueryClient();
     const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
-    const lockRevision = useStore(authClient.store, (state) => state.lockRevision);
-    // The phrase is a query: one attempt per account, credential and lock, asked
-    // again after an unlock rather than counted, and never kept once this view is
-    // gone. A lock changes the key, so the phrase and the checkbox go with it.
-    const backupKey = ['auth', 'recovery-backup', user.id, user.credentialVersion, lockRevision];
-    const backupQuery = useQuery({
-        queryKey: backupKey,
-        queryFn: () =>
-            authClient
-                .restore(user, { validated: true })
-                .then(() => authClient.recoveryBackup(user)),
-        staleTime: Infinity,
-        gcTime: 0,
-        retry: false,
-    });
-    const backup = backupQuery.data ?? null;
-    const loadError = backupQuery.error ? authError(backupQuery.error) : '';
+    const {
+        key: backupKey,
+        query: backupQuery,
+        lockRevision,
+        backup,
+        loadError,
+    } = useRecoveryBackup(user);
     const [error, setError] = useState('');
     const [savedAt, setSavedAt] = useState<number | null>(null);
     const saved = savedAt === lockRevision;
     const [copied, setCopied] = useState(false);
     const [pending, setPending] = useState(false);
+    /* After the kit, three words picked back out of it, before the first save is confirmed. */
+    const [checking, setChecking] = useState(false);
     useEffect(() => {
         if (!copied) return;
         const timer = window.setTimeout(() => setCopied(false), 2_000);
@@ -72,64 +132,8 @@ export function RecoveryPhrase({
     }
     function download() {
         if (!backup) return;
-        // Numbered, four to a line: easier to check against a handwritten copy, and the order is part of the phrase.
-        const words = backup.phrase.trim().split(/\s+/);
-        const numbered = words.map((word, index) =>
-            `${String(index + 1).padStart(2, ' ')}. ${word}`.padEnd(16, ' '),
-        );
-        const lines: string[] = [];
-        for (let i = 0; i < numbered.length; i += 4)
-            lines.push(
-                numbered
-                    .slice(i, i + 4)
-                    .join('')
-                    .trimEnd(),
-            );
-        const content = [
-            'HushOS recovery kit',
-            `Saved ${new Date().toISOString().slice(0, 10)}`,
-            '',
-            'Keep this file private, and keep it somewhere you will find it again.',
-            'Anyone who has it can get into your account. If you lose it and forget',
-            'your password, nobody can get you back in, including HushOS.',
-            '',
-            'YOUR ACCOUNT',
-            `Email:       ${user.email}`,
-            `Account ID:  ${user.id}`,
-            '',
-            `YOUR RECOVERY PHRASE (${words.length} words, in this order)`,
-            'This is what unlocks your account if you forget your password.',
-            '',
-            ...lines,
-            '',
-            'The same phrase on one line, for pasting:',
-            backup.phrase,
-            '',
-            'HOW TO USE IT',
-            '1. Open HushOS and choose "Forgot your password?".',
-            '2. Confirm your email with the link we send.',
-            `3. Enter the ${words.length} words above, in order, and choose a new password.`,
-            '',
-            'WHEN THIS KIT STOPS WORKING',
-            'Resetting your password with this phrase, or replacing your recovery',
-            'phrase or master key in Settings, makes a new phrase. Save a new kit then.',
-            'Changing your password in Settings keeps this phrase as it is.',
-            '',
-            'FOR RECOVERY TOOLS',
-            'The block below is your account key, locked with the phrase above. You do',
-            'not need it to reset your password in HushOS. It is here so the phrase can',
-            'open your key even without the service.',
-            '',
-            JSON.stringify(backup.recovery, null, 4),
-        ].join('\n');
-        const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = 'hushos-recovery-kit.txt';
-        anchor.click();
-        URL.revokeObjectURL(url);
+        downloadKit(user, backup);
         setError('');
-        cue('success', { volume: 0.4 });
     }
     async function finish() {
         if (!backup || (!backup.confirmed && !saved)) return;
@@ -151,80 +155,55 @@ export function RecoveryPhrase({
     }
     const ready = backup && unlockedUserId === user.id;
     const confirmed = backup?.confirmed ?? false;
+    const fresh = reason === 'master-key' || reason === 'recovery-key';
+    if (checking && ready)
+        return (
+            <CheckWords
+                phrase={backup.phrase}
+                pending={pending}
+                error={error}
+                onBack={() => setChecking(false)}
+                onDone={() => void finish()}
+            />
+        );
     return (
         <AuthLayout
-            embedded
-            title={confirmed ? 'Your recovery phrase' : 'Save your recovery phrase'}
-            stamp={confirmed ? 'Saved' : reason ? 'New phrase' : 'One-time setup'}
-            description={`${
-                reason === 'master-key'
-                    ? 'Your master key was rotated and your previous phrase no longer works. '
-                    : reason === 'recovery-key'
-                      ? 'Your previous phrase no longer works. '
-                      : ''
-            }These 24 words, with access to your email, are the only way to set a new password if you forget yours. Store them somewhere private and offline.`}
+            wide
+            title={fresh ? 'Your new recovery phrase' : 'Save your recovery kit'}
+            description="These 24 words get you back in if you forget your password. HushOS can’t recover them for you."
         >
             {ready ? (
-                <div className="flex flex-col gap-4">
-                    {error && (
-                        <p
-                            role="alert"
-                            className="rounded-md bg-destructive-soft px-4 py-3 text-sm leading-relaxed text-destructive"
-                        >
-                            {error}
-                        </p>
+                <div className="flex flex-col gap-5">
+                    {fresh && (
+                        <AuthNote tone="info">
+                            {reason === 'master-key'
+                                ? 'Your sharing keys are reset, and your old phrase no longer works. Save these 24 words instead.'
+                                : 'Your old phrase no longer works. Save these 24 words before you leave this page.'}
+                        </AuthNote>
                     )}
-                    <ol
-                        aria-label="Recovery phrase"
-                        className="grid grid-cols-2 overflow-hidden rounded-md border border-rule bg-muted font-mono text-sm sm:grid-cols-3 md:grid-cols-4"
-                    >
-                        {backup.phrase.split(' ').map((word, index) => (
-                            <li
-                                key={`${index}-${word}`}
-                                className="flex items-baseline gap-3 border-r border-b border-rule px-3.5 py-3 animate-in fade-in slide-in-from-bottom-1 fill-mode-backwards duration-300 ease-out-expo nth-[2n]:border-r-0 sm:nth-[2n]:border-r sm:nth-[3n]:border-r-0 md:nth-[3n]:border-r md:nth-[4n]:border-r-0 [&:nth-last-child(-n+2)]:border-b-0 sm:[&:nth-last-child(-n+3)]:border-b-0 md:[&:nth-last-child(-n+4)]:border-b-0"
-                                style={{ animationDelay: `${index * 25}ms` }}
-                            >
-                                <span className="w-5 shrink-0 text-right text-[10px] text-muted-foreground tabular-nums">
-                                    {index + 1}
-                                </span>
-                                <span className="font-medium">{word}</span>
-                            </li>
-                        ))}
-                    </ol>
+                    {error && <AuthNote tone="danger">{error}</AuthNote>}
+                    <PhraseGrid phrase={backup.phrase} />
+                    <KitSheet email={user.email} phrase={backup.phrase} />
                     <div className="flex flex-wrap gap-2">
-                        <Button variant="outline" onClick={() => void copy()}>
-                            <TextSwap>{copied ? 'Copied' : 'Copy phrase'}</TextSwap>
-                            <CopyCheckIcon done={copied} className="size-4" />
-                        </Button>
                         <Button variant="outline" onClick={download}>
-                            Download kit <DownloadIcon aria-hidden="true" />
+                            <DownloadIcon />
+                            Download kit
+                        </Button>
+                        <Button variant="outline" onClick={() => window.print()}>
+                            <PrinterIcon />
+                            Print
+                        </Button>
+                        <Button variant="ghost" onClick={() => void copy()}>
+                            <CopyIcon />
+                            {copied ? 'Copied' : 'Copy words'}
                         </Button>
                     </div>
-                    <details className="group overflow-hidden rounded-md border border-rule">
-                        <summary className="flex h-11 cursor-pointer items-center justify-between px-4 text-sm font-semibold text-foreground select-none hover:bg-muted">
-                            Show as QR code
-                            <QrCodeIcon className="size-4 text-primary" aria-hidden="true" />
-                        </summary>
-                        <div className="border-t border-rule p-5">
-                            <div className="mx-auto w-fit rounded-xs border border-rule bg-white p-3">
-                                <QrCode
-                                    value={backup.phrase}
-                                    kind="recovery"
-                                    title="Private recovery phrase"
-                                />
-                            </div>
-                            <p className="mx-auto mt-4 w-fit rounded-md bg-warning-soft px-3 py-2 text-center text-xs leading-relaxed text-warning">
-                                Scan only into something you control. This is your phrase in plain
-                                text.
-                            </p>
-                        </div>
-                    </details>
                     {!confirmed || setup ? (
                         <>
                             {!confirmed && (
                                 <label
                                     htmlFor="saved"
-                                    className="flex cursor-pointer items-start gap-3 rounded-md bg-warning-soft px-4 py-3.5 text-sm leading-snug"
+                                    className="flex cursor-pointer items-start gap-2.5 border-t border-rule pt-4 text-sm leading-snug"
                                 >
                                     <Checkbox
                                         id="saved"
@@ -234,50 +213,211 @@ export function RecoveryPhrase({
                                         }
                                         className="mt-0.5"
                                     />
-                                    <span>
-                                        I’ve saved my recovery phrase somewhere private. I
-                                        understand HushOS can’t recover it for me.
-                                    </span>
+                                    I’ve saved my kit or written the words down, somewhere private.
                                 </label>
                             )}
-                            <div className="flex">
+                            <div className="flex justify-end">
                                 <Button
                                     size="lg"
-                                    className="flex-1 justify-between"
+                                    className="max-sm:w-full"
                                     disabled={(!confirmed && !saved) || pending}
-                                    onClick={() => void finish()}
+                                    onClick={() => (confirmed ? void finish() : setChecking(true))}
                                 >
-                                    <PendingLabel
-                                        pending={pending}
-                                        idle="Continue to HushOS"
-                                        busy="Continuing…"
-                                    />
-                                    <ArrowRightIcon aria-hidden="true" />
+                                    {pending ? 'Opening HushOS…' : 'Continue'}
                                 </Button>
                             </div>
                         </>
                     ) : null}
                 </div>
+            ) : !backup && (error || loadError) && unlockedUserId !== user.id ? (
+                <div className="flex flex-col gap-3">
+                    <p className="text-sm font-semibold">Unlock to see your recovery phrase.</p>
+                    <UnlockDevice
+                        user={user}
+                        onUnlocked={() => {
+                            setError('');
+                            void backupQuery.refetch();
+                        }}
+                    />
+                </div>
+            ) : error || loadError ? (
+                <AuthNote tone="danger">{error || loadError}</AuthNote>
             ) : (
-                <FormTable>
-                    {!backup && (error || loadError) && unlockedUserId !== user.id ? (
-                        <>
-                            <FormNote>Unlock this device to view your recovery phrase.</FormNote>
-                            <UnlockDevice
-                                user={user}
-                                onUnlocked={() => {
-                                    setError('');
-                                    void backupQuery.refetch();
-                                }}
-                            />
-                        </>
-                    ) : error || loadError ? (
-                        <FormNote tone="destructive">{error || loadError}</FormNote>
-                    ) : (
-                        <FormNote>Opening your recovery phrase…</FormNote>
-                    )}
-                </FormTable>
+                <output className="flex items-center gap-2.5 text-sm text-muted-foreground">
+                    <Spinner />
+                    Opening your recovery phrase
+                </output>
             )}
+        </AuthLayout>
+    );
+}
+
+/*
+ * The kit on paper: shown only when printing, the same one page from every
+ * page that offers Print. The words, the account, and what to do with it.
+ */
+const noSubscription = () => () => {};
+
+/*
+ * The printed kit. It goes straight into the body, so it prints across the
+ * whole page whatever the screen layout around it, with its own margins so
+ * "Margins: None" still leaves room. Paper is white whatever the theme, so it
+ * is drawn in Hush blue, not the theme's colours.
+ */
+export function KitSheet({ email, phrase }: { email: string; phrase: string }) {
+    const [madeOn] = useState(() =>
+        new Date().toLocaleDateString('en-GB', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+        }),
+    );
+    // The server has no body to put it in; the browser does once it hydrates.
+    const mounted = useSyncExternalStore(
+        noSubscription,
+        () => true,
+        () => false,
+    );
+    if (!mounted) return null;
+    return createPortal(
+        <div
+            data-print
+            className="hidden flex-col gap-7 font-sans text-[#141a33] [print-color-adjust:exact] print:flex"
+        >
+            <div className="flex items-center justify-between border-b-2 border-[#2c428e] pb-4">
+                <div className="flex items-center gap-3">
+                    <LogoBadge className="size-10" />
+                    <span className="flex flex-col">
+                        <span className="text-lg leading-tight font-bold text-[#2c428e]">
+                            HushOS
+                        </span>
+                        <span className="text-[13px] leading-tight">Recovery kit</span>
+                    </span>
+                </div>
+                <span className="text-xs text-[#4a5375]">Made {madeOn}</span>
+            </div>
+            <div className="flex items-end justify-between gap-6">
+                <div className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold text-[#4a5375]">Account</span>
+                    <span className="text-base font-semibold">{email}</span>
+                </div>
+                {/* The same 24 words, for the HushOS apps to scan when you recover there. */}
+                <div className="flex shrink-0 flex-col items-center gap-1">
+                    <QrCode value={phrase} size={112} title="Recovery phrase" />
+                    <span className="text-[11px] text-[#4a5375]">Scan in the HushOS app</span>
+                </div>
+            </div>
+            <ol className="grid grid-cols-3 gap-2.5">
+                {phrase.split(' ').map((word, index) => (
+                    <li
+                        key={`${index}-${word}`}
+                        className="flex items-baseline gap-2.5 rounded-md bg-[#eef1fb] px-3 py-2.5"
+                    >
+                        <span className="w-5 text-right text-xs font-semibold text-[#2c428e] tabular-nums">
+                            {index + 1}
+                        </span>
+                        <span className="font-mono text-base">{word}</span>
+                    </li>
+                ))}
+            </ol>
+            <div className="flex flex-col gap-2 border-l-[3px] border-[#2c428e] pl-4 text-[13px] leading-snug">
+                <span className="font-semibold text-[#2c428e]">If you forget your password</span>
+                <span>
+                    Choose “Forgot your password?” when you sign in to HushOS, on the web or in the
+                    app, and confirm your email. Then type these 24 words in order, or scan the code
+                    above in the app. You’ll get a new phrase afterwards; this page then stops
+                    working.
+                </span>
+                <span className="pt-1 font-semibold text-[#2c428e]">Keep it private</span>
+                <span>
+                    Anyone with these words and access to your email can open your account. HushOS
+                    can’t recover them for you.
+                </span>
+            </div>
+        </div>,
+        document.body,
+    );
+}
+
+/* Three words picked back out of the kit; Finish waits until all three are right. */
+function CheckWords({
+    phrase,
+    pending,
+    error,
+    onBack,
+    onDone,
+}: {
+    phrase: string;
+    pending: boolean;
+    error: string;
+    onBack: () => void;
+    onDone: () => void;
+}) {
+    const words = phrase.split(' ');
+    const [questions] = useState(() => checkQuestions(words));
+    const [picks, setPicks] = useState<Record<number, string>>({});
+    const right = (position: number) => picks[position] === words[position - 1];
+    const done = questions.every((question) => right(question.position));
+    return (
+        <AuthLayout title="Check you saved it" description="Pick the missing words from your kit.">
+            {error && <AuthNote tone="danger">{error}</AuthNote>}
+            {questions.map((question) => {
+                const pick = picks[question.position];
+                const wrong = pick !== undefined && !right(question.position);
+                return (
+                    <fieldset
+                        key={question.position}
+                        className="m-0 flex min-w-0 flex-col gap-1.5 border-0 p-0"
+                    >
+                        <legend className="mb-1.5 text-[13px] font-semibold">
+                            Word {question.position}
+                        </legend>
+                        <div className="flex gap-1 rounded-md bg-muted p-1">
+                            {question.options.map((word) => (
+                                <button
+                                    key={word}
+                                    type="button"
+                                    aria-pressed={pick === word}
+                                    onClick={() =>
+                                        setPicks((current) => ({
+                                            ...current,
+                                            [question.position]: word,
+                                        }))
+                                    }
+                                    className={cn(
+                                        'h-9 min-w-0 flex-1 cursor-pointer rounded-sm font-mono text-sm outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                        pick === word &&
+                                            !wrong &&
+                                            'bg-card font-semibold text-primary shadow-sm ring-1 ring-primary',
+                                        pick === word &&
+                                            wrong &&
+                                            'bg-destructive-soft font-semibold text-destructive ring-1 ring-destructive',
+                                    )}
+                                >
+                                    {word}
+                                </button>
+                            ))}
+                        </div>
+                        {wrong && (
+                            <p role="alert" className="text-[13px] text-destructive">
+                                That isn’t word {question.position}. Look at your kit again.
+                            </p>
+                        )}
+                    </fieldset>
+                );
+            })}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <button
+                    type="button"
+                    onClick={onBack}
+                    className="cursor-pointer text-sm font-semibold underline underline-offset-4"
+                >
+                    Show my words again
+                </button>
+                <Button size="lg" disabled={!done || pending} onClick={onDone}>
+                    {pending ? 'Opening HushOS…' : 'Finish'}
+                </Button>
+            </div>
         </AuthLayout>
     );
 }

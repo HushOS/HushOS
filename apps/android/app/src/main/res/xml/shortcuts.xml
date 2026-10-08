@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Long-press the launcher icon: Upload files, Upload photos, New folder and Search, in the folder last added to
+    (or Files). Each opens MainActivity with its action; signed out, it runs after sign-in.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="upload-files"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_upload_files"
+        android:shortcutShortLabel="@string/shortcut_upload_files">
+        <intent
+            android:action="com.hushos.app.shortcut.UPLOAD_FILES"
+            android:targetPackage="com.hushos.app"
+            android:targetClass="com.hushos.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="upload-photos"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_upload_photos"
+        android:shortcutShortLabel="@string/shortcut_upload_photos">
+        <intent
+            android:action="com.hushos.app.shortcut.UPLOAD_PHOTOS"
+            android:targetPackage="com.hushos.app"
+            android:targetClass="com.hushos.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new-folder"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_new_folder"
+        android:shortcutShortLabel="@string/shortcut_new_folder">
+        <intent
+            android:action="com.hushos.app.shortcut.NEW_FOLDER"
+            android:targetPackage="com.hushos.app"
+            android:targetClass="com.hushos.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/shortcut_search"
+        android:shortcutShortLabel="@string/shortcut_search">
+        <intent
+            android:action="com.hushos.app.shortcut.SEARCH"
+            android:targetPackage="com.hushos.app"
+            android:targetClass="com.hushos.app.MainActivity" />
+    </shortcut>
+</shortcuts>

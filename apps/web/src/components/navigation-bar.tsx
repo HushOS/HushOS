@@ -36,7 +36,7 @@ export function NavigationBar() {
         <div
             aria-hidden="true"
             className={cn(
-                'pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 origin-left bg-primary',
+                'pointer-events-none fixed inset-x-0 top-0 z-50 h-[3px] origin-left bg-primary',
                 phase === 'idle' && 'scale-x-0 opacity-0',
                 phase === 'loading' &&
                     'scale-x-[0.85] opacity-100 transition-transform duration-[8s] ease-out-expo',

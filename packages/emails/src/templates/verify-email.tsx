@@ -15,19 +15,19 @@ import {
 } from 'react-email';
 
 /*
- * Paper, in email form: a desk-coloured ground, one sheet with a hairline
- * edge, ink-blue text, dotted leaders between the facts, and a single blue
- * button. Mono only for the link to copy. Dark mode swaps to the dark desk.
- * Everything is inline-safe for mail clients.
+ * The site's look, in email form: the light ground, one white card with a
+ * hairline edge and 16px corners, ink text, facts in ruled rows, the logo on
+ * its blue square, and a single blue button. Mono only for the link to copy.
+ * Dark mode swaps to the dark ground and card. Inline-safe for mail clients.
  */
 const mono = '"Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
-const sans = '"Atkinson Hyperlegible Next", "Atkinson Hyperlegible", Arial, sans-serif';
+const sans = 'Geist, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
 const label = {
     margin: 0,
     fontSize: '13px',
     lineHeight: '20px',
     fontWeight: 600,
-    color: '#5a6483',
+    color: '#5a6380',
 };
 
 export default function VerifyEmail({
@@ -55,24 +55,24 @@ export default function VerifyEmail({
                 {/* React Email moves the body's inline styles onto a cell inside it; the class stays on the body. */}
                 <style>{`
                     :root { color-scheme: light dark; supported-color-schemes: light dark; }
-                    html { background-color: #e6e2d9; }
+                    html { background-color: #f3f4f8; }
                     @media (prefers-color-scheme: dark) {
-                        html { background-color: #13151b !important; }
-                        .email-body { background-color: #13151b !important; color: #dfe3f2 !important; }
-                        .email-body > table > tbody > tr > td { background-color: #13151b !important; color: #dfe3f2 !important; }
-                        .email-card { background-color: #1c1f28 !important; border-color: #30343f !important; }
-                        .email-cell { border-color: #30343f !important; }
-                        .email-heading, .email-value { color: #dfe3f2 !important; }
-                        .email-muted { color: #969eb8 !important; }
+                        html { background-color: #0e111a !important; }
+                        .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
+                        .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
+                        .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                        .email-cell { border-color: #262b3a !important; }
+                        .email-heading, .email-value { color: #e4e8f4 !important; }
+                        .email-muted { color: #9aa3be !important; }
                         .email-link { color: #aab8f4 !important; }
                         .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     }
-                    [data-ogsc] .email-body { background-color: #13151b !important; color: #dfe3f2 !important; }
-                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #13151b !important; color: #dfe3f2 !important; }
-                    [data-ogsc] .email-card { background-color: #1c1f28 !important; border-color: #30343f !important; }
-                    [data-ogsc] .email-cell { border-color: #30343f !important; }
-                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #dfe3f2 !important; }
-                    [data-ogsc] .email-muted { color: #969eb8 !important; }
+                    [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
+                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
+                    [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                    [data-ogsc] .email-cell { border-color: #262b3a !important; }
+                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
+                    [data-ogsc] .email-muted { color: #9aa3be !important; }
                     [data-ogsc] .email-link { color: #aab8f4 !important; }
                     [data-ogsc] .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     @media (max-width: 480px) {
@@ -89,11 +89,11 @@ export default function VerifyEmail({
             <Body
                 className="email-body"
                 style={{
-                    backgroundColor: '#e6e2d9',
+                    backgroundColor: '#f3f4f8',
                     margin: 0,
                     padding: '40px 16px',
                     fontFamily: sans,
-                    color: '#1c2848',
+                    color: '#17203a',
                 }}
             >
                 <Container
@@ -101,14 +101,14 @@ export default function VerifyEmail({
                     style={{
                         maxWidth: '560px',
                         margin: '0 auto',
-                        backgroundColor: '#fcfbf7',
-                        border: '1px solid #d3d1ca',
-                        borderRadius: '3px',
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #e2e5ee',
+                        borderRadius: '16px',
                     }}
                 >
                     <Section
                         className="email-pad email-cell"
-                        style={{ padding: '18px 28px', borderBottom: '1px solid #d3d1ca' }}
+                        style={{ padding: '18px 28px', borderBottom: '1px solid #e2e5ee' }}
                     >
                         <Row>
                             <Column style={{ width: '34px', verticalAlign: 'middle' }}>
@@ -121,7 +121,7 @@ export default function VerifyEmail({
                                                     width: '26px',
                                                     height: '26px',
                                                     backgroundColor: '#2c428e',
-                                                    borderRadius: '3px',
+                                                    borderRadius: '8px',
                                                     textAlign: 'center',
                                                     verticalAlign: 'middle',
                                                 }}
@@ -146,7 +146,7 @@ export default function VerifyEmail({
                                         fontSize: '16px',
                                         lineHeight: '26px',
                                         fontWeight: 700,
-                                        color: '#1c2848',
+                                        color: '#17203a',
                                     }}
                                 >
                                     HushOS
@@ -166,9 +166,9 @@ export default function VerifyEmail({
                                 margin: '0 0 12px',
                                 fontSize: '26px',
                                 lineHeight: '32px',
-                                fontWeight: 700,
-                                letterSpacing: '-0.3px',
-                                color: '#1c2848',
+                                fontWeight: 800,
+                                letterSpacing: '-0.6px',
+                                color: '#17203a',
                             }}
                         >
                             {recover
@@ -181,7 +181,7 @@ export default function VerifyEmail({
                                 fontSize: '15px',
                                 lineHeight: '24px',
                                 margin: '0 0 20px',
-                                color: '#5a6483',
+                                color: '#5a6380',
                             }}
                         >
                             {recover
@@ -205,7 +205,7 @@ export default function VerifyEmail({
                                             style={{
                                                 width: '44%',
                                                 padding: '9px 0',
-                                                borderBottom: '1px dotted #b9bccb',
+                                                borderBottom: '1px solid #e2e5ee',
                                             }}
                                         >
                                             <Text className="email-muted" style={label}>
@@ -216,7 +216,7 @@ export default function VerifyEmail({
                                             className="email-cell"
                                             style={{
                                                 padding: '9px 0',
-                                                borderBottom: '1px dotted #b9bccb',
+                                                borderBottom: '1px solid #e2e5ee',
                                                 textAlign: 'right',
                                             }}
                                         >
@@ -227,7 +227,7 @@ export default function VerifyEmail({
                                                     fontSize: '14px',
                                                     lineHeight: '20px',
                                                     fontWeight: value === 'Never' ? 700 : 400,
-                                                    color: '#1c2848',
+                                                    color: '#17203a',
                                                 }}
                                             >
                                                 {value}
@@ -245,21 +245,21 @@ export default function VerifyEmail({
                             style={{
                                 display: 'inline-block',
                                 backgroundColor: '#2c428e',
-                                color: '#fcfbf7',
+                                color: '#ffffff',
                                 padding: '13px 22px',
-                                borderRadius: '3px',
+                                borderRadius: '10px',
                                 fontSize: '15px',
                                 lineHeight: '20px',
                                 fontWeight: 700,
                                 textDecoration: 'none',
                             }}
                         >
-                            Verify email →
+                            Verify email
                         </Button>
                     </Section>
                     <Section
                         className="email-pad email-cell"
-                        style={{ padding: '20px 28px', borderTop: '1px solid #d3d1ca' }}
+                        style={{ padding: '20px 28px', borderTop: '1px solid #e2e5ee' }}
                     >
                         <Text
                             className="email-muted"
@@ -267,7 +267,7 @@ export default function VerifyEmail({
                                 fontSize: '13px',
                                 lineHeight: '20px',
                                 margin: '0 0 12px',
-                                color: '#5a6483',
+                                color: '#5a6380',
                             }}
                         >
                             If you didn’t request this, you can ignore this email. Nothing changes

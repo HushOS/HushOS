@@ -2,7 +2,6 @@ import {
     addTag,
     assign,
     findTag,
-    nextColour,
     tagsOf,
     type DriveNode,
     type Tag,
@@ -11,11 +10,10 @@ import {
 } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { CheckIcon, PlusIcon, TagsIcon } from 'lucide-react';
+import { cn } from 'cn';
 import { useId, useState } from 'react';
-import { TagColourPicker } from '@/components/drive/tag-colour';
-import { TagStamp } from '@/components/drive/tag-stamp';
-import { PendingLabel, Spinner } from '@/components/motion';
+import { Swatch, TagColourButton } from '@/components/drive/tag-colour';
+import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -28,7 +26,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { driveClient, driveError } from '@/lib/drive';
-import { invalidateTags, tagsQueryOptions } from '@/lib/tags';
+import { invalidateTags, suggestedColour, tagsQueryOptions, useTagCounts } from '@/lib/tags';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -48,7 +46,7 @@ export function TagDialog({
 }) {
     return (
         <Dialog open={open && nodes.length > 0} onOpenChange={onOpenChange}>
-            <DialogContent>
+            <DialogContent className="sm:max-w-[460px]">
                 {nodes.length > 0 && (
                     <TagForm
                         key={nodes.map((node) => node.id).join(',')}
@@ -126,7 +124,11 @@ function TagForm({
         setPending('create');
         setError('');
         try {
-            const { registry: next, tag } = addTag(registry.data, name, picked ?? undefined);
+            const { registry: next, tag } = addTag(
+                registry.data,
+                name,
+                picked ?? suggestedColour(registry.data),
+            );
             if (next !== registry.data) await driveClient.saveTags(next);
             await invalidateTags(queryClient);
             // Marks may have moved while the save was out; check on top of what is there now.
@@ -171,6 +173,7 @@ function TagForm({
 
     const busy = pending !== null;
     const what = nodes.length === 1 ? `“${nodes[0]!.name}”` : `${nodes.length} selected items`;
+    const counts = useTagCounts();
     return (
         <form
             className="contents"
@@ -183,34 +186,80 @@ function TagForm({
             <DialogHeader>
                 <DialogTitle>Tags for {what}</DialogTitle>
                 <DialogDescription>
-                    Tags are yours alone: sealed to your workspace, never written on the item, and
-                    invisible to anyone you share it with.
+                    Only you see your tags; people you share with don’t.
                 </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                    {registry.data && (
+                        <TagColourButton
+                            value={exact?.colour ?? picked ?? suggestedColour(registry.data)}
+                            onChange={setPicked}
+                            disabled={busy || exact !== null}
+                        />
+                    )}
+                    <label htmlFor={id} className="sr-only">
+                        Find or add a tag
+                    </label>
+                    <Input
+                        id={id}
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                                event.preventDefault();
+                                void create();
+                            }
+                        }}
+                        placeholder="Find or add a tag"
+                        autoComplete="off"
+                        spellCheck={false}
+                        maxLength={40}
+                        className="h-9 flex-1 pointer-coarse:h-11"
+                    />
+                    <Button
+                        type="button"
+                        variant="outline"
+                        disabled={busy || !typed || !registry.data || selected}
+                        onClick={() => void create()}
+                    >
+                        {pending === 'create' ? 'Adding…' : 'Add'}
+                    </Button>
+                </div>
                 {registry.isPending && (
                     <div className="flex items-center justify-center py-6 text-muted-foreground">
                         <Spinner />
                     </div>
                 )}
                 {registry.isError && (
-                    <p role="alert" className="text-xs text-destructive">
+                    <p role="alert" className="text-[13px] text-destructive">
                         {driveError(registry.error)}
                     </p>
                 )}
                 {registry.data && current && (
-                    <div className="flex max-h-72 flex-col overflow-y-auto border-y border-rule">
-                        {registry.data.tags.length === 0 && (
-                            <p className="px-1.5 py-3 text-sm text-muted-foreground">
-                                No tags yet. Make the first one below.
+                    <div className="-mx-2 flex max-h-64 flex-col overflow-y-auto">
+                        {registry.data.tags.length === 0 && !typed && (
+                            <p className="px-2 py-3 text-sm text-muted-foreground">
+                                No tags yet. Type a name above to make the first one.
                             </p>
+                        )}
+                        {typed && !anyMatch && (
+                            <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void create()}
+                                className="flex h-10 cursor-pointer items-center rounded-md px-2 text-left text-sm font-semibold text-primary hover:bg-muted"
+                            >
+                                Add “{typed}”
+                            </button>
                         )}
                         {shown.map((tag) => {
                             const mark = current[tag.id] ?? 'none';
                             return (
                                 <label
                                     key={tag.id}
-                                    className="flex cursor-pointer items-center gap-3 border-b border-rule px-1.5 py-2.5 last:border-b-0 hover:bg-muted"
+                                    // The checkbox carries the state; the row stays plain.
+                                    className="flex h-10 shrink-0 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-muted"
                                 >
                                     <Checkbox
                                         checked={mark === 'all'}
@@ -218,97 +267,48 @@ function TagForm({
                                         onCheckedChange={() => toggle(tag.id)}
                                         aria-label={tag.name}
                                     />
-                                    <TagStamp name={tag.name} colour={tag.colour} />
-                                    {mark === 'some' && (
-                                        <span className="ml-auto text-xs text-muted-foreground">
-                                            on some
-                                        </span>
-                                    )}
+                                    <Swatch colour={tag.colour} className="size-2.5 rounded-full" />
+                                    <span
+                                        className={cn(
+                                            'min-w-0 flex-1 truncate text-sm',
+                                            mark !== 'none' && 'font-semibold',
+                                        )}
+                                    >
+                                        {tag.name}
+                                    </span>
+                                    <span className="text-[13px] text-muted-foreground tabular-nums">
+                                        {mark === 'some' ? 'On some' : (counts.get(tag.id) ?? '')}
+                                    </span>
                                 </label>
                             );
                         })}
-                        {registry.data.tags.length > 0 && !anyMatch && (
-                            <p className="px-1.5 py-3 text-sm text-muted-foreground">
-                                No tag called “{typed}”. Press Enter to make it.
-                            </p>
-                        )}
                     </div>
                 )}
-                <div className="flex flex-col gap-2">
-                    <label htmlFor={id} className="eyebrow text-muted-foreground">
-                        Find or make a tag
-                    </label>
-                    <div className="flex flex-col gap-2">
-                        <Input
-                            id={id}
-                            value={draft}
-                            onChange={(event) => setDraft(event.target.value)}
-                            onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void create();
-                                }
-                            }}
-                            placeholder="Home, Tax, Travel…"
-                            autoComplete="off"
-                            spellCheck={false}
-                            maxLength={40}
-                        />
-                        <div className="flex items-center justify-between gap-2">
-                            {registry.data && !exact ? (
-                                <TagColourPicker
-                                    value={picked ?? nextColour(registry.data)}
-                                    onChange={setPicked}
-                                    disabled={busy}
-                                />
-                            ) : (
-                                <span />
-                            )}
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={busy || !typed || !registry.data || selected}
-                                onClick={() => void create()}
-                            >
-                                {exact ? <CheckIcon /> : <PlusIcon />}
-                                <PendingLabel
-                                    pending={pending === 'create'}
-                                    idle={selected ? 'Selected' : exact ? 'Check' : 'Add'}
-                                    busy="Adding"
-                                />
-                            </Button>
-                        </div>
-                    </div>
-                </div>
                 {error && (
-                    <p role="alert" className="text-xs text-destructive">
+                    <p role="alert" className="text-[13px] text-destructive">
                         {error}
                     </p>
                 )}
             </div>
-            <DialogFooter className="sm:justify-between">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    render={<Link to="/app/tags" onClick={() => onOpenChange(false)} />}
+            <DialogFooter>
+                <Link
+                    to="/app/tags"
+                    onClick={() => onOpenChange(false)}
+                    className="mr-auto text-sm font-semibold text-primary underline underline-offset-4 hover:text-primary-hover max-sm:order-last max-sm:self-center"
                 >
-                    <TagsIcon />
                     Manage tags
+                </Link>
+                <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onOpenChange(false)}
+                    disabled={busy}
+                >
+                    Cancel
                 </Button>
-                <span className="flex gap-2">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => onOpenChange(false)}
-                        disabled={busy}
-                    >
-                        Cancel
-                    </Button>
-                    <Button type="submit" disabled={busy || !current}>
-                        <PendingLabel pending={pending === 'save'} idle="Save tags" busy="Saving" />
-                    </Button>
-                </span>
+                <Button type="submit" disabled={busy || !current}>
+                    {pending === 'save' ? 'Saving…' : 'Save tags'}
+                </Button>
             </DialogFooter>
         </form>
     );

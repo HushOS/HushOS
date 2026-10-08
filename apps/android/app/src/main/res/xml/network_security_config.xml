@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Release: https only, to any server, with the system's certificate authorities. A
+    self-hosted server needs https (docs/self-hosting.md); the server address field refuses
+    http too. Debug builds replace this file (src/debug) to reach the dev server over http.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

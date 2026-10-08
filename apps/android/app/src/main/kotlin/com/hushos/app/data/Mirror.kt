@@ -82,7 +82,11 @@ class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "
     /* Forgets everything about `workspaceId`, or every workspace when none is named. */
     fun clear(workspaceId: String? = null) {
         val db = writableDatabase
-        if (workspaceId == null) { db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null); db.delete("documents", null, null) }
+        if (workspaceId == null) {
+            db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null); db.delete("documents", null, null)
+            // An account leaving the phone: its rows don't linger in the file's free pages either.
+            db.execSQL("VACUUM")
+        }
         else { db.delete("nodes", "workspace_id = ?", arrayOf(workspaceId)); db.delete("cursors", "workspace_id = ?", arrayOf(workspaceId)) }
     }
 

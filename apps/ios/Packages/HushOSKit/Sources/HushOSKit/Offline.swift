@@ -21,6 +21,118 @@ public enum Offline {
         public let keptAt: String
         /* Tells a file of this account's drive from one kept out of a share; entries kept before it was recorded have none. */
         public var workspaceId: String?
+        /* The kept folder this file is kept with; nil when it was kept on its own. */
+        public var folderId: String?
+    }
+
+    /* A folder kept on this phone: every file inside it and its subfolders, now and as they change. */
+    public struct KeptFolder: Codable, Sendable, Identifiable, Equatable {
+        public let id: String
+        public var name: String
+        public let workspaceId: String
+        public let keptAt: String
+    }
+
+    static let foldersKey = "offline.folders"
+
+    /* Every kept folder, newest first. */
+    public static func keptFolders() -> [KeptFolder] {
+        guard let data = defaults.data(forKey: foldersKey), let list = try? JSONDecoder().decode([KeptFolder].self, from: data) else { return [] }
+        return list.sorted { $0.keptAt > $1.keptAt }
+    }
+
+    public static func isFolderKept(_ id: String) -> Bool { keptFolders().contains { $0.id == id } }
+
+    /* The kept folder a file is kept with, if it is. */
+    public static func keptBy(_ fileId: String) -> KeptFolder? {
+        guard let folderId = entries().first(where: { $0.id == fileId })?.folderId else { return nil }
+        return keptFolders().first { $0.id == folderId }
+    }
+
+    /* The files kept with a folder. */
+    public static func entries(keptWith folderId: String) -> [Entry] { entries().filter { $0.folderId == folderId } }
+
+    public static func rememberFolder(_ folder: Opened) {
+        var list = keptFolders().filter { $0.id != folder.id }
+        list.append(KeptFolder(id: folder.id, name: folder.name, workspaceId: folder.node.workspaceId,
+                               keptAt: ISO8601DateFormatter().string(from: Date())))
+        defaults.set(try? JSONEncoder().encode(list), forKey: foldersKey)
+    }
+
+    /* The folder stops being kept and every file kept with it goes; files kept on their own stay. */
+    public static func forgetFolder(_ id: String) {
+        defaults.set(try? JSONEncoder().encode(keptFolders().filter { $0.id != id }), forKey: foldersKey)
+        for entry in entries(keptWith: id) { forget(entry.id) }
+        writeFailures(keepFailures().filter { $0.value.folderId != id })
+    }
+
+    /*
+     * Kept copies from shares that are no longer shared with this account: the folder and
+     * every file kept from that workspace go. `own` is this account's workspace; `shared`
+     * the workspaces shares still open. Returns the folders removed, for the notice.
+     */
+    @discardableResult
+    public static func forgetUnshared(own: String, shared: Set<String>) -> [KeptFolder] {
+        let gone = keptFolders().filter { $0.workspaceId != own && !shared.contains($0.workspaceId) }
+        for folder in gone { forgetFolder(folder.id) }
+        for entry in entries() where entry.workspaceId.map({ $0 != own && !shared.contains($0) }) == true { forget(entry.id) }
+        return gone
+    }
+
+    /* MARK: Files in a kept folder that couldn't be kept */
+
+    /* One file's failed keep: why, how many times, and when to try again. */
+    public struct KeepFailure: Codable, Sendable, Equatable {
+        public let fileId: String
+        public let folderId: String
+        public var reason: String
+        public var attempts: Int
+        public var retryAt: Date
+    }
+
+    static let failuresKey = "offline.failures"
+
+    public static func keepFailures() -> [String: KeepFailure] {
+        guard let data = defaults.data(forKey: failuresKey), let map = try? JSONDecoder().decode([String: KeepFailure].self, from: data) else { return [:] }
+        return map
+    }
+
+    static func writeFailures(_ map: [String: KeepFailure]) {
+        defaults.set(try? JSONEncoder().encode(map), forKey: failuresKey)
+    }
+
+    /* Half a minute after the first failure, doubling to an hour: a file that keeps failing doesn't fail every sync. */
+    public static func keepRetryDelay(attempts: Int) -> TimeInterval {
+        min(3600, 30 * pow(2, Double(max(0, attempts - 1))))
+    }
+
+    /* A file in a kept folder that couldn't be kept: the rest of the folder stays kept. */
+    @discardableResult
+    public static func recordKeepFailure(_ fileId: String, folder folderId: String, reason: String, now: Date = Date()) -> KeepFailure {
+        var map = keepFailures()
+        let attempts = (map[fileId]?.attempts ?? 0) + 1
+        let failure = KeepFailure(fileId: fileId, folderId: folderId, reason: reason, attempts: attempts,
+                                  retryAt: now.addingTimeInterval(keepRetryDelay(attempts: attempts)))
+        map[fileId] = failure
+        writeFailures(map)
+        return failure
+    }
+
+    /* Whether a file may be tried now: never failed, or its wait is over. */
+    public static func isKeepDue(_ fileId: String, now: Date = Date()) -> Bool {
+        guard let failure = keepFailures()[fileId] else { return true }
+        return failure.retryAt <= now
+    }
+
+    /* Retry asked for, or the file came down: it starts again from no failures. */
+    public static func clearKeepFailure(_ fileId: String) {
+        var map = keepFailures()
+        guard map.removeValue(forKey: fileId) != nil else { return }
+        writeFailures(map)
+    }
+
+    public static func keepFailures(in folderId: String) -> [KeepFailure] {
+        keepFailures().values.filter { $0.folderId == folderId }
     }
 
     static let group = "group.com.hushos.app"
@@ -62,11 +174,17 @@ public enum Offline {
         return url
     }
 
-    static func remember(_ item: Opened) {
+    /* `folder`: the kept folder it comes with. A refresh passes none and keeps what was recorded. */
+    static func remember(_ item: Opened, folder: String? = nil) {
+        let existing = entries().first { $0.id == item.id }
         var list = entries().filter { $0.id != item.id }
+        // Kept on its own before: it stays its own, and outlives the folder.
+        let keptWith = existing.map { $0.folderId } ?? folder
         list.append(Entry(id: item.id, name: item.name, versionId: item.node.currentVersion?.id ?? "", size: item.size, mime: item.metadata.mime,
-                          keptAt: ISO8601DateFormatter().string(from: Date()), workspaceId: item.node.workspaceId))
+                          keptAt: existing?.keptAt ?? ISO8601DateFormatter().string(from: Date()), workspaceId: item.node.workspaceId,
+                          folderId: keptWith))
         write(list)
+        clearKeepFailure(item.id)
     }
 
     /* Fills in the workspace of an entry kept before it was recorded, once the item is open. */
@@ -81,11 +199,24 @@ public enum Offline {
         write(entries().filter { $0.id != id })
         try? FileManager.default.removeItem(at: root().appendingPathComponent(id, isDirectory: true))
     }
+
+    /*
+     * Kept copies are decrypted files: they belong to the account that kept them and
+     * nobody else (AccountStore removes them with the rest of the account's data).
+     */
+    public static func forgetAll() {
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: foldersKey)
+        defaults.removeObject(forKey: failuresKey)
+        // Left by an earlier version that recorded the owner here (AccountStore records it now).
+        defaults.removeObject(forKey: "offline.owner")
+        try? FileManager.default.removeItem(at: root())
+    }
 }
 
 extension Vault {
     /* Keeps a file: downloads its current version into the offline store and records it. */
-    public func keepDownloaded(_ item: Opened, progress: @Sendable (Double) -> Void = { _ in }) async throws {
+    public func keepDownloaded(_ item: Opened, folder: String? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: destination.path) {
@@ -108,7 +239,22 @@ extension Vault {
         for entry in (try? FileManager.default.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? [] where entry.lastPathComponent != item.node.currentVersion?.id {
             try? FileManager.default.removeItem(at: entry)
         }
-        Offline.remember(item)
+        Offline.remember(item, folder: folder)
+    }
+
+    /* Every file in a folder and its subfolders, not in the trash: what keeping the folder keeps. */
+    public func filesUnder(_ folderId: String) async throws -> [Opened] {
+        var files: [Opened] = []
+        var queue = [folderId]
+        var seen: Set<String> = []
+        while let id = queue.first {
+            queue.removeFirst()
+            guard seen.insert(id).inserted else { continue }
+            for child in try await children(of: id) where child.node.trashedAt == nil {
+                if child.isFolder { queue.append(child.id) } else if child.node.currentVersion != nil { files.append(child) }
+            }
+        }
+        return files
     }
 
     /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
@@ -199,7 +345,7 @@ extension Vault {
     }
 
     /* Decrypts the fetched `chunk-N` files in `directory` into the kept copy and records it; a replaced file is refused. */
-    public func assembleKeep(_ plan: KeepPlan, from directory: URL) async throws {
+    public func assembleKeep(_ plan: KeepPlan, from directory: URL, folder: String? = nil) async throws {
         let item = try await resolve(plan.nodeId)
         guard item.node.currentVersion?.id == plan.versionId, let destination = Offline.file(for: item) else {
             throw DriveAPIError.server(409, "“\(plan.name)” changed while it was being kept; it will be fetched again.")
@@ -228,6 +374,6 @@ extension Vault {
         for entry in (try? files.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? [] where entry.lastPathComponent != plan.versionId {
             try? files.removeItem(at: entry)
         }
-        Offline.remember(item)
+        Offline.remember(item, folder: folder)
     }
 }

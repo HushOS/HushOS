@@ -34,7 +34,7 @@ public enum AuthError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .message(let text): return text
-        case .wrongPassword: return "Unable to sign in. Check your email and password."
+        case .wrongPassword: return "That email and password don’t match. Check them and try again."
         case .noSession: return "Signed in, but the session was not returned."
         }
     }
@@ -67,23 +67,35 @@ public enum Auth {
         do {
             (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         } catch {
-            throw AuthError.message("Could not reach HushOS. Check your connection.")
+            throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
         }
         let http = response as? HTTPURLResponse
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let http, (200 ..< 300).contains(http.statusCode) else {
-            throw AuthError.message(parsed["message"] as? String ?? "Please try again.")
+            throw AuthError.message(parsed["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }
-        var cookie: String? = nil
-        if let header = http.value(forHTTPHeaderField: "Set-Cookie") {
-            for part in header.split(separator: ";") {
-                let pair = part.trimmingCharacters(in: .whitespaces)
-                if pair.hasPrefix("hushos-session=") || pair.hasPrefix("__Host-hushos-session=") {
-                    cookie = String(pair.split(separator: "=", maxSplits: 1)[1])
-                }
-            }
+        return Reply(body: parsed, cookie: sessionToken(setCookie: http.value(forHTTPHeaderField: "Set-Cookie")))
+    }
+
+    /*
+     * The session token in a Set-Cookie header, or nil. Several cookies arrive joined by
+     * commas; attributes follow a semicolon. Sign-out answers with the cookie cleared
+     * ("hushos-session="): an empty value is no session.
+     */
+    static func sessionToken(setCookie header: String?) -> String? {
+        guard let header else { return nil }
+        var token: String?
+        for cookie in header.components(separatedBy: ",") {
+            // The name=value pair comes first; anything after the first semicolon is an attribute.
+            guard let pair = cookie.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first else { continue }
+            let trimmed = pair.trimmingCharacters(in: .whitespaces)
+            guard let equals = trimmed.firstIndex(of: "=") else { continue }
+            let name = trimmed[..<equals]
+            guard name == "hushos-session" || name == "__Host-hushos-session" else { continue }
+            let value = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            token = value.isEmpty ? nil : value
         }
-        return Reply(body: parsed, cookie: cookie)
+        return token
     }
 
     /* Signs in, stores the session and (when needed) a new device memory; returns who signed in. */
@@ -104,6 +116,8 @@ public enum Auth {
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
         guard let token = finished.cookie else { throw AuthError.noSession }
+        // Another account's data on this phone goes before this one's session exists.
+        AccountStore.shared.claim(user.id)
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
 
@@ -146,7 +160,7 @@ public enum Auth {
         return try JSONDecoder().decode(Body.self, from: data).user
     }
 
-    /* Ends the session on the server (best effort) and forgets it here. The device memory stays for the next sign-in. */
+    /* Ends the session on the server (best effort) and forgets it here; AccountStore.wipe removes the rest. */
     public static func signOut() async {
         if let session = SharedKeychain.session {
             let cookieName = session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"

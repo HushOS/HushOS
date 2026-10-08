@@ -1,8 +1,9 @@
-import { TAG_PRESETS, type TagColour } from '@hushos/drive/client';
+import { TAG_PRESETS, type TagColour, type TagPreset } from '@hushos/drive/client';
+import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { useId, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { swatchProps, TAG_COLOUR_LABEL } from '@/lib/tags';
+import { OFFERED_COLOURS, swatchProps, TAG_COLOUR_LABEL } from '@/lib/tags';
 
 /* A tag's colour as a square, whichever way it was chosen. */
 export function Swatch({ colour, className }: { colour: TagColour | null; className?: string }) {
@@ -17,12 +18,14 @@ export function Swatch({ colour, className }: { colour: TagColour | null; classN
 }
 
 /*
- * The five presets and one of your own. The last square opens, beside it, a
- * small picker drawn the way the rest is: a square for saturation and
- * brightness, a hue strip, and the hex, all three the same colour. Dragging
- * previews; letting go, or Enter in the field, is what chooses. Nothing
- * around the row moves while it is open.
+ * The offered presets as round swatches and one of your own: the last swatch opens,
+ * beneath the row, a square for saturation and brightness, a hue strip, and the
+ * hex, all three the same colour. Dragging previews; letting go, or Enter in the
+ * field, is what chooses. A caption names what is chosen.
  */
+/* Where Custom starts: the plum the presets leave out. */
+const FIRST_CUSTOM = '#7c5cbf' as TagColour;
+
 export function TagColourPicker({
     value,
     onChange,
@@ -36,60 +39,90 @@ export function TagColourPicker({
 }) {
     const id = useId();
     const custom = !(TAG_PRESETS as readonly string[]).includes(value);
-    const [open, setOpen] = useState(false);
-    const cell =
-        'relative flex size-7 cursor-pointer items-center justify-center rounded-xs border border-transparent outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring has-focus-visible:outline-2 has-focus-visible:-outline-offset-2 has-focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 has-disabled:cursor-not-allowed has-disabled:opacity-50';
+    const [open, setOpen] = useState(custom);
+    const ring = (on: boolean) =>
+        cn(
+            'relative flex size-9 cursor-pointer items-center justify-center rounded-full border-2 outline-none has-focus-visible:outline-2 has-focus-visible:outline-offset-1 has-focus-visible:outline-ring has-disabled:cursor-not-allowed has-disabled:opacity-50',
+            on ? 'border-foreground' : 'border-transparent hover:border-rule',
+        );
     return (
         <fieldset
             aria-label="Colour"
             disabled={disabled}
-            className={cn('m-0 flex items-center gap-1 border-0 p-0', className)}
+            className={cn('m-0 flex min-w-0 flex-col gap-2 border-0 p-0', className)}
         >
-            {TAG_PRESETS.map((preset) => (
-                <label
-                    key={preset}
-                    title={TAG_COLOUR_LABEL[preset]}
-                    className={cn(cell, value === preset && 'border-input bg-muted')}
-                >
+            <div className="flex items-center gap-1">
+                {OFFERED_COLOURS.map((preset) => (
+                    <label
+                        key={preset}
+                        title={TAG_COLOUR_LABEL[preset]}
+                        className={ring(value === preset)}
+                    >
+                        <input
+                            type="radio"
+                            name={id}
+                            value={preset}
+                            aria-label={TAG_COLOUR_LABEL[preset]}
+                            checked={value === preset}
+                            onChange={() => {
+                                setOpen(false);
+                                onChange(preset);
+                            }}
+                            className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
+                        />
+                        <span className="pointer-events-none flex size-6 items-center justify-center rounded-full">
+                            <Swatch colour={preset} className="absolute size-6 rounded-full" />
+                            {value === preset && (
+                                <CheckIcon
+                                    className="relative size-3.5 text-white"
+                                    strokeWidth={3}
+                                    aria-hidden="true"
+                                />
+                            )}
+                        </span>
+                    </label>
+                ))}
+                <label title="Custom colour" className={ring(custom)}>
                     <input
                         type="radio"
                         name={id}
-                        value={preset}
-                        aria-label={TAG_COLOUR_LABEL[preset]}
-                        checked={value === preset}
+                        value="custom"
+                        aria-label="Custom colour"
+                        checked={custom}
                         onChange={() => {
-                            setOpen(false);
-                            onChange(preset);
+                            // Choosing Custom chooses a colour at once; the square then refines it.
+                            setOpen(true);
+                            if (!custom) onChange(FIRST_CUSTOM);
                         }}
-                        className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0"
+                        onClick={() => setOpen(true)}
+                        className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
                     />
-                    <Swatch colour={preset} className="size-3 rounded-full" />
-                </label>
-            ))}
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger
-                    title="Custom colour"
-                    aria-label="Custom colour"
-                    disabled={disabled}
-                    className={cn(cell, (custom || open) && 'border-input bg-muted')}
-                >
                     <span
                         aria-hidden="true"
-                        className={cn(
-                            'size-3 shrink-0 rounded-full',
-                            !custom && 'border border-dashed border-muted-foreground',
-                        )}
-                        style={custom ? { backgroundColor: value } : undefined}
+                        className="pointer-events-none size-6 rounded-full"
+                        style={{
+                            background: custom
+                                ? value
+                                : 'conic-gradient(#b4503b, #c9962b, #23766d, #4a64c8, #7c5cbf, #b4503b)',
+                        }}
                     />
-                </PopoverTrigger>
-                <PopoverContent aria-label="Custom colour" className="w-56">
+                </label>
+            </div>
+            <span className="text-[13px] text-muted-foreground">
+                {custom
+                    ? `Custom colour · ${value.toUpperCase()}`
+                    : (TAG_COLOUR_LABEL[value as TagPreset] ?? '')}
+            </span>
+            {open && (
+                <div className="border-t border-rule pt-3">
                     <CustomColour
-                        value={custom ? value : '#3b6acc'}
+                        key={custom ? 'custom' : 'preset'}
+                        value={custom ? value : FIRST_CUSTOM}
                         disabled={disabled}
                         onChoose={(hex) => onChange(hex)}
                     />
-                </PopoverContent>
-            </Popover>
+                </div>
+            )}
         </fieldset>
     );
 }
@@ -208,7 +241,7 @@ function CustomColour({
     }
     const pure = hsvToHex({ h: hsv.h, s: 1, v: 1 });
     return (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
             {/* oxlint-disable jsx-a11y/prefer-tag-over-role -- no form control has two axes, and the hue strip is drawn and driven the same way */}
             <div
                 role="slider"
@@ -220,15 +253,19 @@ function CustomColour({
                 aria-valuetext={`${Math.round(hsv.s * 100)}% saturation, ${Math.round(hsv.v * 100)}% brightness`}
                 onKeyDown={(event) => keys(event, 'area')}
                 {...surface((x, y) => ({ ...hsv, s: x, v: 1 - y }))}
-                className="relative h-28 w-full cursor-crosshair touch-none rounded-xs border border-input outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                className="relative h-32 w-full cursor-crosshair touch-none rounded-md outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pure})`,
                 }}
             >
                 <span
                     aria-hidden="true"
-                    className="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1px_var(--ink)]"
-                    style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%` }}
+                    className="absolute size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
+                    style={{
+                        left: `${hsv.s * 100}%`,
+                        top: `${(1 - hsv.v) * 100}%`,
+                        background: hex,
+                    }}
                 />
             </div>
             <div
@@ -240,7 +277,7 @@ function CustomColour({
                 aria-valuenow={Math.round(hsv.h)}
                 onKeyDown={(event) => keys(event, 'hue')}
                 {...surface((x) => ({ ...hsv, h: x * 359.999 }))}
-                className="relative h-3 w-full cursor-crosshair touch-none rounded-xs border border-input outline-none select-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                className="relative h-3 w-full cursor-pointer touch-none rounded-full outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage:
                         'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)',
@@ -248,16 +285,14 @@ function CustomColour({
             >
                 <span
                     aria-hidden="true"
-                    className="absolute top-1/2 h-4 w-1.5 -translate-x-1/2 -translate-y-1/2 border border-white bg-transparent shadow-[0_0_0_1px_var(--ink)]"
+                    className="absolute top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
                     style={{ left: `${(hsv.h / 360) * 100}%` }}
                 />
             </div>
             {/* oxlint-enable jsx-a11y/prefer-tag-over-role */}
             <label className="flex items-center gap-2">
-                <Swatch
-                    colour={hex as TagColour}
-                    className="size-4 rounded-full border border-input"
-                />
+                <Swatch colour={hex as TagColour} className="size-5 rounded-full" />
+                <span className="text-[13px] font-semibold">Hex</span>
                 <input
                     type="text"
                     aria-label="Hex colour"
@@ -284,9 +319,48 @@ function CustomColour({
                                 commit(hexToHsv(typed.toLowerCase()));
                         }
                     }}
-                    className="h-8 w-24 min-w-0 rounded-md border border-input bg-card px-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-sm outline-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                 />
             </label>
         </div>
+    );
+}
+
+/*
+ * A tag's colour as one compact button beside a name field: it shows the colour,
+ * and opens the presets and the custom picker in a small card.
+ */
+export function TagColourButton({
+    value,
+    onChange,
+    disabled = false,
+}: {
+    value: TagColour;
+    onChange: (colour: TagColour) => void;
+    disabled?: boolean;
+}) {
+    const [open, setOpen] = useState(false);
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger
+                aria-label="Colour for the new tag"
+                title="Colour"
+                disabled={disabled}
+                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
+            >
+                <Swatch colour={value} className="size-[18px] rounded-full" />
+                <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+            </PopoverTrigger>
+            <PopoverContent align="start" className="flex w-[292px] flex-col gap-3 p-4">
+                <span className="text-sm font-bold">Colour</span>
+                <TagColourPicker
+                    value={value}
+                    onChange={(colour) => {
+                        onChange(colour);
+                        if ((TAG_PRESETS as readonly string[]).includes(colour)) setOpen(false);
+                    }}
+                />
+            </PopoverContent>
+        </Popover>
     );
 }

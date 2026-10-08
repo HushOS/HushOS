@@ -24,7 +24,8 @@ object Shared {
     private const val DEVICE = "device"
     private const val CONFIG = "config"
 
-    data class Session(val origin: String, val token: String, val userId: String)
+    /* `email`: for the Files app's root, which names the account; empty for a session saved before it was kept. */
+    data class Session(val origin: String, val token: String, val userId: String, val email: String = "")
     data class Device(val bundle: RememberedDevice, val deviceKey: ByteArray)
 
     @Volatile private var opened: SharedPreferences? = null
@@ -55,11 +56,11 @@ object Shared {
     }
 
     fun session(context: Context): Session? = read(context, SESSION)?.let {
-        Session(it.getString("origin"), it.getString("token"), it.getString("userId"))
+        Session(it.getString("origin"), it.getString("token"), it.getString("userId"), it.optString("email"))
     }
 
     fun writeSession(context: Context, session: Session) =
-        write(context, SESSION, JSONObject().put("origin", session.origin).put("token", session.token).put("userId", session.userId))
+        write(context, SESSION, JSONObject().put("origin", session.origin).put("token", session.token).put("userId", session.userId).put("email", session.email))
 
     fun clearSession(context: Context) {
         prefs(context).edit().remove(SESSION).apply()

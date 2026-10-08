@@ -50,7 +50,7 @@ function CommandDialog({
     return (
         <Dialog {...props}>
             <DialogContent
-                className={cn('top-[18%] translate-y-0 gap-0 p-0 sm:max-w-lg', className)}
+                className={cn('top-[18%] translate-y-0 gap-0 p-0 sm:max-w-lg sm:p-0', className)}
                 showCloseButton={false}
             >
                 <DialogHeader className="sr-only">
@@ -97,7 +97,7 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Comman
         <CommandPrimitive.List
             data-slot="command-list"
             className={cn(
-                'max-h-80 scroll-py-1 overflow-x-hidden overflow-y-auto p-1 outline-none',
+                'max-h-80 scroll-py-1.5 overflow-x-hidden overflow-y-auto p-1.5 outline-none',
                 className,
             )}
             {...props}
@@ -152,7 +152,7 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
         <CommandPrimitive.Item
             data-slot="command-item"
             className={cn(
-                "group/command-item relative flex cursor-default items-center gap-2 rounded-xs px-2 py-2 font-sans text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+                "group/command-item relative flex cursor-default items-center gap-2 rounded-md px-2 py-2 font-sans text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
                 className,
             )}
             {...props}

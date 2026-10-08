@@ -17,17 +17,20 @@ import { cue } from '@/lib/sounds';
 
 export function RenameDialog({
     node,
+    siblings = [],
     open,
     onOpenChange,
 }: {
     node: DriveNode | null;
+    /* The other names in the same folder, so a taken name is caught before it is sent. */
+    siblings?: DriveNode[];
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
     return (
         <Dialog open={open && node !== null} onOpenChange={onOpenChange}>
-            <DialogContent>
-                {node && <RenameForm node={node} onOpenChange={onOpenChange} />}
+            <DialogContent className="sm:max-w-[440px]">
+                {node && <RenameForm node={node} siblings={siblings} onOpenChange={onOpenChange} />}
             </DialogContent>
         </Dialog>
     );
@@ -35,9 +38,11 @@ export function RenameDialog({
 
 function RenameForm({
     node,
+    siblings,
     onOpenChange,
 }: {
     node: DriveNode;
+    siblings: DriveNode[];
     onOpenChange: (open: boolean) => void;
 }) {
     const queryClient = useQueryClient();
@@ -45,9 +50,22 @@ function RenameForm({
     const [value, setValue] = useState(node.name);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    const name = value.trim();
+    const taken =
+        name !== node.name &&
+        siblings.some(
+            (other) => other.id !== node.id && other.name.toLowerCase() === name.toLowerCase(),
+        );
+    // Said as the name is typed, so the button never fails for a reason it could have shown.
+    const problem = !name
+        ? 'Enter a name.'
+        : taken
+          ? `“${name}” is already in this folder. Try another name.`
+          : '';
+    const shown = problem || error;
 
     async function submit() {
-        const name = value.trim();
+        if (problem) return;
         if (name === node.name) {
             onOpenChange(false);
             return;
@@ -77,13 +95,13 @@ function RenameForm({
             noValidate
         >
             <DialogHeader>
-                <DialogTitle>Rename {node.kind === 'folder' ? 'folder' : 'file'}</DialogTitle>
-                <DialogDescription>
-                    The new name is encrypted before it leaves this device.
+                <DialogTitle>Rename</DialogTitle>
+                <DialogDescription className="sr-only">
+                    A new name for “{node.name}”.
                 </DialogDescription>
             </DialogHeader>
-            <div className="flex flex-col gap-2">
-                <label htmlFor={id} className="eyebrow text-muted-foreground">
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={id} className="sr-only">
                     Name
                 </label>
                 <Input
@@ -99,12 +117,14 @@ function RenameForm({
                     onChange={(event) => setValue(event.target.value)}
                     autoComplete="off"
                     spellCheck={false}
-                    aria-invalid={Boolean(error)}
+                    aria-invalid={Boolean(shown)}
+                    aria-describedby={shown ? `${id}-problem` : undefined}
                     maxLength={255}
+                    className="h-11 text-[15px]"
                 />
-                {error && (
-                    <p role="alert" className="text-xs text-destructive">
-                        {error}
+                {shown && (
+                    <p id={`${id}-problem`} role="alert" className="text-[13px] text-destructive">
+                        {shown}
                     </p>
                 )}
             </div>
@@ -117,7 +137,7 @@ function RenameForm({
                 >
                     Cancel
                 </Button>
-                <Button type="submit" disabled={pending || !value.trim()}>
+                <Button type="submit" disabled={pending || Boolean(problem)}>
                     <PendingLabel pending={pending} idle="Rename" busy="Renaming" />
                 </Button>
             </DialogFooter>

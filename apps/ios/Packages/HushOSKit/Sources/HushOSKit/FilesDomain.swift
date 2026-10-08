@@ -28,8 +28,20 @@ public enum FilesDomain {
         signal()
     }
 
+    /* Sign-out: the location goes, and with it every copy Files kept of the account's files. */
     public static func remove() async {
-        try? await NSFileProviderManager.remove(NSFileProviderDomain(identifier: identifier, displayName: "HushOS"))
+        _ = try? await NSFileProviderManager.remove(NSFileProviderDomain(identifier: identifier, displayName: "HushOS"), mode: .removeAll)
+    }
+
+    /*
+     * Another account signed in (from the Files sheet, or after a session ended): Files
+     * forgets what it listed and asks the extension again, which now answers for this one.
+     */
+    public static func reimport() async {
+        let domain = NSFileProviderDomain(identifier: identifier, displayName: "HushOS")
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        try? await manager.reimportItems(below: .rootContainer)
+        signal()
     }
 
     /* Tells Files something changed; it re-enumerates through the change feed. */

@@ -212,9 +212,166 @@ pub fn recovery_open(user_id: String, phrase: String, envelope: RecoveryEnvelope
     Ok(key)
 }
 
+/// The message a recovery reset signs, byte for byte what `packages/crypto/recovery.ts`
+/// `recoveryResetMessage` makes (`JSON.stringify` of the fixed array), so the server's
+/// check accepts a reset made on a phone.
+pub(crate) fn recovery_reset_message(
+    user_id: &str,
+    attempt_token: &str,
+    credential_version: u64,
+    registration_record: &str,
+    envelope: &crate::AccountKeyEnvelope,
+    recovery: &RecoveryEnvelope,
+) -> Vec<u8> {
+    serde_json::to_vec(&json!([
+        "hushos/recovery/reset",
+        1,
+        user_id.to_lowercase(),
+        attempt_token,
+        credential_version,
+        registration_record,
+        [
+            envelope.envelope_version,
+            envelope.key_version,
+            envelope.credential_version,
+            envelope.wrapping_salt,
+            envelope.wrapping_nonce,
+            envelope.encrypted_key,
+        ],
+        [
+            recovery.version,
+            recovery.key_version,
+            recovery.recovery_version,
+            recovery.wrapping_salt,
+            recovery.wrapping_nonce,
+            recovery.encrypted_key,
+            recovery.backup_nonce,
+            recovery.encrypted_recovery_key,
+            recovery.public_key,
+        ],
+    ]))
+    .expect("a JSON array of strings and numbers always serialises")
+}
+
+/// Signs a password reset made with the recovery phrase, as the web's `recoverFinish`
+/// does: the phrase's Ed25519 key (checked against `current`, the envelope the server
+/// sent) over every replacement field. `credential_version` is the account's current one.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[allow(clippy::too_many_arguments)]
+pub fn recovery_reset_sign(
+    user_id: String,
+    phrase: String,
+    current: RecoveryEnvelope,
+    attempt_token: String,
+    credential_version: u64,
+    registration_record: String,
+    envelope: crate::AccountKeyEnvelope,
+    recovery: RecoveryEnvelope,
+) -> CoreResult<String> {
+    use ed25519_dalek::Signer as _;
+    check(&current)?;
+    let secret = entropy_from_phrase(&phrase)?;
+    let salt = decode("wrappingSalt", &current.wrapping_salt, Some(32))?;
+    let signing = SigningKey::from_bytes(&derive(&secret, &salt, "authentication")?);
+    if encode(signing.verifying_key().as_bytes()) != current.public_key {
+        return Err(CoreError::Sealed("The recovery phrase does not match this account.".into()));
+    }
+    let message = recovery_reset_message(
+        &user_id,
+        &attempt_token,
+        credential_version,
+        &registration_record,
+        &envelope,
+        &recovery,
+    );
+    Ok(encode(&signing.sign(&message).to_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reset_message_is_byte_for_byte_the_webs() {
+        // The hex packages/crypto's recoveryResetMessage writes for these inputs (escapes included).
+        let envelope = crate::AccountKeyEnvelope {
+            envelope_version: 1,
+            key_version: 1,
+            credential_version: 4,
+            wrapping_salt: "s".into(),
+            wrapping_nonce: "n".into(),
+            encrypted_key: "k".into(),
+        };
+        let recovery = RecoveryEnvelope {
+            version: 1,
+            key_version: 1,
+            recovery_version: 2,
+            wrapping_salt: "a".into(),
+            wrapping_nonce: "b".into(),
+            encrypted_key: "c".into(),
+            backup_nonce: "d".into(),
+            encrypted_recovery_key: "e".into(),
+            public_key: "f".into(),
+        };
+        let message = recovery_reset_message("User-1", "t\u{f6}k\"en", 3, "rec\u{1}", &envelope, &recovery);
+        let hex: String = message.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "5b22687573686f732f7265636f766572792f7265736574222c312c22757365722d31222c2274c3b66b5c22656e222c332c227265635c7530303031222c5b312c312c342c2273222c226e222c226b225d2c5b312c312c322c2261222c2262222c2263222c2264222c2265222c2266225d5d");
+    }
+
+    #[test]
+    fn a_reset_is_signed_over_the_webs_message_with_the_phrases_key() {
+        use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+        let account_key = random(32);
+        let current = recovery_create("User-1".into(), account_key.clone(), 1, 1).unwrap();
+        let next = recovery_create("user-1".into(), account_key, 2, 1).unwrap();
+        let envelope = crate::AccountKeyEnvelope {
+            envelope_version: 1,
+            key_version: 1,
+            credential_version: 4,
+            wrapping_salt: "s".into(),
+            wrapping_nonce: "n".into(),
+            encrypted_key: "k".into(),
+        };
+        let message = recovery_reset_message("User-1", "token", 3, "record", &envelope, &next.envelope);
+        // The exact bytes JSON.stringify writes for the same array: no spaces, the user id lowercased.
+        let text = String::from_utf8(message.clone()).unwrap();
+        assert!(
+            text.starts_with(
+                r#"["hushos/recovery/reset",1,"user-1","token",3,"record",[1,1,4,"s","n","k"],[1,1,2,"#
+            ),
+            "{text}"
+        );
+        let signature = recovery_reset_sign(
+            "User-1".into(),
+            current.phrase.clone(),
+            current.envelope.clone(),
+            "token".into(),
+            3,
+            "record".into(),
+            envelope.clone(),
+            next.envelope.clone(),
+        )
+        .unwrap();
+        let public = VerifyingKey::from_bytes(
+            &decode("publicKey", &current.envelope.public_key, Some(32)).unwrap().try_into().unwrap(),
+        )
+        .unwrap();
+        let bytes: [u8; 64] = decode("signature", &signature, Some(64)).unwrap().try_into().unwrap();
+        assert!(public.verify(&message, &Signature::from_bytes(&bytes)).is_ok());
+        // Another account's phrase is refused rather than signing with the wrong key.
+        let other = recovery_create("user-2".into(), random(32), 1, 1).unwrap();
+        assert!(recovery_reset_sign(
+            "User-1".into(),
+            other.phrase,
+            current.envelope,
+            "token".into(),
+            3,
+            "record".into(),
+            envelope,
+            next.envelope,
+        )
+        .is_err());
+    }
 
     #[test]
     fn the_wordlist_is_bip39_english() {

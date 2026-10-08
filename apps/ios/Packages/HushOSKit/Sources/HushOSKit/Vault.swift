@@ -4,16 +4,51 @@ import Foundation
 public struct Opened: Sendable, Identifiable, Hashable {
     public let node: NodeView
     public let metadata: NodeMetadata
+    /* The current version's size from its own envelope (suite 2) or row (suite 1). */
+    public var contentSize: UInt64?
     public var id: String { node.id }
     public var name: String { metadata.name }
     public var isFolder: Bool { node.isFolder }
+
+    init(node: NodeView, metadata: NodeMetadata, nodeKey: Data?) {
+        self.node = node
+        self.metadata = metadata
+        self.contentSize = nodeKey.flatMap { Opened.contentSize(of: node, nodeKey: $0) }
+    }
+
+    /*
+     * The current version's size, as the web's contentSize does: the metadata's size
+     * belongs to the newest upload, so after an earlier version is restored it is wrong.
+     */
     public var size: UInt64? {
         if isFolder { return nil }
-        if let size = metadata.size { return size }
+        if let contentSize { return contentSize }
         if let text = node.currentVersion?.plaintextSize, let value = UInt64(text) { return value }
-        return nil
+        return metadata.size
     }
-    public var modified: Date? { parseDate(metadata.modified) ?? parseDate(node.updatedAt) }
+
+    /* Metadata written for another version than the current one: a restore since the last upload. */
+    var metadataIsStale: Bool {
+        guard let contentSize, let sealed = metadata.size else { return false }
+        return contentSize != sealed
+    }
+
+    /* When the file last changed: the uploaded file's own date, or the restore's when an earlier version came back. */
+    public var modified: Date? {
+        if metadataIsStale { return parseDate(node.updatedAt) ?? parseDate(metadata.modified) }
+        return parseDate(metadata.modified) ?? parseDate(node.updatedAt)
+    }
+
+    static func contentSize(of node: NodeView, nodeKey: Data) -> UInt64? {
+        guard let current = node.currentVersion else { return nil }
+        if let text = current.plaintextSize, let value = UInt64(text) { return value }
+        guard let envelope = try? base64urlDecode(value: current.contentKeyEnvelope) else { return nil }
+        let opened = try? HushOSCore.versionOpen(
+            ctx: VersionContext(workspaceId: node.workspaceId, nodeId: node.id, versionId: current.id, objectId: current.objectId),
+            suite: current.contentSuite, nodeKey: nodeKey, envelope: envelope, rowSize: nil
+        )
+        return opened?.plaintextSize
+    }
     public var hasThumbnail: Bool { !isFolder && node.currentVersion?.contentSuite == 2 }
 }
 
@@ -49,6 +84,12 @@ public actor Vault {
     var catalogueChildren: [String: Set<String>] = [:]
     /* The build in flight, so a second caller waits for it rather than returning before it is done. */
     var catalogueBuilding: Task<Bool, Never>?
+    /* Which workspace a node not opened yet lives in, when the caller knows (a kept folder in a share, after a relaunch). */
+    var workspaceHints: [String: String] = [:]
+    public func hint(workspace: String, for nodeId: String) { workspaceHints[nodeId] = workspace }
+
+    /* The top folder being made, so callers that arrive meanwhile wait for it instead of making a second. */
+    var makingRoot: Task<WorkspaceView, Error>?
 
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
@@ -117,8 +158,48 @@ public actor Vault {
         }
         guard let grant = view.grant else { throw DriveAPIError.server(404, "No workspace grant") }
         workspaceKey = try workspaceOpen(userId: session.userId, accountKey: try unlockAccount(), grant: grant.grant)
-        workspace = view
-        return view
+        // An account that never opened Drive has no top folder yet: made here, once, for the app,
+        // the Files app and background transfers alike, as the web makes it on first open.
+        let ready = try await ensureRoot(view)
+        if ready.root != view.root, let data = try? JSONEncoder().encode(ready) { mirror?.putDocument(key, data) }
+        workspace = ready
+        return ready
+    }
+
+    /* The web's ROOT_NAME (packages/drive/src/protocol.ts): what the top folder's sealed metadata says. */
+    static let rootName = "Drive"
+
+    /*
+     * The top folder of a workspace that has none: a node under the workspace key at a
+     * freshly allocated epoch, sealed as the web seals it. The server settles a race
+     * between devices and returns the root that won, which is the one adopted.
+     */
+    func ensureRoot(_ view: WorkspaceView) async throws -> WorkspaceView {
+        guard view.root == nil else { return view }
+        if let makingRoot { return try await makingRoot.value }
+        let task = Task { try await self.makeRoot(view) }
+        makingRoot = task
+        defer { makingRoot = nil }
+        return try await task.value
+    }
+
+    private func makeRoot(_ view: WorkspaceView) async throws -> WorkspaceView {
+        guard let grant = view.grant, let workspaceKey else { throw DriveAPIError.server(404, "No workspace grant") }
+        let epochs = try await api.allocateEpochs(workspaceId: view.workspaceId, count: 1)
+        let id = UUID().uuidString.lowercased()
+        let key = try randomBytes(length: 32)
+        let parentKeyEpoch = grant.workspaceKeyVersion
+        let ctx = NodeKeyContext(workspaceId: view.workspaceId, nodeId: id, parentId: view.workspaceId, parentKeyEpoch: parentKeyEpoch, keyEpoch: epochs.from)
+        let wrapped = try nodeWrap(ctx: ctx, parentKey: workspaceKey, nodeKey: key)
+        let sealed = try metadataSeal(
+            ctx: MetadataContext(workspaceId: view.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
+            metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil)
+        )
+        let made = try await api.createRoot(workspaceId: view.workspaceId, root: [
+            "id": id, "keyEpoch": epochs.from, "parentKeyEpoch": parentKeyEpoch,
+            "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed),
+        ])
+        return WorkspaceView(workspaceId: view.workspaceId, changeSeq: view.changeSeq, grant: view.grant, root: made.root)
     }
 
     public func rootId() async throws -> String {
@@ -129,6 +210,12 @@ public actor Vault {
     public func workspaceId() async throws -> String { try await loadWorkspace().workspaceId }
 
     func workspaceKeyData() -> Data? { workspaceKey }
+
+    /* Tests: a workspace already opened, without the account key from this device's keychain. */
+    func adopt(workspace view: WorkspaceView, key: Data) {
+        workspace = view
+        workspaceKey = key
+    }
 
     /* The identity's private keys, opened once under the account key. */
     func identityKeys() async throws -> IdentityKeys {
@@ -148,6 +235,7 @@ public actor Vault {
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
     public func workspaceId(of nodeId: String) async throws -> String {
         if let known = opened[nodeId] { return known.node.workspaceId }
+        if let hinted = workspaceHints[nodeId] { return hinted }
         return try await loadWorkspace().workspaceId
     }
 
@@ -175,7 +263,7 @@ public actor Vault {
             ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion),
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
-        let result = Opened(node: node, metadata: metadata)
+        let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.id] = result
         return result
     }
@@ -192,10 +280,21 @@ public actor Vault {
 
     /* A node the server just returned, opened with a key this process already holds. */
     func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata) -> Opened {
+        let previous = opened[node.id]?.node.parentId
         nodeKeys[node.id] = key
-        let result = Opened(node: node, metadata: metadata)
+        let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.id] = result
         if let parent = node.parentId { rememberParent(node.id, parent: parent) }
+        /*
+         * A write the server answered (a move, a copy, a new folder) is filed in the catalogue
+         * now, under its new parent and out of its old one. Waiting for the feed was not enough:
+         * by then `opened` already held the new parent, so the sync never saw a move and the
+         * item stayed listed in the folder it left.
+         */
+        if let previous, previous != node.parentId { catalogueChildren[previous]?.remove(node.id) }
+        if let parent = node.parentId, node.workspaceId == workspace?.workspaceId, catalogueState == .ready {
+            catalogueChildren[parent, default: []].insert(node.id)
+        }
         return result
     }
 
@@ -333,7 +432,7 @@ public actor Vault {
             forget(node.id)
             if let opened = try? await resolve(node.id) { items.append(opened) }
         }
-        return items.sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }.prefix(limit).map { $0 }
+        return items.sorted(by: Opened.byRecent).prefix(limit).map { $0 }
     }
 
     public func versions(of nodeId: String) async throws -> [VersionListView] {
@@ -346,6 +445,18 @@ extension Opened {
     public static func byName(_ a: Opened, _ b: Opened) -> Bool {
         if a.isFolder != b.isFolder { return a.isFolder }
         return a.name.localizedStandardCompare(b.name) == .orderedAscending
+    }
+
+    /*
+     * Recent: newest first; things changed in the same moment by name, then id, as the web orders
+     * them, so the list never reshuffles between loads.
+     */
+    public static func byRecent(_ a: Opened, _ b: Opened) -> Bool {
+        let (x, y) = (a.modified ?? .distantPast, b.modified ?? .distantPast)
+        if x != y { return x > y }
+        let names = a.name.localizedCompare(b.name)
+        if names != .orderedSame { return names == .orderedAscending }
+        return a.id < b.id
     }
 
     /* Newest in the trash first, as the server lists it; the id breaks ties so the order holds between loads. */

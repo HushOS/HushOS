@@ -62,8 +62,8 @@ public enum ContactError: Error, LocalizedError {
     case unpinned, changed, message(String)
     public var errorDescription: String? {
         switch self {
-        case .unpinned: return "Pin this contact before sharing with them."
-        case .changed: return "This contact's key changed since you pinned it. Check the fingerprint and pin it again."
+        case .unpinned: return "Add them to your contacts before sharing with them."
+        case .changed: return "Their account changed since you added them. Check it’s them in People you share with before you share."
         case .message(let text): return text
         }
     }
@@ -293,5 +293,30 @@ extension Vault {
             rows.append(SharedByMe(id: "link-" + link.id, item: item, node: link.node, share: nil, link: view))
         }
         return rows
+    }
+}
+
+/* Who can open each of one's own shared items: the people on it and how many links open it. Names are the server's; nothing is opened. */
+public struct SharingIndex: Sendable {
+    public struct Entry: Sendable {
+        public var people: [ShareView.Grantee] = []
+        /* Grantee id to role ("viewer" or "editor"). */
+        public var roles: [String: String] = [:]
+        public var links = 0
+    }
+    public var entries: [String: Entry] = [:]
+}
+
+extension Vault {
+    /* The same answer as `sharedByMe`, keyed by node, without opening any node: cheap enough to ask on every refresh. */
+    public func sharingIndex() async throws -> SharingIndex {
+        let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
+        var index = SharingIndex()
+        for share in reply.shares {
+            index.entries[share.node.id, default: .init()].people.append(share.grantee)
+            index.entries[share.node.id, default: .init()].roles[share.grantee.id] = share.role
+        }
+        for link in reply.links { index.entries[link.node.id, default: .init()].links += 1 }
+        return index
     }
 }

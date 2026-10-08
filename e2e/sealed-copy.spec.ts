@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { unzipSync } from 'fflate';
-import { newPage, registerAccount, sampleFiles } from './helpers';
+import { newFolder, newPage, registerAccount, sampleFiles } from './helpers';
 
 /*
  * A sealed copy is the item as the service holds it: the manifest names every
@@ -53,10 +53,7 @@ test('a sealed copy of a file and of a folder carries the records and the cipher
     const page = await newPage(browser);
     await registerAccount(page);
     const samples = sampleFiles();
-    await page
-        .getByRole('button', { name: /new folder/i })
-        .first()
-        .click();
+    await newFolder(page);
     await page.getByPlaceholder('Reports/2026').fill('Project');
     await page.keyboard.press('Enter');
     await expect(row(page, 'Project')).toBeVisible();

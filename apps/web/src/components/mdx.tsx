@@ -2,6 +2,7 @@
 import { MDXProvider } from '@mdx-js/react';
 import { Link, useRouteContext } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
+import { PageLink } from '@/components/page-link';
 import { Button } from '@/components/ui/button';
 import type { MDXComponents } from 'mdx/types';
 import type { ComponentProps, ComponentType, ReactNode } from 'react';
@@ -17,7 +18,7 @@ export const mdxComponents: MDXComponents = {
     ),
     h2: (props) => (
         <h2
-            className="mt-12 text-2xl font-bold tracking-tight text-balance first:mt-4"
+            className="mt-12 scroll-mt-24 text-2xl leading-tight font-extrabold tracking-[-0.02em] text-balance first:mt-4 sm:text-[28px]"
             {...props}
         />
     ),
@@ -65,7 +66,9 @@ export const mdxComponents: MDXComponents = {
     td: (props) => <td className="border-b border-rule py-2 pr-4 align-top" {...props} />,
     a: ({ href = '', ...props }: ComponentProps<'a'>) =>
         href.startsWith('/') ? (
-            <Link to={href} className="text-link" {...props} />
+            <PageLink to={href} className="text-link">
+                {props.children}
+            </PageLink>
         ) : (
             <a href={href} className="text-link" rel="noreferrer" {...props} />
         ),
@@ -78,7 +81,7 @@ export const mdxComponents: MDXComponents = {
 export function Cta({ children, title = 'Try it' }: { children: ReactNode; title?: string }) {
     const { hasSession } = useRouteContext({ from: '__root__' });
     return (
-        <aside className="sheet mt-8 flex flex-wrap items-center justify-between gap-x-8 gap-y-4 border border-rule px-5 py-5">
+        <aside className="mt-8 flex flex-wrap items-center justify-between gap-x-8 gap-y-4 rounded-xl border border-rule px-5 py-5">
             <div className="min-w-0 flex-1 basis-64">
                 <p className="eyebrow text-muted-foreground">{title}</p>
                 {/* MDX wraps the text in its own paragraph, so this must not be one. */}

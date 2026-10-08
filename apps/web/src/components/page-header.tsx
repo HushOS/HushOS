@@ -1,32 +1,36 @@
 import type { ReactNode } from 'react';
 
-/* Page title block: a small label, the title, a sentence of context. */
+/*
+ * A page's title row, as Files draws its folder path: the title large, the page's
+ * actions on the right, and a sentence of context under it when the page needs one.
+ * `back` is a quiet link above the title to the list a detail page came from.
+ */
 export function PageHeader({
-    eyebrow,
+    back,
     title,
     description,
     children,
 }: {
-    eyebrow?: ReactNode;
+    back?: ReactNode;
     title: ReactNode;
     description?: ReactNode;
     children?: ReactNode;
 }) {
     return (
-        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 border-b border-rule px-5 py-6 sm:px-8 sm:py-8">
-            <div className="min-w-0">
-                {eyebrow && <p className="eyebrow mb-2.5 text-muted-foreground">{eyebrow}</p>}
-                <h1 className="text-2xl font-bold tracking-tight wrap-anywhere">{title}</h1>
-                {description && (
-                    <p className="mt-2 max-w-[65ch] text-sm leading-relaxed text-muted-foreground">
-                        {description}
-                    </p>
+        <div className="flex flex-col gap-1 px-5 pt-1 pb-5 sm:px-8 sm:pb-6">
+            {back && <p className="text-sm font-semibold text-muted-foreground">{back}</p>}
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+                <h1 className="flex min-h-11 min-w-0 items-center text-xl leading-tight font-extrabold tracking-[-0.03em] wrap-anywhere sm:text-[28px]">
+                    {title}
+                </h1>
+                {children && (
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">{children}</div>
                 )}
             </div>
-            {children && (
-                <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
-                    {children}
-                </div>
+            {description && (
+                <p className="max-w-[65ch] text-[15px] leading-relaxed text-muted-foreground">
+                    {description}
+                </p>
             )}
         </div>
     );

@@ -34,64 +34,98 @@ final class FileProviderUIController: FPUIActionExtensionViewController {
     }
 }
 
+/* The board's "Signing in from Files": one heading, one reason, the same fields and words as the app. */
 struct SignInView: View {
     let onDone: () -> Void
     let onCancel: () -> Void
     @State private var email = ""
     @State private var password = ""
+    @State private var showPassword = false
     @State private var pending = false
     @State private var error = ""
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("EXISTING ACCOUNT").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text("Welcome back").font(.title.weight(.bold))
-                        Text("Sign in to unlock your files in the Files app.").foregroundStyle(.secondary)
+            ScrollView {
+                VStack(spacing: Alpine.Space.s6) {
+                    VStack(spacing: Alpine.Space.s3) {
+                        Image("BrandMark").resizable().frame(width: 64, height: 64)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)).accessibilityHidden(true)
+                        Text("Sign in to HushOS").font(.title2.weight(.bold)).foregroundStyle(Alpine.ink).accessibilityAddTraits(.isHeader)
+                        Text("To see your files here and in other apps.").font(.subheadline).foregroundStyle(Alpine.inkMuted)
                     }
-                }
-                .listRowBackground(Color.clear)
-                if !error.isEmpty {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
-                Section(footer: Text("Password stays on this device. Your account key is unwrapped here and never sent.")) {
-                    TextField("Email", text: $email)
-                        .keyboardType(.emailAddress).textContentType(.username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    SecureField("Password", text: $password)
-                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onSubmit { submit() }
-                }
-                Section {
+                    .multilineTextAlignment(.center).padding(.horizontal, Alpine.Space.s8).padding(.top, Alpine.Space.s4)
+
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        VStack(spacing: 0) {
+                            row("Email") {
+                                TextField("name@example.com", text: $email)
+                                    .keyboardType(.emailAddress).textContentType(.username)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            }
+                            Alpine.rule.frame(height: 1).padding(.leading, Alpine.Space.s4)
+                            row("Password") {
+                                HStack {
+                                    Group {
+                                        if showPassword { TextField("Required", text: $password) } else { SecureField("Required", text: $password) }
+                                    }
+                                    .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                    .onSubmit { submit() }
+                                    Button { showPassword.toggle() } label: {
+                                        Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted).frame(width: 36, height: 36)
+                                    }
+                                    .buttonStyle(.plain).accessibilityLabel(showPassword ? "Hide password" : "Show password")
+                                }
+                            }
+                        }
+                        .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Alpine.edge))
+                        if !error.isEmpty {
+                            Text(error).font(.footnote).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
+                        }
+                    }
+
                     Button(action: submit) {
-                        Text(pending ? "Unlocking…" : "Sign in").frame(maxWidth: .infinity).fontWeight(.semibold)
+                        Text(pending ? "Signing in…" : "Sign in").font(.body.weight(.semibold))
+                            .foregroundStyle(Alpine.onPrimary).frame(maxWidth: .infinity, minHeight: 52)
+                            .background(pending ? Alpine.primary.opacity(0.4) : Alpine.primary, in: Capsule())
                     }
-                    .buttonStyle(.borderedProminent).controlSize(.large).disabled(pending)
-                    .listRowBackground(Color.clear)
+                    .buttonStyle(.plain).disabled(pending)
                 }
+                .padding(.horizontal, Alpine.Space.s4)
             }
-            .scrollContentBackground(.hidden)
-            .background(Color(red: 0.902, green: 0.886, blue: 0.851))
-            .tint(Color(red: 0.173, green: 0.259, blue: 0.557))
+            .background(Alpine.ground.ignoresSafeArea())
+            .navigationTitle("HushOS")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) } }
         }
+        .tint(Alpine.primary)
+    }
+
+    private func row(_ label: String, @ViewBuilder field: () -> some View) -> some View {
+        HStack(spacing: Alpine.Space.s3) {
+            Text(label).foregroundStyle(Alpine.ink).frame(width: 84, alignment: .leading)
+            field().foregroundStyle(Alpine.ink)
+        }
+        .padding(.horizontal, Alpine.Space.s4).frame(minHeight: 52)
     }
 
     private func submit() {
         guard !pending else { return }
         let address = email.trimmingCharacters(in: .whitespaces)
-        guard address.contains("@") else { error = "Enter your email address."; return }
+        guard !address.isEmpty else { error = "Enter your email address."; return }
         guard !password.isEmpty else { error = "Enter your password."; return }
         error = ""
         pending = true
         Task {
             do {
                 guard let origin = SharedKeychain.config?.origin else {
-                    throw AuthError.message("Open HushOS once on this device before signing in from Files.")
+                    throw AuthError.message("Open the HushOS app once on this iPhone, then sign in here.")
                 }
-                try await Auth.signIn(origin: origin, email: address, password: password)
+                let previous = AccountStore.shared.owner()
+                let user = try await Auth.signIn(origin: origin, email: address, password: password)
+                // Another account signed in here: Files forgets what it listed for the last one.
+                if previous?.caseInsensitiveCompare(user.id) != .orderedSame { await FilesDomain.reimport() }
                 onDone()
             } catch {
                 self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

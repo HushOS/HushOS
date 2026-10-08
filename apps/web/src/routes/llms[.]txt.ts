@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { getCatalogueServerFn } from '@/lib/billing';
 import { comparisons } from '@/lib/compare';
 import { posts } from '@/lib/content';
-import { formatGiB } from '@/lib/queries';
+import { formatQuota } from '@/lib/queries';
 import { publicOrigin } from '@/lib/social';
 
 /*
@@ -17,10 +17,10 @@ export const Route = createFileRoute('/llms.txt')({
                 const catalogue = await getCatalogueServerFn();
                 const plans = catalogue.enabled
                     ? [
-                          `- Free: ${formatGiB(catalogue.freeQuotaBytes)} of encrypted storage.`,
+                          `- Free: ${formatQuota(catalogue.freeQuotaBytes)} of encrypted storage.`,
                           ...catalogue.plans.map(
                               (plan) =>
-                                  `- ${plan.name}: ${formatGiB(plan.quotaBytes)} per ${plan.interval}, ${Object.entries(
+                                  `- ${plan.name}: ${formatQuota(plan.quotaBytes)} per ${plan.interval}, ${Object.entries(
                                       plan.prices,
                                   )
                                       .map(
@@ -48,7 +48,7 @@ export const Route = createFileRoute('/llms.txt')({
 - Mission: make the private choice the easy choice. Drive is the first part of a productivity suite built the same way.
 - Licence: GNU AGPL-3.0. Source: [github.com/HushOS](https://github.com/HushOS)
 - Runs with Docker Compose; see the self-hosting guide in the repository.
-- The hosted service starts free with 2 GiB; inviting a friend earns both people more storage; paid plans add storage and are billed by Polar as merchant of record. Self-hosted instances set their own allowance and have no billing.
+- The hosted service starts free with 2 GB; inviting a friend earns both people more storage; paid plans add storage and are billed by Polar as merchant of record. Self-hosted instances set their own allowance and have no billing.
 
 ## Pricing (hosted service)
 

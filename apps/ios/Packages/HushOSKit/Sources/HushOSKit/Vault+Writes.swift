@@ -139,6 +139,15 @@ extension Vault {
         try await api.emptyTrash(workspaceId: try workspaceId())
     }
 
+    /* What fills the space beside the files: the trash and earlier versions, as the server counts them. */
+    public func storageBreakdown() async throws -> StorageBreakdown {
+        try await api.storage(workspaceId: try workspaceId())
+    }
+
+    public func discardEarlierVersions() async throws -> EmptyTrashResult {
+        try await api.discardSuperseded(workspaceId: try workspaceId())
+    }
+
     public func restoreVersion(_ version: VersionListView, of nodeId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
         guard let key = nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
@@ -233,7 +242,9 @@ extension Vault {
     private func sealPart(_ begun: Begun, index: UInt64, from handle: FileHandle, thumbnail: Data?) throws -> Data {
         let length = chunkLength(plaintextSize: begun.plaintextSize, index: index)
         try handle.seek(toOffset: index * begun.chunkBytes)
-        let plaintext = try handle.read(upToCount: Int(length)) ?? Data()
+        // In its own pool: FileHandle hands back autoreleased data, which would otherwise pile up until the async
+        // caller returns, the whole file in memory (fatal in Save to HushOS, whose limit is about 120 MB).
+        let plaintext = try autoreleasepool { try handle.read(upToCount: Int(length)) ?? Data() }
         if UInt64(plaintext.count) != length { throw DriveAPIError.server(500, "The file changed while uploading.") }
         var sealed = try chunkEncrypt(content: begun.content, index: index, plaintext: plaintext)
         if index == begun.chunkCount - 1, let thumbnail, begun.content.thumbnailBytes > 0 {
@@ -436,10 +447,10 @@ extension Vault {
      * per workspace, so the file is fetched and uploaded again, thumbnail and
      * all. Folders go node by node.
      */
-    public func copyAcross(_ nodeId: String, to parentId: String, progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
+    public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
         if source.isFolder {
-            let made = try await createFolder(in: parentId, name: source.name)
+            let made = try await createFolder(in: parentId, name: name ?? source.name)
             for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
             return made
         }
@@ -449,6 +460,6 @@ extension Vault {
         let file = directory.appendingPathComponent(source.name)
         try await download(source.id, to: file) { progress($0 / 2) }
         let thumbnail = try? await thumbnail(source.id)
-        return try await upload(fileURL: file, name: source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail) { progress(0.5 + $0 / 2) }
+        return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail) { progress(0.5 + $0 / 2) }
     }
 }

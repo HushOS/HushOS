@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { LegalLayout } from '@/components/legal-layout';
-import Privacy from '@/content/legal/privacy.mdx';
+import Privacy, { headings } from '@/content/legal/privacy.mdx';
 import { frontmatter } from '@/content/legal/privacy.mdx?meta';
 import { pageSocialMeta, publicOrigin, readOperator } from '@/lib/social';
 
@@ -23,5 +23,12 @@ export const Route = createFileRoute('/privacy')({
 
 function LegalPage() {
     const { operator } = Route.useLoaderData();
-    return <LegalLayout document={Privacy} frontmatter={frontmatter} operator={operator} />;
+    return (
+        <LegalLayout
+            document={Privacy}
+            frontmatter={frontmatter}
+            headings={headings}
+            operator={operator}
+        />
+    );
 }

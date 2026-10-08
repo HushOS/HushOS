@@ -1,5 +1,6 @@
 import type { NodeView } from './api';
 import type { DriveNode } from './client';
+import { ROOT_LABEL } from './protocol';
 import type { TagRegistry } from './tags';
 
 /*
@@ -158,38 +159,79 @@ export class Catalogue {
         return chain;
     }
 
-    /* Live nodes carrying every one of `tagIds`. */
+    /* Live nodes carrying every one of `tagIds`; none inside a trashed folder. */
     byTags(tagIds: string[]) {
         if (tagIds.length === 0) return [];
         const sets = tagIds.map((id) => this.byTagId.get(id) ?? new Set<string>());
         sets.sort((a, b) => a.size - b.size);
+        const isLive = this.liveCheck();
         const out: DriveNode[] = [];
         for (const id of sets[0]!) {
             if (!sets.every((set) => set.has(id))) continue;
             const node = this.nodes.get(id);
-            if (node && !node.trashedAt) out.push(node);
+            if (node && isLive(node)) out.push(node);
         }
         return out;
+    }
+
+    /*
+     * A check for "live": not trashed, and no trashed folder above it. Trashing a
+     * folder marks only the folder, so what is inside it must be ruled out by its
+     * ancestors. Answers are remembered for the life of the check.
+     */
+    private liveCheck() {
+        const live = new Map<string, boolean>();
+        const isLive = (node: DriveNode): boolean => {
+            const known = live.get(node.id);
+            if (known !== undefined) return known;
+            const parent = node.parentId ? this.nodes.get(node.parentId) : undefined;
+            const value = !node.trashedAt && (parent === undefined || isLive(parent));
+            live.set(node.id, value);
+            return value;
+        };
+        return isLive;
+    }
+
+    /* What changed lately, newest first: live nodes below the top folder that `keep` lets through. */
+    recent(limit: number, keep: (node: DriveNode) => boolean = () => true) {
+        const isLive = this.liveCheck();
+        const found: { node: DriveNode; at: number }[] = [];
+        for (const node of this.nodes.values())
+            if (node.parentId && isLive(node) && keep(node))
+                found.push({ node, at: Date.parse(node.updatedAt) || 0 });
+        // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
+        found.sort(
+            (a, b) =>
+                b.at - a.at ||
+                a.node.name.localeCompare(b.node.name) ||
+                (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0),
+        );
+        return found.slice(0, limit).map((entry) => entry.node);
     }
 
     /* How many live nodes carry each tag, for the sidebar. */
     tagCounts() {
         const counts = new Map<string, number>();
+        const isLive = this.liveCheck();
         for (const [tagId, ids] of this.byTagId) {
             let count = 0;
-            for (const id of ids) if (!this.nodes.get(id)?.trashedAt) count++;
+            for (const id of ids) {
+                const node = this.nodes.get(id);
+                if (node && isLive(node)) count++;
+            }
             if (count) counts.set(tagId, count);
         }
         return counts;
     }
 
-    /* Every live node every query word lands on, best first; folders above files at a tie, then by name. */
+    /* Every live node every query word lands on (none inside a trashed folder), best first; folders above files at a tie, then by name. */
     search({ query, limit = 50 }: CatalogueQuery): CatalogueHit[] {
         const words = tokenize(query);
         if (!words.length) return [];
         const hits: CatalogueHit[] = [];
+        const isLive = this.liveCheck();
         for (const node of this.nodes.values()) {
-            if (node.trashedAt || !node.parentId) continue;
+            if (!node.parentId || !isLive(node)) continue;
             const name = tokenize(node.name);
             const extension = extensionOf(node.name);
             const tags = this.tagsOf(node.id).flatMap((id) =>
@@ -213,7 +255,12 @@ export class Catalogue {
                 }
                 score += found;
             }
-            if (score) hits.push({ node, score, path: chain.map((ancestor) => ancestor.name) });
+            if (score)
+                hits.push({
+                    node,
+                    score,
+                    path: chain.map((ancestor) => (ancestor.parentId ? ancestor.name : ROOT_LABEL)),
+                });
         }
         hits.sort(
             (a, b) =>

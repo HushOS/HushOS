@@ -1,12 +1,15 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { $ } from 'bun';
 import sharp from 'sharp';
-import { logoSvg, wordmarkSvg } from '../src/lib/brand';
+import { badgeSvg, brandWordmarkSvg, logoSvg, wordmarkSvg } from '../src/lib/brand';
 
 /* Writes public/brand from the mark in src/lib/brand.ts. Run: bun run brand:assets */
 const dir = new URL('../public/brand/', import.meta.url);
 await mkdir(dir, { recursive: true });
 const files = {
+    'hushos-logo-colour.svg': badgeSvg(),
+    'hushos-wordmark-colour.svg': brandWordmarkSvg(),
+    'hushos-wordmark-colour-on-dark.svg': brandWordmarkSvg('#eef0f8'),
     'hushos-logo.svg': logoSvg('#1c2848'),
     'hushos-logo-blue.svg': logoSvg('#2c428e'),
     'hushos-logo-on-dark.svg': logoSvg('#dfe3f2', '#13151b'),
@@ -17,6 +20,10 @@ const files = {
     'README.txt': [
         'HushOS brand assets',
         '',
+        'hushos-logo-colour.svg     the logo: white mark on the blue square. Use this first',
+        'hushos-wordmark-colour*.svg  the logo with HushOS beside it, for light or dark pages',
+        '',
+        'One colour, for one-ink print or a background that is not yours:',
         'hushos-logo.svg            ink mark, transparent background',
         'hushos-logo-blue.svg       blue mark, transparent background',
         'hushos-logo-on-dark.svg    light mark on the dark desk',

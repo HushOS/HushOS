@@ -189,7 +189,9 @@ extension Vault {
     /* This folder's children from the catalogue, or nil when the catalogue cannot answer for it. */
     public func catalogueChildren(of folderId: String) -> [Opened]? {
         guard catalogueState == .ready, let folder = opened[folderId], folder.node.workspaceId == workspace?.workspaceId else { return nil }
-        return (catalogueChildren[folderId] ?? []).compactMap { opened[$0] }.filter { $0.node.trashedAt == nil }.sorted(by: Opened.byName)
+        // Only what still lives here: an id filed under a folder it has since left is not listed in it.
+        return (catalogueChildren[folderId] ?? []).compactMap { opened[$0] }
+            .filter { $0.node.trashedAt == nil && $0.node.parentId == folderId }.sorted(by: Opened.byName)
     }
 
     /* One opened item by id, when this device knows it (the catalogue opens the whole drive). */
@@ -201,11 +203,11 @@ extension Vault {
         return opened.values.filter { $0.node.workspaceId == ws && $0.node.trashedAt == nil }
     }
 
-    /* The most recently changed files, from the catalogue. */
+    /* What changed most recently below the top folder, folders included (as the web's Recent), from the catalogue. */
     public func catalogueRecents(limit: Int = 60) -> [Opened]? {
         guard catalogueState == .ready else { return nil }
-        return catalogueAll().filter { !$0.isFolder && $0.node.currentVersion != nil }
-            .sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }.prefix(limit).map { $0 }
+        return catalogueAll().filter { $0.node.parentId != nil && ($0.isFolder || $0.node.currentVersion != nil) }
+            .sorted(by: Opened.byRecent).prefix(limit).map { $0 }
     }
 
     /* Trashed rows, with whether their parent is trashed too; newest first, as the server lists them. */

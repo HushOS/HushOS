@@ -1,19 +1,11 @@
 import { contentSize, tagsOf, type DriveNode } from '@hushos/drive/client';
 import { useQuery } from '@tanstack/react-query';
-import {
-    ChevronRightIcon,
-    DownloadIcon,
-    EyeIcon,
-    EyeOffIcon,
-    PackageIcon,
-    Share2Icon,
-    XIcon,
-} from 'lucide-react';
+import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { CopyValue } from '@/components/copy-value';
+import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
-import { PendingLabel } from '@/components/motion';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError, formatBytes, formatWhen } from '@/lib/drive';
@@ -47,6 +39,10 @@ export type ItemDetailsProps = {
     onTags?: ((node: DriveNode) => void) | undefined;
     /* Opens sharing for this item; absent for an item that is someone else's. */
     onShare?: ((node: DriveNode) => void) | undefined;
+    /* Whether a folder above it is shared, so it opens to the same people. */
+    inherited?: boolean | undefined;
+    /* The name above the preview: a dialog's title shares its row with the close button. */
+    nameFirst?: boolean | undefined;
 };
 
 /* The key file: enough to decrypt the object without HushOS, and nothing about anyone else. */
@@ -99,29 +95,24 @@ function typeOf(node: DriveNode) {
     return extension ? `${extension.toUpperCase()} file` : 'File';
 }
 
-/* An everyday fact: the key, a dotted leader beneath, the value at the right. */
+/* An everyday fact: the label on the left, the value beside it. */
 function Fact({ label, children }: { label: string; children: ReactNode }) {
     return (
-        <div className="flex items-baseline justify-between gap-4 border-b border-dotted border-rule py-2">
-            <dt className="eyebrow shrink-0 text-muted-foreground">{label}</dt>
-            <dd className="min-w-0 text-right text-sm tabular-nums wrap-anywhere">{children}</dd>
-        </div>
+        <>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 tabular-nums wrap-anywhere">{children}</dd>
+        </>
     );
 }
 
 /* A technical fact, read character by character and often copied: mono, and selectable. */
 function Technical({ label, value, copy }: { label: string; value: string; copy?: boolean }) {
     return (
-        <div className="border-b border-dotted border-rule py-2 last:border-b-0">
-            <dt className="eyebrow text-muted-foreground">{label}</dt>
+        <div className="border-b border-rule py-2 last:border-b-0">
+            <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
             <dd className="mt-1.5 min-w-0 font-mono text-[11px] leading-relaxed wrap-anywhere select-text">
                 {copy ? (
-                    <CopyValue
-                        value={value}
-                        label={`Copy ${label.toLowerCase()}`}
-                        wrap
-                        className="text-[11px]"
-                    />
+                    <CopyValue value={value} label={label} wrap className="text-[11px]" />
                 ) : (
                     value
                 )}
@@ -130,17 +121,19 @@ function Technical({ label, value, copy }: { label: string; value: string; copy?
     );
 }
 
+/* A closed section for what most people never need. */
 function Fold({ title, name, children }: { title: string; name: string; children: ReactNode }) {
     return (
-        <details data-info={name} className="group border-t border-rule">
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 py-3 text-sm font-medium select-none [&::-webkit-details-marker]:hidden">
-                <ChevronRightIcon
+        <details data-info={name} className="group border-b border-rule last:border-b-0">
+            <summary className="flex h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold select-none [&::-webkit-details-marker]:hidden">
+                <span className="flex-1">{title}</span>
+                <span className="text-xs font-normal text-muted-foreground">For experts</span>
+                <ChevronDownIcon
                     aria-hidden="true"
-                    className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90"
+                    className="size-4 text-muted-foreground transition-transform group-open:rotate-180"
                 />
-                {title}
             </summary>
-            <div className="flex flex-col gap-3 pb-4">{children}</div>
+            <div className="flex flex-col gap-3 border-t border-rule p-3">{children}</div>
         </details>
     );
 }
@@ -153,7 +146,7 @@ function Preview({ node }: { node: DriveNode }) {
     const sharp = useSharpImage(node, SHARP_PREVIEW_LIMIT);
     const source = sharp.url ?? thumbnail;
     return (
-        <div className="flex h-36 items-center justify-center overflow-hidden rounded-xs">
+        <div className="flex h-40 items-center justify-center overflow-hidden rounded-xl bg-muted">
             {source ? (
                 <img
                     src={source}
@@ -212,7 +205,7 @@ function OwnCopy({ node }: { node: DriveNode }) {
             cue('error');
             toast.add({
                 type: 'error',
-                title: 'The sealed copy was not saved',
+                title: 'Couldn’t save the sealed copy',
                 description: driveError(error),
             });
         } finally {
@@ -234,35 +227,40 @@ function OwnCopy({ node }: { node: DriveNode }) {
         cue('success', { volume: 0.4 });
     }
 
+    // One line says what the two downloads are for; the raw keys are a link away.
     return (
         <>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-                The keys below are what lock this item. They live only on your devices. Anyone who
-                has them and the stored bytes can read the{' '}
-                {node.kind === 'folder' ? 'names inside this folder' : 'file'} without HushOS, so
-                treat a key file like the file itself.
+            <p className="text-[13px] leading-snug text-muted-foreground">
+                {node.kind === 'folder'
+                    ? 'For keeping a copy outside HushOS: everything in this folder exactly as it is stored, still encrypted, and a key file that opens the folder’s names. Keep the two apart.'
+                    : 'For keeping a copy outside HushOS: the file exactly as it is stored, still encrypted, and a key file that opens it. Keep the two apart. Anyone with both can open the file.'}
             </p>
             <div className="flex flex-wrap gap-2">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => void reveal()}
-                >
-                    {shown ? <EyeOffIcon /> : <EyeIcon />}
-                    <PendingLabel
-                        pending={pending && !shown}
-                        idle={shown ? 'Hide keys' : 'Reveal keys'}
-                        busy="Opening"
-                    />
-                </Button>
                 <Button variant="outline" size="sm" disabled={pending} onClick={() => void save()}>
                     <DownloadIcon />
                     Download key file
                 </Button>
+                {/* The label stays put: a small copy is packed faster than a swap could be read. */}
+                <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={packing}
+                    onClick={() => void sealedCopy()}
+                >
+                    <PackageIcon />
+                    Download sealed copy
+                </Button>
             </div>
+            <button
+                type="button"
+                disabled={pending}
+                onClick={() => void reveal()}
+                className="w-fit cursor-pointer text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover disabled:cursor-default disabled:opacity-60"
+            >
+                {shown ? 'Hide keys' : pending ? 'Opening keys' : 'Show keys'}
+            </button>
             {shown && keys && (
-                <dl data-info="keys" className="rounded-xs bg-muted px-3">
+                <dl data-info="keys" className="rounded-md bg-muted px-3">
                     <Technical
                         label={node.kind === 'folder' ? 'Folder key' : 'File key'}
                         value={keys.nodeKey}
@@ -276,29 +274,20 @@ function OwnCopy({ node }: { node: DriveNode }) {
                     )}
                 </dl>
             )}
-            <p className="text-sm leading-relaxed text-muted-foreground">
-                A sealed copy is this {node.kind === 'folder' ? 'folder' : 'file'} exactly as the
-                service holds it: the stored bytes, still encrypted, and every record's envelopes,
-                with no key and no name in the clear. Keep it offline; with the key file it reads
-                without HushOS.
-            </p>
-            <div>
-                {/* The label stays put: a small copy is packed faster than a swap could be read. */}
-                <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={packing}
-                    onClick={() => void sealedCopy()}
-                >
-                    <PackageIcon />
-                    Download sealed copy
-                </Button>
-            </div>
         </>
     );
 }
 
-export function ItemDetails({ node, heading, location, onTags, onShare }: ItemDetailsProps) {
+export function ItemDetails({
+    node,
+    heading,
+    location,
+    onTags,
+    onShare,
+    inherited = false,
+    nameFirst = false,
+}: ItemDetailsProps) {
+    const access = useAccessIndex(Boolean(onShare));
     const registry = useQuery(tagsQueryOptions).data ?? null;
     const tagIds = registry ? tagsOf(registry, node.id) : [];
     const version = node.kind === 'file' ? node.currentVersion : null;
@@ -314,54 +303,75 @@ export function ItemDetails({ node, heading, location, onTags, onShare }: ItemDe
 
     return (
         <div className="flex min-w-0 flex-col gap-4">
+            {nameFirst && heading(node.name)}
             <Preview node={node} />
-            {heading(node.name)}
-            <dl data-info="details">
-                <Fact label="Type">{typeOf(node)}</Fact>
+            {!nameFirst && heading(node.name)}
+            {onShare && (
+                <div className="flex flex-col gap-1.5 rounded-xl bg-muted px-3.5 py-3">
+                    <span className="text-xs font-semibold text-muted-foreground">
+                        Who can open
+                    </span>
+                    <AccessCell access={access.get(node.id)} inherited={inherited} detail />
+                    <button
+                        type="button"
+                        onClick={() => onShare(node)}
+                        className="cursor-pointer self-start text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                    >
+                        Change who can open
+                    </button>
+                </div>
+            )}
+            <dl
+                data-info="details"
+                className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-4 gap-y-2.5 text-sm"
+            >
+                <Fact label="Kind">{typeOf(node)}</Fact>
                 {version && (
                     <Fact label="Size">{size === null ? 'Unknown' : formatBytes(size)}</Fact>
                 )}
-                <Fact label="Modified">
-                    {formatWhen(node.metadata?.modified ?? node.updatedAt)}
-                </Fact>
+                <Fact label="Changed">{formatWhen(node.metadata?.modified ?? node.updatedAt)}</Fact>
                 <Fact label="Created">{formatWhen(node.createdAt)}</Fact>
-                {location && <Fact label="Location">{location}</Fact>}
+                {location && <Fact label="Folder">{location}</Fact>}
                 {version && version.objectStatus !== 'ready' && (
-                    <Fact label="Status">{status}</Fact>
+                    <Fact label="Status">
+                        <span
+                            className={
+                                version.objectStatus === 'missing'
+                                    ? 'font-semibold text-destructive'
+                                    : undefined
+                            }
+                        >
+                            {version.objectStatus === 'missing'
+                                ? 'Missing. Upload it again, or move it to Trash.'
+                                : 'Still uploading'}
+                        </span>
+                    </Fact>
                 )}
-                <div className="flex items-baseline justify-between gap-4 border-b border-dotted border-rule py-2">
-                    <dt className="eyebrow shrink-0 text-muted-foreground">Tags</dt>
-                    <dd className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-                        {tagIds.length ? (
-                            <TagStamps
-                                tagIds={tagIds}
-                                registry={registry}
-                                itemName={node.name}
-                                max={16}
-                                className="flex-wrap justify-end"
-                            />
-                        ) : (
-                            <span className="text-sm text-muted-foreground">None</span>
-                        )}
-                        {onTags && (
-                            <button
-                                type="button"
-                                className="text-link cursor-pointer text-xs"
-                                onClick={() => onTags(node)}
-                            >
-                                Edit
-                            </button>
-                        )}
-                    </dd>
-                </div>
+                <dt className="pt-0.5 text-muted-foreground">Tags</dt>
+                <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    {tagIds.length ? (
+                        <TagStamps
+                            tagIds={tagIds}
+                            registry={registry}
+                            itemName={node.name}
+                            max={16}
+                            className="flex-wrap"
+                        />
+                    ) : (
+                        <span>None</span>
+                    )}
+                    {onTags && (
+                        <button
+                            type="button"
+                            className="cursor-pointer text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                            onClick={() => onTags(node)}
+                        >
+                            Edit
+                        </button>
+                    )}
+                </dd>
             </dl>
-            {onShare && (
-                <Button className="self-start" size="sm" onClick={() => onShare(node)}>
-                    <Share2Icon />
-                    Share
-                </Button>
-            )}
-            <div>
+            <div className="rounded-xl border border-rule">
                 <Fold title="Keep your own copy" name="own-copy">
                     <OwnCopy key={node.id} node={node} />
                 </Fold>
@@ -423,11 +433,17 @@ export function DetailsPanel({
             data-details=""
             // Never taller than the room beneath the header and the folder's two lines, so opening a
             // section scrolls the panel and the page stays where it is.
-            className="sticky top-3 m-3 ml-0 flex transform-gpu will-change-transform max-h-[calc(100svh-12.5rem)] w-[300px] shrink-0 flex-col self-start overflow-y-auto overscroll-contain rounded-xs bg-popover text-popover-foreground shadow-overlay"
+            className="sticky top-3 m-3 ml-0 flex max-h-[calc(100svh-12.5rem)] w-[320px] shrink-0 transform-gpu flex-col self-start overflow-y-auto overscroll-contain rounded-2xl border border-rule bg-card text-card-foreground shadow-md will-change-transform"
         >
             <div className="flex items-center justify-between gap-2 py-2 pr-2 pl-4">
-                <p className="eyebrow text-muted-foreground">Details</p>
-                <Button variant="ghost" size="icon-sm" aria-label="Close details" onClick={onClose}>
+                <p className="text-sm font-semibold text-muted-foreground">Info</p>
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Close details"
+                    title="Close"
+                    onClick={onClose}
+                >
                     <XIcon />
                 </Button>
             </div>
@@ -436,13 +452,15 @@ export function DetailsPanel({
                     <ItemDetails
                         node={node}
                         heading={(name) => (
-                            <h2 className="text-lg leading-snug font-bold wrap-anywhere">{name}</h2>
+                            <h2 className="text-lg leading-snug font-bold tracking-[-0.01em] wrap-anywhere">
+                                {name}
+                            </h2>
                         )}
                         {...details}
                     />
                 ) : (
                     <p className="py-6 text-sm text-muted-foreground">
-                        Select one item to see its details
+                        Select one item to see its info.
                     </p>
                 )}
             </div>

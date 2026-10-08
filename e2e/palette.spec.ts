@@ -38,11 +38,11 @@ test('goes places from any page, and the folder view lends its actions', async (
     // Off the folder view, its actions are gone and places remain.
     await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await expect(page.getByRole('option', { name: /New folder/ })).toHaveCount(0);
-    await palette(page).fill('contacts');
+    await palette(page).fill('people you share');
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/\/app\/contacts/);
+    await expect(page).toHaveURL(/\/app\/people/);
     // The address changes before the page commits; the next test's goto must not cut it off.
-    await expect(page.getByRole('heading', { name: 'Your fingerprint' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Your twelve words' })).toBeVisible();
 });
 
 test('empties the trash from anywhere, after asking', async () => {
@@ -51,20 +51,22 @@ test('empties the trash from anywhere, after asking', async () => {
     await page.keyboard.press('Backspace');
     await expect(row(page, 'notes.md')).toHaveCount(0);
     // A full navigation: the entry is a real button only once the page has hydrated.
-    await page.goto('/app/contacts', { waitUntil: 'networkidle' });
+    await page.goto('/app/people', { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: 'Search' }).click();
     await palette(page).fill('empty trash');
     await page.keyboard.press('Enter');
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Empty trash' }).click();
-    await expect(page.getByText('Trash emptied: 1 item')).toBeVisible({ timeout: 60_000 });
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Empty Trash' }).click();
+    await expect(page.getByText('Trash emptied')).toBeVisible({ timeout: 60_000 });
     await page.goto('/app/trash');
-    await expect(page.getByText('The trash is empty.')).toBeVisible();
+    await expect(page.getByText('Trash is empty')).toBeVisible();
 });
 
 test('locks this device, after asking', async () => {
     await page.keyboard.press(`${await shortcutModifier(page)}+k`);
     await palette(page).fill('lock');
     await page.keyboard.press('Enter');
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Lock device' }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Unlock this device' })).toBeVisible();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Lock', exact: true }).click();
+    await expect(
+        page.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+    ).toBeVisible();
 });
