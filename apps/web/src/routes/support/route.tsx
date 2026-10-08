@@ -71,6 +71,9 @@ export const Route = createFileRoute('/support')({
 const h2 =
     'mt-12 scroll-mt-24 text-2xl leading-tight font-extrabold tracking-[-0.02em] text-balance first:mt-4 sm:text-[28px]';
 const p = 'mt-4 leading-relaxed';
+/* The phone and email belong to the address, so ink like its lines; the underline says they can be tapped. */
+const contactLink =
+    'underline decoration-1 underline-offset-4 transition-colors hover:text-primary-hover';
 
 function Section({ id, children }: { id: string; children: ReactNode }) {
     const title = headings.find((heading) => heading.id === id)!.title;
@@ -181,7 +184,7 @@ function SupportPage() {
                             <span className="mt-2 block">
                                 <a
                                     href={`tel:${support.phone.replace(/[^+0-9]/g, '')}`}
-                                    className="text-link"
+                                    className={contactLink}
                                 >
                                     {support.phone}
                                 </a>
@@ -189,7 +192,7 @@ function SupportPage() {
                         )}
                         {email && (
                             <span className="block">
-                                <a href={`mailto:${email}`} className="text-link">
+                                <a href={`mailto:${email}`} className={contactLink}>
                                     {email}
                                 </a>
                             </span>
