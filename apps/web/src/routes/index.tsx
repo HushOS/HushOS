@@ -210,7 +210,7 @@ function LandingPage() {
                                 height={1600}
                                 sizes="(min-width: 72rem) 62rem, 88vw"
                                 className="block overflow-hidden rounded-xl border border-rule shadow-lg"
-                                alt="The Lisbon 2026 folder in a browser: twelve photos as a grid, under a line saying you, Jonas and anyone with the link can open everything in it."
+                                alt="The Lisbon 2026 folder in a browser: twelve photos as a grid, with Jonas’s avatar and a link icon beside its name for who can open it."
                             />
                             <Phones
                                 screen="folder"

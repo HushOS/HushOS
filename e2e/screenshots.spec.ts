@@ -40,7 +40,14 @@ const newContext = (browser: Browser, options: BrowserContextOptions = {}) =>
 const toasts = (p: Page) => p.locator('[data-slot=toast]');
 /* The pictures apps/web/public/manifest.json shows when the web app is installed; it needs fixed URLs. */
 const MANIFEST = 'apps/web/public/screenshots';
-const IN_MANIFEST = new Set(['drive-wide', 'drive-grid', 'preview', 'drive-narrow', 'phone-grid']);
+const IN_MANIFEST = new Set([
+    'home-wide',
+    'drive-wide',
+    'drive-grid',
+    'preview',
+    'drive-narrow',
+    'phone-grid',
+]);
 const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
@@ -314,6 +321,15 @@ async function shoot(p: Page, name: string, scale: Scale) {
 async function wideShots(p: Page, suffix: string, scale: Scale) {
     await settle(p);
     await shoot(p, `drive-wide${suffix}`, scale);
+
+    // Home: Add on the title row, then Recent with its filters.
+    await p.getByRole('link', { name: 'Home', exact: true }).click();
+    await expect(p.getByRole('heading', { name: 'Recent' })).toBeVisible({ timeout: 30_000 });
+    await expect(row(p, 'Family')).toBeVisible({ timeout: 60_000 });
+    await settle(p);
+    await shoot(p, `home-wide${suffix}`, scale);
+    await p.getByRole('link', { name: 'My files', exact: true }).click();
+    await expect(row(p, 'Lease agreement.pdf')).toBeVisible({ timeout: 30_000 });
 
     // Search, mid-word, with the hits' actions showing.
     await p.getByRole('button', { name: 'Search' }).click();

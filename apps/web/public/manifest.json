@@ -45,6 +45,13 @@
     ],
     "screenshots": [
         {
+            "src": "/screenshots/home-wide.png",
+            "sizes": "2560x1600",
+            "type": "image/png",
+            "form_factor": "wide",
+            "label": "Home: what you touched last, and Add for anything new"
+        },
+        {
             "src": "/screenshots/drive-wide.png",
             "sizes": "2560x1600",
             "type": "image/png",
