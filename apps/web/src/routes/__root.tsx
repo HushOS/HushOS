@@ -39,6 +39,7 @@ import { sessionHint } from '@/lib/session';
 import { operatorHint } from '@/lib/social';
 import { initSounds } from '@/lib/sounds';
 import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
+import { isAppleTouch, viewportContent } from '@/lib/viewport';
 import styles from '@/styles.css?url';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -59,13 +60,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         contrast: await getContrastServerFn(),
         analytics: analyticsAllowed(location.pathname) ? await getAnalyticsServerFn() : null,
         release: await getReleaseServerFn(),
+        apple: isAppleTouch(),
     }),
     head: ({ loaderData }) => ({
         meta: [
             { charSet: 'utf-8' },
             {
                 name: 'viewport',
-                content: 'width=device-width, initial-scale=1, viewport-fit=cover',
+                content: viewportContent(loaderData?.apple ?? false),
             },
             { title: 'HushOS' },
             {
