@@ -174,7 +174,9 @@ function TeamsPage() {
                                     ? 'How many people, what you keep, and what you use now. We’ll write back when the team plan is ready.'
                                     : 'Start free, make a folder, and share it with the people you work with.'}
                             </p>
-                            <TextLink to="/pricing">Compare plans</TextLink>
+                            <TextLink to="/pricing" search={{ for: 'business' }}>
+                                Compare plans
+                            </TextLink>
                         </div>
                         {action('w-full lg:w-auto')}
                     </div>

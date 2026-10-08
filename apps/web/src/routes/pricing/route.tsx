@@ -29,10 +29,14 @@ import { CheckIcon } from 'lucide-react';
 import { useState } from 'react';
 
 export const Route = createFileRoute('/pricing')({
-    validateSearch: (search: Record<string, unknown>): { currency?: string } =>
-        typeof search.currency === 'string' && /^[a-z]{3}$/.test(search.currency)
+    // In the address, so a link can open the Business plans (/pricing?for=business, from the
+    // teams page) and Back returns to the same choice; Personal, the default, adds nothing.
+    validateSearch: (search: Record<string, unknown>): { currency?: string; for?: 'business' } => ({
+        ...(typeof search.currency === 'string' && /^[a-z]{3}$/.test(search.currency)
             ? { currency: search.currency }
-            : {},
+            : {}),
+        ...(search.for === 'business' ? { for: 'business' as const } : {}),
+    }),
     loaderDeps: ({ search }) => ({ currency: search.currency }),
     loader: async ({ context, deps }) => {
         const catalogue = await context.queryClient.ensureQueryData(catalogueQueryOptions);
@@ -225,7 +229,18 @@ function PricingPage() {
     const navigate = useNavigate();
     const amount = (plan: Plan) => priceOf(plan, currency);
     const money = (minor: number, code = currency) => formatMoney(minor, code);
-    const [audience, setAudience] = useState<Audience>('personal');
+    const search = Route.useSearch();
+    const audience: Audience = search.for === 'business' ? 'business' : 'personal';
+    const setAudience = (value: Audience) =>
+        void navigate({
+            to: '/pricing',
+            search: (previous) => ({
+                ...previous,
+                for: value === 'business' ? ('business' as const) : undefined,
+            }),
+            replace: true,
+            resetScroll: false,
+        });
     const [interval, setInterval] = useState<Interval>('year');
     const tiers = tiersOf(catalogue.plans);
     const free = formatQuota(catalogue.freeQuotaBytes);
@@ -294,7 +309,10 @@ function PricingPage() {
                                             if (typeof value === 'string' && value !== currency)
                                                 void navigate({
                                                     to: '/pricing',
-                                                    search: { currency: value },
+                                                    search: (previous) => ({
+                                                        ...previous,
+                                                        currency: value,
+                                                    }),
                                                     replace: true,
                                                     // Only the prices change; stay where the reader is.
                                                     resetScroll: false,
