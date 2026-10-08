@@ -319,7 +319,7 @@ function CustomColour({
                                 commit(hexToHsv(typed.toLowerCase()));
                         }
                     }}
-                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-sm outline-none focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-base outline-none sm:text-sm focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
                 />
             </label>
         </div>

@@ -489,7 +489,7 @@ function PeopleField({
                     onBlur={() => setOpen(false)}
                     placeholder="Add a name or email"
                     aria-label="Add people"
-                    className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground"
+                    className="h-full min-w-0 flex-1 bg-transparent text-base outline-none sm:text-[15px] placeholder:text-muted-foreground"
                 />
             </div>
             {open && (
