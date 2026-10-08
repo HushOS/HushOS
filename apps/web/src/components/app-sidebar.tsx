@@ -200,10 +200,11 @@ function StorageMeter() {
 const collapsed =
     'group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0! group-data-[collapsible=icon]:[&>span]:hidden';
 /* The active place is tinted, semibold and its icon heavier: never tint alone. */
+/* The quieter rows draw 16px icons in the 18px column (1px each side), so every label starts in one line. */
 const item =
     'h-10 gap-3 rounded-md px-3 text-[15px] font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:size-[18px] [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
 const quiet =
-    'h-9 gap-3 rounded-md px-3 text-sm font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:size-4 [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
+    'h-9 gap-3 rounded-md px-3 text-sm font-normal text-foreground hover:bg-muted hover:text-foreground data-active:bg-accent data-active:font-semibold data-active:text-accent-foreground data-active:hover:bg-accent [&_svg]:mx-px [&_svg]:size-4 [&_svg]:stroke-[1.9] data-active:[&_svg]:stroke-[2.3]';
 const group = 'p-0';
 
 function NavGroup({
@@ -252,10 +253,11 @@ export function AppSidebar({
     return (
         <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
             <SidebarHeader className="px-4 pt-4 pb-0 group-data-[collapsible=icon]:px-2">
+                {/* The logo's square shares the nav icons' centre line (37px in); the name then starts near their labels. */}
                 <Brand
                     to="/app"
                     compact={state === 'collapsed'}
-                    className="h-9 self-start rounded-md border-r-0 px-1 group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-[9px] group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
                 />
             </SidebarHeader>
             <SidebarContent className="gap-5 px-4 pt-5 group-data-[collapsible=icon]:px-2">
