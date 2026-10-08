@@ -1,0 +1,19 @@
+e2e/screenshots.spec.ts
+  s_41ce2ed146c27c::t_89fe5af6312482 222,234
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2bb90e3738c7f3772e9d9e6a98582682981bd44",
+  "prompts": {},
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
