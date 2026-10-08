@@ -150,7 +150,7 @@ function TeamsPage() {
                         {coming.map((line) => (
                             <li
                                 key={line}
-                                className="border-b border-rule py-4 text-[17px] font-semibold"
+                                className="border-b border-rule py-4 text-[17px] font-semibold last:border-b-0"
                             >
                                 {line}
                             </li>
