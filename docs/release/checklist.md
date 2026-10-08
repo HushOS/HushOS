@@ -26,7 +26,7 @@ The blockers were fixed on 2026-10-05; the boxes stay for a last look on the rel
 ## Web and accounts
 
 - [ ] **Blocker, Apple: the support page shows the address and phone.** `https://hushos.com/support` exists; it shows `HELP_CONTACT` (or `OPERATOR_CONTACT`), `OPERATOR_NAME`, `OPERATOR_JURISDICTION`, `OPERATOR_ADDRESS` and `OPERATOR_PHONE`. Set the last two on production (the address takes `\n` between lines) and check the page's "Who runs HushOS" section shows them.
-- [ ] **Support email is live.** `hello@hushos.com` (Cloudflare Email Routing). Send a test from an outside account; both stores show it.
+- [ ] **Support email is live.** `hello@hushos.com` (a Google Workspace alias). Send a test from an outside account; both stores show it.
 - [ ] **Privacy and terms pages are live.** `https://hushos.com/privacy` and `/terms` answer 200 (they did on 2026-10-05).
 - [x] **Recommended: the privacy policy covers the apps.** Section 4 describes only browser storage. Add the apps: the session and remembered device in the keychain or Android Keystore, the local file mirror and kept files, the camera used only on the phone for Take photo and the recovery-kit scan, local notifications only.
 - [x] **Google: an account-deletion URL.** `https://hushos.com/support#delete-account` names HushOS, gives the web and app steps, says what is deleted, and gives the contact email for anyone who can't sign in.

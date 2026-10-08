@@ -28,7 +28,7 @@ Click by click, for HushOS, Inc. Requirements were checked on Apple's own pages 
 
 Apple requires two-factor authentication. It also wants a work email on the organization's domain: "Your work email address needs to associated with your organization's domain name" (Apple's typo; https://developer.apple.com/programs/enroll/).
 
-1. Choose the address: a hushos.com mailbox you'll keep, e.g. `<<you>>@hushos.com`, not a personal Gmail. hushos.com receives mail through Cloudflare Email Routing (MX `route1-3.mx.cloudflare.net`), so a forwarding address works for receiving. Make sure it reaches you.
+1. Choose the address: a hushos.com mailbox you'll keep, e.g. `<<you>>@hushos.com`, not a personal Gmail. hushos.com receives mail in Google Workspace (MX `aspmx.l.google.com`), so an alias on your Workspace account works for receiving. Make sure it reaches you.
 2. Go to https://account.apple.com and create the account with that address (or sign in, if you already have one on it). Use your legal name; Apple may verify your identity against it.
 3. **Sign-In and Security > Two-Factor Authentication > Turn On.** Add a trusted phone number you will keep for years.
 4. Install **Apple Developer** from the App Store on your iPhone and sign in. Enrollment can be finished there, and it is the quickest place to see enrollment messages.
@@ -153,7 +153,7 @@ HushOS encrypts files itself, with standard published algorithms (XChaCha20-Poly
 
 Apple: "include demo account info (and turn on your back-end service!) if your app includes a login" (guideline 2.1(a), https://developer.apple.com/app-store/review/guidelines/), and the account "must not expire". Google needs the same, so make them once on **production**, hushos.com:
 
-1. **The review account.** A hushos.com address that forwards to you, e.g. `appreview@hushos.com` (a Cloudflare Email Routing rule), so the verification email arrives. Register at https://hushos.com/register, name `App Review`, a long unique password. Save the recovery kit in your password manager (the account is useless to you if you lose it).
+1. **The review account.** A hushos.com address that forwards to you, e.g. `appreview@hushos.com` (an alias on a Workspace account), so the verification email arrives. Register at https://hushos.com/register, name `App Review`, a long unique password. Save the recovery kit in your password manager (the account is useless to you if you lose it).
 2. Fill it with **made-up, non-personal content**: a few folders (`Travel`, `Recipes`, `Work`), some photos you own the rights to, a PDF, a text file. Share one folder with the second account (below) as "Can view", and turn on a link for one file. Reviewers then see sharing work.
 3. **A second account** for deleting: `appreview-delete@hushos.com`, for the reviewer who tests Delete account (guideline 5.1.1(v)). Recreate it after each review that deletes it.
 4. Never change these passwords except in the review notes as well; a password change signs out every session.
