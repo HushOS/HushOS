@@ -59,12 +59,11 @@ export function wordmarkSvg(fill = '#000000', background?: string) {
  * of the side (the board's 8px on 26px), the mark 58% of the square's height; in the
  * dark, the dark mark on a light square. This is what the brand menu copies; the
  * one-colour marks above are for one-ink print and other people's backgrounds.
- * The phone apps keep Hush blue for their icons and splash (BRAND_BLUE).
+ * The phone apps' icons and splash use the same ink (scripts/mobile-brand-assets.ts).
  */
 export const BRAND_INK = '#17203a';
 export const BRAND_INK_DARK = '#e4e8f4';
 export const BRAND_GROUND_DARK = '#0e111a';
-export const BRAND_BLUE = '#2c428e';
 const BADGE = 539;
 const MARK_SCALE = (BADGE * 0.58) / 419;
 

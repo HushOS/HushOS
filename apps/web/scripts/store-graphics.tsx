@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { fromJsx } from 'takumi-js/helpers/jsx';
 import { Renderer } from 'takumi-js/node';
-import { BRAND_BLUE, BRAND_WORDMARK_SIZE, brandWordmarkSvg, logoSvg } from '../src/lib/brand';
+import { BRAND_INK, BRAND_WORDMARK_SIZE, brandWordmarkSvg, logoSvg } from '../src/lib/brand';
 
 /*
  * The Play Store's graphics from the same mark and type as the social cards
@@ -20,7 +20,7 @@ const font = await readFile(
         import.meta.resolve('@fontsource-variable/geist/files/geist-latin-wght-normal.woff2'),
     ),
 );
-const wordmark = `data:image/svg+xml;base64,${Buffer.from(brandWordmarkSvg('#141a33', BRAND_BLUE)).toString('base64')}`;
+const wordmark = `data:image/svg+xml;base64,${Buffer.from(brandWordmarkSvg()).toString('base64')}`;
 const wordmarkHeight = 44;
 const wordmarkWidth = Math.round(
     (BRAND_WORDMARK_SIZE.width / BRAND_WORDMARK_SIZE.height) * wordmarkHeight,
@@ -69,10 +69,10 @@ await Promise.all([
         .flatten({ background: '#ffffff' })
         .png()
         .toFile(fileURLToPath(new URL('google-feature-graphic.png', out))),
-    // The app icon as the launcher shows it: the white mark on Hush blue, square; Play rounds it.
-    sharp(Buffer.from(logoSvg('#ffffff', '#2c428e', 0, 0.8)), { density: 300 })
+    // The app icon as the launcher shows it: the white mark on ink, square; Play rounds it.
+    sharp(Buffer.from(logoSvg('#ffffff', BRAND_INK, 0, 0.8)), { density: 300 })
         .resize(512, 512)
-        .flatten({ background: '#2c428e' })
+        .flatten({ background: BRAND_INK })
         .ensureAlpha()
         .png()
         .toFile(fileURLToPath(new URL('google-play-icon.png', out))),

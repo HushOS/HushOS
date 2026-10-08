@@ -277,7 +277,7 @@ HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite
 Principles:
 
 1. **Private is the default; show the exceptions.** Every list says who can open each thing, but only when it differs from its folder. No lock icons on everything.
-2. **One blue.** Hush blue (`primary`) is the brand, the primary button, links, focus, the active place and the link mark. Nothing else is coloured for attention.
+2. **One blue.** Hush blue (`primary`) is the primary button, links, focus, the active place and the link mark. Nothing else is coloured for attention.
 3. **Say it the way a person would.** GB, not GiB. "Who can open", not "ACL". Keys, epochs and rotation stay out of sight until someone opens Technical details.
 4. **One product on three platforms.** The same menus in the same order, the same words, the same states. Each platform keeps its own furniture: iOS menus and glass, Material sheets and FABs, web dialogs and the command palette.
 5. **Say only what the code does.** Never claim a feature that is not built, and no assurance blurbs.
@@ -328,7 +328,7 @@ Four shadows, tinted with ink in light and near-black with a faint top highlight
 The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing else. `chip`: badges, tags, checkboxes, swatches, and a segment inside a segmented control. `control`: buttons, inputs, segmented controls, menu items, small inner cells. `card`: the web page panel, menus, popovers, toasts, banners and alerts, the details panel, grid tiles, admin fact boxes. `sheet`: dialogs and sheets. On the web Tailwind's `rounded-xs`/`sm` map to chip, `md`/`lg` to control, `xl` to card and `2xl` to sheet, so an off-scale corner can't be asked for. Avatars, switches, tag dots and the phones' capsule buttons are fully round.
 
 - **Folder:** two solid sheets, `folder-back` behind `folder-front`. **File:** a white sheet with a turned corner and its type, unless a thumbnail exists: a photo as itself, a PDF as its first page with a type badge, a video as a frame with a play badge. Marks are 32 in compact lists, 36 in file rows, 72 in grids and the details panel; one implementation per client (`FileMark` on the web).
-- **Logo:** monochrome on the web: the white mark on an `ink` square (#17203a) whose corners are 30% of its side; in the dark, the ground-coloured mark on the light ink square. Favicons, social cards and emails use the light-scheme version (an email's square lightens a step in the dark, since its mark is an image). The phone apps' icons and splash keep the Hush blue square (#2c428e). Brand assets are generated from `apps/web/src/lib/brand.ts` with `bun run brand:assets`.
+- **Logo:** monochrome everywhere: the white mark on an `ink` square (#17203a) whose corners are 30% of its side; in the dark, the ground-coloured mark on the light ink square. Favicons, social cards, emails and the app icons use the light-scheme version (an email's square lightens a step in the dark, since its mark is an image; iOS's dark icon is the light-ink mark alone). The phones' splash is the ink mark alone on the app's ground, light ink in the dark. Web assets come from `apps/web/src/lib/brand.ts` with `bun run brand:assets`, the phones' with `bun run brand:mobile`.
 - **Icons:** Lucide stroke icons on the web (16px in controls, 18px in navigation), SF Symbols on iOS, Material Symbols on Android, always beside a word or with an accessible name.
 
 ## Components
