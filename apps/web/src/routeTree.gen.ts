@@ -29,6 +29,7 @@ import { Route as TeamsRouteRouteImport } from './routes/teams/route'
 import { Route as TermsRouteRouteImport } from './routes/terms/route'
 import { Route as DotwellKnownAppleAppSiteAssociationRouteImport } from './routes/[.]well-known/apple-app-site-association'
 import { Route as DotwellKnownAssetlinksDotjsonRouteImport } from './routes/[.]well-known/assetlinks[.]json'
+import { Route as DotwellKnownSecurityDottxtRouteImport } from './routes/[.]well-known/security[.]txt'
 import { Route as AuthenticatedAppRouteRouteImport } from './routes/_authenticated/app/route'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
@@ -167,6 +168,12 @@ const DotwellKnownAssetlinksDotjsonRoute =
   DotwellKnownAssetlinksDotjsonRouteImport.update({
     id: '/.well-known/assetlinks.json',
     path: '/.well-known/assetlinks.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const DotwellKnownSecurityDottxtRoute =
+  DotwellKnownSecurityDottxtRouteImport.update({
+    id: '/.well-known/security.txt',
+    path: '/.well-known/security.txt',
     getParentRoute: () => rootRouteImport,
   } as any)
 const AuthenticatedAppRouteRoute = AuthenticatedAppRouteRouteImport.update({
@@ -400,6 +407,7 @@ export interface FileRoutesByFullPath {
   '/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/.well-known/security.txt': typeof DotwellKnownSecurityDottxtRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -456,6 +464,7 @@ export interface FileRoutesByTo {
   '/app': typeof AuthenticatedAppDriveIndexRoute
   '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/.well-known/security.txt': typeof DotwellKnownSecurityDottxtRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -515,6 +524,7 @@ export interface FileRoutesById {
   '/_authenticated/app': typeof AuthenticatedAppRouteRouteWithChildren
   '/.well-known/apple-app-site-association': typeof DotwellKnownAppleAppSiteAssociationRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/.well-known/security.txt': typeof DotwellKnownSecurityDottxtRoute
   '/api/$': typeof ApiSplatRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/go/$slug': typeof GoSlugRoute
@@ -576,6 +586,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/.well-known/apple-app-site-association'
     | '/.well-known/assetlinks.json'
+    | '/.well-known/security.txt'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -632,6 +643,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/.well-known/apple-app-site-association'
     | '/.well-known/assetlinks.json'
+    | '/.well-known/security.txt'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -690,6 +702,7 @@ export interface FileRouteTypes {
     | '/_authenticated/app'
     | '/.well-known/apple-app-site-association'
     | '/.well-known/assetlinks.json'
+    | '/.well-known/security.txt'
     | '/api/$'
     | '/blog/$slug'
     | '/go/$slug'
@@ -750,6 +763,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   DotwellKnownAppleAppSiteAssociationRoute: typeof DotwellKnownAppleAppSiteAssociationRoute
   DotwellKnownAssetlinksDotjsonRoute: typeof DotwellKnownAssetlinksDotjsonRoute
+  DotwellKnownSecurityDottxtRoute: typeof DotwellKnownSecurityDottxtRoute
   ApiSplatRoute: typeof ApiSplatRoute
   BlogSlugRoute: typeof BlogSlugRoute
   GoSlugRoute: typeof GoSlugRoute
@@ -900,6 +914,13 @@ declare module '@tanstack/react-router' {
       path: '/.well-known/assetlinks.json'
       fullPath: '/.well-known/assetlinks.json'
       preLoaderRoute: typeof DotwellKnownAssetlinksDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/security.txt': {
+      id: '/.well-known/security.txt'
+      path: '/.well-known/security.txt'
+      fullPath: '/.well-known/security.txt'
+      preLoaderRoute: typeof DotwellKnownSecurityDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/app': {
@@ -1311,6 +1332,7 @@ const rootRouteChildren: RootRouteChildren = {
   DotwellKnownAppleAppSiteAssociationRoute:
     DotwellKnownAppleAppSiteAssociationRoute,
   DotwellKnownAssetlinksDotjsonRoute: DotwellKnownAssetlinksDotjsonRoute,
+  DotwellKnownSecurityDottxtRoute: DotwellKnownSecurityDottxtRoute,
   ApiSplatRoute: ApiSplatRoute,
   BlogSlugRoute: BlogSlugRoute,
   GoSlugRoute: GoSlugRoute,

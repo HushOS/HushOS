@@ -52,6 +52,9 @@ export const appEnv = createEnv({
         // Where Help in the app's account menu writes to, for people using this instance.
         // Unset, the account menu shows no Help.
         HELP_CONTACT: z.string().trim().email().max(200).optional(),
+        // Where security researchers report vulnerabilities in this instance, published in
+        // /.well-known/security.txt (RFC 9116). Unset, that file is not served.
+        SECURITY_CONTACT: z.string().trim().email().max(200).optional(),
         // The iOS apps allowed to open this instance's links (universal links) and fill
         // its passwords, as Team ID and bundle id: `ABCDE12345.com.hushos.app`, comma
         // separated. Unset, /.well-known/apple-app-site-association is not served.
