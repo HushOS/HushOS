@@ -1,0 +1,44 @@
+packages/env/src/app.ts
+  s_41ce2ed146c27c::t_40d72bcacb5c33 55-57
+.env.example
+  s_41ce2ed146c27c::t_40d72bcacb5c33 24-25
+.env.production.example
+  s_41ce2ed146c27c::t_40d72bcacb5c33 30-31
+compose.yaml
+  s_41ce2ed146c27c::t_40d72bcacb5c33 89
+apps/web/src/routes/[.]well-known/security[.]txt.ts
+  s_e6be7a44f77585::t_01c83fa4ce4701 1-6
+docs/self-hosting.md
+  s_e6be7a44f77585::t_ac89d3296c82f8 274
+apps/web/src/lib/security-txt.server.ts
+  s_e6be7a44f77585::t_01c83fa4ce4701 1-14,16-17,19-35
+  s_41ce2ed146c27c::t_8bd59b5dc8dd33 15,18
+turbo.json
+  s_41ce2ed146c27c::t_40d72bcacb5c33 20,80
+apps/web/src/routeTree.gen.ts
+  s_e6be7a44f77585::t_807464deb8cb84 32,173-178,410,467,527,589,646,705,766,919-925,1335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "422b5bb49109883703e92ded6bd8ef09150c1d6e",
+  "prompts": {},
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_e6be7a44f77585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4298fa26-72d0-45cb-89af-655a41cadf98",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
