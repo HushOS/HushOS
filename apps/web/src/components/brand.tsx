@@ -18,14 +18,15 @@ type Format = 'svg' | 'png';
 type Copied = { asset: Asset; format: Format };
 
 /*
- * The logo: the white mark on the blue square, corners at 30% of the side as
- * the board draws it and the copied logo has. Brand blue whatever the theme.
+ * The logo: the mark on a square of the ink colour, corners at 30% of the side as
+ * the board draws it and the copied logo has. Monochrome: white on ink in the light,
+ * the ground colour on the light ink in the dark.
  */
 export function LogoBadge({ className }: { className?: string }) {
     return (
         <span
             className={cn(
-                'grid size-6 shrink-0 place-items-center rounded-[30%] bg-[#2c428e] text-white',
+                'grid size-6 shrink-0 place-items-center rounded-[30%] bg-ink text-ground',
                 className,
             )}
         >

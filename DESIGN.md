@@ -259,7 +259,7 @@ components:
         textColor: '{colors.primary}'
         size: 14px
     logo:
-        backgroundColor: '#2c428e'
+        backgroundColor: '{colors.ink}'
         textColor: '#ffffff'
         rounded: 30%
 ---
@@ -328,7 +328,7 @@ Four shadows, tinted with ink in light and near-black with a faint top highlight
 The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing else. `chip`: badges, tags, checkboxes, swatches, and a segment inside a segmented control. `control`: buttons, inputs, segmented controls, menu items, small inner cells. `card`: the web page panel, menus, popovers, toasts, banners and alerts, the details panel, grid tiles, admin fact boxes. `sheet`: dialogs and sheets. On the web Tailwind's `rounded-xs`/`sm` map to chip, `md`/`lg` to control, `xl` to card and `2xl` to sheet, so an off-scale corner can't be asked for. Avatars, switches, tag dots and the phones' capsule buttons are fully round.
 
 - **Folder:** two solid sheets, `folder-back` behind `folder-front`. **File:** a white sheet with a turned corner and its type, unless a thumbnail exists: a photo as itself, a PDF as its first page with a type badge, a video as a frame with a play badge. Marks are 32 in compact lists, 36 in file rows, 72 in grids and the details panel; one implementation per client (`FileMark` on the web).
-- **Logo:** the white mark on a Hush blue (#2c428e) square whose corners are 30% of its side, the same in both schemes. Brand assets are generated from `apps/web/src/lib/brand.ts` with `bun run brand:assets`.
+- **Logo:** monochrome on the web: the white mark on an `ink` square (#17203a) whose corners are 30% of its side; in the dark, the ground-coloured mark on the light ink square. Favicons, social cards and emails use the light-scheme version (an email's square lightens a step in the dark, since its mark is an image). The phone apps' icons and splash keep the Hush blue square (#2c428e). Brand assets are generated from `apps/web/src/lib/brand.ts` with `bun run brand:assets`.
 - **Icons:** Lucide stroke icons on the web (16px in controls, 18px in navigation), SF Symbols on iOS, Material Symbols on Android, always beside a word or with an accessible name.
 
 ## Components
@@ -399,7 +399,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
 
 ## Email
 
-Transactional emails (`packages/emails`) look like the site: the light ground, a white card with 16px corners and a rule header holding the logo square (26px, 8px corners) beside the name, ink text, the facts about a link as ruled rows, and one plain Hush blue button with 10px corners. Mono appears only on a link printed for copying. Dark mode follows the tokens via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial. Templates render at build time (`bun run email:render`); preview with `bun run email:preview`. Social cards (`/og.jpg`, `/og/<page>.jpg`, 1200×630, Takumi) are a white page, the colour wordmark and the heading style; a share link's card is generic.
+Transactional emails (`packages/emails`) look like the site: the light ground, a white card with 16px corners and a rule header holding the ink logo square (26px, 8px corners) beside the name, ink text, the facts about a link as ruled rows, and one plain Hush blue button with 10px corners. Mono appears only on a link printed for copying. Dark mode follows the tokens via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial. Templates render at build time (`bun run email:render`); preview with `bun run email:preview`. Social cards (`/og.jpg`, `/og/<page>.jpg`, 1200×630, Takumi) are a white page, the ink wordmark and the heading style; a share link's card is generic.
 
 ## Accessibility
 

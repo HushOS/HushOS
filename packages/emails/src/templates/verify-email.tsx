@@ -61,6 +61,7 @@ export default function VerifyEmail({
                         .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                        .email-logo { background-color: #343b52 !important; }
                         .email-cell { border-color: #262b3a !important; }
                         .email-heading, .email-value { color: #e4e8f4 !important; }
                         .email-muted { color: #9aa3be !important; }
@@ -70,6 +71,7 @@ export default function VerifyEmail({
                     [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                    [data-ogsc] .email-logo { background-color: #343b52 !important; }
                     [data-ogsc] .email-cell { border-color: #262b3a !important; }
                     [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
                     [data-ogsc] .email-muted { color: #9aa3be !important; }
@@ -112,15 +114,20 @@ export default function VerifyEmail({
                     >
                         <Row>
                             <Column style={{ width: '34px', verticalAlign: 'middle' }}>
-                                {/* The light mark on the brand blue, the same in both colour schemes. */}
+                                {/*
+                                 * The light mark on an ink square, monochrome as on the site. In the dark
+                                 * the square lightens a step so it stays clear of the dark card; the mark,
+                                 * an image, can't swap to the dark one as the site's does.
+                                 */}
                                 <table role="presentation" cellPadding={0} cellSpacing={0}>
                                     <tbody>
                                         <tr>
                                             <td
+                                                className="email-logo"
                                                 style={{
                                                     width: '26px',
                                                     height: '26px',
-                                                    backgroundColor: '#2c428e',
+                                                    backgroundColor: '#17203a',
                                                     borderRadius: '8px',
                                                     textAlign: 'center',
                                                     verticalAlign: 'middle',

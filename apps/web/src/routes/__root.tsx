@@ -80,7 +80,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
             { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f3f4f8' },
             { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0e111a' },
-            { name: 'msapplication-TileColor', content: '#2c428e' },
+            { name: 'msapplication-TileColor', content: '#17203a' },
             { name: 'msapplication-config', content: '/browserconfig.xml' },
         ],
         links: [
@@ -103,7 +103,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { rel: 'icon', href: '/favicon-32x32.png', type: 'image/png', sizes: '32x32' },
             { rel: 'icon', href: '/favicon-16x16.png', type: 'image/png', sizes: '16x16' },
             { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
-            { rel: 'mask-icon', href: '/safari-pinned-tab.svg', color: '#2c428e' },
+            { rel: 'mask-icon', href: '/safari-pinned-tab.svg', color: '#17203a' },
             { rel: 'manifest', href: '/manifest.json' },
         ],
         // Umami on the public pages only; a private page's loader hands back no script.

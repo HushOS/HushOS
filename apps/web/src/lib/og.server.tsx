@@ -126,7 +126,7 @@ export async function socialImage(key: string) {
                             width: 56,
                             height: 56,
                             borderRadius: 17,
-                            backgroundColor: '#2c428e',
+                            backgroundColor: '#17203a',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',

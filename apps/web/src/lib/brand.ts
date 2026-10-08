@@ -55,23 +55,27 @@ export function wordmarkSvg(fill = '#000000', background?: string) {
 }
 
 /*
- * The logo as people see it: the white mark on the blue square, corners at 30%
- * of the side (the board's 8px on 26px), the mark 58% of the square's height.
- * This is what the brand menu copies; the one-colour marks above are for
- * one-ink print and other people's backgrounds.
+ * The logo as people see it on the web: the white mark on an ink square, corners at 30%
+ * of the side (the board's 8px on 26px), the mark 58% of the square's height; in the
+ * dark, the dark mark on a light square. This is what the brand menu copies; the
+ * one-colour marks above are for one-ink print and other people's backgrounds.
+ * The phone apps keep Hush blue for their icons and splash (BRAND_BLUE).
  */
+export const BRAND_INK = '#17203a';
+export const BRAND_INK_DARK = '#e4e8f4';
+export const BRAND_GROUND_DARK = '#0e111a';
 export const BRAND_BLUE = '#2c428e';
 const BADGE = 539;
 const MARK_SCALE = (BADGE * 0.58) / 419;
 
-function badge(blue: string) {
+function badge(square: string, mark = '#ffffff') {
     const width = 300 * MARK_SCALE;
     const height = 419 * MARK_SCALE;
-    return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${blue}"/><g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths('#ffffff')}</g>`;
+    return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${square}"/><g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths(mark)}</g>`;
 }
 
-export function badgeSvg(blue = BRAND_BLUE) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(blue)}</svg>`;
+export function badgeSvg(square = BRAND_INK, mark = '#ffffff') {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(square, mark)}</svg>`;
 }
 
 export const BADGE_SIDE = BADGE;
@@ -88,9 +92,9 @@ export const BRAND_WORDMARK_SIZE = {
     height: BADGE,
 };
 
-export function brandWordmarkSvg(ink = '#141a33', blue = BRAND_BLUE) {
+export function brandWordmarkSvg(ink = BRAND_INK, square = ink, mark = '#ffffff') {
     const x = LETTER_LEFT - 418 * LETTER_SCALE;
     const y = BADGE / 2 - 213.8 * LETTER_SCALE;
     const { width, height } = BRAND_WORDMARK_SIZE;
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" fill="none">${badge(blue)}<path fill="${ink}" transform="translate(${x} ${y}) scale(${LETTER_SCALE})" d="${LETTERING}"/></svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" fill="none">${badge(square, mark)}<path fill="${ink}" transform="translate(${x} ${y}) scale(${LETTER_SCALE})" d="${LETTERING}"/></svg>`;
 }

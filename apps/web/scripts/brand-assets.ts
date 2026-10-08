@@ -1,33 +1,42 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { $ } from 'bun';
 import sharp from 'sharp';
-import { badgeSvg, brandWordmarkSvg, logoSvg, wordmarkSvg } from '../src/lib/brand';
+import {
+    badgeSvg,
+    BRAND_GROUND_DARK,
+    BRAND_INK,
+    BRAND_INK_DARK,
+    brandWordmarkSvg,
+    logoSvg,
+    wordmarkSvg,
+} from '../src/lib/brand';
 
 /* Writes public/brand from the mark in src/lib/brand.ts. Run: bun run brand:assets */
 const dir = new URL('../public/brand/', import.meta.url);
 await mkdir(dir, { recursive: true });
 const files = {
-    'hushos-logo-colour.svg': badgeSvg(),
-    'hushos-wordmark-colour.svg': brandWordmarkSvg(),
-    'hushos-wordmark-colour-on-dark.svg': brandWordmarkSvg('#eef0f8'),
-    'hushos-logo.svg': logoSvg('#1c2848'),
-    'hushos-logo-blue.svg': logoSvg('#2c428e'),
-    'hushos-logo-on-dark.svg': logoSvg('#dfe3f2', '#13151b'),
-    'hushos-logo-on-blue.svg': logoSvg('#fcfbf7', '#2c428e'),
-    'hushos-wordmark.svg': wordmarkSvg('#1c2848'),
-    'hushos-wordmark-on-dark.svg': wordmarkSvg('#dfe3f2', '#13151b'),
-    'hushos-wordmark-on-blue.svg': wordmarkSvg('#fcfbf7', '#2c428e'),
+    'hushos-logo-square.svg': badgeSvg(),
+    'hushos-logo-square-on-dark.svg': badgeSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
+    'hushos-wordmark-square.svg': brandWordmarkSvg(),
+    'hushos-wordmark-square-on-dark.svg': brandWordmarkSvg(
+        BRAND_INK_DARK,
+        BRAND_INK_DARK,
+        BRAND_GROUND_DARK,
+    ),
+    'hushos-logo.svg': logoSvg(BRAND_INK),
+    'hushos-logo-on-dark.svg': logoSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
+    'hushos-wordmark.svg': wordmarkSvg(BRAND_INK),
+    'hushos-wordmark-on-dark.svg': wordmarkSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
     'README.txt': [
         'HushOS brand assets',
         '',
-        'hushos-logo-colour.svg     the logo: white mark on the blue square. Use this first',
-        'hushos-wordmark-colour*.svg  the logo with HushOS beside it, for light or dark pages',
+        'hushos-logo-square.svg     the logo: white mark on the ink square. Use this first',
+        'hushos-logo-square-on-dark.svg   the same for dark pages: dark mark on a light square',
+        'hushos-wordmark-square*.svg  the logo with HushOS beside it, for light or dark pages',
         '',
-        'One colour, for one-ink print or a background that is not yours:',
+        'The mark alone, for one-ink print or a background that is not yours:',
         'hushos-logo.svg            ink mark, transparent background',
-        'hushos-logo-blue.svg       blue mark, transparent background',
-        'hushos-logo-on-dark.svg    light mark on the dark desk',
-        'hushos-logo-on-blue.svg    sheet-coloured mark on the brand blue field',
+        'hushos-logo-on-dark.svg    light mark on the dark ground',
         'hushos-wordmark*.svg       mark + HushOS as outlines, same variants',
         'hushos-logo*.png           the same, rasterised at 1024 px square',
         'hushos-wordmark*.png       the same, rasterised at 2048 px wide',
@@ -37,9 +46,26 @@ const files = {
         '',
     ].join('\n'),
 };
-await $`rm -f brand/hushos-logo-white.svg brand/hushos-wordmark-white.svg`.cwd(
-    new URL('../public/', import.meta.url).pathname,
-);
+// Files from earlier versions of the logo (white, then Hush blue), so the folder holds only today's.
+const retired = [
+    'brand/hushos-logo-white.svg',
+    'brand/hushos-logo-white.png',
+    'brand/hushos-wordmark-white.svg',
+    'brand/hushos-wordmark-white.png',
+    'brand/hushos-logo-colour.svg',
+    'brand/hushos-logo-colour.png',
+    'brand/hushos-wordmark-colour.svg',
+    'brand/hushos-wordmark-colour.png',
+    'brand/hushos-wordmark-colour-on-dark.svg',
+    'brand/hushos-wordmark-colour-on-dark.png',
+    'brand/hushos-logo-blue.svg',
+    'brand/hushos-logo-blue.png',
+    'brand/hushos-logo-on-blue.svg',
+    'brand/hushos-logo-on-blue.png',
+    'brand/hushos-wordmark-on-blue.svg',
+    'brand/hushos-wordmark-on-blue.png',
+];
+await $`rm -f ${retired}`.cwd(new URL('../public/', import.meta.url).pathname);
 for (const [name, svg] of Object.entries(files)) await writeFile(new URL(name, dir), svg);
 // PNGs beside every SVG, for places that take no vector: logos square, wordmarks by width.
 const pngs: string[] = [];
@@ -56,13 +82,13 @@ for (const [name, svg] of Object.entries(files)) {
 const cwd = new URL('../public/', import.meta.url).pathname;
 
 /*
- * App icons and favicons: the sheet-coloured mark on a full blue square, with no
+ * App icons and favicons: the white mark on a full ink square, with no
  * rounded corners or clear margin. Tabs, Google's round result badge and iOS
  * each cut their own shape, and a shaped icon shows the host's colour through
  * the gaps. The maskable pair keeps the mark inside the launcher's safe circle.
  */
 const icon = (side: number, scale = 1) =>
-    sharp(Buffer.from(logoSvg('#fcfbf7', '#2c428e', 0, scale)), { density: 300 })
+    sharp(Buffer.from(logoSvg('#ffffff', BRAND_INK, 0, scale)), { density: 300 })
         .resize(side, side)
         .png()
         .toBuffer();
