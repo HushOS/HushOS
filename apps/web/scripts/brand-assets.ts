@@ -4,9 +4,9 @@ import sharp from 'sharp';
 import {
     badgeSvg,
     BRAND_GROUND_DARK,
-    BRAND_INK,
-    BRAND_INK_DARK,
     brandWordmarkSvg,
+    LOGO_BLACK,
+    LOGO_WHITE,
     logoSvg,
     wordmarkSvg,
 } from '../src/lib/brand';
@@ -16,27 +16,23 @@ const dir = new URL('../public/brand/', import.meta.url);
 await mkdir(dir, { recursive: true });
 const files = {
     'hushos-logo-square.svg': badgeSvg(),
-    'hushos-logo-square-on-dark.svg': badgeSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
+    'hushos-logo-square-on-dark.svg': badgeSvg(LOGO_WHITE, LOGO_BLACK),
     'hushos-wordmark-square.svg': brandWordmarkSvg(),
-    'hushos-wordmark-square-on-dark.svg': brandWordmarkSvg(
-        BRAND_INK_DARK,
-        BRAND_INK_DARK,
-        BRAND_GROUND_DARK,
-    ),
-    'hushos-logo.svg': logoSvg(BRAND_INK),
-    'hushos-logo-on-dark.svg': logoSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
-    'hushos-wordmark.svg': wordmarkSvg(BRAND_INK),
-    'hushos-wordmark-on-dark.svg': wordmarkSvg(BRAND_INK_DARK, BRAND_GROUND_DARK),
+    'hushos-wordmark-square-on-dark.svg': brandWordmarkSvg(LOGO_WHITE, LOGO_WHITE, LOGO_BLACK),
+    'hushos-logo.svg': logoSvg(LOGO_BLACK),
+    'hushos-logo-on-dark.svg': logoSvg(LOGO_WHITE, BRAND_GROUND_DARK),
+    'hushos-wordmark.svg': wordmarkSvg(LOGO_BLACK),
+    'hushos-wordmark-on-dark.svg': wordmarkSvg(LOGO_WHITE, BRAND_GROUND_DARK),
     'README.txt': [
         'HushOS brand assets',
         '',
-        'hushos-logo-square.svg     the logo: white mark on the ink square. Use this first',
-        'hushos-logo-square-on-dark.svg   the same for dark pages: dark mark on a light square',
+        'hushos-logo-square.svg     the logo: white mark on the black square. Use this first',
+        'hushos-logo-square-on-dark.svg   the same for dark pages: black mark on a white square',
         'hushos-wordmark-square*.svg  the logo with HushOS beside it, for light or dark pages',
         '',
         'The mark alone, for one-ink print or a background that is not yours:',
-        'hushos-logo.svg            ink mark, transparent background',
-        'hushos-logo-on-dark.svg    light mark on the dark ground',
+        'hushos-logo.svg            black mark, transparent background',
+        'hushos-logo-on-dark.svg    white mark on the dark ground',
         'hushos-wordmark*.svg       mark + HushOS as outlines, same variants',
         'hushos-logo*.png           the same, rasterised at 1024 px square',
         'hushos-wordmark*.png       the same, rasterised at 2048 px wide',
@@ -82,13 +78,13 @@ for (const [name, svg] of Object.entries(files)) {
 const cwd = new URL('../public/', import.meta.url).pathname;
 
 /*
- * App icons and favicons: the white mark on a full ink square, with no
+ * App icons and favicons: the white mark on a full black square, with no
  * rounded corners or clear margin. Tabs, Google's round result badge and iOS
  * each cut their own shape, and a shaped icon shows the host's colour through
  * the gaps. The maskable pair keeps the mark inside the launcher's safe circle.
  */
 const icon = (side: number, scale = 1) =>
-    sharp(Buffer.from(logoSvg('#ffffff', BRAND_INK, 0, scale)), { density: 300 })
+    sharp(Buffer.from(logoSvg(LOGO_WHITE, LOGO_BLACK, 0, scale)), { density: 300 })
         .resize(side, side)
         .png()
         .toBuffer();

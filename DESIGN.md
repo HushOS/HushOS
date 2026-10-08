@@ -259,7 +259,7 @@ components:
         textColor: '{colors.primary}'
         size: 14px
     logo:
-        backgroundColor: '{colors.ink}'
+        backgroundColor: '#000000'
         textColor: '#ffffff'
         rounded: 30%
 ---
@@ -328,7 +328,7 @@ Four shadows, tinted with ink in light and near-black with a faint top highlight
 The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing else. `chip`: badges, tags, checkboxes, swatches, and a segment inside a segmented control. `control`: buttons, inputs, segmented controls, menu items, small inner cells. `card`: the web page panel, menus, popovers, toasts, banners and alerts, the details panel, grid tiles, admin fact boxes. `sheet`: dialogs and sheets. On the web Tailwind's `rounded-xs`/`sm` map to chip, `md`/`lg` to control, `xl` to card and `2xl` to sheet, so an off-scale corner can't be asked for. Avatars, switches, tag dots and the phones' capsule buttons are fully round.
 
 - **Folder:** two solid sheets, `folder-back` behind `folder-front`. **File:** a white sheet with a turned corner and its type, unless a thumbnail exists: a photo as itself, a PDF as its first page with a type badge, a video as a frame with a play badge. Marks are 32 in compact lists, 36 in file rows, 72 in grids and the details panel; one implementation per client (`FileMark` on the web).
-- **Logo:** monochrome everywhere: the white mark on an `ink` square (#17203a) whose corners are 30% of its side; in the dark, the ground-coloured mark on the light ink square. Favicons, social cards, emails and the app icons use the light-scheme version (an email's square lightens a step in the dark, since its mark is an image; iOS's dark icon is the light-ink mark alone). The phones' splash is the ink mark alone on the app's ground, light ink in the dark. Web assets come from `apps/web/src/lib/brand.ts` with `bun run brand:assets`, the phones' with `bun run brand:mobile`.
+- **Logo:** black and white everywhere: the white mark on a black (#000000) square whose corners are 30% of its side; in the dark, the black mark on a white square. The one place pure black is used: the navy ink beside the blue buttons made the logo read as blue. Favicons, social cards, emails and the app icons use the light-scheme version (an email's square turns grey in the dark, since its mark is an image; iOS's dark icon is the white mark alone). The phones' splash is the black mark alone on the app's ground, white in the dark. Web assets come from `apps/web/src/lib/brand.ts` with `bun run brand:assets`, the phones' with `bun run brand:mobile`.
 - **Icons:** Lucide stroke icons on the web (16px in controls, 18px in navigation), SF Symbols on iOS, Material Symbols on Android, always beside a word or with an accessible name.
 
 ## Components

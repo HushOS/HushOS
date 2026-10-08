@@ -55,14 +55,15 @@ export function wordmarkSvg(fill = '#000000', background?: string) {
 }
 
 /*
- * The logo as people see it on the web: the white mark on an ink square, corners at 30%
- * of the side (the board's 8px on 26px), the mark 58% of the square's height; in the
- * dark, the dark mark on a light square. This is what the brand menu copies; the
- * one-colour marks above are for one-ink print and other people's backgrounds.
- * The phone apps' icons and splash use the same ink (scripts/mobile-brand-assets.ts).
+ * The logo: the white mark on a black square, corners at 30% of the side (the board's 8px
+ * on 26px), the mark 58% of the square's height; in the dark, the black mark on a white
+ * square. True black and white, not the page's navy ink, so it never reads as blue. This
+ * is what the brand menu copies; the one-colour marks above are for one-ink print and other
+ * people's backgrounds. The phone apps' icons and splash use the same pair
+ * (scripts/mobile-brand-assets.ts).
  */
-export const BRAND_INK = '#17203a';
-export const BRAND_INK_DARK = '#e4e8f4';
+export const LOGO_BLACK = '#000000';
+export const LOGO_WHITE = '#ffffff';
 export const BRAND_GROUND_DARK = '#0e111a';
 const BADGE = 539;
 const MARK_SCALE = (BADGE * 0.58) / 419;
@@ -73,7 +74,7 @@ function badge(square: string, mark = '#ffffff') {
     return `<rect width="${BADGE}" height="${BADGE}" rx="${BADGE * 0.3}" fill="${square}"/><g transform="translate(${(BADGE - width) / 2} ${(BADGE - height) / 2}) scale(${MARK_SCALE})">${paths(mark)}</g>`;
 }
 
-export function badgeSvg(square = BRAND_INK, mark = '#ffffff') {
+export function badgeSvg(square = LOGO_BLACK, mark = LOGO_WHITE) {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BADGE} ${BADGE}" width="${BADGE}" height="${BADGE}" fill="none">${badge(square, mark)}</svg>`;
 }
 
@@ -91,7 +92,7 @@ export const BRAND_WORDMARK_SIZE = {
     height: BADGE,
 };
 
-export function brandWordmarkSvg(ink = BRAND_INK, square = ink, mark = '#ffffff') {
+export function brandWordmarkSvg(ink = LOGO_BLACK, square = ink, mark = LOGO_WHITE) {
     const x = LETTER_LEFT - 418 * LETTER_SCALE;
     const y = BADGE / 2 - 213.8 * LETTER_SCALE;
     const { width, height } = BRAND_WORDMARK_SIZE;

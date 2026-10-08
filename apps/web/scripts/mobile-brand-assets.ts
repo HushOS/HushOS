@@ -1,12 +1,12 @@
 import { mkdir } from 'node:fs/promises';
 import sharp from 'sharp';
-import { BRAND_INK, BRAND_INK_DARK, logoSvg } from '../src/lib/brand';
+import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/brand';
 
 /*
  * The phone apps' icons and splash marks from the same mark as the web app
  * (src/lib/brand.ts), written straight into the iOS asset catalog and the
- * Android resources. Run: bun run brand:mobile. Monochrome, as on the web: the white mark
- * on an ink square for the icons, and the ink mark alone (light ink in the dark) for the splash.
+ * Android resources. Run: bun run brand:mobile. Black and white, as on the web: the white mark
+ * on a black square for the icons, and the black mark alone (white in the dark) for the splash.
  */
 const ios = new URL('../../ios/App/Assets.xcassets/', import.meta.url);
 const android = new URL('../../android/app/src/main/res/', import.meta.url);
@@ -27,56 +27,46 @@ await Promise.all(
 );
 
 await Promise.all([
-    // iOS icon: the white mark on ink, as the web's apple-touch icon; iOS rounds it.
-    write(ios, 'AppIcon.appiconset/icon.png', logoSvg('#ffffff', BRAND_INK, 0, 0.8), 1024),
-    // Dark: the mark in the dark scheme's ink on a transparent ground, so iOS's own dark backing shows
+    // iOS icon: the white mark on black, as the web's apple-touch icon; iOS rounds it.
+    write(ios, 'AppIcon.appiconset/icon.png', logoSvg('#ffffff', LOGO_BLACK, 0, 0.8), 1024),
+    // Dark: the white mark on a transparent ground, so iOS's own dark backing shows
     // through; tinted takes a white mark on black and colours it itself.
-    write(
-        ios,
-        'AppIcon.appiconset/icon-dark.png',
-        logoSvg(BRAND_INK_DARK, undefined, 0, 0.8),
-        1024,
-    ),
+    write(ios, 'AppIcon.appiconset/icon-dark.png', logoSvg(LOGO_WHITE, undefined, 0, 0.8), 1024),
     write(ios, 'AppIcon.appiconset/icon-tinted.png', logoSvg('#ffffff', '#000000', 0, 0.8), 1024),
     // The mark in the Files sign-in sheet and the Live Activity, which cannot read the app's catalog.
     write(
         ios,
         '../../FilesUI/Assets.xcassets/BrandMark.imageset/BrandMark.png',
-        logoSvg('#ffffff', BRAND_INK, 0, 0.8),
+        logoSvg('#ffffff', LOGO_BLACK, 0, 0.8),
         192,
     ),
     write(
         ios,
         '../../Widgets/Assets.xcassets/BrandMark.imageset/BrandMark.png',
-        logoSvg('#ffffff', BRAND_INK, 0, 0.8),
+        logoSvg('#ffffff', LOGO_BLACK, 0, 0.8),
         192,
     ),
-    // Android adaptive icon: foreground mark inside the safe circle, ink background, monochrome mark.
+    // Android adaptive icon: foreground mark inside the safe circle, black background, monochrome mark.
     write(android, 'drawable/icon_foreground.png', logoSvg('#ffffff', undefined, 0, 0.55), 1024),
-    write(android, 'drawable/icon_background.png', logoSvg(BRAND_INK, BRAND_INK), 1024),
+    write(android, 'drawable/icon_background.png', logoSvg(LOGO_BLACK, LOGO_BLACK), 1024),
     write(android, 'drawable/icon_monochrome.png', logoSvg('#ffffff', undefined, 0, 0.55), 1024),
-    // The splash on both phones is the mark alone in ink on the app's own ground, so it fades
+    // The splash on both phones is the mark alone in black (white in the dark) on the app's own ground, so it fades
     // straight into the first screen. Android shows it in a 240dp circle whose safe zone is the
     // inner two thirds; the ground colour is `splash` in res/values*/colors.xml.
-    write(android, 'drawable/splash_mark.png', logoSvg(BRAND_INK, undefined, 0, 0.5), 432),
-    write(
-        android,
-        'drawable-night/splash_mark.png',
-        logoSvg(BRAND_INK_DARK, undefined, 0, 0.5),
-        432,
-    ),
+    write(android, 'drawable/splash_mark.png', logoSvg(LOGO_BLACK, undefined, 0, 0.5), 432),
+    write(android, 'drawable-night/splash_mark.png', logoSvg(LOGO_WHITE, undefined, 0, 0.5), 432),
     // iOS: a 160-point mark, centred by the system on the same ground (LaunchBackground, below).
     ...[1, 2, 3].flatMap((scale) => [
         write(
             ios,
             `SplashMark.imageset/splash-icon@${scale}x.png`,
-            logoSvg(BRAND_INK, undefined, 0, 0.8),
+            logoSvg(LOGO_BLACK, undefined, 0, 0.8),
             160 * scale,
         ),
         write(
             ios,
             `SplashMark.imageset/splash-icon-dark@${scale}x.png`,
-            logoSvg(BRAND_INK_DARK, undefined, 0, 0.8),
+            logoSvg(LOGO_WHITE, undefined, 0, 0.8),
             160 * scale,
         ),
     ]),

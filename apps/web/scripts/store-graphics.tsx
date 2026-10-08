@@ -3,7 +3,13 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { fromJsx } from 'takumi-js/helpers/jsx';
 import { Renderer } from 'takumi-js/node';
-import { BRAND_INK, BRAND_WORDMARK_SIZE, brandWordmarkSvg, logoSvg } from '../src/lib/brand';
+import {
+    BRAND_WORDMARK_SIZE,
+    brandWordmarkSvg,
+    LOGO_BLACK,
+    LOGO_WHITE,
+    logoSvg,
+} from '../src/lib/brand';
 
 /*
  * The Play Store's graphics from the same mark and type as the social cards
@@ -69,10 +75,10 @@ await Promise.all([
         .flatten({ background: '#ffffff' })
         .png()
         .toFile(fileURLToPath(new URL('google-feature-graphic.png', out))),
-    // The app icon as the launcher shows it: the white mark on ink, square; Play rounds it.
-    sharp(Buffer.from(logoSvg('#ffffff', BRAND_INK, 0, 0.8)), { density: 300 })
+    // The app icon as the launcher shows it: the white mark on black, square; Play rounds it.
+    sharp(Buffer.from(logoSvg(LOGO_WHITE, LOGO_BLACK, 0, 0.8)), { density: 300 })
         .resize(512, 512)
-        .flatten({ background: BRAND_INK })
+        .flatten({ background: LOGO_BLACK })
         .ensureAlpha()
         .png()
         .toFile(fileURLToPath(new URL('google-play-icon.png', out))),

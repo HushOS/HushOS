@@ -61,7 +61,7 @@ export default function VerifyEmail({
                         .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                         .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                        .email-logo { background-color: #343b52 !important; }
+                        .email-logo { background-color: #3a3a3a !important; }
                         .email-cell { border-color: #262b3a !important; }
                         .email-heading, .email-value { color: #e4e8f4 !important; }
                         .email-muted { color: #9aa3be !important; }
@@ -71,7 +71,7 @@ export default function VerifyEmail({
                     [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
                     [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
-                    [data-ogsc] .email-logo { background-color: #343b52 !important; }
+                    [data-ogsc] .email-logo { background-color: #3a3a3a !important; }
                     [data-ogsc] .email-cell { border-color: #262b3a !important; }
                     [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
                     [data-ogsc] .email-muted { color: #9aa3be !important; }
@@ -115,8 +115,8 @@ export default function VerifyEmail({
                         <Row>
                             <Column style={{ width: '34px', verticalAlign: 'middle' }}>
                                 {/*
-                                 * The light mark on an ink square, monochrome as on the site. In the dark
-                                 * the square lightens a step so it stays clear of the dark card; the mark,
+                                 * The light mark on a black square, as on the site. In the dark the
+                                 * square lightens to grey so it stays clear of the dark card; the mark,
                                  * an image, can't swap to the dark one as the site's does.
                                  */}
                                 <table role="presentation" cellPadding={0} cellSpacing={0}>
@@ -127,7 +127,7 @@ export default function VerifyEmail({
                                                 style={{
                                                     width: '26px',
                                                     height: '26px',
-                                                    backgroundColor: '#17203a',
+                                                    backgroundColor: '#000000',
                                                     borderRadius: '8px',
                                                     textAlign: 'center',
                                                     verticalAlign: 'middle',
