@@ -218,8 +218,9 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         },
         snackbarHost = {
             Column {
-                // Above the add button and the paste bar, which sit over this corner on Files and would cover Undo.
+                // Above the add button and the paste bar, which sit over this corner on Files (and the button on Home) and would cover Undo.
                 val lift = when {
+                    tab == Tab.HOME && home == "home" -> 76.dp
                     tab != Tab.FILES -> 0.dp
                     state.clipboard != null -> 152.dp
                     else -> 76.dp

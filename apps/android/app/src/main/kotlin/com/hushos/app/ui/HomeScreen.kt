@@ -1,10 +1,6 @@
 package com.hushos.app.ui
 
-import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -53,6 +51,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +65,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -98,8 +100,9 @@ private fun TypeChips(value: TypeFilter, onChange: (TypeFilter) -> Unit) {
 }
 
 /*
- * Home: the header, the search bar under it; then the
- * type chips, the tags (once there is one), what is on this phone, and Recent.
+ * Home: the header, the search bar under it; then what is on this phone, and
+ * Recent with its own filters under its title: the type chips, then the tags
+ * (once there is one). The + adds into Files, as Files' own does.
  * `screen` is which page of Home is showing: "home", "search", "phone", or
  * "folder:<id>" for a folder opened from Recent.
  */
@@ -122,9 +125,21 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
     var selected by rememberSavedItem(model)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val upload = { uris: List<Uri> -> state.rootId?.let { if (uris.isNotEmpty()) model.upload(uris, it) }; Unit }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { upload(it) }
-    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { upload(it) }
+    // Adding from Home goes into Files, with Files' menu, questions and dialogs.
+    val add = addInto(model, state, state.rootId, "Files")
+    var fabOpen by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(fabOpen) {
+        model.addMenu(fabOpen)
+        onDispose { if (fabOpen) model.addMenu(false) }
+    }
+    BackHandler(enabled = fabOpen) { fabOpen = false }
+    // New folder and the same-name questions look at what is in Files: fetched once the menu opens, if not yet.
+    val rootMissing = needsLoad(state.rootId, state.folders, state.loading, state.failedFolders)
+    LaunchedEffect(fabOpen, rootMissing) { if (fabOpen && rootMissing) state.rootId?.let { model.refresh(it) } }
+    val clip = state.clipboard
+    val paste = clip?.first?.let { items ->
+        state.rootId?.takeIf { model.pasteProblem(it) == null }?.let { root -> (if (items.size == 1) "Paste “${items[0].name}”" else "Paste ${items.size} items") to { model.paste(root); Unit } }
+    }
     LaunchedEffect(Unit) { model.refreshRecents(); model.refreshTags(); model.refreshOffline(); model.refreshAccess() }
     // Back online after an offline start: who can open each row comes back without a relaunch.
     LaunchedEffect(state.unreachable) { if (!state.unreachable) model.refreshAccess() }
@@ -137,61 +152,70 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
     // A brand-new account: nothing anywhere yet, so Home offers the two ways to start instead of an empty Recent.
     val firstRun = !loading && state.recents.isEmpty() && model.searchesEverything() && model.searchable().isEmpty()
     val heading = state.tags.tags.firstOrNull { it.id == tagFilter }?.name ?: if (filter == TypeFilter.ALL) "Recent" else "Recent ${filter.plural}"
-    Column(Modifier.fillMaxSize()) {
-        DestinationBar("Home")
-        Box(Modifier.padding(bottom = AlpineSpace.S2)) {
-            SearchPill("Search your files", onClick = { go("search") })
-        }
-        // Above the list, not in it: an item added over the first row would land out of view.
-        if (state.unreachable) OfflineCapsule()
-        PullToRefreshBox(isRefreshing = loading && state.recents.isNotEmpty(), onRefresh = { model.refreshRecents(pulled = true); model.refreshAccess() }, modifier = Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
-                if (firstRun) {
-                    item(key = "first") {
-                        EmptyState("Nothing here yet", "Files you add or change show up here.", Icons.Outlined.UploadFile, modifier = Modifier.padding(top = 40.dp)) {
-                            Button(onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
-                                Icon(Icons.Outlined.UploadFile, null, modifier = Modifier.padding(end = AlpineSpace.S2)); Text("Upload files")
-                            }
-                            OutlinedButton(onClick = { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }, modifier = Modifier.fillMaxWidth()) {
-                                Icon(Icons.Outlined.PhotoLibrary, null, modifier = Modifier.padding(end = AlpineSpace.S2)); Text("Upload photos")
+    Scaffold(
+        contentWindowInsets = WindowInsets(0),
+        containerColor = alpine.ground,
+        floatingActionButton = { if (state.rootId != null) AddButton(fabOpen, { fabOpen = it }, add, paste) },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            DestinationBar("Home")
+            Box(Modifier.padding(bottom = AlpineSpace.S2)) {
+                SearchPill("Search your files", onClick = { go("search") })
+            }
+            // Above the list, not in it: an item added over the first row would land out of view.
+            if (state.unreachable) OfflineCapsule()
+            PullToRefreshBox(isRefreshing = loading && state.recents.isNotEmpty(), onRefresh = { model.refreshRecents(pulled = true); model.refreshAccess() }, modifier = Modifier.weight(1f)) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
+                    if (firstRun) {
+                        item(key = "first") {
+                            EmptyState("Nothing here yet", "Files you add or change show up here.", Icons.Outlined.UploadFile, modifier = Modifier.padding(top = 40.dp)) {
+                                Button(onClick = add.pickFiles, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Outlined.UploadFile, null, modifier = Modifier.padding(end = AlpineSpace.S2)); Text("Upload files")
+                                }
+                                OutlinedButton(onClick = add.pickPhotos, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Outlined.PhotoLibrary, null, modifier = Modifier.padding(end = AlpineSpace.S2)); Text("Upload photos")
+                                }
                             }
                         }
+                        return@LazyColumn
                     }
-                    return@LazyColumn
-                }
-                item(key = "types") { TypeChips(filter) { filter = it } }
-                // The tags row stays away until there is a tag to show.
-                if (state.tags.tags.isNotEmpty()) item(key = "tags") {
-                    // One row that scrolls to the screen's edges, label and Manage included, as the board draws it.
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2),
-                    ) {
-                        Text("Tags", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
-                        for (tag in state.tags.tags) AlpineChip(tag.name, selected = tagFilter == tag.id, leading = { TagDot(tag.colour) }, onClick = {
-                            tagFilter = if (tagFilter == tag.id) null else tag.id
-                            scope.launch { tagged = tagFilter?.let { model.tagged(it) } ?: emptyList() }
-                        })
-                        TextButton(onClick = { managingTags = true }) { Text("Manage") }
+                    item(key = "phone") { OnThisPhoneRow(state) { go("phone") } }
+                    // Recent is the page's section, at the Title size; its filters (types, then tags) sit under it.
+                    item(key = "heading") {
+                        Text(heading, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth().semantics { heading() }.padding(start = AlpineSpace.S4, end = AlpineSpace.S4, top = AlpineSpace.S3))
                     }
-                }
-                item(key = "phone") { OnThisPhoneRow(state) { go("phone") } }
-                // A tight rhythm: the tags, On this phone and Recent sit about 12dp apart, not a screen of gaps.
-                item(key = "heading") { Subheader(heading, compact = true) }
-                if (loading && rows.isEmpty()) item(key = "loading") { SkeletonRows(4) }
-                // The empty word sits in the list under its heading, never over the rows above it.
-                if (rows.isEmpty() && !loading) item(key = "empty") {
-                    val name = state.tags.tags.firstOrNull { it.id == tagFilter }?.name
-                    if (name != null) EmptyState(if (filter == TypeFilter.ALL) "Nothing tagged $name" else "No ${filter.plural} tagged $name", modifier = Modifier.padding(top = AlpineSpace.S6))
-                    else EmptyState(if (filter == TypeFilter.ALL) "No recent files yet" else "No ${filter.plural} yet",
-                        "${if (filter == TypeFilter.ALL) "Files" else filter.label} you add or change show up here.", modifier = Modifier.padding(top = AlpineSpace.S6))
-                }
-                items(rows, key = { it.id }) { item ->
-                    // Offline, a file that isn't on this phone can't open: it dims and says so.
-                    val away = state.unreachable && !item.isFolder && item.id !in kept
-                    NodeRow(model, state, item, away = away,
-                        onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } } },
-                        onLongClick = { selected = item }, onMore = { selected = item })
+                    item(key = "types") { TypeChips(filter) { filter = it } }
+                    // The tags row stays away until there is a tag to show.
+                    if (state.tags.tags.isNotEmpty()) item(key = "tags") {
+                        // One row that scrolls to the screen's edges, label and Manage included, as the board draws it.
+                        Row(
+                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2),
+                        ) {
+                            Text("Tags", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
+                            for (tag in state.tags.tags) AlpineChip(tag.name, selected = tagFilter == tag.id, leading = { TagDot(tag.colour) }, onClick = {
+                                tagFilter = if (tagFilter == tag.id) null else tag.id
+                                scope.launch { tagged = tagFilter?.let { model.tagged(it) } ?: emptyList() }
+                            })
+                            TextButton(onClick = { managingTags = true }) { Text("Manage") }
+                        }
+                    }
+                    if (loading && rows.isEmpty()) item(key = "loading") { SkeletonRows(4) }
+                    // The empty word sits in the list under its heading, never over the rows above it.
+                    if (rows.isEmpty() && !loading) item(key = "empty") {
+                        val name = state.tags.tags.firstOrNull { it.id == tagFilter }?.name
+                        if (name != null) EmptyState(if (filter == TypeFilter.ALL) "Nothing tagged $name" else "No ${filter.plural} tagged $name", modifier = Modifier.padding(top = AlpineSpace.S6))
+                        else EmptyState(if (filter == TypeFilter.ALL) "No recent files yet" else "No ${filter.plural} yet",
+                            "${if (filter == TypeFilter.ALL) "Files" else filter.label} you add or change show up here.", modifier = Modifier.padding(top = AlpineSpace.S6))
+                    }
+                    items(rows, key = { it.id }) { item ->
+                        // Offline, a file that isn't on this phone can't open: it dims and says so.
+                        val away = state.unreachable && !item.isFolder && item.id !in kept
+                        NodeRow(model, state, item, away = away,
+                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } } },
+                            onLongClick = { selected = item }, onMore = { selected = item })
+                    }
                 }
             }
         }

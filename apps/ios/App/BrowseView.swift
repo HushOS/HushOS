@@ -413,13 +413,11 @@ struct FolderView: View {
         }
     }
 
-    /* What can be added here, most used first: files, photos, a photo taken now, a folder, then a paste while the clipboard holds items. */
+    /* What can be added here (Home's + adds the same), then a paste while the clipboard holds items. */
     @ViewBuilder private var addItems: some View {
-        Button("Upload files", systemImage: "doc.badge.plus") { showingImporter = true }
-        // A picker inside a menu never presents; a button and a modifier do.
-        Button("Upload photos", systemImage: "photo.badge.plus") { showingPhotos = true }
-        Button("Take photo", systemImage: "camera") { showingCamera = true }
-        Button("New folder", systemImage: "folder.badge.plus") { Rename.newFolder(in: folderId, named: title, store: store) }
+        AddItems(importer: $showingImporter, photos: $showingPhotos, camera: $showingCamera) {
+            Rename.newFolder(in: folderId, named: title, store: store)
+        }
         if let clip = store.clipboard, let first = clip.items.first, store.canPaste(into: folderId) {
             Section {
                 Button(clip.items.count > 1 ? "Paste \(clip.items.count) items" : "Paste “\(first.name)”", systemImage: "doc.on.clipboard") {
@@ -495,6 +493,22 @@ private struct SkeletonRow: View {
     }
 }
 
+/* What + adds, most used first: files, photos, a photo taken now, a folder. A folder's menu and Home's share it. */
+struct AddItems: View {
+    @Binding var importer: Bool
+    @Binding var photos: Bool
+    @Binding var camera: Bool
+    let newFolder: () -> Void
+
+    var body: some View {
+        Button("Upload files", systemImage: "doc.badge.plus") { importer = true }
+        // A picker inside a menu never presents; a button and a modifier do.
+        Button("Upload photos", systemImage: "photo.badge.plus") { photos = true }
+        Button("Take photo", systemImage: "camera") { camera = true }
+        Button("New folder", systemImage: "folder.badge.plus", action: newFolder)
+    }
+}
+
 /* "You, Sam and Priya can open everything in this folder." Manage opens the share sheet. */
 struct AccessBanner: View {
     let text: String
@@ -502,9 +516,11 @@ struct AccessBanner: View {
     let manage: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s3) {
+        // Centred on the text, however many lines it takes, as on Android and the web.
+        HStack(spacing: Alpine.Space.s3) {
             // A folder anyone with its link can open shows the link icon; people only, the people icon.
             Image(systemName: link ? "link" : "person.2").foregroundStyle(Alpine.primary).accessibilityHidden(true)
+                .frame(width: 24)
             Text(text).font(Theme.Text.callout).foregroundStyle(Alpine.ink).frame(maxWidth: .infinity, alignment: .leading)
             if let manage {
                 Button("Manage", action: manage).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)

@@ -22,9 +22,9 @@ enum HomeFilter: String, CaseIterable, Identifiable {
 }
 
 /*
- * Home: the title, type chips, the tags row once a tag exists, what is on this
- * phone, then what changed most recently. A folder in Recent opens on top of
- * Home. Search and Account have their own tabs.
+ * Home: the title with Add (into the top folder), what is on this phone, then
+ * Recent with its type chips and, once a tag exists, the tags row. A folder in
+ * Recent opens on top of Home. Search and Account have their own tabs.
  */
 struct HomeView: View {
     @Environment(DriveStore.self) private var store
@@ -38,6 +38,7 @@ struct HomeView: View {
     @State private var showingImporter = false
     @State private var showingPhone = false
     @State private var showingPhotos = false
+    @State private var showingCamera = false
 
     private var rows: [Opened] {
         (tagFilter != nil ? tagged : store.recents).filter(filter.matches)
@@ -75,21 +76,19 @@ struct HomeView: View {
                         }
                         .bareRow(top: Alpine.Space.s8)
                     } header: {
-                        top(chips: false)
+                        top
                     }
                 } else {
                     Section {
                         NavigationLink { OnThisPhoneView() } label: { onThisPhone }.itemRow()
                     } header: {
-                        top(chips: true)
+                        top
                     }
                     Section {
                         ForEach(rows) { item in row(item) }
                         if loaded && rows.isEmpty { emptyRecent.bareRow(top: Alpine.Space.s4) }
                     } header: {
-                        Text(heading).font(Theme.Text.title).foregroundStyle(Alpine.ink).textCase(nil)
-                            .padding(.horizontal, Alpine.Space.s1)
-                            .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s2, trailing: 0))
+                        recentHeader
                     }
                 }
             }
@@ -97,7 +96,7 @@ struct HomeView: View {
             .alpineGrouped()
             .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
             .listSectionSpacing(Alpine.Space.s4)
-            .screenChrome(title: "Home")
+            .screenChrome(title: "Home") { addMenu }
             .navigationDestination(for: Opened.self) { folder in
                 FolderView(folderId: folder.id, title: folder.name)
             }
@@ -115,7 +114,7 @@ struct HomeView: View {
             }
             .nodeActionSheets(action: $action, store: store)
             .fileViewer($viewing, among: rows, store: store)
-            .uploadFlow(into: store.rootId, importer: $showingImporter, photos: $showingPhotos)
+            .uploadFlow(into: store.rootId, importer: $showingImporter, photos: $showingPhotos, camera: $showingCamera)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
             .task {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
@@ -126,15 +125,36 @@ struct HomeView: View {
         }
     }
 
-    /* The title, the offline line, then the chips and tags: the furniture above On this phone. */
-    private func top(chips: Bool) -> some View {
+    /* The title with Add, then the offline line: the furniture above On this phone. */
+    private var top: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: "Home")
+            ScreenHeader(title: "Home") { addMenu }
             if store.offline { OfflineCapsule() }
-            if chips {
-                TypeChips(value: $filter)
-                if !store.tags.tags.isEmpty { tagsRow }
-            }
+        }
+        .textCase(nil)
+        .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
+    }
+
+    /* Files' + menu, adding into the top folder; what is added leads Recent once the list catches up. */
+    @ViewBuilder private var addMenu: some View {
+        if let root = store.rootId {
+            Menu {
+                AddItems(importer: $showingImporter, photos: $showingPhotos, camera: $showingCamera) {
+                    Rename.newFolder(in: root, named: "Files", store: store)
+                }
+            } label: { HeaderIcon(symbol: "plus") }
+            .accessibilityLabel("Add")
+        }
+    }
+
+    /* "Recent" (or "Recent images", or the tag) as a section title, with its own filters under it. */
+    private var recentHeader: some View {
+        VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+            Text(heading).font(Theme.Text.title).foregroundStyle(Alpine.ink)
+                .padding(.horizontal, Alpine.Space.s1)
+                .accessibilityAddTraits(.isHeader)
+            TypeChips(value: $filter)
+            if !store.tags.tags.isEmpty { tagsRow }
         }
         .textCase(nil)
         .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
