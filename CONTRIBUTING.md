@@ -1,6 +1,6 @@
 # Contributing
 
-Follow the root README to install dependencies, create `.env`, start Postgres, migrate, and start the app. Bun 1.4.0 runs everything, the browser suite included. Open the **repository root** in your editor so workspace configuration and aliases resolve consistently.
+Follow the root README to install dependencies, create `.env`, start Postgres, migrate, and start the app. Bun 1.4.2 runs everything, the browser suite included. Open the **repository root** in your editor so workspace configuration and aliases resolve consistently.
 
 ## Editors
 

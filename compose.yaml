@@ -36,7 +36,7 @@ services:
 
     # One-shot: layout, key, bucket, CORS and lifecycle (see scripts/garage-init.ts).
     garage-init:
-        image: oven/bun:1.4.0-slim
+        image: oven/bun:1.4.2-slim
         depends_on:
             garage:
                 condition: service_healthy

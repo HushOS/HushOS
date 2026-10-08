@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0 AS manifests
+FROM oven/bun:1.4.2 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps/web/package.json ./apps/web/package.json
@@ -29,7 +29,7 @@ COPY packages/drive ./packages/drive
 COPY packages/jobs ./packages/jobs
 RUN bun run --cwd packages/jobs build
 
-FROM oven/bun:1.4.0-slim AS worker
+FROM oven/bun:1.4.2-slim AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 ARG RELEASE_SHA

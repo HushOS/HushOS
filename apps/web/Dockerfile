@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0 AS manifests
+FROM oven/bun:1.4.2 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps/web/package.json ./apps/web/package.json
@@ -19,14 +19,14 @@ COPY packages/utils/package.json ./packages/utils/package.json
 FROM manifests AS migration-deps
 RUN bun install --frozen-lockfile --filter @hushos/db
 
-FROM oven/bun:1.4.0 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 COPY --from=manifests /app ./
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build --filter=@hushos/web
 
-FROM oven/bun:1.4.0-slim AS runtime
+FROM oven/bun:1.4.2-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
