@@ -89,9 +89,10 @@ ios() {
     xcrun simctl status_bar "$udid" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \
         --cellularMode active --cellularBars 4 --operatorName "" --batteryState charged --batteryLevel 100
     xcrun simctl install "$udid" "$app"
-    # The app's clock in the morning zone, so rows read "Today, 10:24 AM" beside the 9:41 status bar.
+    # The app's clock in the morning zone, with any 24-hour override off, so rows read
+    # "Today, 10:24 AM" beside the 9:41 status bar, as on Android.
     xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
-    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app >/dev/null
+    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO >/dev/null
     mkdir -p "$OUT/ios"
     local link="xcrun simctl openurl $udid"
     shot() { # number name instruction [deep link]

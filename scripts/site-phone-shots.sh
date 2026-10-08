@@ -80,7 +80,7 @@ ios() {
     xcrun simctl ui "$udid" appearance light
     xcrun simctl install "$udid" "$app"
     xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
-    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app >/dev/null
+    SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO >/dev/null
     say "iOS, on \"$name\" (open it in Simulator)."
     if [[ -z "${SIGNED_IN:-}" ]]; then
         password | xcrun simctl pbcopy "$udid"
@@ -88,6 +88,8 @@ ios() {
         read -r _
         printf '' | xcrun simctl pbcopy "$udid"
     fi
+    # Every launch turns off a 24-hour override the simulator may carry (Settings › General ›
+    # Date & Time), so times read "Today, 11:17 AM" as on the web and Android pictures.
     # Each picture is a fresh launch: Home is where the app opens, and the folder comes from a
     # debug-only launch argument, since `simctl openurl` makes iOS ask "Open in HushOS?" first.
     # The folder shows as a grid, as the browser beside it on the site does: `-files.view grid`
@@ -96,9 +98,9 @@ ios() {
     shot() { # name [link]
         xcrun simctl terminate "$udid" com.hushos.app 2>/dev/null || true
         if [[ -n "${2:-}" ]]; then
-            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -HushOSOpenLink "$2" -files.view grid >/dev/null
+            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO -HushOSOpenLink "$2" -files.view grid >/dev/null
         else
-            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app >/dev/null
+            SIMCTL_CHILD_TZ="$ZONE" xcrun simctl launch "$udid" com.hushos.app -AppleICUForce24HourTime NO >/dev/null
         fi
         sleep 2
         steady "$TMP/$1.png" ios_frame
