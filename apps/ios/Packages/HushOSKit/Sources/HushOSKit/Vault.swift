@@ -39,6 +39,9 @@ public struct Opened: Sendable, Identifiable, Hashable {
         return parseDate(metadata.modified) ?? parseDate(node.updatedAt)
     }
 
+    /* When it last changed in HushOS (an upload, a rename, a move), whatever the file's own date: what Recent goes by, as on the web. */
+    public var changed: Date? { parseDate(node.updatedAt) }
+
     static func contentSize(of node: NodeView, nodeKey: Data) -> UInt64? {
         guard let current = node.currentVersion else { return nil }
         if let text = current.plaintextSize, let value = UInt64(text) { return value }
@@ -452,7 +455,7 @@ extension Opened {
      * them, so the list never reshuffles between loads.
      */
     public static func byRecent(_ a: Opened, _ b: Opened) -> Bool {
-        let (x, y) = (a.modified ?? .distantPast, b.modified ?? .distantPast)
+        let (x, y) = (a.changed ?? .distantPast, b.changed ?? .distantPast)
         if x != y { return x > y }
         let names = a.name.localizedCompare(b.name)
         if names != .orderedSame { return names == .orderedAscending }

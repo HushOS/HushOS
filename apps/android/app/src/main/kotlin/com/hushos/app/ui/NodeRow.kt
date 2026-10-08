@@ -137,6 +137,8 @@ fun NodeRow(
     away: Boolean = false,
     /* The note says something went wrong (the trash's "Couldn’t be restored"): it reads in red. */
     noteIsProblem: Boolean = false,
+    /* In Recent: the date is when it changed in HushOS, which Recent is ordered by, not the file's own. */
+    recent: Boolean = false,
 ) {
     val alpine = Alpine.colors
     LaunchedEffect(item.id) { model.thumbnail(item) }
@@ -144,7 +146,7 @@ fun NodeRow(
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     // Who can open it only when that differs from its folder: an item shared on its own. Otherwise the date, and a file's size.
     val who = shownWho(model, state, item, note)
-    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
+    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
     val keepProblem = keepProblemOf(state, item, note)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)

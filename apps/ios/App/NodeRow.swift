@@ -22,6 +22,8 @@ struct NodeRow: View {
     var access = true
     /* The note says something went wrong ("Couldn’t be restored"): it is drawn in the danger colour. */
     var noteIsProblem = false
+    /* In Recent: the date is when it changed in HushOS, which Recent is ordered by, not the file's own. */
+    var recent = false
 
     var body: some View {
         HStack(spacing: Alpine.Space.s3) {
@@ -96,7 +98,7 @@ struct NodeRow: View {
             when = Text("Couldn’t be kept").foregroundStyle(Alpine.danger).fontWeight(.semibold)
         } else if let note, noteIsProblem {
             when = Text(note).foregroundStyle(Alpine.danger).fontWeight(.semibold)
-        } else if let label = note ?? changedLabel(item.modified) {
+        } else if let label = note ?? changedLabel(recent ? item.changed : item.modified) {
             when = Text(label).foregroundStyle(muted)
         }
         // Kept on this phone (a file, a folder, or a file kept with its folder): the phone mark leads the date, as on Android.

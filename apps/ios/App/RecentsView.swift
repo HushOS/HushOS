@@ -212,12 +212,12 @@ struct HomeView: View {
         // Offline, a file that isn't on this phone won't open: it dims and says so.
         let away = store.offline && !item.isFolder && !kept.contains { $0.id == item.id }
         if item.isFolder {
-            NavigationLink(value: item) { NodeRow(item: item) }
+            NavigationLink(value: item) { NodeRow(item: item, recent: true) }
                 .nodeActions(item, action: $action, store: store)
                 .itemRow()
         } else {
             Button { Opener.open(item, store: store) { viewing = $0 } } label: {
-                NodeRow(item: item, note: away ? "Not on this phone" : nil).opacity(away ? 0.5 : 1)
+                NodeRow(item: item, note: away ? "Not on this phone" : nil, recent: true).opacity(away ? 0.5 : 1)
             }
             .buttonStyle(.plain)
             .nodeActions(item, action: $action, store: store)

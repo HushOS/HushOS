@@ -74,6 +74,8 @@ data class Opened(
         val at = if (stale) node.updatedAt ?: metadata.modified else metadata.modified ?: node.updatedAt
         return at?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
     }
+    /* When it last changed in HushOS (an upload, a rename, a move), whatever the file's own date: what Recent goes by, as on the web. */
+    val changedMillis: Long? get() = node.updatedAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
     val hasThumbnail get() = !isFolder && node.currentVersion?.contentSuite == 2u
 }
 
@@ -81,7 +83,7 @@ data class Opened(
  * Recent: newest first; things changed in the same moment by name, then id, as the web orders
  * them, so the list never reshuffles between loads.
  */
-val byRecent: Comparator<Opened> = compareByDescending<Opened> { it.modifiedMillis ?: 0L }
+val byRecent: Comparator<Opened> = compareByDescending<Opened> { it.changedMillis ?: 0L }
     .thenBy(java.text.Collator.getInstance()) { it.name }
     .thenBy { it.id }
 
