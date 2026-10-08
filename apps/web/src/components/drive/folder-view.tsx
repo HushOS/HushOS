@@ -36,6 +36,7 @@ import { ShareDialog } from '@/components/drive/share-dialog';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { keyLabel } from '@/components/drive/shortcuts';
+import { AddMenu } from '@/components/drive/add-menu';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
 import { Button } from '@/components/ui/button';
@@ -51,7 +52,6 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
-    DropdownMenuShortcut,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
@@ -98,7 +98,6 @@ import {
     LayoutGridIcon,
     ListChecksIcon,
     ListIcon,
-    PlusIcon,
     RotateCcwIcon,
     TriangleAlertIcon,
 } from 'lucide-react';
@@ -809,31 +808,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                         ))}
                     </fieldset>
                     {folder && !shared && (
-                        <DropdownMenu>
-                            <DropdownMenuTrigger
-                                render={<Button className="pr-4.5 pl-3.5 max-sm:px-3" />}
-                            >
-                                <PlusIcon strokeWidth={2.4} />
-                                <span className="max-sm:sr-only">Add</span>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" sideOffset={6} className="w-56">
-                                <DropdownMenuItem onClick={() => setCreating(true)}>
-                                    <FolderPlusIcon aria-hidden="true" />
-                                    New folder
-                                    <DropdownMenuShortcut>
-                                        {keyLabel('Shift')}N
-                                    </DropdownMenuShortcut>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => picker.current?.pickFiles()}>
-                                    <FileUpIcon aria-hidden="true" />
-                                    Upload files
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => picker.current?.pickFolder()}>
-                                    <FolderUpIcon aria-hidden="true" />
-                                    Upload folder
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
+                        <AddMenu picker={picker} onNewFolder={() => setCreating(true)} />
                     )}
                     {folder && <UploadInputs folder={folder} known={rows} handle={picker} />}
                 </div>

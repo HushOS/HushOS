@@ -6,6 +6,7 @@ import { cn } from 'cn';
 import { CheckIcon, FileUpIcon, FolderPlusIcon } from 'lucide-react';
 import { useMemo, useRef, useState, type MouseEvent } from 'react';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
+import { AddMenu } from '@/components/drive/add-menu';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -288,6 +289,9 @@ export function HomeView() {
     useHotkey('C', () => selection.length > 0 && setCopying(selection), { enabled });
     useHotkey('D', () => download(selection), { enabled });
     useHotkey('I', toggleInfo, { enabled });
+    useHotkey('Shift+N', () => setCreating(true), {
+        enabled: enabled && Boolean(top.data?.folder),
+    });
     useHotkey('T', () => selection.length > 0 && setTagging(selection), { enabled });
     useHotkey('Backspace', () => void trash(selection), { enabled });
     useHotkey('Delete', () => void trash(selection), { enabled });
@@ -360,7 +364,10 @@ export function HomeView() {
                     </p>
                 </div>
             )}
-            <PageHeader title="Home" />
+            <PageHeader title="Home">
+                {/* Adds into My files, as dropping onto Home does. */}
+                {folder && <AddMenu picker={picker} onNewFolder={() => setCreating(true)} />}
+            </PageHeader>
             {firstRun ? (
                 <EmptyState
                     icon={FileUpIcon}
@@ -379,6 +386,10 @@ export function HomeView() {
                 </EmptyState>
             ) : (
                 <>
+                    {/* Recent is the page: its title first, then its own filters. */}
+                    <h2 className="shrink-0 px-5 pb-3 text-lg leading-tight font-bold tracking-[-0.015em] sm:px-8 sm:text-[22px]">
+                        {heading}
+                    </h2>
                     <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 pb-4 sm:px-8">
                         <TypeChips value={type} onChange={setType} />
                         {/* Hidden until there is a tag to choose. */}
@@ -403,7 +414,6 @@ export function HomeView() {
                             </div>
                         )}
                     </div>
-                    <h2 className="shrink-0 px-5 pb-1 text-lg font-bold sm:px-8">{heading}</h2>
                     <div className="flex min-h-0 flex-1">
                         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                             {rows.length === 0 &&
