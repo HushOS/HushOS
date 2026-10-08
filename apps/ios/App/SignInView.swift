@@ -2,7 +2,7 @@ import HushOSKit
 import SwiftUI
 
 /*
- * Sign in (DESIGN.md): "Welcome back", the server named under it
+ * Sign in (DESIGN.md): "Welcome back" with the gear beside it, the server named under it
  * only when it isn't HushOS's own, one message above the fields when the server says
  * no, and a line under them when one is empty. The gear opens Self-hosting › Server address;
  * Forgot opens the reset in the app (RecoveryView). Creating an account stays on the web:
@@ -29,29 +29,20 @@ struct SignInView: View {
 
     private var form: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button { showingServer = true } label: {
-                    Image(systemName: "gearshape").font(.system(size: 19, weight: .semibold)).foregroundStyle(Alpine.ink)
-                        .frame(width: Theme.control, height: Theme.control).contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .highContrastEdge(Circle())
-                .accessibilityLabel("Self-hosting")
+            // The title at the top with the gear beside it, as every screen carries its actions.
+            ScreenHeader(title: "Welcome back") {
+                Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Self-hosting")
             }
-            .padding(.horizontal, Alpine.Space.s4).frame(height: 52)
+            .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Alpine.Space.s6) {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                        Text("Welcome back").font(.system(size: 32, weight: .heavy)).kerning(-1).foregroundStyle(Alpine.ink)
-                            .accessibilityAddTraits(.isHeader)
-                        if let host = model.selfHostedName {
-                            Text("Signing in to \(Text(host).foregroundStyle(Alpine.ink).fontWeight(.semibold))").font(.body).foregroundStyle(Alpine.inkMuted)
-                        }
+                    if let host = model.selfHostedName {
+                        Text("Signing in to \(Text(host).foregroundStyle(Alpine.ink).fontWeight(.semibold))").font(.body).foregroundStyle(Alpine.inkMuted)
+                            .padding(.horizontal, Alpine.Space.s1)
                     }
-                    .padding(.horizontal, Alpine.Space.s1)
 
                     if !formError.isEmpty {
                         HStack(alignment: .top, spacing: 10) {

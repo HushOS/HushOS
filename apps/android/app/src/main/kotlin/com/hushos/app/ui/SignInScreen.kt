@@ -3,7 +3,6 @@ package com.hushos.app.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,7 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -92,8 +91,13 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(AlpineSpace.S6),
         verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3),
     ) {
-        Spacer(Modifier.height(56.dp))
-        Text("Welcome back", style = MaterialTheme.typography.headlineLarge)
+        // The title at the top with the gear beside it (Self-hosting), so nobody else has to read an address.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Welcome back", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f))
+            IconButton(onClick = { editingOrigin = true }, modifier = Modifier.offset(x = 12.dp)) {
+                Icon(Icons.Outlined.Settings, contentDescription = "Self-hosting", tint = alpine.inkMuted)
+            }
+        }
         if (custom) Text("Signing in to ${hostOf(state.origin)}", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
         if (state.linkWaiting) Text("Sign in to open the link you followed.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
         Spacer(Modifier.height(AlpineSpace.S2))
@@ -129,12 +133,6 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { openWebPage(context, privacyUrl(state.origin)) }) { Text("Privacy policy") }
             TextButton(onClick = { openWebPage(context, termsUrl(state.origin)) }) { Text("Terms") }
-        }
-    }
-    // Which HushOS this phone talks to, behind a gear (Self-hosting) so nobody else has to read an address.
-    Box(Modifier.fillMaxSize().statusBarsPadding().padding(AlpineSpace.S2), contentAlignment = Alignment.TopEnd) {
-        IconButton(onClick = { editingOrigin = true }) {
-            Icon(Icons.Outlined.Settings, contentDescription = "Self-hosting", tint = alpine.inkMuted)
         }
     }
 }
