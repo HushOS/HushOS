@@ -219,7 +219,7 @@ async function upload(p: Page, paths: string[], last: string) {
     await expect(p.getByText(/Uploading/)).toHaveCount(0, { timeout: 90_000 });
 }
 /*
- * Sets the server's change times to HISTORY. The server stamps every change with the moment it
+ * Sets the server's change times to HISTORY, and creation times no later than them. The server stamps every change with the moment it
  * happens, so the database is the only place a week can pass; only this run's demo rows change.
  * A client that has already built its catalogue keeps the old times, so the pictures come from
  * fresh contexts.
@@ -231,7 +231,7 @@ async function backdate(p: Page) {
         const id = await row(p, name).getAttribute('data-node-id', { timeout: 60_000 });
         rows.push(`('${id}'::uuid, '${ago(name).toISOString()}'::timestamptz)`);
     }
-    const sql = `update drive_nodes n set updated_at = v.at from (values ${rows.join(', ')}) v(id, at) where n.id = v.id`;
+    const sql = `update drive_nodes n set updated_at = v.at, created_at = least(n.created_at, v.at) from (values ${rows.join(', ')}) v(id, at) where n.id = v.id`;
     execFileSync('docker', [
         'compose',
         '-f',
