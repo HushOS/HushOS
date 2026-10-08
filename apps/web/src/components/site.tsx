@@ -113,9 +113,17 @@ export function StartFree({
 }) {
     const { hasSession, billingEnabled, freeQuotaBytes } = useRouteContext({ from: '__root__' });
     const size = short ? 'default' : 'lg';
+    // The header's button stays 36px on touch screens too, where buttons grow to 44: at 44 it
+    // filled the 56px header and outweighed the page's own call to action. The tap area keeps 44.
+    const compact = short
+        ? "relative pointer-coarse:h-9! pointer-coarse:px-3.5! after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']"
+        : undefined;
     if (hasSession)
         return (
-            <Link to="/app/drive" className={buttonVariants({ size, className })}>
+            <Link
+                to="/app/drive"
+                className={buttonVariants({ size, className: cn(compact, className) })}
+            >
                 Go to Drive
             </Link>
         );
@@ -127,7 +135,10 @@ export function StartFree({
           ? 'Start free'
           : `Start free with ${formatQuota(freeQuotaBytes)}`;
     return (
-        <Link to="/register" className={buttonVariants({ size, className })}>
+        <Link
+            to="/register"
+            className={buttonVariants({ size, className: cn(compact, className) })}
+        >
             {label}
         </Link>
     );
