@@ -1,0 +1,63 @@
+DESIGN.md
+  s_41ce2ed146c27c::t_af5223760de9d4 262,331
+apps/web/scripts/brand-assets.ts
+  s_41ce2ed146c27c::t_4bc74792d7441b 8-9,19,21-25,29-30,34-35,81,87
+apps/web/scripts/store-graphics.tsx
+  s_41ce2ed146c27c::t_4bc74792d7441b 78-79,81
+  s_41ce2ed146c27c::t_956b1d5e84cb50 6-12
+packages/emails/src/templates/verify-email.tsx
+  s_41ce2ed146c27c::t_4bc74792d7441b 64,74,118-119,130
+packages/emails/src/rendered/verify-email.ts
+  s_41ce2ed146c27c::t_956b1d5e84cb50 4,8
+apps/web/public/brand/hushos-logo.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/public/brand/hushos-wordmark.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/src/components/brand.tsx
+  s_41ce2ed146c27c::t_4bc74792d7441b 21-23,29
+apps/web/public/brand/hushos-wordmark-on-dark.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/public/brand/hushos-wordmark-square.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/public/brand/hushos-wordmark-square-on-dark.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+packages/emails/src/rendered/share-notice.ts
+  s_41ce2ed146c27c::t_956b1d5e84cb50 4,8
+apps/web/scripts/mobile-brand-assets.ts
+  s_41ce2ed146c27c::t_956b1d5e84cb50 34,57
+  s_41ce2ed146c27c::t_4bc74792d7441b 3,8-9,30-32,40,46,49,51,53,56,63,69
+apps/web/public/browserconfig.xml
+  s_41ce2ed146c27c::t_4bc74792d7441b 6
+apps/web/public/brand/hushos-logo-square-on-dark.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/public/brand/hushos-logo-square.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/public/brand/hushos-logo-on-dark.svg
+  s_41ce2ed146c27c::t_956b1d5e84cb50 1
+apps/web/src/lib/brand.ts
+  s_41ce2ed146c27c::t_4bc74792d7441b 58-63,65-66,77,95
+apps/web/public/brand/README.txt
+  s_41ce2ed146c27c::t_956b1d5e84cb50 3-4,8-9
+apps/web/src/lib/og.server.tsx
+  s_41ce2ed146c27c::t_4bc74792d7441b 129
+packages/emails/src/templates/share-notice.tsx
+  s_41ce2ed146c27c::t_4bc74792d7441b 69,79,119-120,131
+apps/web/src/routes/__root.tsx
+  s_41ce2ed146c27c::t_fca8c27a077313 83,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b1964c9168623f599a2702323229353170b840c",
+  "prompts": {},
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
