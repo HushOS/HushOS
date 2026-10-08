@@ -28,7 +28,8 @@ const getSupportServerFn = createServerFn().handler((): Support => ({
     jurisdiction: appEnv.OPERATOR_JURISDICTION ?? null,
     // Written with \n in an .env file, so the lines survive one-line settings.
     address: (appEnv.OPERATOR_ADDRESS ?? '')
-        .split(/\\n|\n/)
+        // Line breaks written as \n, as \\n (a .env or compose file that escapes the backslash), or real ones.
+        .split(/\\+n|\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean),
     phone: appEnv.OPERATOR_PHONE ?? null,
