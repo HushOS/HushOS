@@ -1,0 +1,21 @@
+docs/release/apple.md
+  s_e6be7a44f77585::t_304cd3ac766fd7 31,156
+docs/release/checklist.md
+  s_e6be7a44f77585::t_ffe029d18b2faf 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f83bdc7fc7edb9d8aa3e0f7e3e1738da2ebdc93e",
+  "prompts": {},
+  "sessions": {
+    "s_e6be7a44f77585": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4298fa26-72d0-45cb-89af-655a41cadf98",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
