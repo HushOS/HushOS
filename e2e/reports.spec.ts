@@ -10,6 +10,7 @@ import {
     registerAccount,
     sampleFiles,
     sha256,
+    openFolder,
 } from './helpers';
 
 /*
@@ -89,8 +90,7 @@ test.beforeAll(async ({ browser }) => {
     await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Dropbox');
     await owner.keyboard.press('Enter');
-    await row(owner, 'Dropbox').getByRole('link', { name: 'Dropbox' }).click();
-    await expect(owner).toHaveURL(/\/app\/drive\/f\//);
+    await openFolder(owner, 'Dropbox');
     await owner.locator('input[type=file]').first().setInputFiles([samples.files.markdown]);
     await expect(row(owner, 'notes.md')).toBeVisible({ timeout: 90_000 });
     await owner.locator('[data-crumb-id]').first().click();

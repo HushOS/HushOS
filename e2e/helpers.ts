@@ -66,6 +66,23 @@ export async function waitForRotation(page: Page, before: number, timeout = 120_
     await expect.poll(() => rotationsDone(page), { timeout }).toBeGreaterThan(before);
 }
 
+/*
+ * Opens a folder from the list and waits until it is the one on screen. The URL changes
+ * before the folder draws, and until then the page, file inputs included, still belongs
+ * to the folder left behind: a file picked at that moment lands there.
+ */
+export async function openFolder(page: Page, name: string) {
+    await page
+        .locator('[data-node-id]')
+        .filter({ has: page.getByText(name, { exact: true }) })
+        .getByRole('link', { name })
+        .click();
+    await expect(page).toHaveURL(/\/app\/drive\/f\//);
+    await expect(
+        page.getByRole('navigation', { name: 'Folder path' }).getByRole('heading', { level: 1 }),
+    ).toHaveText(name);
+}
+
 /* Opens the New folder dialog from the folder's Add menu. */
 export async function newFolder(page: Page) {
     await page.getByRole('button', { name: 'Add', exact: true }).click();

@@ -9,6 +9,7 @@ import {
     sampleFiles,
     shareWith,
     waitForRotation,
+    openFolder,
 } from './helpers';
 
 /*
@@ -153,8 +154,7 @@ test('after a revoked share is rotated, the rotated items are still found, throu
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 
     await owner.goto('/app/drive');
-    await row(owner, 'Project').getByRole('link', { name: 'Project' }).click();
-    await expect(owner).toHaveURL(/\/app\/drive\/f\//);
+    await openFolder(owner, 'Project');
     const samples = sampleFiles();
     await owner.locator('input[type=file]').first().setInputFiles([samples.files.markdown]);
     await expect(row(owner, 'notes.md')).toBeVisible({ timeout: 60_000 });

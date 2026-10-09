@@ -10,6 +10,7 @@ import {
     sampleFiles,
     shareWith,
     waitForRotation,
+    openFolder,
 } from './helpers';
 
 /*
@@ -63,8 +64,7 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await newFolder(owner);
     await owner.getByPlaceholder('Reports/2026').fill('Project');
     await owner.keyboard.press('Enter');
-    await row(owner, 'Project').getByRole('link', { name: 'Project' }).click();
-    await expect(owner).toHaveURL(/\/app\/drive\/f\//);
+    await openFolder(owner, 'Project');
     await owner.locator('input[type=file]').first().setInputFiles([samples.files.markdown]);
     await expect(row(owner, 'notes.md')).toBeVisible({ timeout: 60_000 });
 
