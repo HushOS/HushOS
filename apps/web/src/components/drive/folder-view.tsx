@@ -595,15 +595,18 @@ export function FolderView({ folderId }: { folderId: string }) {
         dragState.current = { selected, select, moveTo, moveCrumb, rows, crumbs };
     });
     /*
-     * Registered again only when the items themselves change. A refetch hands back new
-     * objects for the same rows, and tearing the handlers down then would cancel a drag
-     * the person is in the middle of: the drop lands on nothing.
+     * Registered again whenever the rows or the path change, but not during a drag: a
+     * refetch mid-drag hands back new objects for the same items, and tearing the
+     * handlers down then cancels the drag, so the drop lands on nothing. The drop's
+     * check reads the latest path, and the handlers catch up once the drag ends.
      */
-    const dragKey = `${rows.map((row) => `${row.id}:${row.kind}`).join(',')}|${crumbs
-        .map((crumb) => crumb.id)
-        .join(',')}`;
+    const [dragging, setDragging] = useState(false);
+    const registered = useRef<(() => void) | null>(null);
+    useEffect(() => () => registered.current?.(), []);
     useEffect(() => {
-        const { rows, crumbs } = dragState.current;
+        if (dragging) return;
+        registered.current?.();
+        registered.current = null;
         const root = dropRef.current;
         if (!root) return;
         const cleanups: (() => void)[] = [];
@@ -673,8 +676,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                 }),
             );
         }
-        return combine(...cleanups);
-    }, [dragKey, view]);
+        registered.current = combine(...cleanups);
+    }, [rows, crumbs, view, dragging]);
 
     /* The card that follows the pointer while rows or a crumb are dragged, in place of the browser's snapshot. */
     const [ghost, setGhost] = useState<{
@@ -688,7 +691,8 @@ export function FolderView({ folderId }: { folderId: string }) {
             monitorForElements({
                 canMonitor: ({ source }) =>
                     source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
-                onDragStart: ({ source, location }) =>
+                onDragStart: ({ source, location }) => {
+                    setDragging(true);
                     setGhost({
                         x: location.current.input.clientX,
                         y: location.current.input.clientY,
@@ -697,7 +701,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 ? [source.data.id as string]
                                 : (source.data.ids as string[]),
                         copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
-                    }),
+                    });
+                },
                 onDrag: ({ source, location }) =>
                     setGhost((current) =>
                         current
@@ -711,7 +716,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                               }
                             : current,
                     ),
-                onDrop: () => setGhost(null),
+                onDrop: () => {
+                    setGhost(null);
+                    setDragging(false);
+                },
             }),
         [],
     );
