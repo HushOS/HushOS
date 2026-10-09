@@ -205,13 +205,18 @@ export function createAuthClient(
                             return `${entry.step} ${end - entry.at}ms`;
                         })
                         .join(', ');
+                // Every way out that leaves the account locked without an error says why, so a
+                // lock screen that "should" have opened can be traced to its reason.
+                const stop = (reason: string) =>
+                    console.info(`Device restore stopped: ${reason} (${describeTrail()}).`);
                 store.setState({ restoring: true, restoreStep: null });
                 try {
                     const restoringEpoch = epoch;
                     step('rehydrate');
                     await store.persist.rehydrate();
                     const device = store.getState().device;
-                    if (!device || device.userId !== user.id) return;
+                    if (!device) return stop('no saved device access');
+                    if (device.userId !== user.id) return stop('saved for another account');
                     let sessionUser: SessionUser | null;
                     step('session');
                     try {
@@ -219,7 +224,7 @@ export function createAuthClient(
                     } catch {
                         // Offline or a flaky connection: the bundle may be fine. Keep it and
                         // let the next focus or session check try again.
-                        return;
+                        return stop('the session could not be checked');
                     }
                     if (
                         !sessionUser ||
@@ -228,16 +233,17 @@ export function createAuthClient(
                     ) {
                         lock();
                         store.setState({ device: null });
-                        return;
+                        return stop('it no longer matches the session');
                     }
-                    if (epoch !== restoringEpoch) return;
+                    if (epoch !== restoringEpoch) return stop('locked while checking the session');
                     step('device-key');
                     const deviceKey = await deviceKeys.load(device.deviceKeyId);
-                    if (epoch !== restoringEpoch) return;
+                    if (epoch !== restoringEpoch)
+                        return stop('locked while reading the device key');
                     if (!deviceKey) throw new Error('The saved device key is unavailable.');
                     step('worker');
                     await rpc('restore', { bundle: device, deviceKey });
-                    if (epoch !== restoringEpoch) return;
+                    if (epoch !== restoringEpoch) return stop('locked while opening the key');
                     store.setState({ unlockedUserId: user.id, rememberError: '' });
                 } catch (error) {
                     lock();

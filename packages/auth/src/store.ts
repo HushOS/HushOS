@@ -43,8 +43,16 @@ export function createAuthStore() {
             /* Storage may be disabled entirely. In-memory auth must still work. */
         }
     }
+    /*
+     * Persist writes the whole state on every change, loaded or not, and this store
+     * loads only when first used (skipHydration). A change before then (a lock, a
+     * restore step) would save the empty starting state over the saved unlock, and
+     * the next visit would ask for the password. Nothing is written until it has loaded.
+     */
+    let loaded = false;
     const storage: StateStorage = {
         getItem(name) {
+            loaded = true;
             if (!available) return null;
             try {
                 return localStorage.getItem(name);
@@ -54,7 +62,7 @@ export function createAuthStore() {
             }
         },
         setItem(name, value) {
-            if (!available) return;
+            if (!available || !loaded) return;
             try {
                 localStorage.setItem(name, value);
             } catch {
