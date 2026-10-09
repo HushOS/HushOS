@@ -311,7 +311,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
             ) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val columns = gridColumns(maxWidth)
-                    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = if (showPaste) 168.dp else 88.dp)) {
+                    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = (if (showPaste) 168.dp else 88.dp) + LocalFootBars.current)) {
                         item(key = "header") {
                             Column {
                                 // Who can open everything here, once, right under the title, for a folder this account shared (or one

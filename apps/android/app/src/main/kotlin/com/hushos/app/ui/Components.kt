@@ -228,6 +228,9 @@ fun SkeletonRows(rows: Int = 7) {
 /* The app's current notice, drawn by whatever is on top (a sheet is its own window). */
 val LocalNotice = androidx.compose.runtime.compositionLocalOf<@Composable () -> Unit> { {} }
 
+/* How tall the notice and transfer bars at the foot are right now: the + button and the lists' ends move up by it, as Material lifts a FAB over a snackbar. */
+val LocalFootBars = androidx.compose.runtime.compositionLocalOf { 0.dp }
+
 /*
  * A modal bottom sheet on the white surface, as the board draws sheets. Inside it
  * Material's `surface` is the sheet's own colour, so rows (ListItem paints itself

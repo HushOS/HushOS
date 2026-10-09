@@ -165,7 +165,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
             // Above the list, not in it: an item added over the first row would land out of view.
             if (state.unreachable) OfflineCapsule()
             PullToRefreshBox(isRefreshing = loading && state.recents.isNotEmpty(), onRefresh = { model.refreshRecents(pulled = true); model.refreshAccess() }, modifier = Modifier.weight(1f)) {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp + LocalFootBars.current)) {
                     if (firstRun) {
                         item(key = "first") {
                             EmptyState("Nothing here yet", "Files you add or change show up here.", Icons.Outlined.UploadFile, modifier = Modifier.padding(top = 40.dp)) {

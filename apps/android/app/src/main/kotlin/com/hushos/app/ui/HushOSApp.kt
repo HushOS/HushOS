@@ -79,6 +79,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -180,7 +181,13 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         }
     }
     // A sheet is its own window above this screen: it draws the notice too, so feedback is never hidden under it.
-    CompositionLocalProvider(LocalNotice provides { state.notice?.let { NoticeBar(it, model, Modifier.padding(12.dp)) } }) {
+    // The bars at the foot, measured, so the + button and the lists' ends rise over them.
+    var footBars by remember { mutableStateOf(0.dp) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    CompositionLocalProvider(
+        LocalNotice provides { state.notice?.let { NoticeBar(it, model, Modifier.padding(12.dp)) } },
+        LocalFootBars provides footBars,
+    ) {
     Scaffold(
         containerColor = alpine.ground,
         bottomBar = {
@@ -217,19 +224,15 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             }
         },
         snackbarHost = {
-            Column {
-                // Above the add button and the paste bar, which sit over this corner on Files (and the button on Home) and would cover Undo.
-                val lift = when {
-                    tab == Tab.HOME && home == "home" -> 76.dp
-                    tab != Tab.FILES -> 0.dp
-                    state.clipboard != null -> 152.dp
-                    else -> 76.dp
-                }
+            // At the foot, just above the tabs; the + button rises over them (LocalFootBars). On Files they
+            // sit over the paste bar, which belongs to the folder.
+            val lift = if (tab == Tab.FILES && state.clipboard != null) 80.dp else 0.dp
+            Column(Modifier.padding(bottom = lift).onSizeChanged { footBars = with(density) { it.height.toDp() } }) {
                 state.notice?.let { notice ->
-                    NoticeBar(notice, model, Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty() && state.queued.isEmpty()) lift else 0.dp))
+                    NoticeBar(notice, model, Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty() && state.queued.isEmpty()) 4.dp else 0.dp))
                 }
                 val all = state.queued + state.transfers
-                if (all.isNotEmpty() && !state.addMenuOpen) Box(Modifier.padding(bottom = lift)) { TransferBar(all, offline = state.unreachable) { transfersOpen = true } }
+                if (all.isNotEmpty()) TransferBar(all, offline = state.unreachable) { transfersOpen = true }
             }
         },
     ) { padding ->

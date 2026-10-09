@@ -175,15 +175,17 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
 /*
  * The + button and its menu, Files' and Home's: Paste (when the clipboard can go here), New
  * folder, Take photo, Upload photos, and Upload files nearest the button. `lift` raises it over
- * a paste bar.
+ * a paste bar; it also rises over the notice and transfer bars at the foot.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun AddButton(open: Boolean, onOpen: (Boolean) -> Unit, add: Adder, paste: Pair<String, () -> Unit>? = null, lift: Dp = 0.dp) {
     val alpine = Alpine.colors
+    // Over the paste bar and over the notice and transfer bars at the foot, moving as they come and go.
+    val rise by androidx.compose.animation.core.animateDpAsState(lift + LocalFootBars.current, label = "fab lift")
     FloatingActionButtonMenu(
-        // The menu pads its button a second time; pull it back to the usual 16dp, and lift it over the paste bar.
-        modifier = Modifier.offset(x = 16.dp, y = 16.dp).padding(bottom = lift),
+        // The menu pads its button a second time; pull it back to the usual 16dp, and lift it.
+        modifier = Modifier.offset(x = 16.dp, y = 16.dp).padding(bottom = rise),
         expanded = open,
         horizontalAlignment = Alignment.End,
         button = {
