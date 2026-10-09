@@ -111,6 +111,22 @@ export function createAuthClient(
             throw error;
         }
     }
+    /*
+     * WebKit stores a CryptoKey in IndexedDB by wrapping it with a key from the system
+     * keychain, and that step now and then fails at once with DataCloneError (seen in CI
+     * on macOS). The key itself is fine, so it is tried a few times before giving up.
+     */
+    async function createDeviceKey() {
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await deviceKeys.create();
+            } catch (error) {
+                const clone = (error as { name?: unknown } | null)?.name === 'DataCloneError';
+                if (!clone || attempt >= 3) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+            }
+        }
+    }
     async function login(email: string, password: string) {
         const loginEpoch = epoch;
         const start = await rpc('loginStart', { password });
@@ -134,7 +150,7 @@ export function createAuthClient(
         try {
             if (!canPersist()) throw new Error('Device storage is unavailable.');
             saving = 'device key';
-            const saved = await deviceKeys.create();
+            const saved = await createDeviceKey();
             saving = 'lock check';
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             saving = 'worker';
