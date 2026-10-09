@@ -1,0 +1,28 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_41ce2ed146c27c::t_5774e299491d57 168
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_41ce2ed146c27c::t_5774e299491d57 231-233
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_41ce2ed146c27c::t_5774e299491d57 314
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_41ce2ed146c27c::t_5774e299491d57 178,184-185,187-188
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_41ce2ed146c27c::t_5774e299491d57 184-190,227-230,232,235
+  s_41ce2ed146c27c::t_b18b80d7fae532 82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a0d35782b6c9b3797247824c5bf0d17fc28f41c",
+  "prompts": {},
+  "sessions": {
+    "s_41ce2ed146c27c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d70584b3-e373-4645-9ed6-7b3c580163ce",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
