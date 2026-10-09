@@ -41,24 +41,22 @@ function mdxMeta(): Plugin {
 }
 
 /*
- * The dev server closes an idle connection after about five seconds, Node's default.
- * WebKit keeps idle connections longer and reuses one the server has just closed;
- * it retries a GET when that happens but not a POST, which then fails as "The network
- * connection was lost" (seen in CI as an unlock whose login/finish never arrived).
- * Idle connections now outlive WebKit's. Production sits behind a proxy, which owns
- * the browser's connections.
+ * In CI, every dev-server connection carries one request. WebKit reuses idle
+ * connections, and a POST on one the server is closing fails without a retry: at
+ * Node's five-second timeout it was "The network connection was lost" (an unlock's
+ * login/finish), and with a 65-second timeout sign-ups ten seconds after the page
+ * loaded read as ECONNRESET. Without reuse there is no such moment. Locally the
+ * defaults stay, and production sits behind a proxy that owns the browser's connections.
  */
-function keepAliveForWebKit(): Plugin {
+function oneRequestPerConnectionInCI(): Plugin {
     return {
-        name: 'hushos:keep-alive',
+        name: 'hushos:one-request-per-connection',
         configureServer(server) {
-            const http = server.httpServer as {
-                keepAliveTimeout: number;
-                headersTimeout: number;
-            } | null;
-            if (!http) return;
-            http.keepAliveTimeout = 65_000;
-            http.headersTimeout = 66_000;
+            if (!process.env.CI) return;
+            // Ahead of Vite's own listener, which may already have answered by the time a later one runs.
+            server.httpServer?.prependListener('request', (_request, response) => {
+                if (!response.headersSent) response.setHeader('connection', 'close');
+            });
         },
     };
 }
@@ -91,7 +89,7 @@ export default defineConfig({
         ],
     },
     plugins: [
-        keepAliveForWebKit(),
+        oneRequestPerConnectionInCI(),
         mdxMeta(),
         {
             // MDX compiles to React components at build time, so legal pages and
