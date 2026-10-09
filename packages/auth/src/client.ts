@@ -62,6 +62,21 @@ export function createAuthClient(
             /* Storage events still propagate locks when broadcasting is unavailable. */
         }
     }
+    /*
+     * What localStorage holds for the saved unlock, for a restore that found none: no entry
+     * (never written, or not visible to this page), an entry whose device is empty (written
+     * over), or one with a device the store refused. Never the bundle itself.
+     */
+    function storedUnlock() {
+        try {
+            const raw = localStorage.getItem(store.persist.getOptions().name ?? '');
+            if (raw === null) return `nothing stored (${localStorage.length} other keys)`;
+            const saved = (JSON.parse(raw) as { state?: Record<string, unknown> }).state;
+            return `stored device ${saved?.device ? 'present but refused' : 'empty'}, lock revision ${String(saved?.lockRevision)}`;
+        } catch {
+            return 'storage unreadable';
+        }
+    }
     function broadcastLock() {
         try {
             channel?.postMessage('lock');
@@ -215,7 +230,7 @@ export function createAuthClient(
                     step('rehydrate');
                     await store.persist.rehydrate();
                     const device = store.getState().device;
-                    if (!device) return stop('no saved device access');
+                    if (!device) return stop(`no saved device access, ${storedUnlock()}`);
                     if (device.userId !== user.id) return stop('saved for another account');
                     let sessionUser: SessionUser | null;
                     step('session');
