@@ -130,8 +130,10 @@ jobs:
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
+            # A test that failed and then passed on retry still left its trace: keep it, so a
+            # flake shows what went wrong instead of disappearing with the green run.
             - name: Keep traces of failures and the server log
-              if: failure()
+              if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v4
               with:
                   name: playwright-traces-chromium-${{ matrix.shard }}
@@ -198,8 +200,10 @@ jobs:
               run: |
                   tail -n 60 scratchpad/e2e-server.log || true
                   for log in "$RUNNER_TEMP"/hushos-infra/*.log; do echo "== $log"; tail -n 20 "$log"; done
+            # A test that failed and then passed on retry still left its trace: keep it, so a
+            # flake shows what went wrong instead of disappearing with the green run.
             - name: Keep traces of failures and the logs
-              if: failure()
+              if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v4
               with:
                   name: playwright-traces-webkit-${{ matrix.shard }}
