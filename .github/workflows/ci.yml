@@ -136,7 +136,7 @@ jobs:
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-chromium-${{ matrix.shard }}
+                  name: playwright-traces-chromium-${{ matrix.shard }}-${{ github.run_attempt }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
@@ -206,7 +206,7 @@ jobs:
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v4
               with:
-                  name: playwright-traces-webkit-${{ matrix.shard }}
+                  name: playwright-traces-webkit-${{ matrix.shard }}-${{ github.run_attempt }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
