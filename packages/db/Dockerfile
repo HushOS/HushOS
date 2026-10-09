@@ -1,6 +1,8 @@
 FROM oven/bun:1.4.2 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
+# Dependency patches bun install applies (package.json's patchedDependencies).
+COPY patches ./patches
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/crypto/package.json ./packages/crypto/package.json
 COPY packages/env/package.json ./packages/env/package.json
