@@ -1,0 +1,15 @@
+diff --git a/dist/_chunks/common-base-runner.mjs b/dist/_chunks/common-base-runner.mjs
+index 95e8bfb..c829fd4 100644
+--- a/dist/_chunks/common-base-runner.mjs
++++ b/dist/_chunks/common-base-runner.mjs
+@@ -29,7 +29,9 @@ var BaseEnvRunner = class {
+ 	async fetch(input, init) {
+ 		for (let i = 0; i < 5 && !this._address && !this.closed; i++) await new Promise((r) => setTimeout(r, 100 * Math.pow(2, i)));
+ 		if (!this._address) return new Response(`${this._runtimeType()} env runner is unavailable`, { status: 503 });
+-		return proxyFetch(this._address, this._resolveFetchInput(input), init);
++		// HushOS patch: a fresh connection per request. The pooled keep-alive agent reused
++		// connections the worker's server was closing after ~10 s idle, failing with ECONNRESET.
++		return proxyFetch(this._address, this._resolveFetchInput(input), init, { agent: false });
+ 	}
+ 	async upgrade(context) {
+ 		if (!this.ready) await this.waitForReady().catch(() => {});

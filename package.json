@@ -75,5 +75,8 @@
         "skills": [
             "*"
         ]
+    },
+    "patchedDependencies": {
+        "env-runner@0.2.1": "patches/env-runner@0.2.1.patch"
     }
 }
