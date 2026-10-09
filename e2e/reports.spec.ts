@@ -67,7 +67,7 @@ async function openReportContent(page: Page, id: string) {
             console.warn(
                 `Saved device access was not restored: ${restoreLog.join(' | ') || 'no log'}`,
             );
-            await page.getByLabel('Password').fill(PASSWORD);
+            await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
             await page.getByRole('button', { name: 'Unlock', exact: true }).click();
         }
         await open.click();
