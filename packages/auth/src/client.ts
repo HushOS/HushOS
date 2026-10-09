@@ -128,10 +128,16 @@ export function createAuthClient(
         }
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
         store.setState({ unlockedUserId: result.user.id, rememberError: '' });
+        // Which step a failed save stopped at, and why: the banner says only that it failed.
+        let saving = 'storage';
+        const started = Date.now();
         try {
             if (!canPersist()) throw new Error('Device storage is unavailable.');
+            saving = 'device key';
             const saved = await deviceKeys.create();
+            saving = 'lock check';
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
+            saving = 'worker';
             const device = await rpc('remember', {
                 deviceKey: saved.key,
                 identity: {
@@ -141,10 +147,16 @@ export function createAuthClient(
                     credentialVersion: result.envelope.credentialVersion,
                 },
             });
+            saving = 'lock check';
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
+            saving = 'shared storage';
             store.setState({ device });
             if (!canPersist()) throw new Error('Device storage is unavailable.');
-        } catch {
+        } catch (error) {
+            console.warn(
+                `Saving device access failed at ${saving} after ${Date.now() - started}ms.`,
+                error,
+            );
             store.setState({
                 rememberError:
                     'This browser could not save device access. You can continue, but a refresh will require your password.',
