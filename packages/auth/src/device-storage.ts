@@ -1,4 +1,3 @@
-import type { RememberedAccount } from '@hushos/crypto';
 import { createDeviceKey } from '@hushos/crypto/device';
 
 /*
@@ -34,16 +33,8 @@ function withTimeout<T>(work: Promise<T>) {
 export type DeviceKeyStore = {
     create: () => Promise<{ id: string; key: CryptoKey }>;
     load: (id: string) => Promise<CryptoKey | null>;
-    /*
-     * A copy of the saved unlock beside its key. localStorage holds the one tabs share,
-     * but WebKit has handed a freshly loaded page an older value there; IndexedDB says a
-     * write is done only once it is committed. create() and clear() remove the copy too.
-     */
-    keep: (bundle: RememberedAccount) => Promise<void>;
-    kept: () => Promise<unknown>;
     clear: () => Promise<void>;
 };
-const BUNDLE = 'unlock';
 export function createBrowserDeviceKeyStore(): DeviceKeyStore {
     function open(): Promise<IDBDatabase> {
         return withTimeout(
@@ -80,28 +71,6 @@ export function createBrowserDeviceKeyStore(): DeviceKeyStore {
                 store.put(key, id);
             });
             return { id, key };
-        },
-        keep: (bundle) =>
-            write((store) => {
-                store.put(bundle, BUNDLE);
-            }),
-        async kept() {
-            const db = await open();
-            try {
-                return await withTimeout(
-                    new Promise<unknown>((resolve, reject) => {
-                        const request = db
-                            .transaction('keys', 'readonly')
-                            .objectStore('keys')
-                            .get(BUNDLE);
-                        request.onsuccess = () => resolve(request.result ?? null);
-                        request.onerror = () =>
-                            reject(new Error('Could not read the saved device access.'));
-                    }),
-                );
-            } finally {
-                db.close();
-            }
         },
         async load(id) {
             const db = await open();
