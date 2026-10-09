@@ -13,7 +13,7 @@ type AuthState = {
     device: RememberedAccount | null;
     lockRevision: number;
 };
-function isDevice(value: unknown): value is RememberedAccount {
+export function isDevice(value: unknown): value is RememberedAccount {
     if (!value || typeof value !== 'object') return false;
     const v = value as Record<string, unknown>;
     return (

@@ -9,7 +9,7 @@ export {
 import type { IdentityKem } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
-import { createAuthStore } from './store';
+import { createAuthStore, isDevice } from './store';
 import { withStorageEvents } from './with-storage-events';
 import { DeviceStorageTimeout, type DeviceKeyStore } from './device-storage';
 import type { RestoreStep } from './store';
@@ -144,6 +144,8 @@ export function createAuthClient(
             if (epoch !== loginEpoch) throw new Error('Your account was locked.');
             store.setState({ device });
             if (!canPersist()) throw new Error('Device storage is unavailable.');
+            // Committed before sign-in returns, so the page that loads next can find it.
+            await deviceKeys.keep(device).catch(() => {});
         } catch {
             store.setState({
                 rememberError:
@@ -229,8 +231,21 @@ export function createAuthClient(
                     const restoringEpoch = epoch;
                     step('rehydrate');
                     await store.persist.rehydrate();
-                    const device = store.getState().device;
-                    if (!device) return stop(`no saved device access, ${storedUnlock()}`);
+                    let device = store.getState().device;
+                    if (!device) {
+                        // localStorage can hand a page that just loaded an older value; the copy
+                        // beside the device key is committed. Deliberate locks clear both.
+                        const shared = storedUnlock();
+                        const kept = await deviceKeys.kept().catch(() => null);
+                        if (epoch !== restoringEpoch)
+                            return stop('locked while reading saved access');
+                        if (!isDevice(kept)) return stop(`no saved device access, ${shared}`);
+                        console.info(
+                            `Device restore: shared storage had ${shared}; using the copy kept with the device key.`,
+                        );
+                        device = kept;
+                        store.setState({ device });
+                    }
                     if (device.userId !== user.id) return stop('saved for another account');
                     let sessionUser: SessionUser | null;
                     step('session');
