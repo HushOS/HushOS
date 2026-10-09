@@ -590,11 +590,20 @@ export function FolderView({ folderId }: { folderId: string }) {
     }
     // Rows drag as themselves, or as the whole selection when they are part of it.
     // Folder rows and crumbs further up take the drop; the current folder does not.
-    const dragState = useRef({ selected, select, moveTo, moveCrumb });
+    const dragState = useRef({ selected, select, moveTo, moveCrumb, rows, crumbs });
     useEffect(() => {
-        dragState.current = { selected, select, moveTo, moveCrumb };
+        dragState.current = { selected, select, moveTo, moveCrumb, rows, crumbs };
     });
+    /*
+     * Registered again only when the items themselves change. A refetch hands back new
+     * objects for the same rows, and tearing the handlers down then would cancel a drag
+     * the person is in the middle of: the drop lands on nothing.
+     */
+    const dragKey = `${rows.map((row) => `${row.id}:${row.kind}`).join(',')}|${crumbs
+        .map((crumb) => crumb.id)
+        .join(',')}`;
     useEffect(() => {
+        const { rows, crumbs } = dragState.current;
         const root = dropRef.current;
         if (!root) return;
         const cleanups: (() => void)[] = [];
@@ -606,8 +615,9 @@ export function FolderView({ folderId }: { folderId: string }) {
                 canDrop: ({ source }) => {
                     if (source.data.type === 'drive-crumb') {
                         // Only upward, and past its own parent: anything else is where it already is, or inside itself.
-                        const from = crumbs.findIndex((crumb) => crumb.id === source.data.id);
-                        const to = crumbs.findIndex((crumb) => crumb.id === destination.id);
+                        const path = dragState.current.crumbs;
+                        const from = path.findIndex((crumb) => crumb.id === source.data.id);
+                        const to = path.findIndex((crumb) => crumb.id === destination.id);
                         return to >= 0 && from > 0 && to < from - 1;
                     }
                     return (
@@ -664,7 +674,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             );
         }
         return combine(...cleanups);
-    }, [rows, crumbs, view]);
+    }, [dragKey, view]);
 
     /* The card that follows the pointer while rows or a crumb are dragged, in place of the browser's snapshot. */
     const [ghost, setGhost] = useState<{
