@@ -40,6 +40,29 @@ function mdxMeta(): Plugin {
     };
 }
 
+/*
+ * The dev server closes an idle connection after about five seconds, Node's default.
+ * WebKit keeps idle connections longer and reuses one the server has just closed;
+ * it retries a GET when that happens but not a POST, which then fails as "The network
+ * connection was lost" (seen in CI as an unlock whose login/finish never arrived).
+ * Idle connections now outlive WebKit's. Production sits behind a proxy, which owns
+ * the browser's connections.
+ */
+function keepAliveForWebKit(): Plugin {
+    return {
+        name: 'hushos:keep-alive',
+        configureServer(server) {
+            const http = server.httpServer as {
+                keepAliveTimeout: number;
+                headersTimeout: number;
+            } | null;
+            if (!http) return;
+            http.keepAliveTimeout = 65_000;
+            http.headersTimeout = 66_000;
+        },
+    };
+}
+
 export default defineConfig({
     server: {
         host: '0.0.0.0',
@@ -68,6 +91,7 @@ export default defineConfig({
         ],
     },
     plugins: [
+        keepAliveForWebKit(),
         mdxMeta(),
         {
             // MDX compiles to React components at build time, so legal pages and
