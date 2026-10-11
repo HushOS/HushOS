@@ -1,0 +1,30 @@
+packages/drive/src/client.ts
+  s_75dbe24a0bc379::t_861f5ab1efd6e8 145-150,1253,1272,1283
+apps/web/src/lib/contacts.ts
+  s_75dbe24a0bc379::t_5f509650315a1d 17,22,28-29,56-59,96-102,185-188,191,195,254,258,267,300-304,316-320,324
+  s_75dbe24a0bc379::t_25a77a55ca1319 18-21
+  s_75dbe24a0bc379::t_0fb6e109c7d12c 288,294-298
+apps/web/src/components/drive/check-contact.tsx
+  s_75dbe24a0bc379::t_e588be6dc25863 9,74-75
+e2e/sharing.spec.ts
+  s_75dbe24a0bc379::t_e588be6dc25863 20-21,30,45,98,100-103,105-107,110-112
+  s_75dbe24a0bc379::t_a43fd1ed92c787 3
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_75dbe24a0bc379::t_861f5ab1efd6e8 283-290,297-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9aea6d22f8ddb64340fe3a73fd02e08bede561bb",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
