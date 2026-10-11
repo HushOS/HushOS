@@ -1,17 +1,3 @@
-import {
-    addTag,
-    assign,
-    findTag,
-    tagsOf,
-    type DriveNode,
-    type Tag,
-    type TagColour,
-    type TagRegistry,
-} from '@hushos/drive/client';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
-import { cn } from 'cn';
-import { useId, useState } from 'react';
 import { Swatch, TagColourButton } from '@/components/drive/tag-colour';
 import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
@@ -26,8 +12,22 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { driveClient, driveError } from '@/lib/drive';
-import { invalidateTags, suggestedColour, tagsQueryOptions, useTagCounts } from '@/lib/tags';
 import { cue } from '@/lib/sounds';
+import { invalidateTags, suggestedColour, tagsQueryOptions, useTagCounts } from '@/lib/tags';
+import {
+    addTag,
+    assign,
+    findTag,
+    tagsOf,
+    type DriveNode,
+    type Tag,
+    type TagColour,
+    type TagRegistry,
+} from '@hushos/drive/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
+import { cn } from 'cn';
+import { useId, useRef, useState, type RefObject } from 'react';
 
 /*
  * The tags one or more items carry. Every tag in the workspace is a row: on
@@ -44,13 +44,16 @@ export function TagDialog({
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
+    // Focus opens in the text box, not on the colour button before it: T then a name is the whole flow.
+    const field = useRef<HTMLInputElement>(null);
     return (
         <Dialog open={open && nodes.length > 0} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-[460px]">
+            <DialogContent className="sm:max-w-115" initialFocus={field}>
                 {nodes.length > 0 && (
                     <TagForm
                         key={nodes.map((node) => node.id).join(',')}
                         nodes={nodes}
+                        field={field}
                         onOpenChange={onOpenChange}
                     />
                 )}
@@ -72,9 +75,11 @@ function marksFor(nodes: DriveNode[], registry: TagRegistry) {
 
 function TagForm({
     nodes,
+    field,
     onOpenChange,
 }: {
     nodes: DriveNode[];
+    field: RefObject<HTMLInputElement | null>;
     onOpenChange: (open: boolean) => void;
 }) {
     const queryClient = useQueryClient();
@@ -202,6 +207,7 @@ function TagForm({
                         Find or add a tag
                     </label>
                     <Input
+                        ref={field}
                         id={id}
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
