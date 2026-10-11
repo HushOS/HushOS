@@ -52,6 +52,21 @@ describe('paths', () => {
         expect(redact({ path: `/register/${TOKEN}` }).path).toBe('/private/unknown');
     });
 
+    test('a link token in the path never reaches the log, on the page or the API', () => {
+        expect(redact({ path: `/s/${TOKEN}` }).path).toBe('/s/:token');
+        expect(redact({ path: `/api/drive/links/${TOKEN}/open` }).path).toBe(
+            '/api/drive/links/:link/open',
+        );
+        expect(redact({ path: `/api/drive/links/${TOKEN}/versions/${FOLDER}/url` }).path).toBe(
+            `/api/drive/links/:link/versions/${FOLDER}/url`,
+        );
+    });
+
+    test('a download path that reached the server is logged without its name', () => {
+        const event = redact({ path: `/hushos-download/${FOLDER}/tax-return-2026.pdf` });
+        expect(event.path).toBe('/hushos-download/:download');
+    });
+
     test('a route that only starts like a private one keeps its fields', () => {
         const event = redact({ path: '/application', campaign: 'spring' });
         expect(event.path).toBe('/application');

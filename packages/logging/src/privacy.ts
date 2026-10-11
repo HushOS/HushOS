@@ -162,10 +162,29 @@ export function authLogAction(pathname: string) {
     return authActions.has(action) ? action : 'unknown';
 }
 
+/*
+ * Paths that carry a bearer secret or a name on public routes: a link's token
+ * (which opens its ciphertext, tree and sizes to whoever holds it), and the
+ * download worker's own paths, which the server only sees when the worker was
+ * bypassed. Logged as their patterns.
+ */
+const secretPaths: [RegExp, string][] = [
+    [/^\/s\/[^/]+$/, '/s/:token'],
+    [/^\/api\/drive\/links\/[^/]+/, '/api/drive/links/:link'],
+    [/^\/hushos-download\/.*$/, '/hushos-download/:download'],
+];
+function withoutSecrets(path: string) {
+    for (const [pattern, replacement] of secretPaths)
+        if (pattern.test(path)) return path.replace(pattern, replacement);
+    return path;
+}
+
 // Runtime transform: evlog applies it before console output and before drains.
 // Keep auth telemetry allowlisted even if a future handler attaches a raw object.
 export function redactAuthenticationEvent(event: WideEvent) {
-    const path = typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : '';
+    const path = withoutSecrets(
+        typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : '',
+    );
     const privateRoute =
         /^\/(api\/auth(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$)|setup(?:\/|$))/.test(
             path,

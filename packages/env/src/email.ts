@@ -34,6 +34,12 @@ export const emailEnv = createEnv({
 });
 
 export function validateEmailAdapter() {
+    // Every verification and recovery link lands in the log: whoever reads it can finish
+    // another person's sign-up. Fine for a first run on one's own machine, so said, not refused.
+    if (emailEnv.EMAIL_ADAPTER === 'log' && process.env.NODE_ENV === 'production')
+        console.warn(
+            'EMAIL_ADAPTER=log writes every verification and recovery link to this log. Switch to smtp, resend or ses before anyone else uses this instance.',
+        );
     if (emailEnv.EMAIL_ADAPTER === 'smtp') {
         if (!emailEnv.SMTP_HOST) throw new Error('Set SMTP_HOST for the smtp email adapter.');
         if (Boolean(emailEnv.SMTP_USER) !== Boolean(emailEnv.SMTP_PASSWORD))

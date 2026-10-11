@@ -58,6 +58,11 @@ let setup: Promise<string> | undefined;
 function serverSetup() {
     setup ??= (async () => {
         if (authEnv.OPAQUE_SERVER_SETUP) return authEnv.OPAQUE_SERVER_SETUP;
+        // Beside the password records, a dump of the database is all an offline guess needs.
+        if (process.env.NODE_ENV === 'production')
+            console.warn(
+                'OPAQUE_SERVER_SETUP is not set, so the server setup lives in the database beside the password records. Move it to the environment (see docs/self-hosting.md).',
+            );
         await ready;
         return authRepository.ensureServerSecret(
             `opaque-setup:${authEnv.OPAQUE_SERVER_SETUP_ID}`,
