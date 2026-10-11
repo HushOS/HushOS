@@ -5,9 +5,9 @@ import { useSyncExternalStore } from 'react';
  * Which release rendered this page, and whether the server has moved on. The
  * page asks `/api/ready` for the server's release now and then (on a timer
  * while visible, when the tab comes back into view, and on navigation); a
- * different answer means a deploy happened under this tab, and the page
- * reloads itself at the next quiet moment rather than failing oddly against
- * a server it no longer matches.
+ * different answer means a deploy happened under this tab. A public page then
+ * reloads itself at the next quiet moment; the app never does, and shows a
+ * notice offering a reload instead.
  */
 
 const RELEASE = /^[a-f0-9]{40}$/;
