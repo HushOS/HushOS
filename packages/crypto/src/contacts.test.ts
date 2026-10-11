@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createIdentity, openIdentityEncryptionKey } from './identity';
+import { createIdentity, openIdentityEncryptionKey, verifyIdentitySigningKey } from './identity';
 import { EMPTY_SETTINGS, fingerprint, openSettings, sealSettings, type Settings } from './contacts';
 import { decode } from './keys';
 
@@ -17,11 +17,38 @@ describe('fingerprints', () => {
     test('are stable for a key, differ between keys, and are ten groups of four hex digits', async () => {
         const a = await identityWithKey();
         const b = await identityWithKey();
-        const first = await fingerprint(decode(a.envelope.encryptionPublicKey, 32));
+        const keys = (envelope: typeof a.envelope) =>
+            [
+                decode(envelope.encryptionPublicKey, 32),
+                decode(envelope.signingPublicKey, 32),
+            ] as const;
+        const first = await fingerprint(...keys(a.envelope));
         expect(first).toMatch(/^([0-9a-f]{4} ){9}[0-9a-f]{4}$/);
-        expect(await fingerprint(decode(a.envelope.encryptionPublicKey, 32))).toBe(first);
-        expect(await fingerprint(decode(b.envelope.encryptionPublicKey, 32))).not.toBe(first);
-        await expect(fingerprint(new Uint8Array(31))).rejects.toThrow();
+        expect(await fingerprint(...keys(a.envelope))).toBe(first);
+        expect(await fingerprint(...keys(b.envelope))).not.toBe(first);
+        // The same X25519 key beside another identity's signing key: not the same person.
+        expect(
+            await fingerprint(
+                decode(a.envelope.encryptionPublicKey, 32),
+                decode(b.envelope.signingPublicKey, 32),
+            ),
+        ).not.toBe(first);
+        await expect(fingerprint(new Uint8Array(31), new Uint8Array(32))).rejects.toThrow();
+    });
+});
+
+describe('own signing key', () => {
+    test('is proven against the seed under the root, so a swapped one is refused', async () => {
+        const { root, envelope } = await identityWithKey();
+        expect(await verifyIdentitySigningKey(root, USER, envelope)).toBe(
+            envelope.signingPublicKey,
+        );
+        const swapped = {
+            ...envelope,
+            signingPublicKey: (await identityWithKey()).envelope.signingPublicKey,
+        };
+        await expect(verifyIdentitySigningKey(root, USER, swapped)).rejects.toThrow();
+        await expect(verifyIdentitySigningKey(root, OTHER, envelope)).rejects.toThrow();
     });
 });
 

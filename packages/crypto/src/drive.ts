@@ -488,11 +488,16 @@ export function ciphertextSize(plaintextSize: number, thumbnailBytes = 0) {
         plaintextSize + CHUNK_TAG_BYTES * chunkCount(plaintextSize) + trailerLength(thumbnailBytes)
     );
 }
-/* Byte range of the thumbnail trailer inside the stored object. */
+/*
+ * The bytes to fetch for a thumbnail: always the object's last 64 KiB and a tag
+ * (or all of it, when smaller), whatever the trailer's length. Asking for the
+ * trailer's own range would hand the store its length and with it the file's
+ * exact size; decryptThumbnail takes the trailer from the end of the window.
+ */
 export function thumbnailRange(plaintextSize: number, thumbnailBytes: number) {
     if (thumbnailBytes < 1) throw new CryptoError('This file has no thumbnail.');
-    const start = ciphertextSize(plaintextSize);
-    return { start, end: start + trailerLength(thumbnailBytes) - 1 };
+    const end = ciphertextSize(plaintextSize, thumbnailBytes) - 1;
+    return { start: Math.max(0, end + 1 - trailerLength(THUMBNAIL_MAX_BYTES)), end };
 }
 /*
  * What the server can know about the parts of an object it was told has
@@ -655,15 +660,18 @@ export async function encryptThumbnail(
         key.fill(0);
     }
 }
+/* `fetched` is the window thumbnailRange asks for, or just the trailer: the trailer is its end. */
 export async function decryptThumbnail(
-    ciphertext: Uint8Array,
+    fetched: Uint8Array,
     contentKey: Uint8Array,
     contentNonce: Uint8Array,
     ctx: ThumbnailContext,
 ) {
     await sodium.ready;
-    if (ciphertext.length !== trailerLength(ctx.thumbnailBytes) || ctx.thumbnailBytes < 1)
+    const length = trailerLength(ctx.thumbnailBytes);
+    if (fetched.length < length || ctx.thumbnailBytes < 1)
         throw new CryptoError('This thumbnail could not be decrypted. It may be damaged.');
+    const ciphertext = fetched.subarray(fetched.length - length);
     const key = await thumbnailKey(contentKey);
     try {
         return new Uint8Array(

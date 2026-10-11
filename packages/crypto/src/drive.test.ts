@@ -296,11 +296,23 @@ describe('the thumbnail trailer', () => {
         expect(trailer).toHaveLength(3000 + 16);
         const ctx = { ...base, thumbnailBytes: 3000 };
         expect(await decryptThumbnail(trailer, contentKey, nonce, ctx)).toEqual(webp);
-        // Its range is exactly the bytes after the chunks, and the object ends with it.
+        // The object ends with it, and the fetch is the same-length tail whatever its size,
+        // so the store cannot read the trailer's length (and the file's exact size) off it.
         const range = thumbnailRange(base.plaintextSize, 3000);
-        expect(range.start).toBe(ciphertextSize(base.plaintextSize));
         expect(range.end + 1).toBe(ciphertextSize(base.plaintextSize, 3000));
+        const other = thumbnailRange(base.plaintextSize, THUMBNAIL_MAX_BYTES);
+        expect(other.end - other.start).toBe(range.end - range.start);
+        expect(range.end - range.start + 1).toBe(THUMBNAIL_MAX_BYTES + 16);
         expect(ciphertextSize(base.plaintextSize, 0)).toBe(ciphertextSize(base.plaintextSize));
+        // A small object is fetched whole.
+        expect(thumbnailRange(10, 3000)).toEqual({ start: 0, end: ciphertextSize(10, 3000) - 1 });
+        // The trailer opens from the end of that window, and a window short of it does not.
+        const window = new Uint8Array(range.end - range.start + 1);
+        window.set(trailer, window.length - trailer.length);
+        expect(await decryptThumbnail(window, contentKey, nonce, ctx)).toEqual(webp);
+        await expect(
+            decryptThumbnail(trailer.subarray(1), contentKey, nonce, ctx),
+        ).rejects.toBeInstanceOf(CryptoError);
         // Another object, another length, another file size (a different nonce) or the content key itself: refused.
         for (const wrong of [
             { ...ctx, objectId: OTHER },

@@ -538,7 +538,7 @@ describe('the thumbnail trailer', () => {
         expect(versions.versions[0]).toEqual({ id: C, plaintextSize: size, thumbnailBytes: 1234 });
         expect(versions.versions[1]!.error).toBeDefined();
 
-        // A thumbnail fetch asks the object's URL for exactly the trailer's range.
+        // A thumbnail fetch asks the object's URL for the fixed-length tail, not the trailer's own range.
         const range = thumbnailRange(size, 1234);
         const fetched = vi.fn(async (_url: string, init?: RequestInit) => {
             expect((init?.headers as Record<string, string> | undefined)?.Range).toBe(

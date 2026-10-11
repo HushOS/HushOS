@@ -11,6 +11,7 @@ import {
     createIdentity,
     openIdentityEncryptionKey,
     openIdentityKemKey,
+    verifyIdentitySigningKey,
     verifyKemBinding,
     type IdentityEnvelope,
     type IdentityKem,
@@ -469,7 +470,11 @@ export type CryptoResults = {
     loginStart: { startLoginRequest: string };
     loginFinish: { finishLoginRequest: string };
     unlock: { userId: string };
-    identityOpen: { encryptionPublicKey: string; kemPublicKey: string | null };
+    identityOpen: {
+        encryptionPublicKey: string;
+        signingPublicKey: string;
+        kemPublicKey: string | null;
+    };
     identityMintKem: { kem: IdentityKem };
     identityVerifyKem: { valid: boolean };
     settingsOpen: { settings: Settings };
@@ -570,6 +575,7 @@ export function createCryptoSession() {
               userId: string;
               key: Uint8Array<ArrayBuffer>;
               publicKey: string;
+              signingPublicKey: string;
               kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
           }
         | undefined;
@@ -1111,16 +1117,25 @@ export function createCryptoSession() {
                 if (identityKey && identityKey.userId === userId && !message.input.refresh)
                     return {
                         encryptionPublicKey: identityKey.publicKey,
+                        signingPublicKey: identityKey.signingPublicKey,
                         kemPublicKey: identityKey.kem?.publicKey ?? null,
                     };
                 const root = accountKey.slice();
                 try {
                     const key = await openIdentityEncryptionKey(root, userId, identity);
+                    const signingPublicKey = await verifyIdentitySigningKey(root, userId, identity);
                     const kem = await openIdentityKemKey(root, userId, identity);
                     forgetIdentity();
-                    identityKey = { userId, key, publicKey: identity.encryptionPublicKey, kem };
+                    identityKey = {
+                        userId,
+                        key,
+                        publicKey: identity.encryptionPublicKey,
+                        signingPublicKey,
+                        kem,
+                    };
                     return {
                         encryptionPublicKey: identity.encryptionPublicKey,
+                        signingPublicKey,
                         kemPublicKey: kem?.publicKey ?? null,
                     };
                 } finally {

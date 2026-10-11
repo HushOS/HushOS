@@ -41,11 +41,20 @@ describe('fingerprint words', () => {
         }
     });
 
-    test('the same key gives the same twelve words, and another key different ones', async () => {
-        const one = fingerprintWords(await fingerprint(key(1)));
+    test('the same keys give the same twelve words, and another key of either kind different ones', async () => {
+        const one = fingerprintWords(await fingerprint(key(1), key(2)));
         expect(one).toHaveLength(FINGERPRINT_WORDS);
-        expect(fingerprintWords(await fingerprint(key(1)))).toEqual(one);
-        expect(fingerprintWords(await fingerprint(key(2)))).not.toEqual(one);
+        expect(fingerprintWords(await fingerprint(key(1), key(2)))).toEqual(one);
+        expect(fingerprintWords(await fingerprint(key(4), key(2)))).not.toEqual(one);
+        // The signing key vouches for the ML-KEM key, so swapping it alone must show.
+        expect(fingerprintWords(await fingerprint(key(1), key(3)))).not.toEqual(one);
+    });
+
+    test('is the vector the native core prints for the same keys', async () => {
+        // crates/hushos-core contacts.rs checks the same value.
+        expect(await fingerprint(key(1), key(2))).toBe(
+            '8e5f 7614 6df7 df81 0a13 a5aa 35c7 ac7d b5db 2e38',
+        );
     });
 
     test('anything that is not a fingerprint is refused', () => {

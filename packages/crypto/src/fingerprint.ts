@@ -3,16 +3,20 @@ import { CryptoError } from './errors';
 
 /*
  * What two people compare over another channel before trusting a key the
- * server handed them: SHA-256 over the identity encryption public key, shown
- * as ten groups of four hex digits. Web Crypto only, so the main thread can
- * show it without loading libsodium.
+ * server handed them: SHA-256 over the identity encryption public key and the
+ * signing public key, shown as ten groups of four hex digits. The signing key
+ * is in it because it vouches for the ML-KEM key: a fingerprint over X25519
+ * alone would let a server swap the post-quantum half unnoticed. Web Crypto
+ * only, so the main thread can show it without loading libsodium.
  */
-export async function fingerprint(encryptionPublicKey: Uint8Array) {
-    if (encryptionPublicKey.length !== 32) throw new CryptoError('Invalid identity key.');
-    const prefix = new TextEncoder().encode('hushos/identity/fingerprint/v1');
-    const input = new Uint8Array(prefix.length + 32);
+export async function fingerprint(encryptionPublicKey: Uint8Array, signingPublicKey: Uint8Array) {
+    if (encryptionPublicKey.length !== 32 || signingPublicKey.length !== 32)
+        throw new CryptoError('Invalid identity key.');
+    const prefix = new TextEncoder().encode('hushos/identity/fingerprint/v2');
+    const input = new Uint8Array(prefix.length + 64);
     input.set(prefix);
     input.set(encryptionPublicKey, prefix.length);
+    input.set(signingPublicKey, prefix.length + 32);
     const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input));
     const hex = Array.from(digest.subarray(0, 20), (byte) =>
         byte.toString(16).padStart(2, '0'),

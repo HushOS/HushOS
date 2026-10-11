@@ -383,6 +383,49 @@ export async function openIdentityKemKey(
 }
 
 /*
+ * Proves the served signing public key is this identity's own: its seed opens
+ * under the root with that key in the associated data and derives it. What the
+ * person's own fingerprint is computed from, so a server cannot show them a
+ * fingerprint over a signing key it swapped in.
+ */
+export async function verifyIdentitySigningKey(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: IdentityEnvelope,
+) {
+    if (envelope.version !== 1) throw new CryptoError('Unsupported identity envelope.');
+    await sodium.ready;
+    const wrap = await identityWrappingKey(
+        root,
+        decode(envelope.wrappingSalt, 32),
+        'signing-seed-wrap',
+    );
+    let seed: Uint8Array | undefined;
+    let pair: { publicKey: Uint8Array; privateKey: Uint8Array } | undefined;
+    try {
+        seed = await decryptKey(
+            decode(envelope.encryptedSigningSeed, 48),
+            wrap,
+            decode(envelope.signingSeedNonce, 24),
+            identityContext(
+                userId,
+                envelope.keyVersion,
+                'signing-seed-wrap',
+                envelope.signingPublicKey,
+            ),
+        );
+        pair = sodium.crypto_sign_seed_keypair(seed);
+        if (encode(pair.publicKey) !== envelope.signingPublicKey)
+            throw new CryptoError('Identity keys do not match.');
+        return envelope.signingPublicKey;
+    } finally {
+        wrap.fill(0);
+        seed?.fill(0);
+        pair?.privateKey.fill(0);
+    }
+}
+
+/*
  * Gives an identity made before hybrid sharing its KEM key: the signing seed is
  * opened under the root to sign the binding, and the rest is as at creation.
  * The X25519 and signing keys, and so the fingerprint, do not change.
