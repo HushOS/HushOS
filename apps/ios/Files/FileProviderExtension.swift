@@ -40,6 +40,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             return message == "This item no longer exists."
                 ? NSFileProviderError(.noSuchItem)
                 : CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: message])
+        case DriveAPIError.trashed:
+            // Files shows no HushOS trash, so an item trashed elsewhere (or under a trashed folder) is gone
+            // from this location: saying so lets Files drop it instead of keeping a copy it can't sync.
+            return NSFileProviderError(.noSuchItem)
         case DriveAPIError.server(_, let message):
             return CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey: message])
         default:

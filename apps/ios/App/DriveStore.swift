@@ -290,6 +290,8 @@ final class DriveStore {
         // The feed answered: whatever the last request said, the server is reachable now.
         offline = false
         if touched.isEmpty { return }
+        // Changes from other devices reach the Files location too, not only this device's own writes.
+        FilesDomain.signal()
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
             if let children = try? await vault.children(of: id) { folders[id] = children }
         }

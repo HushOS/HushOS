@@ -50,8 +50,10 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired))
                     return
                 }
-                if !changes.updated.isEmpty { observer.didUpdate(changes.updated.map { FileProviderItem($0, rootId: rootId) }) }
+                // Deletions first: a folder trashed and a new one of the same name made in its place arrive in one
+                // batch, and Files gives the newcomer a "2" if the old one still holds the name when it lands.
                 if !changes.deleted.isEmpty { observer.didDeleteItems(withIdentifiers: changes.deleted.map { NSFileProviderItemIdentifier($0) }) }
+                if !changes.updated.isEmpty { observer.didUpdate(changes.updated.map { FileProviderItem($0, rootId: rootId) }) }
                 log.notice("changes since \(since): \(changes.updated.count) updated, \(changes.deleted.count) deleted, next \(changes.nextCursor)")
                 observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(String(changes.nextCursor).data(using: .utf8)!), moreComing: changes.hasMore)
             } catch {

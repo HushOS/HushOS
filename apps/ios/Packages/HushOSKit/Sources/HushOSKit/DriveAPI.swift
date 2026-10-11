@@ -5,6 +5,8 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     case server(Int, String)
     case transport(String)
     case notFound(String)
+    /* The item, or a folder above it, is in the trash: the server's `trashed` code. */
+    case trashed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -12,7 +14,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -72,8 +74,10 @@ public final class DriveAPI: Sendable {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401 { throw DriveAPIError.notAuthenticated }
         guard (200 ..< 300).contains(status) else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let message = body?["message"] as? String
             if status == 404 { throw DriveAPIError.notFound(message ?? "This item no longer exists.") }
+            if status == 409, body?["code"] as? String == "trashed" { throw DriveAPIError.trashed(message ?? "This item is in the trash.") }
             throw DriveAPIError.server(status, message ?? "Request failed")
         }
         return try JSONDecoder().decode(type, from: data)

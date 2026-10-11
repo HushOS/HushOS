@@ -424,7 +424,14 @@ extension Vault {
                     continue
                 }
                 if let parent = node.parentId { rememberParent(node.id, parent: parent) }
-                if let opened = try? await resolve(node.id) { updated.append(opened) } else { deleted.append(node.id) }
+                do {
+                    updated.append(try await resolve(node.id))
+                } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
+                    // Gone, under a trashed folder, or no longer openable here: it leaves the Files location.
+                    deleted.append(node.id)
+                }
+                // Anything else (no network, a busy server, keys mid-rotation, an ended session) is no verdict on
+                // the node: it fails the batch and Files asks again, rather than deleting the item there.
             case "tombstone":
                 if let id = change.nodeId {
                     deleted.append(id)

@@ -27,7 +27,9 @@ Home (search pill, type chips, tags row with a manager, recent files), Files (th
 
 ## Things learned the hard way
 
-- Never map an unknown error to `noSuchItem`: Files deletes the item locally. Only the server's "This item no longer exists." is that.
+- Never map an unknown error to `noSuchItem`: Files deletes the item locally. Only the server's "This item no longer exists." and its `trashed` code (`DriveAPIError.trashed`: the item or a folder above it is in the trash, which this location doesn't show) are that. Reporting `trashed` as a read error kept folders trashed on another device in Files indefinitely, retrying every few seconds, and a new folder of the same name showed up as "… 2".
+- In `enumerateChanges`, report deletions before updates: a folder replaced by a new one of the same name arrives in one batch. The change feed marks a node deleted only on a verdict (gone, trashed, unopenable); a network or server failure fails the batch instead.
+- The app signals Files after every live sync that changed something, so changes from other devices reach the Files location without a local write.
 - Items advertise write capabilities even for read-only paths; the simulator's volume refuses the read-only flags.
 - `documentStorageURL` asserts in a replicated extension; decrypt into the temp directory and let Files move the file.
 - The two extension targets build in Swift 5 mode: the File Provider API is callback based and Swift 6's sending-closure checks reject it.
