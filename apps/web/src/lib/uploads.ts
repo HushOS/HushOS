@@ -59,6 +59,8 @@ export async function enqueueDropped(
         createdAny = true;
     }
     if (createdAny) await invalidateFolders(queryClient, folder.id);
+    // Names match whatever their case, as the phones and the "keep both" names already do:
+    // "notes.txt" arriving where "Notes.txt" lives is the same file, so it asks.
     const existing = new Map<string, Map<string, DriveNode>>();
     for (const parent of new Set(files.map((entry) => parents.get(entry.path.join('/')) ?? folder)))
         existing.set(
@@ -66,7 +68,7 @@ export async function enqueueDropped(
             new Map(
                 (await childrenOf(parent))
                     .filter((child) => child.kind === 'file')
-                    .map((child) => [child.name, child]),
+                    .map((child) => [child.name.toLowerCase(), child]),
             ),
         );
     const free: EnqueueInput[] = [];
@@ -74,7 +76,7 @@ export async function enqueueDropped(
     for (const entry of files) {
         const parent = parents.get(entry.path.join('/')) ?? folder;
         const input = { file: entry.file, parent, handle: entry.handle };
-        const replaces = existing.get(parent.id)?.get(entry.file.name);
+        const replaces = existing.get(parent.id)?.get(entry.file.name.toLowerCase());
         if (replaces) collisions.push({ input, replaces });
         else free.push(input);
     }
