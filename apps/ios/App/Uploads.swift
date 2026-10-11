@@ -9,12 +9,15 @@ import UniformTypeIdentifiers
  * the name-clash question (DESIGN.md): asked per file, Replace, Keep
  * both or Skip, each saying what it does, with "Do the same for N others". Keep both
  * names the new copies in a sheet. Home's first-run buttons and every folder share it.
+ * A picked folder comes in whole, as on the web: its folders merge with any of the same
+ * name already there, at every depth, and each file whose name is taken in its folder
+ * gets the same question (keep both takes the name the question offers).
  */
 typealias StagedFile = (url: URL, name: String, type: UTType?)
 
 extension View {
-    func uploadFlow(into folderId: String?, named folderName: String = "Files", importer: Binding<Bool>, photos: Binding<Bool>, camera: Binding<Bool> = .constant(false)) -> some View {
-        modifier(UploadFlow(folderId: folderId, folderName: folderName, showingImporter: importer, showingPhotos: photos, showingCamera: camera))
+    func uploadFlow(into folderId: String?, named folderName: String = "Files", importer: Binding<Bool>, folder: Binding<Bool> = .constant(false), photos: Binding<Bool>, camera: Binding<Bool> = .constant(false)) -> some View {
+        modifier(UploadFlow(folderId: folderId, folderName: folderName, showingImporter: importer, showingFolder: folder, showingPhotos: photos, showingCamera: camera))
     }
 }
 
@@ -23,6 +26,7 @@ private struct UploadFlow: ViewModifier {
     let folderId: String?
     let folderName: String
     @Binding var showingImporter: Bool
+    @Binding var showingFolder: Bool
     @Binding var showingPhotos: Bool
     @Binding var showingCamera: Bool
     @State private var photoItems: [PhotosPickerItem] = []
@@ -32,14 +36,31 @@ private struct UploadFlow: ViewModifier {
     @State private var asking: String?
     @State private var naming = false
     @State private var noCamera = false
+    /* Whether the open document picker is choosing a folder (its answer comes after the flags are reset). */
+    @State private var importingFolder = false
+    /*
+     * A picked folder's questions, in an object: they are set after the folder is placed, and the
+     * sheet's content, built from an earlier body, read empty copies of them as plain state.
+     */
+    @State private var folderQuestions = FolderQuestions()
 
     func body(content: Self.Content) -> some View {
         content
             .photosPicker(isPresented: $showingPhotos, selection: $photoItems, matching: .any(of: [.images, .videos]))
-            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            // One picker for files and folders: a second .fileImporter on the same view never presents.
+            .fileImporter(
+                isPresented: Binding(get: { showingImporter || showingFolder }, set: { if !$0 { showingImporter = false; showingFolder = false } }),
+                allowedContentTypes: showingFolder ? [.folder] : [.item], allowsMultipleSelection: !showingFolder
+            ) { result in
                 guard case .success(let urls) = result else { return }
-                queue(urls.compactMap(Self.stage))
+                if importingFolder {
+                    if let url = urls.first { queueFolder(url) }
+                } else {
+                    queue(urls.compactMap(Self.stage))
+                }
             }
+            .onChange(of: showingFolder) { _, on in if on { importingFolder = true } }
+            .onChange(of: showingImporter) { _, on in if on { importingFolder = false } }
             .onChange(of: showingCamera) { _, on in
                 // The simulator and some iPads have no camera: say so rather than open nothing.
                 if on, !UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -61,6 +82,20 @@ private struct UploadFlow: ViewModifier {
                     free: DriveStore.freeName(asked.name, among: takenNames + pending.map(\.name)),
                     cancel: cancel
                 ) { choice, same in decide(asked.name, choice, same: same) }
+                .environment(store)
+                .interactiveDismissDisabled()
+            }
+            .sheet(item: Binding(get: { folderQuestions.asking }, set: { folderQuestions.asking = $0 })) { asked in
+                let folderClashes = folderQuestions.clashes
+                let folderAnswers = folderQuestions.answers
+                ClashSheet(
+                    name: asked.file.name, folderName: asked.folderName,
+                    others: folderClashes.filter { $0.id != asked.id && folderAnswers[$0.id] == nil }.map(\.file.name),
+                    free: DriveStore.freeName(asked.file.name, among: folderQuestions.claimed[asked.folderId] ?? []),
+                    cancel: cancelFolder
+                ) { choice, same in decide(asked, choice, same: same) }
+                // Each file starts from the defaults, not from the answer given for the one before.
+                .id(asked.id)
                 .environment(store)
                 .interactiveDismissDisabled()
             }
@@ -143,8 +178,154 @@ private struct UploadFlow: ViewModifier {
         naming = false
     }
 
+    /* A picked folder copied into our temp directory, each file with the folders above it. */
+    private struct PickedFolder: Sendable {
+        let files: [(file: StagedFile, path: [String])]
+        let folders: [[String]]
+        let unread: Int
+    }
+
+    /* A picked folder: copied out while a row says it is getting ready, then placed and uploaded. */
+    private func queueFolder(_ url: URL) {
+        guard let folderId else { return }
+        let ticket = store.begin(.upload, url.lastPathComponent)
+        store.markWaiting(ticket)
+        Task {
+            let picked = await Task.detached { Self.stageFolder(url) }.value
+            if let picked {
+                await place(picked, into: folderId)
+                if picked.unread > 0 {
+                    store.notify(picked.unread == 1 ? "1 file in “\(url.lastPathComponent)” couldn’t be read, so it wasn’t added." : "\(picked.unread) files in “\(url.lastPathComponent)” couldn’t be read, so they weren’t added.")
+                }
+            } else {
+                store.notify("Couldn’t open “\(url.lastPathComponent)”. Try choosing it again.")
+            }
+            store.dismiss(ticket)
+        }
+    }
+
+    /*
+     * The web's order: every folder the pick needs, parents first, reusing one of the same name
+     * that is already there; then the files with free names go at once, and each taken name is
+     * asked about in turn. The listings read here are the ones the upload checks names against.
+     */
+    private func place(_ picked: PickedFolder, into folderId: String) async {
+        await store.sync()
+        var listings: [String: [Opened]] = [:]
+        var made: Set<String> = []
+        func listing(_ id: String) async -> [Opened]? {
+            if made.contains(id) { return [] }
+            if let known = listings[id] { return known }
+            do {
+                let children = try await store.vault.children(of: id)
+                listings[id] = children
+                store.folders[id] = children
+                return children
+            } catch {
+                store.report(error)
+                return nil
+            }
+        }
+        let discard = { for entry in picked.files { try? FileManager.default.removeItem(at: entry.file.url) } }
+        var places: [[String]: (id: String, name: String)] = [[]: (folderId, folderName)]
+        for path in FolderPick.plan(files: picked.files.map(\.path), folders: picked.folders) {
+            guard let name = path.last, let parent = places[Array(path.dropLast())] else { continue }
+            guard let children = await listing(parent.id) else { return discard() }
+            if let same = children.first(where: { $0.isFolder && $0.name == name }) {
+                places[path] = (same.id, same.name)
+                continue
+            }
+            guard let created = await store.createFolder(named: name, in: parent.id) else { return discard() }
+            made.insert(created.id)
+            places[path] = (created.id, created.name)
+        }
+        var order: [String] = []
+        var free: [String: [StagedFile]] = [:]
+        var clashing: [FolderClash] = []
+        var taken: [String: [String]] = [:]
+        for entry in picked.files {
+            guard let place = places[entry.path], let children = await listing(place.id) else {
+                try? FileManager.default.removeItem(at: entry.file.url)
+                continue
+            }
+            if taken[place.id] == nil { taken[place.id] = children.map(\.name) }
+            if !order.contains(place.id) { order.append(place.id) }
+            if children.contains(where: { !$0.isFolder && $0.name.caseInsensitiveCompare(entry.file.name) == .orderedSame }) {
+                clashing.append(FolderClash(file: entry.file, folderId: place.id, folderName: place.name))
+            } else {
+                free[place.id, default: []].append(entry.file)
+                taken[place.id, default: []].append(entry.file.name)
+            }
+        }
+        let ready = order.compactMap { id in free[id].map { (id, $0) } }
+        Task { for (id, files) in ready { await store.upload(files, to: id) } }
+        guard !clashing.isEmpty else { return }
+        folderQuestions.clashes = clashing
+        folderQuestions.answers = [:]
+        folderQuestions.claimed = taken
+        folderQuestions.asking = clashing.first
+    }
+
+    /* One answer, or one for every file still unasked; keep both takes the next free name in that folder. */
+    private func decide(_ asked: FolderClash, _ choice: DriveStore.Conflict, same: Bool) {
+        let questions = folderQuestions
+        let answering = same ? questions.clashes.filter { $0.id == asked.id || questions.answers[$0.id] == nil } : [asked]
+        for clash in answering {
+            var name = clash.file.name
+            if choice == .keepBoth {
+                name = DriveStore.freeName(clash.file.name, among: questions.claimed[clash.folderId] ?? [])
+                questions.claimed[clash.folderId, default: []].append(name)
+            }
+            questions.answers[clash.id] = (choice, name)
+        }
+        questions.asking = nil
+        if let next = questions.clashes.first(where: { questions.answers[$0.id] == nil }) {
+            Task { try? await Task.sleep(for: .milliseconds(350)); questions.asking = next }
+            return
+        }
+        let answered = questions.clashes
+        let answers = questions.answers
+        questions.reset()
+        Task {
+            var seen: Set<String> = []
+            for id in answered.map(\.folderId) where seen.insert(id).inserted {
+                let group = answered.filter { $0.folderId == id }
+                var decisions: [String: DriveStore.Conflict] = [:]
+                var renames: [String: String] = [:]
+                for clash in group {
+                    decisions[clash.file.name] = answers[clash.id]?.choice ?? .skip
+                    renames[clash.file.name] = answers[clash.id]?.name
+                }
+                await store.upload(group.map(\.file), to: id, onConflict: .skip, decisions: decisions, renames: renames)
+            }
+        }
+    }
+
+    /* Cancel adds none of the files that were asked about; the ones with free names have gone already. */
+    private func cancelFolder() {
+        for clash in folderQuestions.clashes { try? FileManager.default.removeItem(at: clash.file.url) }
+        folderQuestions.reset()
+    }
+
+    /* Reads the picked folder through a file coordinator, so a provider brings its files down first. */
+    nonisolated private static func stageFolder(_ url: URL) -> PickedFolder? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        var picked: PickedFolder?
+        var problem: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &problem) { url in
+            let found = FolderPick.read(url)
+            var files: [(file: StagedFile, path: [String])] = []
+            for file in found.files {
+                if let staged = stage(file.url) { files.append((staged, file.path)) }
+            }
+            picked = PickedFolder(files: files, folders: found.folders, unread: found.files.count - files.count)
+        }
+        return picked
+    }
+
     /* A security-scoped file copied into our temp directory so the upload can read it at leisure. */
-    static func stage(_ url: URL) -> StagedFile? {
+    nonisolated static func stage(_ url: URL) -> StagedFile? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let name = url.lastPathComponent
@@ -171,6 +352,31 @@ private struct UploadFlow: ViewModifier {
         guard (try? data.write(to: url)) != nil else { return nil }
         return (url, name, type)
     }
+}
+
+/* What a picked folder still asks about: the files whose names are taken where they are going, and the answers so far. */
+@MainActor @Observable
+private final class FolderQuestions {
+    var clashes: [FolderClash] = []
+    var answers: [UUID: (choice: DriveStore.Conflict, name: String)] = [:]
+    /* Names in use per destination folder, the kept-both names given so far included. */
+    var claimed: [String: [String]] = [:]
+    var asking: FolderClash?
+
+    func reset() {
+        clashes = []
+        answers = [:]
+        claimed = [:]
+        asking = nil
+    }
+}
+
+/* One file of a picked folder whose name its destination folder already has. */
+private struct FolderClash: Identifiable {
+    let id = UUID()
+    let file: StagedFile
+    let folderId: String
+    let folderName: String
 }
 
 /* One clashing file: what should happen to the one being added, and whether the rest follow. */

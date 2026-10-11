@@ -631,8 +631,12 @@ final class DriveStore {
         return false
     }
 
-    func createFolder(named name: String, in folder: String) async {
-        _ = await perform(in: folder) { _ = try await vault.createFolder(in: folder, name: name) }
+    /* The new folder, or nil when it could not be made (the failure is reported). */
+    @discardableResult
+    func createFolder(named name: String, in folder: String) async -> Opened? {
+        var made: Opened?
+        _ = await perform(in: folder) { made = try await vault.createFolder(in: folder, name: name) }
+        return made
     }
 
     func rename(_ item: Opened, to name: String) async {

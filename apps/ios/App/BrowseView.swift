@@ -73,6 +73,7 @@ struct FolderView: View {
     var isRoot = false
     @State private var loaded = false
     @State private var showingImporter = false
+    @State private var showingFolder = false
     @State private var showingPhotos = false
     @State private var showingCamera = false
     @State private var action: NodeAction?
@@ -195,7 +196,7 @@ struct FolderView: View {
             MovePicker(items: selectedItems).environment(store)
                 .onDisappear { endSelecting() }
         }
-        .uploadFlow(into: folderId, named: title, importer: $showingImporter, photos: $showingPhotos, camera: $showingCamera)
+        .uploadFlow(into: folderId, named: title, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
         // A quick action for this folder: the + menu's action, once the push has settled (a sheet
         // asked for mid-push is dropped).
         .onChange(of: store.pendingAdd, initial: true) { _, pending in
@@ -415,7 +416,7 @@ struct FolderView: View {
 
     /* What can be added here (Home's + adds the same), then a paste while the clipboard holds items. */
     @ViewBuilder private var addItems: some View {
-        AddItems(importer: $showingImporter, photos: $showingPhotos, camera: $showingCamera) {
+        AddItems(importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera) {
             Rename.newFolder(in: folderId, named: title, store: store)
         }
         if let clip = store.clipboard, let first = clip.items.first, store.canPaste(into: folderId) {
@@ -493,15 +494,17 @@ private struct SkeletonRow: View {
     }
 }
 
-/* What + adds, most used first: files, photos, a photo taken now, a folder. A folder's menu and Home's share it. */
+/* What + adds, most used first: files, a folder of them, photos, a photo taken now, a new folder. A folder's menu and Home's share it. */
 struct AddItems: View {
     @Binding var importer: Bool
+    @Binding var folder: Bool
     @Binding var photos: Bool
     @Binding var camera: Bool
     let newFolder: () -> Void
 
     var body: some View {
         Button("Upload files", systemImage: "doc.badge.plus") { importer = true }
+        Button("Upload folder", systemImage: "arrow.up.folder") { folder = true }
         // A picker inside a menu never presents; a button and a modifier do.
         Button("Upload photos", systemImage: "photo.badge.plus") { photos = true }
         Button("Take photo", systemImage: "camera") { camera = true }
