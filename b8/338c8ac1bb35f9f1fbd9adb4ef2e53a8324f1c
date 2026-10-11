@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FolderPick.kt
+  s_b5938b5134af95::t_61e065137cf836 1-53
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_b5938b5134af95::t_86b1e4a196f8dd 1385-1451
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_b5938b5134af95::t_fc955f03aa8c8f 26,64,96-105,134,146-170,205,214,243,251,264-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b8338c8ac1bb35f9f1fbd9adb4ef2e53a8324f1c",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
