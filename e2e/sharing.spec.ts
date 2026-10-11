@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+    addContact,
     grip,
     mailSubjects,
     newContext,
@@ -16,8 +17,8 @@ import {
 /*
  * Sharing to an account, end to end as two people: the owner pins the other
  * person's fingerprint, shares a folder with a file in it, the other person
- * sees it under "Shared with me" (pinning the owner's key on first use), opens
- * the folder, previews the file, adds one of their own as an editor, and loses
+ * sees it under "Shared with me" waiting until they pin the owner's key after
+ * comparing words too (never on first use), opens the folder, previews the file, adds one of their own as an editor, and loses
  * everything the moment the owner stops sharing.
  */
 
@@ -26,6 +27,7 @@ test.describe.configure({ mode: 'serial' });
 let owner: Page;
 let guest: Page;
 let guestEmail: string;
+let ownerEmail: string;
 let samples: ReturnType<typeof sampleFiles>;
 let linkUrl: string;
 
@@ -40,7 +42,7 @@ test.beforeAll(async ({ browser }) => {
     guest = await (await newContext(browser)).newPage();
     guestEmail = (await registerAccount(guest)).email;
     owner = await (await newContext(browser)).newPage();
-    await registerAccount(owner);
+    ownerEmail = (await registerAccount(owner)).email;
 });
 test.afterAll(async () => {
     await owner.context().close();
@@ -93,16 +95,21 @@ test('the owner pins the guest and shares a folder as editor', async () => {
         .toContain('E2E Tester shared something with you · HushOS');
 });
 
-test('the guest sees the share, opens it with the owner’s key pinned on first use, and adds a file', async () => {
+test('the guest’s share stays shut until they check the owner’s words, then opens, and they add a file', async () => {
+    await guest.goto('/app/shared');
+    // Not pinned yet: nothing is trusted on first use, so the share waits, named only as the server knows it.
+    const waiting = guest.locator('[data-shared="Shared folder"]');
+    await expect(waiting).toBeVisible({ timeout: 60_000 });
+    await expect(waiting).toContainText('Opens once you’ve checked E2E’s words.');
+    await guest.goto('/app/people');
+    await expect(guest.locator('[data-contact]')).toHaveCount(0, { timeout: 60_000 });
+    await addContact(guest, ownerEmail);
+    await expect(guest.locator('[data-contact]')).toHaveCount(1);
+
     await guest.goto('/app/shared');
     const item = guest.locator('[data-shared="Project"]');
     await expect(item).toBeVisible({ timeout: 60_000 });
     await expect(item).toContainText('From E2E · can edit');
-    // First use pinned the owner: the contacts page now lists them.
-    await guest.goto('/app/people');
-    await expect(guest.locator('[data-contact]')).toHaveCount(1, { timeout: 60_000 });
-
-    await guest.goto('/app/shared');
     await guest.locator('[data-shared="Project"]').getByRole('link', { name: 'Project' }).click();
     await expect(guest).toHaveURL(/\/app\/drive\/f\//);
     await expect(row(guest, 'notes.md')).toBeVisible({ timeout: 60_000 });

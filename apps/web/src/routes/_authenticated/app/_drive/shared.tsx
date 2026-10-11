@@ -280,22 +280,41 @@ function WithMeRow({
                 data-shared={share.node.name}
                 className="flex h-16 items-center gap-4 border-b border-rule pr-5 pl-5 sm:pr-8 sm:pl-8"
             >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive-soft text-destructive">
+                <span
+                    className={cn(
+                        'flex size-10 shrink-0 items-center justify-center rounded-full',
+                        share.unverified
+                            ? 'bg-muted text-muted-foreground'
+                            : 'bg-destructive-soft text-destructive',
+                    )}
+                >
                     <TriangleAlertIcon className="size-[18px]" aria-hidden="true" />
                 </span>
                 <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[15px] font-medium">
                         Shared by {share.granter.name}
                     </span>
-                    <span role="alert" className="text-[13px] text-destructive">
-                        Couldn’t open this. {share.error}{' '}
-                        <Link
-                            to="/app/people"
-                            className="font-semibold underline underline-offset-2"
-                        >
-                            Go to People you share with
-                        </Link>
-                    </span>
+                    {share.unverified ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            Opens once you’ve checked {from}’s words.{' '}
+                            <Link
+                                to="/app/people"
+                                className="font-semibold underline underline-offset-2"
+                            >
+                                Add {from} in People you share with
+                            </Link>
+                        </span>
+                    ) : (
+                        <span role="alert" className="text-[13px] text-destructive">
+                            Couldn’t open this. {share.error}{' '}
+                            <Link
+                                to="/app/people"
+                                className="font-semibold underline underline-offset-2"
+                            >
+                                Go to People you share with
+                            </Link>
+                        </span>
+                    )}
                 </span>
             </li>
         );

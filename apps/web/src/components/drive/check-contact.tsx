@@ -6,7 +6,7 @@ import { FingerprintWords } from '@/components/fingerprint-words';
 import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatDay } from '@/lib/drive';
+import { driveKeys, formatDay } from '@/lib/drive';
 import { lookupContact, pinContact, settingsQueryOptions, type Lookup } from '@/lib/contacts';
 import { cue } from '@/lib/sounds';
 
@@ -71,6 +71,8 @@ export function CheckContact({
             const loaded = await queryClient.fetchQuery(settingsQueryOptions(userId));
             const pin = loaded.settings.contacts[found.contact.userId];
             if (!pin) throw new Error('They weren’t saved. Try again.');
+            // What they shared, waiting on this check, opens now.
+            void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
             cue('success');
             onAdded(pin);
         } catch (cause) {

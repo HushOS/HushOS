@@ -142,7 +142,12 @@ export type DriveClientOptions = {
     ) => Promise<{ encryptionPublicKey: string; kemPublicKey: string | null }>;
 };
 
-export type ShareMount = SharedWithMeView & { node: DriveNode; error: string | null };
+/* `unverified`: the share stays shut until its granter is pinned after a words check. */
+export type ShareMount = SharedWithMeView & {
+    node: DriveNode;
+    error: string | null;
+    unverified: boolean;
+};
 
 export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientOptions = {}) {
     let workspace: WorkspaceView | undefined;
@@ -937,7 +942,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             reason: string;
             via: { link: string } | { share: true };
             reporterEmail: string | null;
-            contentHash: string | null;
         },
     ) {
         const { operators } = await api.reportOperators();
@@ -1246,6 +1250,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             for (const received of shares) {
                 remember([received.node]);
                 let error: string | null = null;
+                let unverified = false;
                 try {
                     if (!options.trustGranter || !granteeUserId)
                         throw new Error('Shares cannot be opened on this client.');
@@ -1264,6 +1269,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 } catch (cause) {
                     error =
                         cause instanceof Error ? cause.message : 'This share could not be opened.';
+                    unverified = cause instanceof Error && cause.name === 'UnverifiedGranterError';
                 }
                 const node: DriveNode = error
                     ? {
@@ -1274,7 +1280,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           openError: error,
                       }
                     : (await decorate([received.node]))[0]!;
-                out.push({ ...received, node, error });
+                out.push({ ...received, node, error, unverified });
             }
             return out;
         })().catch((error: unknown) => {

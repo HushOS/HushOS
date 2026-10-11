@@ -14,14 +14,19 @@ import { authClient } from '@/lib/auth-client';
 
 export const EMPTY: Settings = { version: 1, contacts: {} };
 
-let opened: { userId: string; promise: Promise<string> } | undefined;
+let opened:
+    | {
+          userId: string;
+          promise: Promise<{ encryptionPublicKey: string; signingPublicKey: string }>;
+      }
+    | undefined;
 authClient.store.subscribe((state, previous) => {
     if (state.unlockedUserId !== previous.unlockedUserId) opened = undefined;
 });
 
 /*
- * Opens the identity in the worker once per unlock; returns the encryption
- * public key. An identity from before hybrid sharing has no KEM key yet: it is
+ * Opens the identity in the worker once per unlock; returns its encryption and
+ * signing public keys, both proven against the private keys. An identity from before hybrid sharing has no KEM key yet: it is
  * minted and signed in the worker, stored once on the server, and the envelope
  * reopened with it, so every share from now on can be sealed hybrid.
  */
@@ -48,7 +53,10 @@ export function openIdentity(userId: string) {
                         refresh: true,
                     });
                 }
-                return result.encryptionPublicKey;
+                return {
+                    encryptionPublicKey: result.encryptionPublicKey,
+                    signingPublicKey: result.signingPublicKey,
+                };
             })().catch((error: unknown) => {
                 opened = undefined;
                 throw error;
@@ -85,7 +93,13 @@ export const settingsQueryOptions = (userId: string) =>
 export const ownFingerprintQueryOptions = (userId: string) =>
     queryOptions({
         queryKey: contactKeys.own(userId),
-        queryFn: async () => fingerprint(publicKeyBytes(await openIdentity(userId))),
+        queryFn: async () => {
+            const own = await openIdentity(userId);
+            return fingerprint(
+                publicKeyBytes(own.encryptionPublicKey),
+                publicKeyBytes(own.signingPublicKey),
+            );
+        },
         staleTime: Infinity,
         retry: 1,
     });
@@ -168,13 +182,17 @@ export async function lookupContact(
         authClient.lookupContact(email),
         queryClient.fetchQuery(settingsQueryOptions(userId)),
     ]);
-    const print = await fingerprint(publicKeyBytes(contact.encryptionPublicKey));
+    const print = await fingerprint(
+        publicKeyBytes(contact.encryptionPublicKey),
+        publicKeyBytes(contact.signingPublicKey),
+    );
     const pinned = loaded.settings.contacts[contact.userId] ?? null;
     const kem = await servedKem(contact.userId, contact);
-    // A changed X25519 key, a changed KEM key, or a KEM key gone missing: all warnings.
+    // A changed X25519 or signing key, a changed KEM key, or a KEM key gone missing: all warnings.
     const changed =
         pinned !== null &&
         (pinned.encryptionPublicKey !== contact.encryptionPublicKey ||
+            pinned.signingPublicKey !== contact.signingPublicKey ||
             (Boolean(pinned.kemPublicKeyHash) && (!kem || kem.hash !== pinned.kemPublicKeyHash)));
     return { contact, fingerprint: print, pinned, changed, kem };
 }
@@ -233,11 +251,11 @@ export async function trustGrantee(
             kemPublicKey: served.kem.publicKey,
         };
     }
-    const signingPublicKey = pinned.signingPublicKey || served.signingPublicKey;
+    // Only the pinned signing key may vouch: the fingerprint compared covers it, the served one could be anyone's.
     const { valid } = await authClient.rpc('identityVerifyKem', {
         userId: granteeUserId,
         encryptionPublicKey: pinned.encryptionPublicKey,
-        signingPublicKey,
+        signingPublicKey: pinned.signingPublicKey,
         kem: served.kem,
     });
     if (!valid)
@@ -246,10 +264,7 @@ export async function trustGrantee(
         );
     await saveSettings(boundQueryClient, userId, (settings) => {
         const pin = settings.contacts[granteeUserId];
-        if (pin) {
-            pin.kemPublicKeyHash = hash;
-            if (!pin.signingPublicKey) pin.signingPublicKey = signingPublicKey;
-        }
+        if (pin) pin.kemPublicKeyHash = hash;
         return settings;
     });
     return { encryptionPublicKey: pinned.encryptionPublicKey, kemPublicKey: served.kem.publicKey };
@@ -270,17 +285,23 @@ export function removeContact(queryClient: QueryClient, userId: string, contactI
     });
 }
 
-/* The app's query client, so pins made while opening a share reach the contacts page too. */
+/* The app's query client, so pins updated behind the share dialog reach the contacts page too. */
 let boundQueryClient: QueryClient | undefined;
 export function bindContactsToQueries(client: QueryClient) {
     boundQueryClient = client;
 }
 
+/* A share whose granter is not pinned yet: shown as waiting for a words check, not as broken. */
+export class UnverifiedGranterError extends Error {
+    override name = 'UnverifiedGranterError';
+}
+
 /*
- * Which key to open a share with. The pinned key when there is one; the served
- * key on first use, pinned right then, so a later swap is caught; and a refusal
- * when the served key differs from the pin, because that is exactly the attack
- * the pin exists to catch.
+ * Which key to open a share with: the pinned key, and only when the server
+ * served that same key. A share from someone not pinned stays shut until the
+ * person is added in People you share with and their words are compared;
+ * taking the served key on first use would let a server fake a share "from"
+ * anyone and plant its own key as theirs.
  */
 export async function trustGranter(granter: {
     id: string;
@@ -292,25 +313,13 @@ export async function trustGranter(granter: {
     if (!userId) throw new Error('Unlock your account first.');
     const loaded = await loadSettings(userId);
     const pinned = loaded.settings.contacts[granter.id];
-    if (pinned) {
-        if (pinned.encryptionPublicKey === granter.encryptionPublicKey)
-            return pinned.encryptionPublicKey;
+    if (!pinned)
+        throw new UnverifiedGranterError(
+            `Add ${granter.name} in People you share with and check their words to open what they shared.`,
+        );
+    if (pinned.encryptionPublicKey !== granter.encryptionPublicKey)
         throw new Error(
             `${granter.name}’s key has changed since you pinned it. Check it’s them in People you share with before opening what they shared.`,
         );
-    }
-    const print = await fingerprint(publicKeyBytes(granter.encryptionPublicKey));
-    await saveSettings(boundQueryClient, userId, (settings) => {
-        settings.contacts[granter.id] = {
-            userId: granter.id,
-            email: granter.email,
-            name: granter.name,
-            encryptionPublicKey: granter.encryptionPublicKey,
-            signingPublicKey: '',
-            fingerprint: print,
-            pinnedAt: new Date().toISOString(),
-        };
-        return settings;
-    });
-    return granter.encryptionPublicKey;
+    return pinned.encryptionPublicKey;
 }
