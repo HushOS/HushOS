@@ -1,0 +1,57 @@
+crates/hushos-core/src/drive.rs
+  s_75dbe24a0bc379::t_11713d0c5732b9 5,15,40,52-64,197,207-218,416,424-432,638,650-663,845-867,1111-1114
+  s_75dbe24a0bc379::t_170458e438ba58 615-618,622-627,631-633,759-760,762,766-767,770
+  s_75dbe24a0bc379::t_f78fe1e9afb18f 773
+  s_75dbe24a0bc379::t_56d4bb0868814d 1106-1110
+  s_75dbe24a0bc379::t_32d39b0593514e 433,868
+crates/hushos-core/src/recovery.rs
+  s_75dbe24a0bc379::t_03ac3474ca8312 211,287
+  s_75dbe24a0bc379::t_461ae3efd31915 7,14-15,35,43-48,58,73,79,90,99-100,102,138,143,158,165,190,194-195,199,208,216,284,404
+  s_75dbe24a0bc379::t_94afdfd28e2c44 415,417
+  s_75dbe24a0bc379::t_1941d8cbcc98ca 91,396-403,405
+crates/hushos-core/src/contacts.rs
+  s_75dbe24a0bc379::t_577eae63eb97d8 26-29,32,46,48
+  s_75dbe24a0bc379::t_11713d0c5732b9 38-41,44,147-151
+  s_75dbe24a0bc379::t_e4aaa49d851341 143-146,152-154
+crates/hushos-core/src/links.rs
+  s_75dbe24a0bc379::t_8c7c42f88eeca4 10,17-18,65,75,82,93-94,97,122,126-127,135,146-156,166-171,176,190-191,200,213-225,245-246,249-252,278,280,282,327,334-337,440
+  s_75dbe24a0bc379::t_748a811294aa1d 338-339,424-439,441
+crates/hushos-core/src/account.rs
+  s_75dbe24a0bc379::t_0f9db1f745fcc8 5,14-15,47-48,50,59,86,96,98,107,134,142-147,178,204,351
+  s_75dbe24a0bc379::t_467078d7010fcc 345-350,352
+crates/hushos-core/src/identity.rs
+  s_75dbe24a0bc379::t_9ebd0c9d44ff90 7,16,18,51,64-68,70-77,79,106,113,116,121,143,147-148,157-161,180,188-189,193,197,225,235-237,241,244,258-261,271-273
+  s_75dbe24a0bc379::t_7e83ba3e0b3eb3 57-58,69,125-126,165-173,176-177,181,401-406,423
+  s_75dbe24a0bc379::t_5ee47ac4c3f5fc 174-175,380
+  s_75dbe24a0bc379::t_4c34da9e566edd 343,354,366,407,414-422,424
+crates/hushos-core/src/opaque.rs
+  s_75dbe24a0bc379::t_a1f0be27bf7209 7,19-20,81,91,102,110,119-153,170,184,206,224,336
+  s_75dbe24a0bc379::t_76d6fc7c49df47 317-335,337
+crates/hushos-core/src/bytes.rs
+  s_75dbe24a0bc379::t_85d73ae9fa64da 6,38-44
+  s_75dbe24a0bc379::t_a621ffd439db15 45-53
+crates/hushos-core/Cargo.toml
+  s_75dbe24a0bc379::t_83413f3ecfe4fe 36
+Cargo.lock
+  s_75dbe24a0bc379::t_8b4e10c96e1267 774
+crates/hushos-core/src/reports.rs
+  s_75dbe24a0bc379::t_409fe43a04295f 23,110-112,118,154,162-164,166-169,171,174,208,223
+crates/hushos-core/src/shares.rs
+  s_75dbe24a0bc379::t_e7ec7f4ec53e3a 15,82,86-87,91,94-99,102,104,133,136,138,156-157,170,172,278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b69b7eda487ea9d9aaa425b2476ccf05844ac0ef",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
