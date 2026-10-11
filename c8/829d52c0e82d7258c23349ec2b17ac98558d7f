@@ -1,0 +1,31 @@
+apps/ios/App/Uploads.swift
+  s_b5938b5134af95::t_abbdb9719b0d4e 12-14,19-20,29,39-40,50-54,56-60,62-63,91-93,95-96,101,181-262,267-270,273-275,278,280,284-285,289-305,308-326,328
+  s_b5938b5134af95::t_fbdb47c0cf2e14 97-98
+  s_b5938b5134af95::t_5afd000e7e056e 41-45,88-90,94,263-266,271-272,276-277,279,281-283,286-288,306-307
+  s_b5938b5134af95::t_99e5cff18a6774 357-380
+  s_b5938b5134af95::t_9cbd334b482710 99-100,381
+apps/ios/App/BrowseView.swift
+  s_b5938b5134af95::t_6306f55f33e5b4 76,199,419,497,500,507
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FolderPick.swift
+  s_b5938b5134af95::t_fba2fe31242f85 1-55
+apps/ios/App/DriveStore.swift
+  s_b5938b5134af95::t_c466c82011d39d 634-639
+apps/ios/App/RecentsView.swift
+  s_b5938b5134af95::t_6306f55f33e5b4 39,118,143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8829d52c0e82d7258c23349ec2b17ac98558d7f",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
