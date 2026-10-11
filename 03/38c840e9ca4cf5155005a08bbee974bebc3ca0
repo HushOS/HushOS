@@ -1,0 +1,19 @@
+apps/web/src/lib/release.ts
+  s_9d831f1494c926::t_5ad60d25776b41 8-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0338c840e9ca4cf5155005a08bbee974bebc3ca0",
+  "prompts": {},
+  "sessions": {
+    "s_9d831f1494c926": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cb2b90c0-83e3-41f3-9306-722b9f6c43f3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
