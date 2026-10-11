@@ -1,0 +1,32 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/UploadNames.kt
+  s_b5938b5134af95::t_3da2abb1ce5cbc 1-45
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_b5938b5134af95::t_7f966a9f02f7d9 232-233
+  s_b5938b5134af95::t_3da2abb1ce5cbc 1342,1356-1364,1367-1368,1371,1377,1381-1415,1423,1457-1458,1461-1472,1482-1483
+  s_b5938b5134af95::t_c1fb8cbddd7c12 325,1372-1373,1426-1430,1495,1509-1528
+  s_b5938b5134af95::t_0e3dbfbca740d6 234,1529
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadNamesTest.kt
+  s_b5938b5134af95::t_24687b0ee3822d 1-47
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_b5938b5134af95::t_1247e4a3992613 19,149,158,160-161,165,234-270
+  s_b5938b5134af95::t_77ef1c0d00da50 75-86,90-94,98,101,129-132,136,143,146-148,150-153,157,159,162-164,166,169,275
+  s_b5938b5134af95::t_9a00cb5374385b 271-272
+apps/android/app/src/main/kotlin/com/hushos/app/data/FolderPick.kt
+  s_b5938b5134af95::t_c1fb8cbddd7c12 16-18,22,26,46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "262d8c4e413a9fa45393290ac78361bba717af7e",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
