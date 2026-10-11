@@ -1,0 +1,36 @@
+apps/web/src/components/drive/link-row.tsx
+  s_b5938b5134af95::t_be3a5a9706a678 16,157
+apps/web/src/components/drive/pdf-viewer.tsx
+  s_b5938b5134af95::t_be3a5a9706a678 8,222,224
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_b5938b5134af95::t_5ce456a7d69670 569-573
+apps/web/src/routes/s/$token.tsx
+  s_b5938b5134af95::t_be3a5a9706a678 19,354
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_b5938b5134af95::t_5ce456a7d69670 386,390
+apps/web/src/components/password-input.tsx
+  s_b5938b5134af95::t_8d5f853f3d03d4 18-22
+  s_b5938b5134af95::t_f09ef37c959008 1-17,23-35
+apps/ios/App/AccountView.swift
+  s_b5938b5134af95::t_72812e48abdff2 631-650,652-655,658-665
+apps/ios/App/Received.swift
+  s_b5938b5134af95::t_bb5e7f00e3a421 489
+apps/ios/App/Sharing.swift
+  s_b5938b5134af95::t_f884ea66dc6f17 457-458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b43534ee5aeb08d20bb82109456b3f8a741c39ff",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
