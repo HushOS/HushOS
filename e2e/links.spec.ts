@@ -128,10 +128,10 @@ test('a password link asks first, refuses a wrong password, and opens with the r
     await expect(visitor.getByRole('heading', { name: 'This link has a password' })).toBeVisible({
         timeout: 60_000,
     });
-    await visitor.getByLabel('Password').fill('wrong');
+    await visitor.getByLabel('Password', { exact: true }).fill('wrong');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(visitor.getByRole('alert')).toContainText(/didn’t work/, { timeout: 60_000 });
-    await visitor.getByLabel('Password').fill('open sesame');
+    await visitor.getByLabel('Password', { exact: true }).fill('open sesame');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(visitor.getByRole('heading', { name: 'Public' })).toBeVisible({ timeout: 60_000 });
     await expect(row(visitor, 'payload.bin')).toBeVisible();
@@ -199,7 +199,7 @@ test('a link can be shown again, given a password, and shown as a QR code, witho
     await expect(visitor.getByRole('heading', { name: 'This link has a password' })).toBeVisible({
         timeout: 60_000,
     });
-    await visitor.getByLabel('Password').fill('later on');
+    await visitor.getByLabel('Password', { exact: true }).fill('later on');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(row(visitor, 'payload.bin')).toBeVisible({ timeout: 60_000 });
     // Moving into a folder keeps the fragment, so a reload inside still has the key,
@@ -207,7 +207,7 @@ test('a link can be shown again, given a password, and shown as a QR code, witho
     await row(visitor, 'inner').locator('button').first().click(grip);
     await expect(visitor).toHaveURL(/folder=.*#/);
     await visitor.reload();
-    await visitor.getByLabel('Password').fill('later on');
+    await visitor.getByLabel('Password', { exact: true }).fill('later on');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(visitor.getByText('Nothing in this folder.')).toBeVisible({ timeout: 60_000 });
     await expect(visitor.locator('[data-crumb-id]')).toHaveCount(2);

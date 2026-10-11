@@ -221,7 +221,7 @@ test('after the rotation the owner still opens everything, and the link made bef
     await expect(visitor.getByRole('heading', { name: 'This link has a password' })).toBeVisible({
         timeout: 60_000,
     });
-    await visitor.getByLabel('Password').fill('open sesame');
+    await visitor.getByLabel('Password', { exact: true }).fill('open sesame');
     await visitor.getByRole('button', { name: 'Open' }).click();
     await expect(row(visitor, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await row(visitor, 'notes.md').locator('button').first().click(grip);
