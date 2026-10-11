@@ -13,14 +13,17 @@ import android.provider.DocumentsContract
 object FolderPick {
     class File(val uri: Uri, val name: String, val path: List<String>)
 
+    /* What a pick holds; a hidden picked folder (its own name starts with ".") holds nothing. */
+    class Picked(val top: String, val files: List<File>, val folders: List<List<String>>)
+
     fun hidden(name: String) = name.startsWith(".")
 
     /* What the picked tree holds, walked depth first with one query per folder. */
-    fun read(resolver: ContentResolver, tree: Uri): Pair<List<File>, List<List<String>>>? {
+    fun read(resolver: ContentResolver, tree: Uri): Picked? {
         val rootId = DocumentsContract.getTreeDocumentId(tree)
         val top = resolver.query(DocumentsContract.buildDocumentUriUsingTree(tree, rootId), arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
             ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: return null
-        if (hidden(top)) return emptyList<File>() to emptyList()
+        if (hidden(top)) return Picked(top, emptyList(), emptyList())
         val files = ArrayList<File>()
         val folders = arrayListOf(listOf(top))
         val columns = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE)
@@ -40,7 +43,7 @@ object FolderPick {
             }
         }
         walk(rootId, listOf(top))
-        return files to folders
+        return Picked(top, files, folders)
     }
 
     /* Every folder the files and folders need, each prefix included, parents before children. */

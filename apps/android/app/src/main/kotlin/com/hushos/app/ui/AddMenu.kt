@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,9 +58,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.io.File
 
-/* One file of a batch that has the same name as something in the folder, and what to do with it. */
-private data class Clash(val uri: Uri, val name: String)
-
 /* What the + menu does in a folder: each starts its picker, the camera or the New folder dialog. */
 class Adder(val pickFiles: () -> Unit, val pickFolder: () -> Unit, val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val newFolder: () -> Unit)
 
@@ -73,35 +71,34 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
     val alpine = Alpine.colors
     val context = LocalContext.current
     var newFolder by rememberSaveable { mutableStateOf<String?>(null) }
-    // Same-name uploads: asked one file at a time; Keep both then names them all in one dialog.
-    var batch by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var clashes by remember { mutableStateOf<List<Clash>>(emptyList()) }
-    var decided by remember { mutableStateOf<Map<Uri, DriveViewModel.Conflict>>(emptyMap()) }
-    var renames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val taken = (folderId?.let { state.folders[it] } ?: emptyList()).map { it.name.lowercase() }.toSet()
-    fun send(uris: List<Uri>, choices: Map<Uri, DriveViewModel.Conflict>, names: Map<String, String>) {
-        val folder = folderId ?: return
-        val replace = uris.filter { choices[it] == DriveViewModel.Conflict.REPLACE }
-        val rest = uris.filter { choices[it] != DriveViewModel.Conflict.REPLACE && choices[it] != DriveViewModel.Conflict.SKIP }
-        if (rest.isNotEmpty()) model.upload(rest, folder, DriveViewModel.Conflict.KEEP_BOTH, names)
-        if (replace.isNotEmpty()) model.upload(replace, folder, DriveViewModel.Conflict.REPLACE)
+    // Same-name uploads, picked files and picked folders alike: asked one file at a time, each by
+    // its own uri (two picks can share a name); Keep both then names them all in one dialog.
+    // Cancel adds none of those; the files with free names have gone already.
+    var clashes by remember { mutableStateOf<List<DriveViewModel.Clash>>(emptyList()) }
+    var answers by remember { mutableStateOf<Map<Uri, Pair<DriveViewModel.Conflict, String>>>(emptyMap()) }
+    // Names in each destination before any answer, and the same with the kept-both names suggested so far.
+    var namesThere by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var claimed by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var renames by remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
+    fun ask(found: List<DriveViewModel.Clash>, names: Map<String, Set<String>>) {
+        if (found.isEmpty()) return
+        clashes = found; answers = emptyMap(); namesThere = names; claimed = names; renames = emptyMap()
     }
     fun startUpload(uris: List<Uri>) {
         if (uris.isEmpty() || folderId == null) return
-        val files = (state.folders[folderId] ?: emptyList()).filter { !it.isFolder }.map { it.name.lowercase() }.toSet()
-        val found = uris.mapNotNull { uri -> model.displayName(uri)?.takeIf { it.lowercase() in files }?.let { Clash(uri, it) } }
-        if (found.isEmpty()) model.upload(uris, folderId) else { batch = uris; clashes = found; decided = emptyMap() }
+        val children = state.folders[folderId].orEmpty()
+        val names = children.map { it.name.lowercase() }.toMutableSet()
+        val (free, found) = model.sortPicked(uris.map { it to (model.displayName(it) ?: "file") }, folderId, folderName, children, names)
+        if (free.isNotEmpty()) model.upload(free, folderId)
+        ask(found, mapOf(folderId to names))
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { startUpload(it) }
     // A picked folder comes in whole, as on the web: its folders merge with any of the same name
-    // already there, at every depth, and each file whose name is taken in its folder gets the same
-    // question (keep both takes the name the question offers). Cancel adds none of those.
-    var folderClashes by remember { mutableStateOf<List<DriveViewModel.FolderClash>>(emptyList()) }
-    var folderAnswers by remember { mutableStateOf<Map<Uri, Pair<DriveViewModel.Conflict, String>>>(emptyMap()) }
-    var claimed by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    // already there, at every depth, and each file whose name is taken in its folder gets the same question.
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
         if (tree == null || folderId == null) return@rememberLauncherForActivityResult
-        model.uploadFolder(tree, folderId, folderName) { found, taken -> folderClashes = found; folderAnswers = emptyMap(); claimed = taken }
+        model.uploadFolder(tree, folderId, folderName) { found, names -> ask(found, names) }
     }
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { startUpload(it) }
     var photoFile by rememberSaveable { mutableStateOf<String?>(null) }
@@ -129,59 +126,47 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
     }
     takePhotoAfterAsking = ::takePhoto
 
-    clashes.firstOrNull { it.uri !in decided }?.let { clash ->
-        val left = clashes.filter { it.uri !in decided && it != clash }
-        ClashDialog(clash, left, folderName, model.freeName(clash.name, taken),
-            cancel = { clashes = emptyList(); batch = emptyList(); decided = emptyMap() },
-        ) { choice, forAll ->
-            val next = decided + (clash.uri to choice) + if (forAll) left.associate { it.uri to choice } else emptyMap()
-            decided = next
-            if (clashes.all { it.uri in next }) {
-                val keep = clashes.filter { next[it.uri] == DriveViewModel.Conflict.KEEP_BOTH }
-                if (keep.isEmpty()) { send(batch, next, emptyMap()); clashes = emptyList(); batch = emptyList() }
-                else renames = keep.associate { it.name to model.freeName(it.name, taken) }
-            }
-        }
-    }
-    folderClashes.firstOrNull { it.uri !in folderAnswers }?.let { asked ->
-        val left = folderClashes.filter { it.uri !in folderAnswers && it != asked }
-        ClashDialog(Clash(asked.uri, asked.name), left.map { Clash(it.uri, it.name) }, asked.folderName, model.freeName(asked.name, claimed[asked.folderId].orEmpty()),
-            cancel = { folderClashes = emptyList(); folderAnswers = emptyMap() },
+    clashes.firstOrNull { it.uri !in answers }?.let { asked ->
+        val left = clashes.filter { it.uri !in answers && it != asked }
+        ClashDialog(asked, left, asked.folderName, model.freeName(asked.name, claimed[asked.folderId].orEmpty()),
+            cancel = { clashes = emptyList(); answers = emptyMap() },
         ) { choice, forAll ->
             // Keep both takes the next free name in that folder, so two copies never get the same one.
             var names = claimed
-            var answers = folderAnswers
+            var given = answers
             for (clash in listOf(asked) + if (forAll) left else emptyList()) {
                 var name = clash.name
                 if (choice == DriveViewModel.Conflict.KEEP_BOTH) {
                     name = model.freeName(clash.name, names[clash.folderId].orEmpty())
                     names = names + (clash.folderId to names[clash.folderId].orEmpty() + name.lowercase())
                 }
-                answers = answers + (clash.uri to (choice to name))
+                given = given + (clash.uri to (choice to name))
             }
             claimed = names
-            folderAnswers = answers
-            if (folderClashes.all { it.uri in answers }) {
-                model.uploadAnswered(folderClashes.map { it to answers.getValue(it.uri) })
-                folderClashes = emptyList()
-                folderAnswers = emptyMap()
+            answers = given
+            if (clashes.all { it.uri in given }) {
+                val keep = clashes.filter { given.getValue(it.uri).first == DriveViewModel.Conflict.KEEP_BOTH }
+                if (keep.isEmpty()) {
+                    model.uploadAnswered(clashes.map { it to given.getValue(it.uri) })
+                    clashes = emptyList()
+                    answers = emptyMap()
+                } else renames = keep.associate { it.uri to given.getValue(it.uri).second }
             }
         }
     }
-    if (renames.isNotEmpty() && folderId != null) {
-        val valid = renames.values.all { it.isNotBlank() && it.trim().lowercase() !in taken } && renames.values.map { it.trim().lowercase() }.toSet().size == renames.size
-        AlertDialog(
-            onDismissRequest = { renames = emptyMap(); decided = emptyMap() },
-            title = { Text("Keep both") },
-            text = {
-                Column {
-                    Text("Each file is added under its new name. The ones already here don’t change.")
-                    for ((original, name) in renames) OutlinedTextField(value = name, onValueChange = { renames = renames + (original to it) }, singleLine = true, label = { Text("Was $original") }, modifier = Modifier.padding(top = 12.dp))
-                }
+    if (renames.isNotEmpty()) {
+        KeepBothDialog(
+            clashes.filter { it.uri in renames }.map { KeepEntry(it.uri, it.name, it.folderId, it.folderName) }, renames, namesThere,
+            edit = { uri, name -> renames = renames + (uri to name) },
+            upload = {
+                model.uploadAnswered(clashes.map { clash ->
+                    val answer = answers.getValue(clash.uri)
+                    clash to (answer.first to (renames[clash.uri]?.trim() ?: answer.second))
+                })
+                renames = emptyMap(); clashes = emptyList(); answers = emptyMap()
             },
-            confirmButton = { TextButton(enabled = valid, onClick = { send(batch, decided, renames.mapValues { it.value.trim() }); renames = emptyMap(); clashes = emptyList(); batch = emptyList() }) { Text("Upload") } },
             // Back returns to the questions, from the first file.
-            dismissButton = { TextButton(onClick = { renames = emptyMap(); decided = emptyMap() }) { Text("Back") } },
+            back = { renames = emptyMap(); answers = emptyMap(); claimed = namesThere },
         )
     }
     newFolder?.let { draft ->
@@ -246,9 +231,48 @@ fun AddButton(open: Boolean, onOpen: (Boolean) -> Unit, add: Adder, paste: Pair<
     }
 }
 
+/* One file to keep both of: its name now and the folder it is going to. */
+private class KeepEntry(val uri: Uri, val original: String, val folderId: String, val folderName: String)
+
+/*
+ * Keep both: each file gets the name it will carry, suggested free and editable. A name can't be
+ * empty, already in its folder, or given to another file going to the same folder. Upload is
+ * offered once every name is usable; Back returns to the questions.
+ */
+@Composable
+private fun KeepBothDialog(entries: List<KeepEntry>, names: Map<Uri, String>, taken: Map<String, Set<String>>, edit: (Uri, String) -> Unit, upload: () -> Unit, back: () -> Unit) {
+    fun problem(entry: KeepEntry): String? {
+        val name = names[entry.uri].orEmpty().trim()
+        if (name.isEmpty()) return "Enter a name."
+        if (name.lowercase() in taken[entry.folderId].orEmpty()) return "“$name” is already here too. Try another name."
+        val twice = entries.any { it.uri != entry.uri && it.folderId == entry.folderId && names[it.uri].orEmpty().trim().equals(name, ignoreCase = true) }
+        return if (twice) "Another file going here has this name." else null
+    }
+    val folders = entries.map { it.folderId }.distinct().size
+    AlertDialog(
+        onDismissRequest = back,
+        title = { Text("Keep both") },
+        text = {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                Text("Each file is added under its new name. The ones already here don’t change.")
+                for (entry in entries) {
+                    val problem = problem(entry)
+                    OutlinedTextField(
+                        value = names[entry.uri].orEmpty(), onValueChange = { edit(entry.uri, it) }, singleLine = true, isError = problem != null,
+                        label = { Text(if (folders > 1) "Was ${entry.original}, in “${entry.folderName}”" else "Was ${entry.original}") },
+                        supportingText = problem?.let { { Text(it) } }, modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(enabled = entries.none { problem(it) != null }, onClick = upload) { Text("Upload") } },
+        dismissButton = { TextButton(onClick = back) { Text("Back") } },
+    )
+}
+
 /* One name clash: Replace, Keep both or Skip, each saying what it does, and whether to do the same for the rest. */
 @Composable
-private fun ClashDialog(clash: Clash, others: List<Clash>, folderName: String, freeName: String, cancel: () -> Unit, decide: (DriveViewModel.Conflict, Boolean) -> Unit) {
+private fun ClashDialog(clash: DriveViewModel.Clash, others: List<DriveViewModel.Clash>, folderName: String, freeName: String, cancel: () -> Unit, decide: (DriveViewModel.Conflict, Boolean) -> Unit) {
     var choice by remember(clash.uri) { mutableStateOf(DriveViewModel.Conflict.REPLACE) }
     var same by remember(clash.uri) { mutableStateOf(true) }
     val options = listOf(

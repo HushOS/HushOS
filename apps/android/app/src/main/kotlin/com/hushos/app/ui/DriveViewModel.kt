@@ -229,6 +229,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Files a failed upload into a shared folder kept for its retry, by row. */
     private val stagedCopies = HashMap<String, File>()
 
+    // After the map above exists: initialisers and init blocks run in the order they are written.
+    init { sweepStaged() }
+
     /*
      * The background queue as the panel shows it, and what a finished job changes:
      * a landed upload or keep redraws the lists. Once nothing is left to run, the
@@ -319,7 +322,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Takes in-app rows off the panel, and the copies failed ones kept. */
     private fun removeTransfers(which: (TransferItem) -> Boolean) {
         val gone = state.value.transfers.filter(which)
-        gone.forEach { stagedCopies.remove(it.id)?.delete() }
+        gone.forEach { row -> stagedCopies.remove(row.id)?.let(::dropStaged) }
         _state.update { s -> s.copy(transfers = s.transfers.filterNot(which)) }
     }
 
@@ -1336,14 +1339,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */
-    fun freeName(name: String, taken: Set<String>): String {
-        if (name.lowercase() !in taken) return name
-        val dot = name.lastIndexOf('.')
-        val stem = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        for (n in 2..999) { val candidate = "$stem ($n)$ext"; if (candidate.lowercase() !in taken) return candidate }
-        return "$stem ${System.nanoTime() % 100000}$ext"
-    }
+    fun freeName(name: String, taken: Set<String>): String = com.hushos.app.data.UploadNames.freeName(name, taken)
 
     /* Files picked with the system picker, copied into the cache and uploaded in turn with their thumbnails. */
     /* Pasting into the folder the items already sit in is a no-op the drives refuse; so do we. */
@@ -1357,33 +1353,66 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         return if (items.any { it.node.parentId != folder }) null else if (items.size == 1) "It’s already in this folder" else "They’re already in this folder"
     }
 
-    fun upload(uris: List<Uri>, folder: String, onConflict: Conflict = Conflict.KEEP_BOTH, renames: Map<String, String> = emptyMap()) = viewModelScope.launch {
+    /* One picked file on its way: the name it goes under, and the file it replaces (a new version of it), if any. */
+    data class Outgoing(val uri: Uri, val name: String, val replacing: Opened? = null)
+
+    /*
+     * Picked files, copied into the cache and uploaded in turn with their thumbnails. Every one
+     * comes with its own name and answer already settled (two picked files can share a name),
+     * so nothing is looked up by name here.
+     */
+    fun upload(items: List<Outgoing>, folder: String) = viewModelScope.launch {
         // The folder last added to: Save to HushOS and the shortcuts start there next time.
         if (ownDrive(folder)) com.hushos.app.data.Places.used(context, folder, if (folder == state.value.rootId) "Files" else vault?.item(folder)?.name ?: "Files")
-        val existing = (state.value.folders[folder] ?: emptyList()).filter { !it.isFolder }
-        val taken = existing.map { it.name.lowercase() }.toSet()
-        for ((index, uri) in uris.withIndex()) {
-            val staged = withContext(Dispatchers.IO) { stage(uri) } ?: continue
-            val clash = existing.firstOrNull { it.name.equals(staged.second, ignoreCase = true) }
-            var name = staged.second
-            var replacing: Opened? = null
-            if (clash != null) when (onConflict) {
-                Conflict.SKIP -> { staged.first.delete(); continue }
-                Conflict.REPLACE -> replacing = clash
-                Conflict.KEEP_BOTH -> name = renames[name] ?: freeName(name, taken)
-            }
+        for (item in items) {
+            val staged = withContext(Dispatchers.IO) { stage(item.uri) } ?: continue
             if (ownDrive(folder)) {
                 // Queued: it waits for a network and finishes even if the app is closed; the panel shows it.
-                com.hushos.app.data.TransferQueue.upload(context, staged.first, name, staged.third, folder, replacing?.id)
+                com.hushos.app.data.TransferQueue.upload(context, staged.first, item.name, staged.third, folder, item.replacing?.id)
+                // The queue moved the copy into its own folder; the one it was staged in is empty now.
+                dropStaged(staged.first)
                 continue
             }
             // A shared folder lives in someone else's drive: uploaded here and now, as before.
-            if (!uploadNow(staged.first, name, staged.third, folder, replacing)) break
+            if (!uploadNow(staged.first, item.name, staged.third, folder, item.replacing)) break
         }
     }
 
-    /* One file of a picked folder whose name its destination folder already has. */
-    data class FolderClash(val uri: Uri, val name: String, val folderId: String, val folderName: String)
+    /* One picked file whose name a file in its destination already has, and that file. */
+    data class Clash(val uri: Uri, val name: String, val folderId: String, val folderName: String, val replaces: Opened?)
+
+    /*
+     * Picked files for one folder, each on its own: the ones whose name a file there has are
+     * asked about (each its own question, even two picks of one name), and the rest go under
+     * their own name, or the next free one when an earlier pick took it. `taken` (lower case)
+     * gains the free names.
+     */
+    fun sortPicked(picked: List<Pair<Uri, String>>, folderId: String, folderName: String, children: List<Opened>, taken: MutableSet<String>): Pair<List<Outgoing>, List<Clash>> {
+        val existing = children.filter { !it.isFolder }
+        val placements = com.hushos.app.data.UploadNames.place(picked.map { it.second }, existing.map { it.name }, taken)
+        val free = ArrayList<Outgoing>()
+        val clashes = ArrayList<Clash>()
+        for ((pick, placement) in picked.zip(placements)) when (placement) {
+            is com.hushos.app.data.UploadNames.Placement.Free -> free.add(Outgoing(pick.first, placement.name))
+            com.hushos.app.data.UploadNames.Placement.Clash ->
+                clashes.add(Clash(pick.first, pick.second, folderId, folderName, existing.firstOrNull { it.name.equals(pick.second, ignoreCase = true) }))
+        }
+        return free to clashes
+    }
+
+    /* Each answered file by its own answer, never by its name: two picks of one name can be answered differently. */
+    fun uploadAnswered(answers: List<Pair<Clash, Pair<Conflict, String>>>) {
+        for ((folder, group) in answers.groupBy { it.first.folderId }) {
+            val items = group.mapNotNull { (clash, answer) ->
+                when (answer.first) {
+                    Conflict.SKIP -> null
+                    Conflict.REPLACE -> Outgoing(clash.uri, clash.name, clash.replaces)
+                    Conflict.KEEP_BOTH -> Outgoing(clash.uri, answer.second)
+                }
+            }
+            if (items.isNotEmpty()) upload(items, folder)
+        }
+    }
 
     /*
      * A picked folder, as the web takes a dropped one: every folder it needs, parents first,
@@ -1391,11 +1420,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * go at once and `ask` gets the ones whose names are taken, with the names in use in each
      * destination. The listings read here are the ones the upload checks names against.
      */
-    fun uploadFolder(tree: Uri, into: String, intoName: String, ask: (List<FolderClash>, Map<String, Set<String>>) -> Unit) = viewModelScope.launch {
+    fun uploadFolder(tree: Uri, into: String, intoName: String, ask: (List<Clash>, Map<String, Set<String>>) -> Unit) = viewModelScope.launch {
         val picked = withContext(Dispatchers.IO) { runCatching { com.hushos.app.data.FolderPick.read(context.contentResolver, tree) }.getOrNull() }
         if (picked == null) { notify("Couldn’t open that folder. Try choosing it again."); return@launch }
-        val (files, folders) = picked
-        val ticket = begin("upload", folders.firstOrNull()?.firstOrNull() ?: "Folder")
+        // Hidden files and folders stay behind, as they do inside a pick: say so rather than add nothing silently.
+        if (com.hushos.app.data.FolderPick.hidden(picked.top)) { notify("“${picked.top}” is a hidden folder, and hidden folders aren’t uploaded."); return@launch }
+        val files = picked.files
+        val folders = picked.folders
+        val ticket = begin("upload", picked.top)
         _state.update { s -> s.copy(transfers = s.transfers.map { if (it.id == ticket) it.copy(waiting = true) else it }) }
         try {
             sync()
@@ -1422,36 +1454,33 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 made.add(folder.id)
                 places[path] = folder.id to folder.name
             }
-            val free = LinkedHashMap<String, MutableList<Uri>>()
-            val clashes = ArrayList<FolderClash>()
-            val taken = HashMap<String, MutableSet<String>>()
+            // Grouped by destination in pick order; each group is sorted as picked files are.
+            val groups = LinkedHashMap<String, MutableList<com.hushos.app.data.FolderPick.File>>()
             for (file in files) {
                 val place = places[file.path] ?: continue
-                val children = listing(place.first) ?: continue
-                val names = taken.getOrPut(place.first) { children.map { it.name.lowercase() }.toMutableSet() }
-                if (children.any { !it.isFolder && it.name.equals(file.name, ignoreCase = true) }) clashes.add(FolderClash(file.uri, file.name, place.first, place.second))
-                else { free.getOrPut(place.first) { ArrayList() }.add(file.uri); names.add(file.name.lowercase()) }
+                groups.getOrPut(place.first) { ArrayList() }.add(file)
             }
-            for ((folder, uris) in free) upload(uris, folder)
+            val clashes = ArrayList<Clash>()
+            val taken = HashMap<String, MutableSet<String>>()
+            for ((folder, picked) in groups) {
+                val children = listing(folder) ?: continue
+                val name = places.values.first { it.first == folder }.second
+                val names = children.map { it.name.lowercase() }.toMutableSet()
+                val (free, asked) = sortPicked(picked.map { it.uri to it.name }, folder, name, children, names)
+                taken[folder] = names
+                if (free.isNotEmpty()) upload(free, folder)
+                clashes += asked
+            }
             if (clashes.isNotEmpty()) ask(clashes, taken)
         } finally {
             drop(ticket)
         }
     }
 
-    /* The answers about a picked folder's taken names: each destination gets its replacements and its renamed copies. */
-    fun uploadAnswered(answers: List<Pair<FolderClash, Pair<Conflict, String>>>) {
-        for ((folder, group) in answers.groupBy { it.first.folderId }) {
-            val replace = group.filter { it.second.first == Conflict.REPLACE }.map { it.first.uri }
-            val keep = group.filter { it.second.first == Conflict.KEEP_BOTH }
-            if (keep.isNotEmpty()) upload(keep.map { it.first.uri }, folder, Conflict.KEEP_BOTH, keep.associate { it.first.name to it.second.second })
-            if (replace.isNotEmpty()) upload(replace, folder, Conflict.REPLACE)
-        }
-    }
-
     /* A photo the camera app wrote into the cache: uploaded like a picked file, then its cache copy goes. */
     fun uploadTaken(file: File, folder: String) = viewModelScope.launch {
-        upload(listOf(FileProvider.getUriForFile(context, "${context.packageName}.shared", file)), folder).join()
+        val taken = state.value.folders[folder].orEmpty().map { it.name.lowercase() }.toSet()
+        upload(listOf(Outgoing(FileProvider.getUriForFile(context, "${context.packageName}.shared", file), freeName(file.name, taken))), folder).join()
         file.delete()
     }
 
@@ -1463,7 +1492,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime)) { fraction -> progress(ticket, fraction) }
         }
         if (ok) {
-            file.delete()
+            dropStaged(file)
             finish(ticket)
         } else {
             stagedCopies[ticket] = file
@@ -1475,6 +1504,27 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             })
         }
         return ok
+    }
+
+    private val stagedRoot get() = File(context.cacheDir, "staged")
+
+    /* A copy that is done with goes with the folder it was staged in, so no empty folder is left in the cache. */
+    private fun dropStaged(file: File) {
+        val dir = file.parentFile
+        if (dir != null && dir.parentFile == stagedRoot) dir.deleteRecursively() else file.delete()
+    }
+
+    /*
+     * Staged copies an earlier run left behind (the app stopped mid-upload, or before this
+     * cleaned up). A failed upload's copy kept for Retry stays, and so does anything staged in
+     * the last few minutes, since a copy lands before the upload that reads it starts.
+     */
+    private fun sweepStaged() {
+        val kept = stagedCopies.values.mapNotNull { it.parentFile }.toSet()
+        val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
+        viewModelScope.launch(Dispatchers.IO) {
+            stagedRoot.listFiles()?.forEach { dir -> if (dir !in kept && dir.lastModified() < cutoff) dir.deleteRecursively() }
+        }
     }
 
     private fun stage(uri: Uri): Triple<File, String, String?>? {
