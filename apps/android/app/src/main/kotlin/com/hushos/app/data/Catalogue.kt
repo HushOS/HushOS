@@ -164,11 +164,20 @@ fun Vault.catalogueChildren(folderId: String): List<Opened>? {
         .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 }
 
-/* Everything opened in this workspace, for search. */
+/*
+ * Everything live in this workspace, for Recent and search: not trashed, and no trashed folder
+ * above it. Trashing a folder marks only the folder, so what is inside it is ruled out by its
+ * ancestors (the web catalogue's rule). Answers are remembered for the one call.
+ */
 fun Vault.catalogueAll(): List<Opened> {
     if (catalogueState != CatalogueState.READY) return emptyList()
     val ws = workspaceId
-    return opened.values.filter { it.node.workspaceId == ws && it.node.trashedAt == null }
+    val live = HashMap<String, Boolean>()
+    fun isLive(item: Opened): Boolean = live[item.id] ?: run {
+        val parent = item.node.parentId?.let { opened[it] }
+        (item.node.trashedAt == null && (parent == null || isLive(parent))).also { live[item.id] = it }
+    }
+    return opened.values.filter { it.node.workspaceId == ws && isLive(it) }
 }
 
 fun Vault.catalogueRecents(limit: Int): List<Opened>? {
