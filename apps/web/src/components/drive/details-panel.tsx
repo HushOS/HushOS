@@ -232,8 +232,8 @@ function OwnCopy({ node }: { node: DriveNode }) {
         <>
             <p className="text-[13px] leading-snug text-muted-foreground">
                 {node.kind === 'folder'
-                    ? 'For keeping a copy outside HushOS: everything in this folder exactly as it is stored, still encrypted, and a key file that opens the folder’s names. Keep the two apart.'
-                    : 'For keeping a copy outside HushOS: the file exactly as it is stored, still encrypted, and a key file that opens it. Keep the two apart. Anyone with both can open the file.'}
+                    ? 'For keeping a copy outside HushOS: everything in this folder exactly as it is stored, still encrypted, and a key file that opens all of it, names and files. Keep the two apart. Both are saved under the folder’s name.'
+                    : 'For keeping a copy outside HushOS: the file exactly as it is stored, still encrypted, and a key file that opens it. Keep the two apart. Anyone with both can open the file. Both are saved under the file’s name.'}
             </p>
             <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" disabled={pending} onClick={() => void save()}>

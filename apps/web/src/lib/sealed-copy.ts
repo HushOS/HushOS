@@ -7,10 +7,12 @@ import { driveApi } from '@/lib/drive-api';
 /*
  * A sealed copy: an item exactly as the service holds it, for keeping offline.
  * A zip with a manifest of every record under the item, envelopes and all,
- * and the stored bytes of every file, still encrypted, named by object. It
- * carries no key and no name in the clear: opened with the key file from the
- * same dialog it reads without HushOS; without one it is as opaque to a finder
- * as it is to us. Objects are fetched through the same short-lived URLs a
+ * and the stored bytes of every file, still encrypted, named by object. Inside
+ * it there is no key and no name in the clear: opened with the key file from
+ * the same dialog it reads without HushOS; without one its contents are as
+ * opaque to a finder as they are to us. The zip itself is saved under the
+ * item's name, so the person can tell their copies apart, and the dialog says
+ * so. Objects are fetched through the same short-lived URLs a
  * download uses, minted a hundred at a time as the zip reaches them.
  */
 
