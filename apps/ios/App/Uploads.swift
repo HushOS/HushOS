@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
  * names the new copies in a sheet. Home's first-run buttons and every folder share it.
  * A picked folder comes in whole, as on the web: its folders merge with any of the same
  * name already there, at every depth, and each file whose name is taken in its folder
- * gets the same question (keep both takes the name the question offers).
+ * gets the same question. Files with free names go at once, picked files and folders alike.
  */
 typealias StagedFile = (url: URL, name: String, type: UTType?)
 
@@ -30,19 +30,15 @@ private struct UploadFlow: ViewModifier {
     @Binding var showingPhotos: Bool
     @Binding var showingCamera: Bool
     @State private var photoItems: [PhotosPickerItem] = []
-    @State private var pending: [StagedFile] = []
-    @State private var clashes: [String] = []
-    @State private var decisions: [String: DriveStore.Conflict] = [:]
-    @State private var asking: String?
-    @State private var naming = false
     @State private var noCamera = false
     /* Whether the open document picker is choosing a folder (its answer comes after the flags are reset). */
     @State private var importingFolder = false
     /*
-     * A picked folder's questions, in an object: they are set after the folder is placed, and the
-     * sheet's content, built from an earlier body, read empty copies of them as plain state.
+     * The same-name questions, in an object: they are often set after an await (a folder placed,
+     * photos copied out), and a sheet's content built from an earlier body read empty copies of
+     * them when they were plain state.
      */
-    @State private var folderQuestions = FolderQuestions()
+    @State private var questions = UploadQuestions()
 
     func body(content: Self.Content) -> some View {
         content
@@ -76,36 +72,22 @@ private struct UploadFlow: ViewModifier {
             } message: {
                 Text("Choose Upload photos to add pictures you already have.")
             }
-            .sheet(item: Binding(get: { asking.map(Asked.init) }, set: { if $0 == nil { asking = nil } })) { asked in
-                ClashSheet(
-                    name: asked.name, folderName: folderName, others: clashes.filter { $0 != asked.name && decisions[$0] == nil },
-                    free: DriveStore.freeName(asked.name, among: takenNames + pending.map(\.name)),
-                    cancel: cancel
-                ) { choice, same in decide(asked.name, choice, same: same) }
-                .environment(store)
-                .interactiveDismissDisabled()
-            }
-            .sheet(item: Binding(get: { folderQuestions.asking }, set: { folderQuestions.asking = $0 })) { asked in
-                let folderClashes = folderQuestions.clashes
-                let folderAnswers = folderQuestions.answers
+            .sheet(item: Binding(get: { questions.asking }, set: { questions.asking = $0 })) { asked in
                 ClashSheet(
                     name: asked.file.name, folderName: asked.folderName,
-                    others: folderClashes.filter { $0.id != asked.id && folderAnswers[$0.id] == nil }.map(\.file.name),
-                    free: DriveStore.freeName(asked.file.name, among: folderQuestions.claimed[asked.folderId] ?? []),
-                    cancel: cancelFolder
+                    others: questions.clashes.filter { $0.id != asked.id && questions.answers[$0.id] == nil }.map(\.file.name),
+                    free: DriveStore.freeName(asked.file.name, among: questions.claimed[asked.folderId] ?? []),
+                    cancel: cancelQuestions
                 ) { choice, same in decide(asked, choice, same: same) }
                 // Each file starts from the defaults, not from the answer given for the one before.
                 .id(asked.id)
                 .environment(store)
                 .interactiveDismissDisabled()
             }
-            .sheet(isPresented: $naming) {
-                if let folderId {
-                    let keep = clashes.filter { decisions[$0] == .keepBoth }
-                    KeepBothSheet(files: pending.filter { keep.contains($0.name) }, taken: takenNames) { renames in
-                        upload(into: folderId, renames: renames)
-                    } cancel: { cancel() }
-                }
+            .sheet(isPresented: Binding(get: { questions.naming }, set: { questions.naming = $0 })) {
+                KeepBothSheet(entries: questions.keeping, taken: questions.taken) { names in
+                    send(renamed: names)
+                } cancel: { cancelQuestions() }
             }
             .onChange(of: photoItems) { _, items in
                 guard !items.isEmpty else { return }
@@ -133,49 +115,35 @@ private struct UploadFlow: ViewModifier {
             }
     }
 
-    private struct Asked: Identifiable { let name: String; var id: String { name } }
-
-    private var takenNames: [String] { (folderId.flatMap { store.folders[$0] } ?? []).map(\.name) }
-
-    /* Ask about each name already here, as the web does; upload straight away when nothing clashes. */
+    /* Picked files for this folder: the free names go at once, each taken one is asked about. */
     private func queue(_ files: [StagedFile]) {
         guard !files.isEmpty, let folderId else { return }
-        let names = store.conflicts(files, in: folderId).map(\.name)
-        pending = files
-        decisions = [:]
-        clashes = files.map(\.name).filter { name in names.contains { $0.caseInsensitiveCompare(name) == .orderedSame } }
-        if clashes.isEmpty { upload(into: folderId, renames: [:]) } else { asking = clashes.first }
+        var taken = (store.folders[folderId] ?? []).map(\.name)
+        let (free, clashing) = Self.sort(files, into: folderId, named: folderName, holding: store.folders[folderId] ?? [], taken: &taken)
+        if !free.isEmpty { Task { await store.upload(free, to: folderId) } }
+        questions.start(clashing, taken: [folderId: taken])
     }
 
-    private func decide(_ name: String, _ choice: DriveStore.Conflict, same: Bool) {
-        decisions[name] = choice
-        if same { for other in clashes where decisions[other] == nil { decisions[other] = choice } }
-        asking = nil
-        if let next = clashes.first(where: { decisions[$0] == nil }) {
-            // The next file's question, once this sheet has gone.
-            Task { try? await Task.sleep(for: .milliseconds(350)); asking = next }
-        } else if decisions.values.contains(.keepBoth) {
-            Task { try? await Task.sleep(for: .milliseconds(350)); naming = true }
-        } else if let folderId {
-            upload(into: folderId, renames: [:])
+    /*
+     * Picked files for one folder, each on its own: the ones whose name a file there has are
+     * asked about (each its own question, even two picks of one name), and the rest go under
+     * their own name, or the next free one when an earlier pick took it.
+     */
+    private static func sort(_ files: [StagedFile], into folderId: String, named folderName: String, holding children: [Opened], taken: inout [String]) -> (free: [DriveStore.Outgoing], clashing: [UploadClash]) {
+        let existing = children.filter { !$0.isFolder }
+        let placements = UploadNames.place(files.map(\.name), existingFiles: existing.map(\.name), taken: &taken)
+        var free: [DriveStore.Outgoing] = []
+        var clashing: [UploadClash] = []
+        for (file, placement) in zip(files, placements) {
+            switch placement {
+            case .free(let name):
+                free.append(DriveStore.Outgoing(file: file, name: name))
+            case .clash:
+                let replaces = existing.first { $0.name.caseInsensitiveCompare(file.name) == .orderedSame }
+                clashing.append(UploadClash(file: file, folderId: folderId, folderName: folderName, replaces: replaces))
+            }
         }
-    }
-
-    private func upload(into folderId: String, renames: [String: String]) {
-        let files = pending
-        let chosen = decisions
-        pending = []
-        clashes = []
-        Task { await store.upload(files, to: folderId, onConflict: .keepBoth, decisions: chosen, renames: renames) }
-    }
-
-    private func cancel() {
-        for file in pending { try? FileManager.default.removeItem(at: file.url) }
-        pending = []
-        clashes = []
-        decisions = [:]
-        asking = nil
-        naming = false
+        return (free, clashing)
     }
 
     /* A picked folder copied into our temp directory, each file with the folders above it. */
@@ -188,6 +156,11 @@ private struct UploadFlow: ViewModifier {
     /* A picked folder: copied out while a row says it is getting ready, then placed and uploaded. */
     private func queueFolder(_ url: URL) {
         guard let folderId else { return }
+        // Hidden files and folders stay behind, as they do inside a pick: say so rather than add nothing silently.
+        if FolderPick.hidden(url.lastPathComponent) {
+            store.notify("“\(url.lastPathComponent)” is a hidden folder, and hidden folders aren’t uploaded.")
+            return
+        }
         let ticket = store.begin(.upload, url.lastPathComponent)
         store.markWaiting(ticket)
         Task {
@@ -239,36 +212,41 @@ private struct UploadFlow: ViewModifier {
             made.insert(created.id)
             places[path] = (created.id, created.name)
         }
+        // Grouped by destination in pick order; each group is sorted as picked files are.
         var order: [String] = []
-        var free: [String: [StagedFile]] = [:]
-        var clashing: [FolderClash] = []
-        var taken: [String: [String]] = [:]
+        var groups: [String: (name: String, children: [Opened], files: [StagedFile])] = [:]
         for entry in picked.files {
             guard let place = places[entry.path], let children = await listing(place.id) else {
                 try? FileManager.default.removeItem(at: entry.file.url)
                 continue
             }
-            if taken[place.id] == nil { taken[place.id] = children.map(\.name) }
-            if !order.contains(place.id) { order.append(place.id) }
-            if children.contains(where: { !$0.isFolder && $0.name.caseInsensitiveCompare(entry.file.name) == .orderedSame }) {
-                clashing.append(FolderClash(file: entry.file, folderId: place.id, folderName: place.name))
-            } else {
-                free[place.id, default: []].append(entry.file)
-                taken[place.id, default: []].append(entry.file.name)
+            if groups[place.id] == nil {
+                order.append(place.id)
+                groups[place.id] = (place.name, children, [])
             }
+            groups[place.id]?.files.append(entry.file)
         }
-        let ready = order.compactMap { id in free[id].map { (id, $0) } }
-        Task { for (id, files) in ready { await store.upload(files, to: id) } }
-        guard !clashing.isEmpty else { return }
-        folderQuestions.clashes = clashing
-        folderQuestions.answers = [:]
-        folderQuestions.claimed = taken
-        folderQuestions.asking = clashing.first
+        var ready: [(String, [DriveStore.Outgoing])] = []
+        var clashing: [UploadClash] = []
+        var taken: [String: [String]] = [:]
+        for id in order {
+            guard let group = groups[id] else { continue }
+            var names = group.children.map(\.name)
+            let sorted = Self.sort(group.files, into: id, named: group.name, holding: group.children, taken: &names)
+            taken[id] = names
+            if !sorted.free.isEmpty { ready.append((id, sorted.free)) }
+            clashing += sorted.clashing
+        }
+        Task { for (id, items) in ready { await store.upload(items, to: id) } }
+        questions.start(clashing, taken: taken)
     }
 
-    /* One answer, or one for every file still unasked; keep both takes the next free name in that folder. */
-    private func decide(_ asked: FolderClash, _ choice: DriveStore.Conflict, same: Bool) {
-        let questions = folderQuestions
+    /*
+     * One answer, or one for every file still unasked; keep both suggests the next free name in
+     * that folder. Once all are answered, the kept-both names can be changed before anything goes.
+     */
+    private func decide(_ asked: UploadClash, _ choice: DriveStore.Conflict, same: Bool) {
+        let questions = self.questions
         let answering = same ? questions.clashes.filter { $0.id == asked.id || questions.answers[$0.id] == nil } : [asked]
         for clash in answering {
             var name = clash.file.name
@@ -280,31 +258,41 @@ private struct UploadFlow: ViewModifier {
         }
         questions.asking = nil
         if let next = questions.clashes.first(where: { questions.answers[$0.id] == nil }) {
+            // The next file's question, once this sheet has gone.
             Task { try? await Task.sleep(for: .milliseconds(350)); questions.asking = next }
-            return
-        }
-        let answered = questions.clashes
-        let answers = questions.answers
-        questions.reset()
-        Task {
-            var seen: Set<String> = []
-            for id in answered.map(\.folderId) where seen.insert(id).inserted {
-                let group = answered.filter { $0.folderId == id }
-                var decisions: [String: DriveStore.Conflict] = [:]
-                var renames: [String: String] = [:]
-                for clash in group {
-                    decisions[clash.file.name] = answers[clash.id]?.choice ?? .skip
-                    renames[clash.file.name] = answers[clash.id]?.name
-                }
-                await store.upload(group.map(\.file), to: id, onConflict: .skip, decisions: decisions, renames: renames)
-            }
+        } else if !questions.keeping.isEmpty {
+            Task { try? await Task.sleep(for: .milliseconds(350)); questions.naming = true }
+        } else {
+            send(renamed: [:])
         }
     }
 
+    /* Each destination folder gets its replacements and its kept-both copies under their chosen names. */
+    private func send(renamed: [UUID: String]) {
+        let answered = questions.clashes
+        let answers = questions.answers
+        questions.reset()
+        // Each file by its own answer, never by its name: two picks of one name can be answered differently.
+        var order: [String] = []
+        var outgoing: [String: [DriveStore.Outgoing]] = [:]
+        for clash in answered {
+            if outgoing[clash.folderId] == nil { order.append(clash.folderId); outgoing[clash.folderId] = [] }
+            switch answers[clash.id]?.choice ?? .skip {
+            case .skip:
+                try? FileManager.default.removeItem(at: clash.file.url)
+            case .replace:
+                outgoing[clash.folderId]?.append(DriveStore.Outgoing(file: clash.file, name: clash.file.name, replacing: clash.replaces))
+            case .keepBoth:
+                outgoing[clash.folderId]?.append(DriveStore.Outgoing(file: clash.file, name: renamed[clash.id] ?? answers[clash.id]?.name ?? clash.file.name))
+            }
+        }
+        Task { for id in order where !(outgoing[id] ?? []).isEmpty { await store.upload(outgoing[id] ?? [], to: id) } }
+    }
+
     /* Cancel adds none of the files that were asked about; the ones with free names have gone already. */
-    private func cancelFolder() {
-        for clash in folderQuestions.clashes { try? FileManager.default.removeItem(at: clash.file.url) }
-        folderQuestions.reset()
+    private func cancelQuestions() {
+        for clash in questions.clashes { try? FileManager.default.removeItem(at: clash.file.url) }
+        questions.reset()
     }
 
     /* Reads the picked folder through a file coordinator, so a provider brings its files down first. */
@@ -354,29 +342,55 @@ private struct UploadFlow: ViewModifier {
     }
 }
 
-/* What a picked folder still asks about: the files whose names are taken where they are going, and the answers so far. */
+/* What an upload still asks about: the files whose names are taken where they are going, and the answers so far. */
 @MainActor @Observable
-private final class FolderQuestions {
-    var clashes: [FolderClash] = []
+private final class UploadQuestions {
+    var clashes: [UploadClash] = []
     var answers: [UUID: (choice: DriveStore.Conflict, name: String)] = [:]
-    /* Names in use per destination folder, the kept-both names given so far included. */
+    /* Names in each destination folder before any answer: what is there, and the files with free names going in. */
+    var taken: [String: [String]] = [:]
+    /* The same, with the kept-both names suggested so far. */
     var claimed: [String: [String]] = [:]
-    var asking: FolderClash?
+    var asking: UploadClash?
+    /* All answered, and some are kept both: their names are being chosen. */
+    var naming = false
+
+    func start(_ clashes: [UploadClash], taken: [String: [String]]) {
+        guard !clashes.isEmpty else { return }
+        self.clashes = clashes
+        answers = [:]
+        self.taken = taken
+        claimed = taken
+        naming = false
+        asking = clashes.first
+    }
+
+    /* The files to keep both of, each with the name suggested when it was answered. */
+    var keeping: [KeepBothSheet.Entry] {
+        clashes.compactMap { clash in
+            guard let answer = answers[clash.id], answer.choice == .keepBoth else { return nil }
+            return KeepBothSheet.Entry(id: clash.id, original: clash.file.name, folderId: clash.folderId, folderName: clash.folderName, suggested: answer.name)
+        }
+    }
 
     func reset() {
         clashes = []
         answers = [:]
+        taken = [:]
         claimed = [:]
         asking = nil
+        naming = false
     }
 }
 
-/* One file of a picked folder whose name its destination folder already has. */
-private struct FolderClash: Identifiable {
+/* One added file whose name its destination folder already has. */
+private struct UploadClash: Identifiable {
     let id = UUID()
     let file: StagedFile
     let folderId: String
     let folderName: String
+    /* The file there whose name it has: Replace makes a new version of this one. */
+    let replaces: Opened?
 }
 
 /* One clashing file: what should happen to the one being added, and whether the rest follow. */
@@ -441,55 +455,75 @@ private struct ClashSheet: View {
     }
 }
 
-/* Keeping both: each clashing file gets the name it will carry, suggested free and editable. */
+/*
+ * Keeping both: each clashing file gets the name it will carry, suggested free and editable,
+ * grouped by the folder it is going to when a picked folder sends them to more than one.
+ */
 struct KeepBothSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let files: [StagedFile]
-    let taken: [String]
-    let done: ([String: String]) -> Void
-    var cancel: () -> Void = {}
-    @State private var names: [String: String] = [:]
+    struct Entry: Identifiable {
+        let id: UUID
+        let original: String
+        let folderId: String
+        let folderName: String
+        let suggested: String
+    }
 
-    private var invalid: Bool {
-        files.contains { file in
-            let name = (names[file.name] ?? "").trimmingCharacters(in: .whitespaces)
-            return name.isEmpty || taken.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
-        }
+    @Environment(\.dismiss) private var dismiss
+    let entries: [Entry]
+    /* Names already in each destination folder, the files with free names going in included. */
+    let taken: [String: [String]]
+    let done: ([UUID: String]) -> Void
+    var cancel: () -> Void = {}
+    @State private var names: [UUID: String] = [:]
+
+    private var folders: [String] {
+        var seen: Set<String> = []
+        return entries.map(\.folderId).filter { seen.insert($0).inserted }
+    }
+
+    private func name(_ entry: Entry) -> String { (names[entry.id] ?? entry.suggested).trimmingCharacters(in: .whitespaces) }
+
+    /* Why a name can't be used: empty, already in that folder, or given to another file going there. */
+    private func problem(_ entry: Entry) -> String? {
+        let name = name(entry)
+        if name.isEmpty { return "Enter a name." }
+        if (taken[entry.folderId] ?? []).contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { return "“\(name)” is already here too. Try another name." }
+        let twice = entries.contains { $0.id != entry.id && $0.folderId == entry.folderId && self.name($0).caseInsensitiveCompare(name) == .orderedSame }
+        return twice ? "Another file going here has this name." : nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    ForEach(files, id: \.name) { file in
-                        VStack(alignment: .leading, spacing: 2) {
-                            TextField("Name", text: Binding(get: { names[file.name] ?? "" }, set: { names[file.name] = $0 }))
-                                .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Alpine.ink)
-                            Text("Already here: \(file.name)").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                ForEach(folders, id: \.self) { folder in
+                    let here = entries.filter { $0.folderId == folder }
+                    Section {
+                        ForEach(here) { entry in
+                            VStack(alignment: .leading, spacing: 2) {
+                                TextField("Name", text: Binding(get: { names[entry.id] ?? entry.suggested }, set: { names[entry.id] = $0 }))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Alpine.ink)
+                                Text(problem(entry) ?? "Already here: \(entry.original)").font(Theme.Text.footnote)
+                                    .foregroundStyle(problem(entry) == nil ? Alpine.inkMuted : Alpine.danger)
+                            }
+                            .alpineRow()
                         }
-                        .alpineRow()
+                    } header: {
+                        Text(folders.count == 1 ? "New names" : "In “\(here.first?.folderName ?? "")”")
+                    } footer: {
+                        if folder == folders.last { Text("Each file is added under its new name. The ones already here don’t change.") }
                     }
-                } header: {
-                    Text("New names")
-                } footer: {
-                    Text("Each file is added under its new name. The ones already here don’t change.")
                 }
             }
             .alpineGrouped()
             .navigationTitle("Keep both")
-            .navigationSubtitle(Text(files.count == 1 ? "1 file" : "\(files.count) files"))
+            .navigationSubtitle(Text(entries.count == 1 ? "1 file" : "\(entries.count) files"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss(); cancel() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Upload") { dismiss(); done(names) }.disabled(invalid) }
-            }
-        }
-        .onAppear {
-            var used = taken
-            for file in files {
-                let name = DriveStore.freeName(file.name, among: used)
-                names[file.name] = name
-                used.append(name)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Upload") { dismiss(); done(Dictionary(uniqueKeysWithValues: entries.map { ($0.id, name($0)) })) }
+                        .disabled(entries.contains { problem($0) != nil })
+                }
             }
         }
     }

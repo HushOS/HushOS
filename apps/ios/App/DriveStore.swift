@@ -1286,12 +1286,6 @@ final class DriveStore {
     /* What to do with a picked file whose name a file in the folder already has, as the web asks. */
     enum Conflict { case replace, keepBoth, skip }
 
-    /* The picked files whose names already exist in `folder`. */
-    func conflicts(_ files: [(url: URL, name: String, type: UTType?)], in folder: String) -> [Opened] {
-        let existing = (folders[folder] ?? []).filter { !$0.isFolder }
-        return files.compactMap { file in existing.first { $0.name.caseInsensitiveCompare(file.name) == .orderedSame } }
-    }
-
     /* Pasting into the folder the items already sit in is a no-op the drives refuse; so do we. */
     func canPaste(into folder: String) -> Bool { pasteProblem(into: folder) == nil }
 
@@ -1314,34 +1308,31 @@ final class DriveStore {
         return clip.items.contains { $0.node.parentId != folder } ? nil : clip.items.count == 1 ? "It’s already in this folder" : "They’re already in this folder"
     }
 
-    /* Files picked from the document or photo picker, each uploaded in turn with its thumbnail. `renames` names the kept-both ones. */
-    func upload(_ files: [(url: URL, name: String, type: UTType?)], to folder: String, onConflict: Conflict = .keepBoth, decisions: [String: Conflict] = [:], renames: [String: String] = [:]) async {
-        let existing = (folders[folder] ?? []).filter { !$0.isFolder }
+    /* One picked file on its way: the name it goes under, and the file it replaces (a new version of it), if any. */
+    struct Outgoing {
+        let file: (url: URL, name: String, type: UTType?)
+        let name: String
+        var replacing: Opened? = nil
+    }
+
+    /*
+     * Picked files, each uploaded in turn with its thumbnail. Every one comes with its own name
+     * and answer already settled (two picked files can share a name), so nothing is looked up by name here.
+     */
+    func upload(_ items: [Outgoing], to folder: String) async {
         holdBackground()
         defer { releaseBackground() }
-        for (index, file) in files.enumerated() {
-            let mime = file.type?.preferredMIMEType
-            let clash = existing.first { $0.name.caseInsensitiveCompare(file.name) == .orderedSame }
-            var name = file.name
-            var replacing: Opened?
-            if let clash {
-                // Asked per file now, as the web asks; a batch answer covers whatever was not asked.
-                switch decisions[file.name] ?? onConflict {
-                case .skip: try? FileManager.default.removeItem(at: file.url); continue
-                case .replace: replacing = clash
-                case .keepBoth: name = renames[file.name] ?? Self.freeName(file.name, among: existing.map(\.name))
-                }
-            }
-            _ = index
+        for item in items {
+            let mime = item.file.type?.preferredMIMEType
             if await ownDrive(folder) {
                 // Where Save to HushOS and the quick actions add next.
                 Places.used(folder, name: folder == rootId ? "Files" : known(folder)?.name ?? "Files")
                 // Queued: sealed and handed to iOS, which sends it even if the app is closed; the panel shows it.
-                BackgroundTransfers.shared.upload(fileURL: file.url, name: name, mime: mime, folderId: folder, replacingId: replacing?.id)
+                BackgroundTransfers.shared.upload(fileURL: item.file.url, name: item.name, mime: mime, folderId: folder, replacingId: item.replacing?.id)
                 continue
             }
             // A shared folder lives in someone else's drive: uploaded here and now, as before.
-            if !(await uploadNow(PendingUpload(url: file.url, name: name, mime: mime, folder: folder, replacing: replacing))) { break }
+            if !(await uploadNow(PendingUpload(url: item.file.url, name: item.name, mime: mime, folder: folder, replacing: item.replacing))) { break }
         }
     }
 
@@ -1360,17 +1351,7 @@ final class DriveStore {
     }
 
     /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */
-    static func freeName(_ name: String, among taken: [String]) -> String {
-        let lower = Set(taken.map { $0.lowercased() })
-        guard lower.contains(name.lowercased()) else { return name }
-        let ext = (name as NSString).pathExtension
-        let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
-        for n in 2 ... 999 {
-            let candidate = ext.isEmpty ? "\(stem) (\(n))" : "\(stem) (\(n)).\(ext)"
-            if !lower.contains(candidate.lowercased()) { return candidate }
-        }
-        return "\(stem) \(UUID().uuidString.prefix(6))\(ext.isEmpty ? "" : ".\(ext)")"
-    }
+    static func freeName(_ name: String, among taken: [String]) -> String { UploadNames.freeName(name, among: taken) }
 
     /* As `download`, but the failure comes back to the caller (the viewer and Send a copy say it in place). */
     func fetch(_ item: Opened, version: VersionListView? = nil) async throws -> URL {
