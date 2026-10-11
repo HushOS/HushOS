@@ -90,22 +90,22 @@ export const reportQueryOptions = (reportId: string) =>
         retry: false,
     });
 
-/* Files up to this size are digested on the reporter's device; larger ones are reported without a hash. */
+/* Files up to this size are digested on the operator's device; larger ones are not. */
 export const HASH_MAX_BYTES = 64 * 1024 * 1024;
 
-async function contentHash(node: DriveNode) {
+/*
+ * SHA-256 of a reported file, as hex, worked out on the operator's device from
+ * the bytes it decrypts. Never sent by the reporter: a plaintext digest kept
+ * beside the report would be readable by anyone with the database.
+ */
+export async function reportContentHash(node: DriveNode) {
     if (node.kind !== 'file') return null;
     if ((contentSize(node) ?? 0) > HASH_MAX_BYTES) return null;
     const reader = openReader(node);
     try {
         const { bytes } = await readAll(reader, HASH_MAX_BYTES);
         const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-        return btoa(String.fromCharCode(...digest))
-            .replaceAll('+', '-')
-            .replaceAll('/', '_')
-            .replace(/=+$/, '');
-    } catch {
-        return null;
+        return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
     } finally {
         await reader.close();
     }
@@ -120,5 +120,5 @@ export async function fileReport(
         reporterEmail: string | null;
     },
 ) {
-    return driveClient.fileReport(node, { ...input, contentHash: await contentHash(node) });
+    return driveClient.fileReport(node, input);
 }

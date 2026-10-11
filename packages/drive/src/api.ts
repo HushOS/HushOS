@@ -462,7 +462,6 @@ export type ReportInput = {
     /* How the reporter can see the node: a link's token, or the share behind their session. */
     via: { link: string } | { share: true };
     reporterEmail: string | null;
-    contentHash: string | null;
     keys: { operatorUserId: string; keyEnvelope: string }[];
 };
 
@@ -477,7 +476,6 @@ export type ReportView = {
     reason: string;
     reporter: { userId: string | null; email: string | null };
     uploader: { userId: string | null; email: string | null; suspended: boolean };
-    contentHash: string | null;
     status: ReportStatus;
     heldAt: string | null;
     evidenceStatus: 'pending' | 'copied' | 'skipped' | 'failed' | 'purged';

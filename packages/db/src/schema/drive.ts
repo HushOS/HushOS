@@ -400,7 +400,6 @@ export const driveReports = pgTable(
         reporterAddressHash: bytea('reporter_address_hash'),
         uploaderUserId: uuid('uploader_user_id'),
         uploaderEmail: text('uploader_email'),
-        contentHash: bytea('content_hash'),
         status: text().notNull().$type<ReportStatus>().default('open'),
         // Keeps the bytes past resolution: the deletion outbox skips what an open or held report names.
         heldAt: timestamp('held_at', { withTimezone: true }),
@@ -434,7 +433,7 @@ export const driveReports = pgTable(
         ),
         check(
             'drive_reports_values_valid',
-            sql`${table.keyEpoch} >= 1 and char_length(${table.reason}) between 1 and 2000 and (${table.reporterEmail} is null or char_length(${table.reporterEmail}) <= 254) and (${table.reporterAddressHash} is null or octet_length(${table.reporterAddressHash}) = 32) and (${table.contentHash} is null or octet_length(${table.contentHash}) = 32) and ${table.itemCount} >= 0 and (${table.filedWith} is null or char_length(${table.filedWith}) <= 200) and (${table.filedReference} is null or char_length(${table.filedReference}) <= 200)`,
+            sql`${table.keyEpoch} >= 1 and char_length(${table.reason}) between 1 and 2000 and (${table.reporterEmail} is null or char_length(${table.reporterEmail}) <= 254) and (${table.reporterAddressHash} is null or octet_length(${table.reporterAddressHash}) = 32) and ${table.itemCount} >= 0 and (${table.filedWith} is null or char_length(${table.filedWith}) <= 200) and (${table.filedReference} is null or char_length(${table.filedReference}) <= 200)`,
         ),
     ],
 );

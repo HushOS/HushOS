@@ -115,7 +115,6 @@ async function report(
         reporterUserId: null,
         reporterEmail: null,
         reporterAddressHash: hash('1.2.3.4'),
-        contentHash: null,
         keys: operators.map((o) => ({ operatorUserId: o.userId, keyEnvelope: randomBytes(112) })),
         ...overrides,
     });
@@ -543,5 +542,63 @@ describe('re-sealing', () => {
         expect((await reports.addReportKeys(randomUUID(), operator.userId, [])).status).toBe(
             'not-found',
         );
+    });
+});
+
+describe('release', () => {
+    test('closing without a hold deletes every operator key and the reporter’s address; with a hold both stay', async () => {
+        const dismissed = await report(await folder(rootId, rootEpoch));
+        const held = await report(await folder(rootId, rootEpoch));
+        if (dismissed.status !== 'ok' || held.status !== 'ok') throw new Error('not filed');
+
+        await reports.resolveReport(dismissed.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        await reports.resolveReport(held.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: true,
+        });
+        expect(await reports.getReportKey(dismissed.report.id, operator.userId)).toBeNull();
+        const closed = (await reports.getReport(dismissed.report.id))!.report;
+        expect(reports.isReleased(closed)).toBe(true);
+        expect(closed.reporterAddressHash).toBeNull();
+        expect(await reports.getReportKey(held.report.id, operator.userId)).toHaveLength(112);
+        expect(reports.isReleased((await reports.getReport(held.report.id))!.report)).toBe(false);
+    });
+
+    test('releasing the hold of a closed report releases it; of an open one, nothing is lost', async () => {
+        const open = await report(await folder(rootId, rootEpoch));
+        const closed = await report(await folder(rootId, rootEpoch));
+        if (open.status !== 'ok' || closed.status !== 'ok') throw new Error('not filed');
+        await reports.setReportHold(open.report.id, operator.userId, true);
+        await reports.setReportHold(open.report.id, operator.userId, false);
+        expect(await reports.getReportKey(open.report.id, operator.userId)).toHaveLength(112);
+
+        await reports.resolveReport(closed.report.id, operator.userId, {
+            status: 'removed',
+            hold: true,
+        });
+        expect(await reports.getReportKey(closed.report.id, operator.userId)).toHaveLength(112);
+        await reports.setReportHold(closed.report.id, operator.userId, false);
+        expect(await reports.getReportKey(closed.report.id, operator.userId)).toBeNull();
+    });
+
+    test('a released report takes no new keys, so it cannot be re-sealed to anyone', async () => {
+        const made = await report(await folder(rootId, rootEpoch));
+        if (made.status !== 'ok') throw new Error(made.status);
+        await reports.resolveReport(made.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        const later = await createTestAccount();
+        await identityFor(later.userId);
+        await db.update(users).set({ role: 'admin' }).where(eq(users.id, later.userId));
+        expect(
+            await reports.addReportKeys(made.report.id, operator.userId, [
+                { operatorUserId: later.userId, keyEnvelope: randomBytes(112) },
+            ]),
+        ).toEqual({ status: 'released' });
+        expect(await reports.getReportKey(made.report.id, later.userId)).toBeNull();
     });
 });

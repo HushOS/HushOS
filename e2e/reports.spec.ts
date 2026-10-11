@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import {
+    check,
     grip,
     newContext,
     newFolder,
@@ -189,6 +190,8 @@ test('removing the content stops the link and the owner’s restore; suspending 
     browser,
 }) => {
     await operator.getByRole('button', { name: 'Remove the content' }).click();
+    // Held: a report closed without one is released, its keys deleted (the last test checks).
+    await check(operator.getByRole('checkbox', { name: 'Keep the bytes on hold after closing' }));
     await operator.getByRole('button', { name: 'Remove', exact: true }).click();
     await expect(operator.getByText('Content removed').first()).toBeVisible({ timeout: 60_000 });
     await expect(operator.locator('ol li')).toHaveCount(5);
@@ -257,4 +260,14 @@ test('an operator promoted after the report cannot open it until an operator who
     await openReportContent(late, reportId);
     await expect(row(late, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await late.context().close();
+});
+
+test('releasing the hold of a closed report deletes its keys: nobody can open it any more', async () => {
+    await operator.goto(`/app/admin/reports/${reportId}`);
+    await operator.getByRole('button', { name: 'Release the hold and the keys' }).click();
+    await expect(operator.getByText('Hold released').first()).toBeVisible({ timeout: 60_000 });
+    await expect(operator.getByText(/can’t be opened or reopened/)).toBeVisible();
+    await expect(operator.getByRole('button', { name: 'Reopen' })).toHaveCount(0);
+    await openReportContent(operator, reportId);
+    await expect(operator.getByRole('alert')).toContainText(/released/, { timeout: 60_000 });
 });

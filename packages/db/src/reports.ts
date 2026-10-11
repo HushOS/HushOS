@@ -61,7 +61,6 @@ export type CreateReport = {
     reporterUserId: string | null;
     reporterEmail: string | null;
     reporterAddressHash: Buffer | null;
-    contentHash: Buffer | null;
     keys: { operatorUserId: string; keyEnvelope: Buffer }[];
 };
 
@@ -166,7 +165,6 @@ export async function createReport(input: CreateReport) {
                 reporterAddressHash: input.reporterAddressHash,
                 uploaderUserId: owner?.id ?? null,
                 uploaderEmail: owner?.email ?? null,
-                contentHash: input.contentHash,
                 itemCount: items.length,
                 itemsTruncated: truncated,
             })
@@ -319,10 +317,12 @@ export async function addReportKeys(
 ) {
     return db.transaction(async (tx) => {
         const [report] = await tx
-            .select({ id: driveReports.id })
+            .select({ status: driveReports.status, heldAt: driveReports.heldAt })
             .from(driveReports)
-            .where(eq(driveReports.id, reportId));
+            .where(eq(driveReports.id, reportId))
+            .for('update');
         if (!report) return { status: 'not-found' as const };
+        if (isReleased(report)) return { status: 'released' as const };
         const operators = new Set((await listOperators()).map((o) => o.userId));
         const accepted = keys.filter((key) => operators.has(key.operatorUserId));
         if (!accepted.length) return { status: 'ok' as const, added: 0 };
@@ -412,6 +412,23 @@ export async function getReportVersions(reportId: string, versionIds: string[]) 
         );
 }
 
+/*
+ * Closed without a hold: what the report held is released. Its operator keys
+ * are deleted when that happens, and nothing serves its content any more.
+ */
+export function isReleased(report: { status: ReportStatus; heldAt: Date | null }) {
+    return report.status !== 'open' && report.heldAt === null;
+}
+
+/* Deletes what lets anyone open a released report, and the anonymous reporter's address with it. */
+async function release(tx: Tx, reportId: string) {
+    await tx.delete(driveReportKeys).where(eq(driveReportKeys.reportId, reportId));
+    await tx
+        .update(driveReports)
+        .set({ reporterAddressHash: null })
+        .where(eq(driveReports.id, reportId));
+}
+
 export type Resolution =
     | { status: 'dismissed'; hold: boolean }
     | { status: 'removed'; hold: boolean }
@@ -442,6 +459,7 @@ export async function resolveReport(reportId: string, actorUserId: string, resol
             })
             .where(eq(driveReports.id, reportId))
             .returning();
+        if (!hold) await release(tx, reportId);
         await tx.insert(driveReportEvents).values({
             reportId,
             actorUserId,
@@ -468,6 +486,7 @@ export async function setReportHold(reportId: string, actorUserId: string, held:
             .where(eq(driveReports.id, reportId))
             .returning();
         if (!report) return null;
+        if (isReleased(report)) await release(tx, reportId);
         await tx.insert(driveReportEvents).values({
             reportId,
             actorUserId,

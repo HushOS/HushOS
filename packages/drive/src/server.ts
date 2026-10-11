@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import {
     authRepository,
     driveRepository,
@@ -8,7 +8,12 @@ import {
     type UploadRow,
     type VersionRow,
 } from '@hushos/db';
-import { partLength, validObjectSize } from '@hushos/crypto/drive';
+import {
+    documentPadStep,
+    METADATA_PAD_STEP,
+    partLength,
+    validObjectSize,
+} from '@hushos/crypto/drive';
 import { objectKey, primaryStore } from './storage';
 import { storageEnv } from '@hushos/env/storage';
 import {
@@ -193,10 +198,23 @@ function linkSecretEnvelope(value: string) {
         throw new DriveError('invalid', 'Invalid envelope.');
     return bytes;
 }
+/*
+ * Sealed plaintext must arrive padded, as every client pads it (see
+ * @hushos/crypto/drive): metadata to 256-byte steps, a document in steps that
+ * grow with it. A client that skipped the padding would hand the server a
+ * name's length or a document's exact size, so its write is refused.
+ */
+function paddedEnvelope(value: string, max: number, step: (length: number) => number) {
+    const bytes = decodeEnvelope(value, undefined, max);
+    const plaintext = bytes.length - 24 - 16;
+    if (plaintext < 1 || plaintext % step(plaintext) !== 0)
+        throw new DriveError('invalid', 'Invalid envelope: its contents must be padded.');
+    return bytes;
+}
 const metadataEnvelope = (value: string) =>
-    decodeEnvelope(value, undefined, 24 + 16 + METADATA_MAX_BYTES);
+    paddedEnvelope(value, 24 + 16 + METADATA_MAX_BYTES, () => METADATA_PAD_STEP);
 const documentEnvelope = (value: string) =>
-    decodeEnvelope(value, undefined, DOCUMENT_ENVELOPE_MAX_BYTES);
+    paddedEnvelope(value, DOCUMENT_ENVELOPE_MAX_BYTES, documentPadStep);
 const DOCUMENT_KIND = /^[a-z][a-z0-9-]{0,31}$/;
 
 async function requireMember(userId: string, workspaceId: string) {
@@ -1652,7 +1670,6 @@ function reportView(report: ReportRow, uploaderSuspended = false) {
             email: report.uploaderEmail,
             suspended: uploaderSuspended,
         },
-        contentHash: report.contentHash ? report.contentHash.toString('hex') : null,
         status: report.status,
         heldAt: report.heldAt?.toISOString() ?? null,
         evidenceStatus: report.evidenceStatus,
@@ -1725,6 +1742,24 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
 
+/*
+ * What an anonymous reporter's address is kept as, for one open report per
+ * address and node: an HMAC under a key the server keeps, never a plain hash,
+ * which the 2^32 IPv4 addresses would undo in seconds. It is cleared when the
+ * report closes.
+ */
+let addressKey: Promise<Buffer> | undefined;
+function reportAddressKey() {
+    addressKey ??= authRepository
+        .ensureServerSecret('report-address-key', () => randomBytes(32).toString('base64'))
+        .then((value) => Buffer.from(value, 'base64'))
+        .catch((error: unknown) => {
+            addressKey = undefined;
+            throw error;
+        });
+    return addressKey;
+}
+
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: {
     userId: string;
@@ -1768,10 +1803,10 @@ export async function fileReport(
         reason: string;
         via: { link: string } | { share: true };
         reporterEmail: string | null;
-        contentHash: string | null;
         keys: { operatorUserId: string; keyEnvelope: string }[];
     },
 ) {
+    const addressKey = await reportAddressKey();
     const limits = [hashToken(`report:address:${actor.address}`)];
     if (actor.userId) limits.push(hashToken(`report:user:${actor.userId}`));
     for (const key of limits)
@@ -1810,8 +1845,9 @@ export async function fileReport(
         reason,
         reporterUserId: actor.userId,
         reporterEmail: actor.userId ? null : input.reporterEmail?.trim() || null,
-        reporterAddressHash: actor.userId ? null : hashToken(`report:address:${actor.address}`),
-        contentHash: input.contentHash ? decodeEnvelope(input.contentHash, 32) : null,
+        reporterAddressHash: actor.userId
+            ? null
+            : createHmac('sha256', addressKey).update(actor.address).digest(),
         keys: input.keys.map((key) => ({
             operatorUserId: key.operatorUserId,
             keyEnvelope: reportEnvelope(key.keyEnvelope),
@@ -1857,6 +1893,23 @@ async function loadReport(reportId: string) {
     if (!found) throw reportGone();
     return found;
 }
+/*
+ * A report closed without a hold has released what it held: its operator keys
+ * are deleted (see reportsRepository.resolveReport), and every route that
+ * reads its content is shut, so dismissing a report ends the operators' view of
+ * the owner's files rather than leaving it open for good.
+ */
+const reportReleased = () =>
+    new DriveError(
+        'conflict',
+        'This report was closed without a hold, so its content was released and can no longer be opened.',
+        410,
+    );
+async function loadHeldReport(reportId: string) {
+    const found = await loadReport(reportId);
+    if (reportsRepository.isReleased(found.report)) throw reportReleased();
+    return found;
+}
 
 export async function getReport(reportId: string) {
     const found = await loadReport(reportId);
@@ -1868,7 +1921,7 @@ export async function getReport(reportId: string) {
 
 /* Hands the operator their sealed key and the reported node; every open is on the record. */
 export async function openReport(operatorUserId: string, reportId: string) {
-    const found = await loadReport(reportId);
+    const found = await loadHeldReport(reportId);
     const item = await reportsRepository.getReportItem(reportId, found.report.nodeId);
     if (!item) throw reportGone();
     const keyEnvelope = await reportsRepository.getReportKey(reportId, operatorUserId);
@@ -1881,7 +1934,7 @@ export async function openReport(operatorUserId: string, reportId: string) {
 }
 
 export async function reportChildren(reportId: string, parentId: string) {
-    const found = await loadReport(reportId);
+    const found = await loadHeldReport(reportId);
     const listing = await reportsRepository.listReportChildren(reportId, parentId);
     if (!listing) throw notFound();
     const ws = found.report.workspaceId;
@@ -1899,7 +1952,7 @@ export async function reportChildren(reportId: string, parentId: string) {
  * to show; the evidence copy, when one was made, is the worker's to reach.
  */
 export async function reportDownloadUrls(reportId: string, versionIds: string[]) {
-    await loadReport(reportId);
+    await loadHeldReport(reportId);
     const items = await reportsRepository.getReportVersions(
         reportId,
         [...new Set(versionIds)].slice(0, THUMBNAIL_BATCH),
@@ -1918,7 +1971,7 @@ export async function reportDownloadUrls(reportId: string, versionIds: string[])
 }
 
 export async function reportDownloadUrl(reportId: string, versionId: string) {
-    const found = await loadReport(reportId);
+    const found = await loadHeldReport(reportId);
     const [item] = await reportsRepository.getReportVersions(reportId, [versionId]);
     if (!item) throw notFound();
     // Presigned whether or not the primary copy is still there: once a released hold has
@@ -1943,6 +1996,7 @@ export async function reportThumbnailUrls(reportId: string, versionIds: string[]
  * presigned URLs the page then reads directly.
  */
 export async function requestEvidence(operatorUserId: string, reportId: string) {
+    await loadHeldReport(reportId);
     const result = await reportsRepository.createEvidenceRequest(reportId, operatorUserId);
     switch (result.status) {
         case 'not-found':
@@ -1987,6 +2041,7 @@ export async function resealReport(
             keyEnvelope: reportEnvelope(key.keyEnvelope),
         })),
     );
+    if (result.status === 'released') throw reportReleased();
     if (result.status !== 'ok') throw reportGone();
     return { added: result.added };
 }
@@ -2029,14 +2084,16 @@ export async function resolveReport(
 }
 
 export async function holdReport(operatorUserId: string, reportId: string, held: boolean) {
-    const found = await loadReport(reportId);
+    // A released report has no keys left to hold the content for.
+    const found = held ? await loadHeldReport(reportId) : await loadReport(reportId);
     const report = await reportsRepository.setReportHold(reportId, operatorUserId, held);
     if (!report) throw reportGone();
     return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 export async function reopenReport(operatorUserId: string, reportId: string) {
-    const found = await loadReport(reportId);
+    // Its keys went when it was released: a report about the same thing must be filed again.
+    const found = await loadHeldReport(reportId);
     const report = await reportsRepository.reopenReport(reportId, operatorUserId);
     if (!report) throw reportGone();
     return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };

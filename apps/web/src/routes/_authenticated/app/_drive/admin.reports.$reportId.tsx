@@ -27,6 +27,8 @@ import {
     categoryLabel,
     describeDue,
     dueAt,
+    HASH_MAX_BYTES,
+    reportContentHash,
     reportKeys,
     reportQueryOptions,
     STATUS_LABELS,
@@ -171,12 +173,6 @@ function Facts({ report }: { report: ReportView }) {
                 </span>
             </div>
             <div className={row}>
-                <span className={label}>Content hash</span>
-                <span className={report.contentHash ? mono : value}>
-                    {report.contentHash ? `sha256 ${report.contentHash}` : 'Not computed'}
-                </span>
-            </div>
-            <div className={row}>
                 <span className={label}>Evidence</span>
                 <span className={value}>
                     {
@@ -207,6 +203,37 @@ function Facts({ report }: { report: ReportView }) {
                 </span>
             </div>
         </div>
+    );
+}
+
+/* The file's SHA-256, worked out here from the decrypted bytes when asked: the server never holds it. */
+function ContentHash({ node }: { node: DriveNode }) {
+    const [state, setState] = useState<
+        { phase: 'idle' | 'working' } | { phase: 'done'; hash: string | null } | { phase: 'failed' }
+    >({ phase: 'idle' });
+    if (state.phase === 'done')
+        return (
+            <span className={`${mono} w-full wrap-anywhere`}>
+                {state.hash
+                    ? `sha256 ${state.hash}`
+                    : `Larger than ${formatBytes(HASH_MAX_BYTES)}, not hashed`}
+            </span>
+        );
+    return (
+        <Button
+            variant="outline"
+            size="sm"
+            disabled={state.phase === 'working'}
+            onClick={() => {
+                setState({ phase: 'working' });
+                reportContentHash(node).then(
+                    (hash) => setState({ phase: 'done', hash }),
+                    () => setState({ phase: 'failed' }),
+                );
+            }}
+        >
+            {state.phase === 'failed' ? 'Hash failed, try again' : 'SHA-256'}
+        </Button>
     );
 }
 
@@ -283,6 +310,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                         {formatBytes(contentSize(opened.node) ?? 0)}
                     </span>
                     <span className="flex-1" />
+                    <ContentHash node={opened.node} />
                     <Button variant="outline" size="sm" onClick={() => setPreviewing(opened.node)}>
                         Preview
                     </Button>
@@ -595,6 +623,7 @@ function Actions({ report }: { report: ReportView }) {
         }
     }
     const open = report.status === 'open';
+    const released = !open && !report.heldAt;
     return (
         <section className="flex flex-col gap-3">
             <h2 className="text-[15px] font-bold">Actions</h2>
@@ -621,6 +650,11 @@ function Actions({ report }: { report: ReportView }) {
                             Mark as filed with an authority
                         </ActionRow>
                     </>
+                ) : released ? (
+                    <p className="px-4 py-3 text-sm text-muted-foreground">
+                        Released when it closed without a hold: the operators’ keys to it are
+                        deleted, so it can’t be opened or reopened. File a new report if needed.
+                    </p>
                 ) : (
                     <ActionRow
                         onClick={() =>
@@ -630,17 +664,23 @@ function Actions({ report }: { report: ReportView }) {
                         Reopen
                     </ActionRow>
                 )}
-                <ActionRow
-                    onClick={() =>
-                        void run(
-                            'hold',
-                            () => reportApi.hold(report.id, !report.heldAt),
-                            report.heldAt ? 'Hold released' : 'Kept on hold',
-                        )
-                    }
-                >
-                    {report.heldAt ? 'Release the hold' : 'Keep on hold'}
-                </ActionRow>
+                {!released && (
+                    <ActionRow
+                        onClick={() =>
+                            void run(
+                                'hold',
+                                () => reportApi.hold(report.id, !report.heldAt),
+                                report.heldAt ? 'Hold released' : 'Kept on hold',
+                            )
+                        }
+                    >
+                        {!report.heldAt
+                            ? 'Keep on hold'
+                            : open
+                              ? 'Release the hold'
+                              : 'Release the hold and the keys'}
+                    </ActionRow>
+                )}
                 {report.uploader.userId && (
                     <ActionRow
                         tone={report.uploader.suspended ? undefined : 'destructive'}
@@ -706,14 +746,16 @@ function Actions({ report }: { report: ReportView }) {
                     {action === 'dismiss' && (
                         <p className="text-sm leading-relaxed text-muted-foreground">
                             Closes the report as unfounded. Without a hold the bytes are released to
-                            the owner’s ordinary deletion and the evidence copy is removed.
+                            the owner’s ordinary deletion, the evidence copy is removed, and every
+                            operator’s key to it is deleted, so it can’t be opened again.
                         </p>
                     )}
                     {action === 'remove' && (
                         <p className="text-sm leading-relaxed text-muted-foreground">
                             Moves the item to the owner’s trash where they cannot restore it, and
                             revokes every share and link on it. The owner can still delete it
-                            forever; a hold keeps the bytes regardless.
+                            forever; a hold keeps the bytes regardless. Without a hold, every
+                            operator’s key to it is deleted as it closes.
                         </p>
                     )}
                     {(action === 'dismiss' || action === 'remove') && (

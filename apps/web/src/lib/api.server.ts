@@ -1029,7 +1029,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
             void auth
                 .notifyShare(user.id, body.granteeUserId, body.role)
                 .catch((error: unknown) => {
-                    if (error instanceof Error) log.error(error);
+                    // The class and code only: a mail error's message often names the recipient.
+                    log.set({ share: { notify: 'failed', failure: describeFailure(error) } });
+                    log.error(new Error('Share notification failed.'));
                 });
             return result;
         },
@@ -1416,9 +1418,6 @@ export const apiApp = new Elysia({ prefix: '/api' })
                     t.Object({ share: t.Literal(true) }),
                 ]),
                 reporterEmail: t.Nullable(emailSchema),
-                contentHash: t.Nullable(
-                    t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' }),
-                ),
                 keys: t.Array(
                     t.Object({
                         operatorUserId: uuidSchema,
