@@ -1,0 +1,24 @@
+docs/self-hosting.md
+  s_75dbe24a0bc379::t_8073ba728abe85 265,375,380,382,400
+  s_75dbe24a0bc379::t_25a77a55ca1319 284
+docs/drive-design.md
+  s_75dbe24a0bc379::t_8073ba728abe85 19,21,162-164,586,661-662,665
+docs/opaque-auth-design.md
+  s_75dbe24a0bc379::t_8073ba728abe85 99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc69488955838005e235113e1d53de67ededed43",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
