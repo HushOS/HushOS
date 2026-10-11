@@ -632,6 +632,21 @@ describe('journal and restore', () => {
         expect(second.server.aborted).toContain('up-1');
     });
 
+    test('a part sent without an answer must match too: the store may hold it under the same nonce', async () => {
+        const { id, second, entry } = await interrupted();
+        // A part whose digest was journaled before its send, with no etag back: changed bytes there.
+        const landed = Object.keys(entry.parts).map(Number);
+        const unanswered = String(Math.max(...landed) + 1);
+        second.journal.entries.set(id, {
+            ...entry,
+            parts: { ...entry.parts, [unanswered]: { digest: 'stale' } },
+        });
+        await second.manager.restore('ws');
+        const result = await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'movie.mp4'));
+        expect(result).toEqual({ ok: true, resumed: false });
+        expect(second.server.aborted).toContain('up-1');
+    });
+
     test('an expired journal entry is discarded and the server told', async () => {
         const { id, second, entry } = await interrupted();
         second.journal.entries.set(id, {
@@ -789,6 +804,35 @@ describe('queued rows and stashed copies', () => {
         expect(stash.removed).toEqual(['copy-1']);
         expect(second.journal.entries.size).toBe(0);
         expect(second.journal.queued.size).toBe(0);
+    });
+
+    test('signing out stops every upload and leaves no name, digest or stashed byte behind', async () => {
+        const stash = fakeStash();
+        stash.files.set('copy-1', fakeFile(4 * CHUNK, 'shared-contract.pdf'));
+        // A stash an earlier page left behind, which no upload names any more.
+        stash.files.set('orphan', fakeFile(CHUNK, 'old.bin'));
+        const h = harness({ stash });
+        h.manager.enqueue([
+            {
+                file: fakeFile(4 * CHUNK, 'shared-contract.pdf'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'copy-1',
+            },
+            { file: fakeFile(4 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+            { file: fakeFile(CHUNK, 'waiting.txt'), parent: node('root', null) },
+        ]);
+        await settle(120);
+        expect(h.journal.entries.size + h.journal.queued.size).toBeGreaterThan(0);
+        await h.manager.forgetAll();
+        await settle(200);
+        expect(h.journal.entries.size).toBe(0);
+        expect(h.journal.queued.size).toBe(0);
+        expect(stash.files.size).toBe(0);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+        // The server is told, so the reservations do not linger until they expire.
+        expect(h.server.aborted.length).toBeGreaterThan(0);
+        expect(h.server.completed).toHaveLength(0);
     });
 
     test('a copy without bytes on this device is reported lost, its reservation released, no file picker offered', async () => {

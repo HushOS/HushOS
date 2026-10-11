@@ -1199,10 +1199,13 @@ export function createTransferManager(options: TransferManagerOptions) {
 
     /*
      * Gives a restored upload its file back. The file must be the one that was
-     * journaled: same size and modification time, and every chunk that already
-     * left the machine must hash to what the journal recorded. Anything else
-     * starts over, because encrypting different bytes under the same key and nonce
-     * as an uploaded part is the one thing the cipher forbids.
+     * journaled: same size and modification time, and every chunk that may
+     * already have left the machine must hash to what the journal recorded. That
+     * is every part with a digest, acknowledged or not: a digest is journaled
+     * before the send, and a part the store took without the answer reaching us
+     * is as much on the server as one it acknowledged. Anything else starts over,
+     * because encrypting different bytes under the same key and nonce as a part
+     * the server holds is the one thing the cipher forbids.
      */
     async function attachFile(id: string, file: File) {
         const u = uploads.get(id);
@@ -1220,7 +1223,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             let verified = identity;
             if (verified)
                 for (const [part, journaled] of Object.entries(entry.parts)) {
-                    if (!journaled.etag) continue;
+                    if (!journaled.digest) continue;
                     const { digest } = await rpc('driveUploadDigest', {
                         objectId: u.objectId,
                         file,
@@ -1509,8 +1512,23 @@ export function createTransferManager(options: TransferManagerOptions) {
         emit();
     }
 
+    /*
+     * Sign-out: every upload stopped and forgotten, and nothing of them left in
+     * this browser, neither the journal's names and chunk digests nor the
+     * stash's decrypted bytes.
+     */
+    async function forgetAll() {
+        for (const id of order.slice()) await cancel(id);
+        uploads.clear();
+        order.length = 0;
+        emit();
+        await journal?.clear().catch(() => {});
+        await options.stash?.sweep?.(new Set()).catch(() => {});
+    }
+
     return {
         enqueue,
+        forgetAll,
         pause,
         resume,
         retry,

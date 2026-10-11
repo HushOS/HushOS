@@ -92,6 +92,8 @@ export interface UploadJournal {
     listQueued(workspaceId?: string): Promise<QueuedEntry[]>;
     putQueued(entry: QueuedEntry): Promise<void>;
     removeQueued(id: string): Promise<void>;
+    /* Sign-out: every entry and every queued file gone, names and chunk digests with them. */
+    clear(): Promise<void>;
 }
 
 interface Schema extends DBSchema {
@@ -162,6 +164,15 @@ export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
             await tx.store.delete(id);
             await tx.done;
         },
+        async clear() {
+            const db = await open();
+            const tx = db.transaction(['uploads', 'queued'], 'readwrite', { durability: 'strict' });
+            await Promise.all([
+                tx.objectStore('uploads').clear(),
+                tx.objectStore('queued').clear(),
+            ]);
+            await tx.done;
+        },
     };
 }
 
@@ -202,6 +213,10 @@ export function createMemoryJournal(): UploadJournal & {
         },
         async removeQueued(id) {
             queued.delete(id);
+        },
+        async clear() {
+            entries.clear();
+            queued.clear();
         },
     };
 }
