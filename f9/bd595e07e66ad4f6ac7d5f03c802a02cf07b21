@@ -1,0 +1,27 @@
+packages/drive/src/transfers.test.ts
+  s_75dbe24a0bc379::t_6a38d05f12ed35 809-835
+  s_75dbe24a0bc379::t_c917404214a011 635-649,836
+  s_75dbe24a0bc379::t_8e9717514572a7 837
+packages/drive/src/journal.ts
+  s_75dbe24a0bc379::t_25a77a55ca1319 170-173
+  s_75dbe24a0bc379::t_c43e72c6e1a21f 95-96,167-169,174-175,217-220
+packages/drive/src/transfers.ts
+  s_75dbe24a0bc379::t_c43e72c6e1a21f 1515-1528,1531
+  s_75dbe24a0bc379::t_48c51f0374dc8c 1202-1208,1226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f9bd595e07e66ad4f6ac7d5f03c802a02cf07b21",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
