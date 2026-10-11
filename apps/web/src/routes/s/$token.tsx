@@ -16,6 +16,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
@@ -350,9 +351,8 @@ function Unlock({
                     <label htmlFor={id} className="text-[13px] font-semibold">
                         Password
                     </label>
-                    <Input
+                    <PasswordInput
                         id={id}
-                        type="password"
                         autoComplete="off"
                         aria-invalid={Boolean(error) || undefined}
                         aria-describedby={error ? `${id}-error` : undefined}

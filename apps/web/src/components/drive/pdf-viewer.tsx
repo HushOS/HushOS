@@ -5,7 +5,7 @@ import { FileQuestionIcon, LockIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Notice, Opening } from '@/components/drive/viewer-parts';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/password-input';
 import { PREVIEW_LIMITS, readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import '@/components/drive/pdf-viewer.css';
 
@@ -219,9 +219,9 @@ function PdfPassword({
                 }}
             >
                 <span className="flex w-full gap-2">
-                    <Input
+                    <PasswordInput
                         id={id}
-                        type="password"
+                        wrapperClassName="flex-1"
                         autoComplete="off"
                         // oxlint-disable-next-line jsx-a11y/no-autofocus -- the only thing to do here
                         autoFocus

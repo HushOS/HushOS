@@ -13,7 +13,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
@@ -154,9 +154,8 @@ function LinkOptionsForm({
                 <label htmlFor={`${id}-password`} className="text-[13px] font-semibold">
                     Password
                 </label>
-                <Input
+                <PasswordInput
                     id={`${id}-password`}
-                    type="password"
                     autoComplete="new-password"
                     placeholder={link.hasPassword ? 'Keep the current password' : 'None'}
                     value={password}

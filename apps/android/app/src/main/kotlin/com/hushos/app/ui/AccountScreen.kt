@@ -383,10 +383,11 @@ private fun StorageRow(label: String, value: String, colour: androidx.compose.ui
 
 /* A password field with the eye, as on sign-in. */
 @Composable
-fun PasswordField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, error: String? = null, hint: String? = null, enabled: Boolean = true, onGo: (() -> Unit)? = null) {
+fun PasswordField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, error: String? = null, hint: String? = null, enabled: Boolean = true, placeholder: String? = null, onGo: (() -> Unit)? = null) {
     var shown by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true, enabled = enabled, isError = error != null,
+        placeholder = placeholder?.let { { Text(it) } },
         supportingText = (error ?: hint)?.let { { Text(it) } },
         visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = if (onGo != null) ImeAction.Go else ImeAction.Default),

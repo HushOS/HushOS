@@ -88,7 +88,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -567,11 +566,11 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
                 }
                 Switch(checked = withPassword, onCheckedChange = { withPassword = it })
             }
-            if (withPassword) OutlinedTextField(
-                value = password, onValueChange = { password = it }, singleLine = true, label = { Text("Link password") },
-                placeholder = { if (link.hasPassword) Text("Keep the current password") },
-                visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6),
+            // The eye, as on sign-in: a link password is typed once and never shown again, so seeing it matters.
+            if (withPassword) PasswordField(
+                password, { password = it }, "Link password",
+                placeholder = if (link.hasPassword) "Keep the current password" else null,
+                modifier = Modifier.padding(horizontal = AlpineSpace.S6),
             )
             Subheader("Ends")
             FlowRow(Modifier.padding(horizontal = AlpineSpace.S4), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {

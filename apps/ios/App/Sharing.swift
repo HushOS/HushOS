@@ -454,8 +454,8 @@ struct LinkOptionsSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    SecureField(link.hasPassword ? "Keep the current password" : "None", text: $password)
-                        .textContentType(.newPassword).disabled(removePassword).alpineRow()
+                    RevealingSecureField(placeholder: link.hasPassword ? "Keep the current password" : "None", text: $password, content: .newPassword)
+                        .disabled(removePassword).alpineRow()
                     if link.hasPassword { Toggle("Remove the password", isOn: $removePassword).alpineRow() }
                 } header: {
                     Text("Password")

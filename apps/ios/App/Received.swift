@@ -486,7 +486,7 @@ struct LinkBrowserView: View {
                 .bareRow(top: Alpine.Space.s8)
             }
             Section {
-                SecureField("Password", text: $password).onSubmit { Task { await open() } }.alpineRow()
+                RevealingSecureField(placeholder: "Password", text: $password, content: nil) { Task { await open() } }.alpineRow()
             } footer: {
                 if wrongPassword { Text("That password didn’t work. Check it and try again.").foregroundStyle(Alpine.danger) }
             }

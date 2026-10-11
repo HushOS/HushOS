@@ -624,19 +624,45 @@ struct PasswordField: View {
     @Binding var text: String
     /* Nil for a password typed only to confirm (Reset sharing keys, Delete account): not a sign-in, so nothing to save. */
     var content: UITextContentType? = .password
-    @State private var shown = false
 
     var body: some View {
         HStack {
             Text(label).foregroundStyle(Alpine.ink).frame(width: 90, alignment: .leading)
-            // Both stay on screen (see SignInView): swapping them out makes iOS offer to save a password.
+            RevealingSecureField(placeholder: "Required", text: $text, content: content)
+        }
+    }
+}
+
+/*
+ * A secure field with the eye at its end, as on sign-in. Both fields stay on screen and the
+ * eye swaps which one shows (see SignInView): swapping them out makes iOS offer to save a
+ * password. The keyboard stays with whichever is showing.
+ */
+struct RevealingSecureField: View {
+    let placeholder: String
+    @Binding var text: String
+    var content: UITextContentType? = .password
+    var submit: (() -> Void)? = nil
+    @State private var shown = false
+    @FocusState private var focus: Bool?
+
+    var body: some View {
+        HStack {
             ZStack {
-                SecureField("Required", text: $text).opacity(shown ? 0 : 1)
-                TextField("Required", text: $text).opacity(shown ? 1 : 0)
+                SecureField(placeholder, text: $text).focused($focus, equals: false)
+                    .opacity(shown ? 0 : 1).accessibilityHidden(shown)
+                TextField(placeholder, text: $text).focused($focus, equals: true)
+                    .opacity(shown ? 1 : 0).accessibilityHidden(!shown)
             }
             .textContentType(content).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button { shown.toggle() } label: { Image(systemName: shown ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted) }
-                .buttonStyle(.plain).accessibilityLabel(shown ? "Hide password" : "Show password")
+            .onSubmit { submit?() }
+            Button {
+                shown.toggle()
+                if focus != nil { focus = shown }
+            } label: {
+                Image(systemName: shown ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted)
+            }
+            .buttonStyle(.plain).accessibilityLabel(shown ? "Hide password" : "Show password")
         }
     }
 }
