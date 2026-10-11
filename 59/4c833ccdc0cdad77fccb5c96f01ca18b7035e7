@@ -1,0 +1,21 @@
+apps/web/src/lib/sealed-copy.ts
+  s_75dbe24a0bc379::t_da855ac5062ac6 10-15
+apps/web/src/components/drive/details-panel.tsx
+  s_75dbe24a0bc379::t_da855ac5062ac6 235-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "594c833ccdc0cdad77fccb5c96f01ca18b7035e7",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
