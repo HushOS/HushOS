@@ -278,7 +278,8 @@ function MiddleName({ name }: { name: string }) {
     if (cut < 8) return <span className="truncate">{name}</span>;
     return (
         <>
-            <span className="truncate">{name.slice(0, cut)}</span>
+            {/* A space right at the cut would be dropped from the end of this part, so it is held as a no-break space. */}
+            <span className="truncate">{name.slice(0, cut).replace(/ $/, ' ')}</span>
             <span className="shrink-0 whitespace-pre">{name.slice(cut)}</span>
         </>
     );
