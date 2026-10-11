@@ -1,0 +1,68 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_75dbe24a0bc379::t_c92c94a9751e3f 23-25,88
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_75dbe24a0bc379::t_57b9dc5212cd2f 105,115-117
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_75dbe24a0bc379::t_57b9dc5212cd2f 397
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/GranterTrustTests.swift
+  s_75dbe24a0bc379::t_19d5ae939f5717 1-36
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_75dbe24a0bc379::t_57b9dc5212cd2f 238-242
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_75dbe24a0bc379::t_c92c94a9751e3f 40-41
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_75dbe24a0bc379::t_a671d0a1a66267 52-67
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_75dbe24a0bc379::t_d1abee1bf56d10 9-11,37,39,43,61,66,96,99,103,142,148,154,210-212,226,303-304,362
+apps/ios/Files/FileProviderExtension.swift
+  s_75dbe24a0bc379::t_0b4a52b4e9b8e1 20,28-29
+apps/ios/App/BackgroundTransfers.swift
+  s_75dbe24a0bc379::t_5f5e86d098b21d 91-92
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_75dbe24a0bc379::t_dab364b0a9f19e 16,18-19,86-87,153,163-164,208-209
+  s_75dbe24a0bc379::t_5c88ab4d5e20ee 154
+apps/ios/App/SearchView.swift
+  s_75dbe24a0bc379::t_e71e5865190627 18-19,150-151
+apps/ios/App/Received.swift
+  s_75dbe24a0bc379::t_2448afb782f04c 196
+  s_75dbe24a0bc379::t_33a39c714a11ed 194-195,197-209
+  s_75dbe24a0bc379::t_9ef4c35300253b 287
+apps/ios/App/HushOSApp.swift
+  s_75dbe24a0bc379::t_5f5e86d098b21d 12-14
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Places.swift
+  s_75dbe24a0bc379::t_d1abee1bf56d10 10,20-21,23,25,27
+apps/ios/App/Sharing.swift
+  s_75dbe24a0bc379::t_9ef4c35300253b 411
+apps/ios/Files/FileProviderEnumerator.swift
+  s_75dbe24a0bc379::t_0b4a52b4e9b8e1 37
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_75dbe24a0bc379::t_9ab2c465478b9c 1-93
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_75dbe24a0bc379::t_57b9dc5212cd2f 285
+apps/ios/Share/SaveModel.swift
+  s_75dbe24a0bc379::t_a671d0a1a66267 42-44,52-53,218
+apps/ios/App/AccountView.swift
+  s_75dbe24a0bc379::t_3b7cc64ab6661b 679-680
+  s_75dbe24a0bc379::t_9ef4c35300253b 676-678,713
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_75dbe24a0bc379::t_e33b03102b1ba0 8-9,13-15,18-39,59,67,84
+  s_75dbe24a0bc379::t_2448afb782f04c 16-17
+apps/ios/AGENTS.md
+  s_75dbe24a0bc379::t_61d049a1dd528d 62-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad58965ae1d7ef0f35a47d48ffe2040dffdf81a8",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
