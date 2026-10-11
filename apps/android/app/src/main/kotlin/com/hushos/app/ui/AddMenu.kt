@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.DriveFolderUpload
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.UploadFile
@@ -60,7 +61,7 @@ import java.io.File
 private data class Clash(val uri: Uri, val name: String)
 
 /* What the + menu does in a folder: each starts its picker, the camera or the New folder dialog. */
-class Adder(val pickFiles: () -> Unit, val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val newFolder: () -> Unit)
+class Adder(val pickFiles: () -> Unit, val pickFolder: () -> Unit, val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val newFolder: () -> Unit)
 
 /*
  * Adding into a folder, for Files and Home alike: the pickers, the camera, the same-name
@@ -92,6 +93,16 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
         if (found.isEmpty()) model.upload(uris, folderId) else { batch = uris; clashes = found; decided = emptyMap() }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { startUpload(it) }
+    // A picked folder comes in whole, as on the web: its folders merge with any of the same name
+    // already there, at every depth, and each file whose name is taken in its folder gets the same
+    // question (keep both takes the name the question offers). Cancel adds none of those.
+    var folderClashes by remember { mutableStateOf<List<DriveViewModel.FolderClash>>(emptyList()) }
+    var folderAnswers by remember { mutableStateOf<Map<Uri, Pair<DriveViewModel.Conflict, String>>>(emptyMap()) }
+    var claimed by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree == null || folderId == null) return@rememberLauncherForActivityResult
+        model.uploadFolder(tree, folderId, folderName) { found, taken -> folderClashes = found; folderAnswers = emptyMap(); claimed = taken }
+    }
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { startUpload(it) }
     var photoFile by rememberSaveable { mutableStateOf<String?>(null) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
@@ -120,7 +131,7 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
 
     clashes.firstOrNull { it.uri !in decided }?.let { clash ->
         val left = clashes.filter { it.uri !in decided && it != clash }
-        ClashDialog(clash, left, model.freeName(clash.name, taken),
+        ClashDialog(clash, left, folderName, model.freeName(clash.name, taken),
             cancel = { clashes = emptyList(); batch = emptyList(); decided = emptyMap() },
         ) { choice, forAll ->
             val next = decided + (clash.uri to choice) + if (forAll) left.associate { it.uri to choice } else emptyMap()
@@ -129,6 +140,31 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
                 val keep = clashes.filter { next[it.uri] == DriveViewModel.Conflict.KEEP_BOTH }
                 if (keep.isEmpty()) { send(batch, next, emptyMap()); clashes = emptyList(); batch = emptyList() }
                 else renames = keep.associate { it.name to model.freeName(it.name, taken) }
+            }
+        }
+    }
+    folderClashes.firstOrNull { it.uri !in folderAnswers }?.let { asked ->
+        val left = folderClashes.filter { it.uri !in folderAnswers && it != asked }
+        ClashDialog(Clash(asked.uri, asked.name), left.map { Clash(it.uri, it.name) }, asked.folderName, model.freeName(asked.name, claimed[asked.folderId].orEmpty()),
+            cancel = { folderClashes = emptyList(); folderAnswers = emptyMap() },
+        ) { choice, forAll ->
+            // Keep both takes the next free name in that folder, so two copies never get the same one.
+            var names = claimed
+            var answers = folderAnswers
+            for (clash in listOf(asked) + if (forAll) left else emptyList()) {
+                var name = clash.name
+                if (choice == DriveViewModel.Conflict.KEEP_BOTH) {
+                    name = model.freeName(clash.name, names[clash.folderId].orEmpty())
+                    names = names + (clash.folderId to names[clash.folderId].orEmpty() + name.lowercase())
+                }
+                answers = answers + (clash.uri to (choice to name))
+            }
+            claimed = names
+            folderAnswers = answers
+            if (folderClashes.all { it.uri in answers }) {
+                model.uploadAnswered(folderClashes.map { it to answers.getValue(it.uri) })
+                folderClashes = emptyList()
+                folderAnswers = emptyMap()
             }
         }
     }
@@ -166,6 +202,7 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
     }
     return Adder(
         pickFiles = { picker.launch(arrayOf("*/*")) },
+        pickFolder = { folderPicker.launch(null) },
         pickPhotos = { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
         takePhoto = ::takePhoto,
         newFolder = { newFolder = "" },
@@ -174,7 +211,7 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
 
 /*
  * The + button and its menu, Files' and Home's: Paste (when the clipboard can go here), New
- * folder, Take photo, Upload photos, and Upload files nearest the button. `lift` raises it over
+ * folder, Take photo, Upload photos, Upload folder, and Upload files nearest the button. `lift` raises it over
  * a paste bar; it also rises over the notice and transfer bars at the foot.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -203,6 +240,7 @@ fun AddButton(open: Boolean, onOpen: (Boolean) -> Unit, add: Adder, paste: Pair<
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.newFolder() }, icon = { Icon(Icons.Outlined.CreateNewFolder, null) }, text = { Text("New folder") })
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.takePhoto() }, icon = { Icon(Icons.Outlined.PhotoCamera, null) }, text = { Text("Take photo") })
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.pickPhotos() }, icon = { Icon(Icons.Outlined.PhotoLibrary, null) }, text = { Text("Upload photos") })
+        FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.pickFolder() }, icon = { Icon(Icons.Outlined.DriveFolderUpload, null) }, text = { Text("Upload folder") })
         // The most used, nearest the button.
         FloatingActionButtonMenuItem(containerColor = alpine.primary, contentColor = alpine.onPrimary, onClick = { onOpen(false); add.pickFiles() }, icon = { Icon(Icons.Outlined.UploadFile, null) }, text = { Text("Upload files") })
     }
@@ -210,7 +248,7 @@ fun AddButton(open: Boolean, onOpen: (Boolean) -> Unit, add: Adder, paste: Pair<
 
 /* One name clash: Replace, Keep both or Skip, each saying what it does, and whether to do the same for the rest. */
 @Composable
-private fun ClashDialog(clash: Clash, others: List<Clash>, freeName: String, cancel: () -> Unit, decide: (DriveViewModel.Conflict, Boolean) -> Unit) {
+private fun ClashDialog(clash: Clash, others: List<Clash>, folderName: String, freeName: String, cancel: () -> Unit, decide: (DriveViewModel.Conflict, Boolean) -> Unit) {
     var choice by remember(clash.uri) { mutableStateOf(DriveViewModel.Conflict.REPLACE) }
     var same by remember(clash.uri) { mutableStateOf(true) }
     val options = listOf(
@@ -223,7 +261,8 @@ private fun ClashDialog(clash: Clash, others: List<Clash>, freeName: String, can
         title = { Text("“${clash.name}” is already here") },
         text = {
             Column {
-                Text("What should happen to the one you’re adding?", modifier = Modifier.padding(bottom = 8.dp))
+                // Which folder, as the web says it: a folder upload asks about files at every depth.
+                Text("“$folderName” already has a file with this name. What should happen to the one you’re adding?", modifier = Modifier.padding(bottom = 8.dp))
                 for ((value, label, detail) in options) Row(
                     Modifier.fillMaxWidth().selectable(selected = choice == value, role = Role.RadioButton) { choice = value }.padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,

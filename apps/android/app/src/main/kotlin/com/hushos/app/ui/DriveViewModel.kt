@@ -1382,6 +1382,73 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /* One file of a picked folder whose name its destination folder already has. */
+    data class FolderClash(val uri: Uri, val name: String, val folderId: String, val folderName: String)
+
+    /*
+     * A picked folder, as the web takes a dropped one: every folder it needs, parents first,
+     * reusing one of the same name already there at each depth; then the files with free names
+     * go at once and `ask` gets the ones whose names are taken, with the names in use in each
+     * destination. The listings read here are the ones the upload checks names against.
+     */
+    fun uploadFolder(tree: Uri, into: String, intoName: String, ask: (List<FolderClash>, Map<String, Set<String>>) -> Unit) = viewModelScope.launch {
+        val picked = withContext(Dispatchers.IO) { runCatching { com.hushos.app.data.FolderPick.read(context.contentResolver, tree) }.getOrNull() }
+        if (picked == null) { notify("Couldn’t open that folder. Try choosing it again."); return@launch }
+        val (files, folders) = picked
+        val ticket = begin("upload", folders.firstOrNull()?.firstOrNull() ?: "Folder")
+        _state.update { s -> s.copy(transfers = s.transfers.map { if (it.id == ticket) it.copy(waiting = true) else it }) }
+        try {
+            sync()
+            val listings = HashMap<String, List<Opened>>()
+            val made = HashSet<String>()
+            suspend fun listing(id: String): List<Opened>? {
+                if (id in made) return emptyList()
+                listings[id]?.let { return it }
+                val children = io { it.listChildren(id) } ?: return null
+                listings[id] = children
+                _state.update { it.copy(folders = it.folders + (id to children)) }
+                return children
+            }
+            val places = hashMapOf<List<String>, Pair<String, String>>(emptyList<String>() to (into to intoName))
+            for (path in com.hushos.app.data.FolderPick.plan(files.map { it.path }, folders)) {
+                val parent = places[path.dropLast(1)] ?: continue
+                val name = path.last()
+                val children = listing(parent.first) ?: return@launch
+                val same = children.firstOrNull { it.isFolder && it.name == name }
+                if (same != null) { places[path] = same.id to same.name; continue }
+                var created: Opened? = null
+                if (!write(parent.first) { created = it.createFolder(parent.first, name) }) return@launch
+                val folder = created ?: return@launch
+                made.add(folder.id)
+                places[path] = folder.id to folder.name
+            }
+            val free = LinkedHashMap<String, MutableList<Uri>>()
+            val clashes = ArrayList<FolderClash>()
+            val taken = HashMap<String, MutableSet<String>>()
+            for (file in files) {
+                val place = places[file.path] ?: continue
+                val children = listing(place.first) ?: continue
+                val names = taken.getOrPut(place.first) { children.map { it.name.lowercase() }.toMutableSet() }
+                if (children.any { !it.isFolder && it.name.equals(file.name, ignoreCase = true) }) clashes.add(FolderClash(file.uri, file.name, place.first, place.second))
+                else { free.getOrPut(place.first) { ArrayList() }.add(file.uri); names.add(file.name.lowercase()) }
+            }
+            for ((folder, uris) in free) upload(uris, folder)
+            if (clashes.isNotEmpty()) ask(clashes, taken)
+        } finally {
+            drop(ticket)
+        }
+    }
+
+    /* The answers about a picked folder's taken names: each destination gets its replacements and its renamed copies. */
+    fun uploadAnswered(answers: List<Pair<FolderClash, Pair<Conflict, String>>>) {
+        for ((folder, group) in answers.groupBy { it.first.folderId }) {
+            val replace = group.filter { it.second.first == Conflict.REPLACE }.map { it.first.uri }
+            val keep = group.filter { it.second.first == Conflict.KEEP_BOTH }
+            if (keep.isNotEmpty()) upload(keep.map { it.first.uri }, folder, Conflict.KEEP_BOTH, keep.associate { it.first.name to it.second.second })
+            if (replace.isNotEmpty()) upload(replace, folder, Conflict.REPLACE)
+        }
+    }
+
     /* A photo the camera app wrote into the cache: uploaded like a picked file, then its cache copy goes. */
     fun uploadTaken(file: File, folder: String) = viewModelScope.launch {
         upload(listOf(FileProvider.getUriForFile(context, "${context.packageName}.shared", file)), folder).join()
