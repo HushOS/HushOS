@@ -197,10 +197,21 @@ extension Vault {
     /* One opened item by id, when this device knows it (the catalogue opens the whole drive). */
     public func openedItem(_ id: String) -> Opened? { opened[id] }
 
-    /* Everything opened in this workspace, for search. */
+    /*
+     * Everything live in this workspace, for Recent, search and tags: not trashed, and no trashed
+     * folder above it. Trashing a folder marks only the folder, so what is inside it is ruled out
+     * by its ancestors (the web catalogue's rule). Answers are remembered for the one call.
+     */
     public func catalogueAll() -> [Opened] {
         guard catalogueState == .ready, let ws = workspace?.workspaceId else { return [] }
-        return opened.values.filter { $0.node.workspaceId == ws && $0.node.trashedAt == nil }
+        var live: [String: Bool] = [:]
+        func isLive(_ item: Opened) -> Bool {
+            if let known = live[item.id] { return known }
+            let value = item.node.trashedAt == nil && (item.node.parentId.flatMap { opened[$0] }.map(isLive) ?? true)
+            live[item.id] = value
+            return value
+        }
+        return opened.values.filter { $0.node.workspaceId == ws && isLive($0) }
     }
 
     /* What changed most recently below the top folder, folders included (as the web's Recent), from the catalogue. */
