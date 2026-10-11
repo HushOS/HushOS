@@ -400,9 +400,10 @@ fun PasswordField(value: String, onChange: (String) -> Unit, label: String, modi
 @Composable
 private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
-    var current by rememberSaveable { mutableStateOf("") }
-    var new by rememberSaveable { mutableStateOf("") }
-    var repeat by rememberSaveable { mutableStateOf("") }
+    // Passwords stay in memory, never in saved state (which outlives the process on disk).
+    var current by remember { mutableStateOf("") }
+    var new by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val mismatch = repeat.isNotEmpty() && new != repeat
@@ -443,6 +444,7 @@ fun PhraseScreen(model: DriveViewModel, fresh: String?, onDone: () -> Unit) {
     var saved by rememberSaveable { mutableStateOf(false) }
     var checking by rememberSaveable { mutableStateOf(false) }
     var attempt by remember { mutableStateOf(0) }
+    SecureWindow()
     LaunchedEffect(attempt) { failed = false; kit = model.recoveryKit(); if (kit == null) failed = true }
     // The kit file is only on this phone while this page is open.
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
@@ -474,7 +476,7 @@ fun PhraseScreen(model: DriveViewModel, fresh: String?, onDone: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                         Button(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
                         OutlinedButton(onClick = {
-                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Recovery phrase", current.phrase))
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip("Recovery phrase", current.phrase))
                             model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
                         }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
                     }
@@ -623,7 +625,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
         AccountRow("Delete account", "Every file, every earlier version and the account. It can’t be undone.", Icons.Outlined.DeleteForever, danger = true) { deleting = true }
     }
     if (deleting) {
-        var password by rememberSaveable { mutableStateOf("") }
+        var password by remember { mutableStateOf("") }
         var typed by rememberSaveable { mutableStateOf("") }
         var pending by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
@@ -655,7 +657,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
 @Composable
 private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
-    var password by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var phrase by rememberSaveable { mutableStateOf<String?>(null) }

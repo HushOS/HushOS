@@ -175,6 +175,7 @@ private fun KitStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow, in
     val alpine = Alpine.colors
     val context = LocalContext.current
     // The words stay in memory, never in saved state: a rotation keeps them, a restart doesn't.
+    SecureWindow()
     var mode by remember { mutableStateOf(KitMode.CHOOSE) }
     var kit by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
     var notKit by remember { mutableStateOf(false) }

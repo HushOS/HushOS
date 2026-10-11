@@ -78,7 +78,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     } catch (e: FileNotFoundException) {
         throw e
     } catch (e: Exception) {
-        android.util.Log.w("HushOSFiles", "provider request failed", e)
+        // The message can carry a decrypted name or path: only the exception's type goes to the log.
+        android.util.Log.w("HushOSFiles", "provider request failed: ${e.javaClass.name}")
         throw FileNotFoundException(e.message ?: e.toString())
     }
 

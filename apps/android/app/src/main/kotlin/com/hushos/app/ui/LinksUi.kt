@@ -1,6 +1,5 @@
 package com.hushos.app.ui
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -118,7 +117,7 @@ import java.util.Locale
 import java.util.Optional
 
 private fun copyToClipboard(context: Context, label: String, text: String) {
-    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
+    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip(label, text))
 }
 
 private fun firstName(name: String, email: String = "") = name.trim().split(Regex("\\s+")).firstOrNull { it.isNotEmpty() } ?: email.substringBefore('@')

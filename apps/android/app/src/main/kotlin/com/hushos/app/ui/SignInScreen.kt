@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Row
@@ -57,7 +58,8 @@ private fun hostOf(origin: String) = runCatching { java.net.URI(origin).host }.g
 fun SignInScreen(model: DriveViewModel, state: DriveState) {
     val alpine = Alpine.colors
     var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    // In memory only: saved state is written to disk when the process is put away.
+    var password by remember { mutableStateOf("") }
     var pending by rememberSaveable { mutableStateOf(false) }
     var emailError by rememberSaveable { mutableStateOf<String?>(null) }
     var passwordError by rememberSaveable { mutableStateOf<String?>(null) }

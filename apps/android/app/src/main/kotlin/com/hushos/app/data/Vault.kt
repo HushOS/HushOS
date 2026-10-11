@@ -290,7 +290,7 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun contacts(): List<ContactPin> = loadSettings().contacts.values.sortedByDescending { it.pinnedAt }
 
     /* This account's own fingerprint, for the other person to check. */
-    fun ownFingerprint(): String = identityFingerprint(base64urlDecode(identityKeys().encryptionPublicKey))
+    fun ownFingerprint(): String = identityKeys().let { identityFingerprint(base64urlDecode(it.encryptionPublicKey), base64urlDecode(it.signingPublicKey)) }
 
     /* A person by email, with what the pin says about them. */
     fun lookup(email: String): Lookup {
@@ -298,7 +298,8 @@ class Vault(private val context: Context, val api: DriveApi) {
         val pinned = loadSettings().contacts[contact.userId]
         var changed = false
         if (pinned != null) {
-            if (pinned.encryptionPublicKey != contact.encryptionPublicKey) changed = true
+            // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
+            if (pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey) changed = true
             if (pinned.kemPublicKeyHash != null && pinned.kemPublicKeyHash != contact.kemHash) changed = true
         }
         return Lookup(contact, pinned, changed)
@@ -336,7 +337,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         val contact = Auth.lookupContact(context, pin.email)
         if (contact.userId != pin.userId || contact.encryptionPublicKey != pin.encryptionPublicKey) throw ContactChanged()
         var kemPublic: ByteArray? = null
-        if (contact.kemPublicKey != null && contact.kemSigned) {
+        if (contact.kemPublicKey != null && contact.kemSignedFor(pin)) {
             val hash = contact.kemHash
             if (pin.kemPublicKeyHash != null) {
                 if (pin.kemPublicKeyHash != hash) throw ContactChanged()
@@ -463,7 +464,8 @@ class Vault(private val context: Context, val api: DriveApi) {
                 if (failure != null) Offline.clearFailure(context, file.id)
             } catch (error: Exception) {
                 if (KeepRules.failsTheJob(error)) throw error
-                android.util.Log.w("HushOSOffline", "keeping ${file.id} in ${folder.id} failed", error)
+                // An exception's message can carry a file name or path: only its type is logged.
+                android.util.Log.w("HushOSOffline", "keeping ${file.id} in ${folder.id} failed: ${error.javaClass.name}")
                 Offline.recordFailure(context, KeepRules.failed(failure, file.id, folder.id, file.name, error.message ?: "It didn’t download.", System.currentTimeMillis()))
             }
             doneBytes += size
@@ -545,7 +547,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             try {
                 keepDownloaded(item) { progress(entry.id, it) }
             } catch (error: Exception) {
-                android.util.Log.w("HushOSOffline", "refreshing the kept copy of ${entry.id} failed", error)
+                android.util.Log.w("HushOSOffline", "refreshing the kept copy of ${entry.id} failed: ${error.javaClass.name}")
                 failed[entry.id] = error
             }
         }
@@ -558,20 +560,22 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
     private fun workspaceOf(nodeId: String): String = opened[nodeId]?.node?.workspaceId ?: workspaceId
 
-    /* A share as received, with its root opened under the key the granter sealed to this identity. */
-    data class ShareMount(val share: ShareView, val root: Opened?, val error: String?)
+    /* A share as received, with its root opened under the key the granter sealed to this identity; `trust` when the granter's key kept it shut. */
+    data class ShareMount(val share: ShareView, val root: Opened?, val error: String?, val trust: GranterTrust? = null)
 
     fun mountShares(): List<ShareMount> {
         val shares = api.sharedWithMe()
         if (shares.isEmpty()) return emptyList()
         val keys = identityKeys()
+        val pins = loadSettings().contacts
         return shares.map { share ->
             runCatching {
-                val key = shareOpen(base64urlDecode(share.shareEnvelope), base64urlDecode(share.granterPublicKey), keys,
+                val granter = granterKey(share.granterId, share.granterName.ifEmpty { share.granterEmail }, share.granterPublicKey, pins)
+                val key = shareOpen(base64urlDecode(share.shareEnvelope), granter, keys,
                     ShareContext(share.workspaceId, share.node.id, share.keyEpoch, api.session.userId, share.granterId))
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
                 ShareMount(share, adopt(share.node, key, metadata), null)
-            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.") }
+            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust) }
         }
     }
     fun item(id: String): Opened? = opened[id]
@@ -675,7 +679,9 @@ class Vault(private val context: Context, val api: DriveApi) {
         if (v.content.thumbnailBytes == 0u) return null
         val ciphertext = mirror.thumbnail(v.versionId) ?: run {
             val url = api.thumbnailUrl(v.versionId, item.node.workspaceId) ?: return null
-            api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes)).also { mirror.putThumbnail(v.versionId, it) }
+            // The range is a fixed tail window (so the store never learns the trailer's length); keep only the trailer at its end.
+            val window = api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes))
+            window.copyOfRange(maxOf(0, window.size - v.content.thumbnailBytes.toInt() - 16), window.size).also { mirror.putThumbnail(v.versionId, it) }
         }
         return thumbnailDecrypt(v.content, ciphertext)
     }

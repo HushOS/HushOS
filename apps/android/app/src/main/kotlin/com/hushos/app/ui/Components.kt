@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -381,3 +382,31 @@ fun openWebPage(context: android.content.Context, url: String) {
 /* The server's own privacy policy and terms (hushos.com's by default); app=1 drops the site's links to plans. */
 fun privacyUrl(origin: String) = origin.trimEnd('/') + "/privacy?app=1"
 fun termsUrl(origin: String) = origin.trimEnd('/') + "/terms?app=1"
+
+/*
+ * A clip Android keeps out of its copy preview and keyboards' suggestions: a recovery phrase,
+ * or a link whose secret opens the file. The flag's constant arrived in API 33; older
+ * releases that honour it read the same key.
+ */
+internal fun sensitiveClip(label: String, text: String): android.content.ClipData =
+    android.content.ClipData.newPlainText(label, text).apply {
+        description.extras = android.os.PersistableBundle().apply {
+            putBoolean(
+                if (android.os.Build.VERSION.SDK_INT >= 33) android.content.ClipDescription.EXTRA_IS_SENSITIVE else "android.content.extra.IS_SENSITIVE",
+                true,
+            )
+        }
+    }
+
+/* Keeps the window out of screenshots, screen recordings and the recents preview while it shows a recovery phrase. */
+@Composable
+internal fun SecureWindow() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val window = remember(context) {
+        generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.filterIsInstance<android.app.Activity>().firstOrNull()?.window
+    }
+    androidx.compose.runtime.DisposableEffect(window) {
+        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
+    }
+}

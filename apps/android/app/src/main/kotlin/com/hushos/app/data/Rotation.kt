@@ -76,7 +76,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Int {
         val kemBytes = base64urlDecode(kem.getString("publicKey"))
         val digest = keyDigest(kemBytes)
         pin.kemPublicKeyHash?.let { return if (it == digest) publicKey to kemBytes else null }
-        val signed = kemBindingVerify(granteeId, served.getString("encryptionPublicKey"), served.getString("signingPublicKey"), kem.getString("publicKey"), kem.getString("signature"))
+        // Only the pinned signing key may vouch: the words compared cover it, the served one could be anyone's.
+        val signed = kemBindingVerify(granteeId, pin.encryptionPublicKey, pin.signingPublicKey, kem.getString("publicKey"), kem.getString("signature"))
         return publicKey to (if (signed) kemBytes else null)
     }
 

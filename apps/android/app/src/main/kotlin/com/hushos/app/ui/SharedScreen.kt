@@ -1,11 +1,11 @@
 package com.hushos.app.ui
 
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hushos.app.data.GranterTrust
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SharedByMe
 import com.hushos.app.data.Vault
@@ -179,7 +180,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                                 EmptyState("Nothing shared with you yet", "When someone shares a folder or file with you, it shows up here.", Icons.Outlined.Group, modifier = Modifier.padding(top = 64.dp))
                             }
                         }
-                        items(shares.orEmpty(), key = { it.share.id }) { mount -> ReceivedRow(model, state, mount, onOpen = { mount.root?.let { open(it) } }, onMore = { received = mount }) }
+                        items(shares.orEmpty(), key = { it.share.id }) { mount -> ReceivedRow(model, state, mount, onOpen = { mount.root?.let { open(it) } }, onMore = { received = mount }, onPeople = { people = true }) }
                     } else {
                         val rows = mine
                         val withPeople = rows.orEmpty().filter { it.share != null }.groupBy { it.node.id }
@@ -251,7 +252,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                     scope.launch {
                         val url = model.linkUrl(link.link, row.item)
                         if (url != null) {
-                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("HushOS link", url))
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip("HushOS link", url))
                             model.notify("Link copied. Anyone with it can view “${row.name}”.")
                         } else model.notify("This link was made before links could be shown again. Turn it off and make a new one.")
                     }
@@ -308,10 +309,25 @@ private fun whoOf(row: Outgoing): String {
 /* Something someone shared with this account: its mark, its name, who and what you can do. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.ShareMount, onOpen: () -> Unit, onMore: () -> Unit) {
+private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.ShareMount, onOpen: () -> Unit, onMore: () -> Unit, onPeople: () -> Unit) {
     val alpine = Alpine.colors
     val root = mount.root
     val from = first(mount.share.granterName, mount.share.granterEmail)
+    val trust = mount.trust
+    if (root == null && trust != null) {
+        // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
+        val unverified = trust is GranterTrust.Unverified
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onPeople).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).background(if (unverified) alpine.tint else alpine.dangerSoft, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(if (unverified) Icons.Outlined.Group else Icons.Outlined.WarningAmber, null, tint = if (unverified) alpine.inkMuted else alpine.danger, modifier = Modifier.size(20.dp))
+            }
+            Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+                Text("Shared by $from", style = MaterialTheme.typography.bodyLarge)
+                Text(trust.message.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = if (unverified) alpine.inkMuted else alpine.danger)
+            }
+        }
+        return
+    }
     if (root == null) {
         // A share whose name can't be read: who it came from, and what to do.
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
