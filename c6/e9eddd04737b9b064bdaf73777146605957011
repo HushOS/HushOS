@@ -1,0 +1,27 @@
+apps/web/src/components/drive/tag-dialog.tsx
+  s_b5938b5134af95::t_a11d3977bde6c5 82
+  h_f7ba60a6997566 16,30,51
+  s_b5938b5134af95::t_59291035b5a853 47-48,56,78,210
+  h_f7ba60a6997566 17-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c6e9eddd04737b9b064bdaf73777146605957011",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  },
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
