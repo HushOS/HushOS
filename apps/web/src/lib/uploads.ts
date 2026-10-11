@@ -71,17 +71,8 @@ export async function enqueueDropped(
                     .map((child) => [child.name.toLowerCase(), child]),
             ),
         );
-    const free: EnqueueInput[] = [];
-    const collisions: { input: EnqueueInput; replaces: DriveNode }[] = [];
-    for (const entry of files) {
-        const parent = parents.get(entry.path.join('/')) ?? folder;
-        const input = { file: entry.file, parent, handle: entry.handle };
-        const replaces = existing.get(parent.id)?.get(entry.file.name.toLowerCase());
-        if (replaces) collisions.push({ input, replaces });
-        else free.push(input);
-    }
-    const ids = transfers.enqueue(free);
-    // Names claimed by this drop so far, per folder, so "keep both" cannot collide twice.
+    // Names claimed by this drop so far, per folder, so neither a second file of the same name
+    // nor a "keep both" name can land on one already given out.
     const claimed = new Map<string, Set<string>>();
     const takenIn = (parent: DriveNode) => {
         let set = claimed.get(parent.id);
@@ -91,7 +82,24 @@ export async function enqueueDropped(
         }
         return set;
     };
-    for (const input of free) takenIn(input.parent).add(input.file.name);
+    const free: EnqueueInput[] = [];
+    const collisions: { input: EnqueueInput; replaces: DriveNode }[] = [];
+    for (const entry of files) {
+        const parent = parents.get(entry.path.join('/')) ?? folder;
+        const input = { file: entry.file, parent, handle: entry.handle };
+        const replaces = existing.get(parent.id)?.get(entry.file.name.toLowerCase());
+        if (replaces) {
+            collisions.push({ input, replaces });
+            continue;
+        }
+        // Two same-named files with nothing in the folder to clash with (dragged from a search
+        // window, say) land as "name" and "name (2)", as on the phones.
+        const taken = takenIn(parent);
+        const name = nextName(entry.file.name, taken);
+        taken.add(name);
+        free.push(name === entry.file.name ? input : { ...input, name });
+    }
+    const ids = transfers.enqueue(free);
     let standing: CollisionDecision | null = null;
     for (const [index, { input, replaces }] of collisions.entries()) {
         const taken = takenIn(input.parent);
