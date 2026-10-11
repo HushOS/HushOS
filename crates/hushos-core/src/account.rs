@@ -2,7 +2,7 @@
 //! remembered on the device under a fresh AES-256-GCM key that the app keeps
 //! in the platform keychain, and restored from that memory on later launches.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use aes_gcm::aead::{Aead as _, Payload};
@@ -11,6 +11,8 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
+use std::fmt;
+use zeroize::Zeroizing;
 
 const GCM_NONCE_BYTES: usize = 12;
 const WRAPPED_KEY_BYTES: usize = KEY_BYTES + 16;
@@ -42,9 +44,10 @@ pub fn account_unlock(
     let salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
     let nonce = decode("wrappingNonce", &envelope.wrapping_nonce, Some(24))?;
     let ciphertext = decode("encryptedKey", &envelope.encrypted_key, Some(WRAPPED_KEY_BYTES))?;
-    let mut wrap = [0u8; KEY_BYTES];
+    let export_key = Zeroizing::new(export_key);
+    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&salt), &export_key)
-        .expand(b"hushos/account-key/password-wrap/v1", &mut wrap)
+        .expand(b"hushos/account-key/password-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let aad = context(&[
         json!("hushos/account-key/password-wrap"),
@@ -53,7 +56,7 @@ pub fn account_unlock(
         json!(envelope.key_version),
         json!(envelope.credential_version),
     ]);
-    let key = open_with_nonce(&wrap, &nonce, &ciphertext, &aad)?;
+    let key = open_with_nonce(wrap.as_slice(), &nonce, &ciphertext, &aad)?;
     expect_len("account key", &key, KEY_BYTES)
         .map_err(|_| CoreError::Sealed("Invalid account key.".into()))?;
     Ok(key)
@@ -80,6 +83,7 @@ pub fn account_seal(
     key_version: u64,
     credential_version: u64,
 ) -> CoreResult<AccountKeyEnvelope> {
+    let (export_key, account_key) = (Zeroizing::new(export_key), Zeroizing::new(account_key));
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     if export_key.is_empty() {
         return Err(input("exportKey is empty"));
@@ -89,9 +93,9 @@ pub fn account_seal(
     }
     let salt = random(32);
     let nonce = random(24);
-    let mut wrap = [0u8; KEY_BYTES];
+    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&salt), &export_key)
-        .expand(b"hushos/account-key/password-wrap/v1", &mut wrap)
+        .expand(b"hushos/account-key/password-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let aad = context(&[
         json!("hushos/account-key/password-wrap"),
@@ -100,7 +104,7 @@ pub fn account_seal(
         json!(key_version),
         json!(credential_version),
     ]);
-    let sealed = seal_with_nonce(&wrap, &nonce, &account_key, &aad)?;
+    let sealed = seal_with_nonce(wrap.as_slice(), &nonce, &account_key, &aad)?;
     Ok(AccountKeyEnvelope {
         envelope_version: 1,
         key_version,
@@ -127,12 +131,18 @@ pub struct RememberedDevice {
 }
 
 /// A fresh device key and the account key sealed under it.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeviceMemory {
     /// Keep in the platform keychain, never beside the bundle in plain storage.
     pub device_key: Vec<u8>,
     pub bundle: RememberedDevice,
+}
+
+impl fmt::Debug for DeviceMemory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceMemory").field("device_key", &Redacted).field("bundle", &self.bundle).finish()
+    }
 }
 
 fn device_context(bundle: &RememberedDevice) -> Vec<u8> {
@@ -165,6 +175,7 @@ pub fn device_remember(
     credential_version: u64,
     device_key_id: String,
 ) -> CoreResult<DeviceMemory> {
+    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     if key_version < 1 || credential_version < 1 {
         return Err(input("keyVersion and credentialVersion start at 1"));
@@ -190,6 +201,7 @@ pub fn device_remember(
 /// The inverse of [`device_remember`]: the account key from the bundle and the device key.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn device_restore(bundle: RememberedDevice, device_key: Vec<u8>) -> CoreResult<Vec<u8>> {
+    let device_key = Zeroizing::new(device_key);
     if bundle.version != 1 || bundle.key_version < 1 || bundle.credential_version < 1 {
         return Err(input("This saved account-key version is not supported."));
     }
@@ -328,6 +340,14 @@ mod tests {
         let mut other_user = memory.bundle;
         other_user.user_id = "user-2".into();
         assert!(matches!(device_restore(other_user, memory.device_key), Err(CoreError::Sealed(_))));
+    }
+
+    #[test]
+    fn a_debug_print_of_device_memory_hides_the_device_key() {
+        let memory = device_remember("u".into(), random(32), 1, 1, "d".into()).unwrap();
+        let printed = format!("{memory:?}");
+        assert!(!crate::bytes::shows(&printed, &memory.device_key), "{printed}");
+        assert!(printed.contains(&memory.bundle.encrypted_key), "the sealed bundle is not secret");
     }
 
     #[test]

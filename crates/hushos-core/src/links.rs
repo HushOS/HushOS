@@ -7,13 +7,15 @@
 //! sealed under the node key, so the URL can be shown again and the link
 //! survives a rotation without the password.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open, seal};
 use crate::error::{input, CoreError, CoreResult};
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest as _};
 use serde_json::json;
+use std::fmt;
+use zeroize::Zeroizing;
 
 pub(crate) const LINK_SECRET_BYTES: usize = 32;
 pub(crate) const LINK_TOKEN_BYTES: usize = 32;
@@ -60,7 +62,7 @@ fn link_context(ctx: &LinkContext, purpose: &str) -> Vec<u8> {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn link_password_key(password: Option<String>, salt: Vec<u8>) -> CoreResult<Vec<u8>> {
     expect_len("link salt", &salt, LINK_SALT_BYTES).map_err(|_| input("Invalid link salt."))?;
-    let Some(password) = password else { return Ok(vec![0u8; KEY_BYTES]) };
+    let Some(password) = password.map(Zeroizing::new) else { return Ok(vec![0u8; KEY_BYTES]) };
     let params = Params::new(65_536, 3, 4, Some(KEY_BYTES)).map_err(|_| input("argon2 parameters"))?;
     let mut out = vec![0u8; KEY_BYTES];
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
@@ -70,14 +72,14 @@ pub fn link_password_key(password: Option<String>, salt: Vec<u8>) -> CoreResult<
 }
 
 /* The link key: BLAKE2b-256 over the secret and the stretched password key. */
-fn link_key(secret: &[u8], from_password: &[u8]) -> CoreResult<[u8; KEY_BYTES]> {
+fn link_key(secret: &[u8], from_password: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("link secret", secret, LINK_SECRET_BYTES).map_err(|_| input("Invalid link secret."))?;
     expect_len("link password key", from_password, KEY_BYTES)
         .map_err(|_| input("Invalid link password key."))?;
     let mut hasher = Blake2b::<U32>::new();
     hasher.update(secret);
     hasher.update(from_password);
-    Ok(hasher.finalize().into())
+    Ok(Zeroizing::new(hasher.finalize().into()))
 }
 
 /// The node key sealed under the link key: the 72-byte `linkEnvelope` the server stores.
@@ -88,9 +90,11 @@ pub fn link_seal(
     secret: Vec<u8>,
     from_password: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
+    let (node_key, secret, from_password) =
+        (Zeroizing::new(node_key), Zeroizing::new(secret), Zeroizing::new(from_password));
     expect_len("node key", &node_key, KEY_BYTES)?;
     let key = link_key(&secret, &from_password)?;
-    seal(&key, &node_key, &link_context(&ctx, "hushos/drive/link"))
+    seal(key.as_slice(), &node_key, &link_context(&ctx, "hushos/drive/link"))
 }
 
 /// What a visitor does with the URL: the secret from the fragment, the
@@ -115,11 +119,12 @@ pub fn link_open(
     password: Option<String>,
     salt: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
+    let secret = Zeroizing::new(secret);
     if envelope.len() != LINK_ENVELOPE_BYTES {
         return Err(input("Invalid link envelope."));
     }
-    let key = link_key(&secret, &link_password_key(password, salt)?)?;
-    let opened = open(&key, &envelope, &link_context(&ctx, "hushos/drive/link"))
+    let key = link_key(&secret, &Zeroizing::new(link_password_key(password, salt)?))?;
+    let opened = open(key.as_slice(), &envelope, &link_context(&ctx, "hushos/drive/link"))
         .map_err(|_| CoreError::Sealed("This link could not be opened. The password may be wrong.".into()))?;
     expect_len("node key", &opened, KEY_BYTES)
         .map_err(|_| CoreError::Sealed("Invalid link envelope.".into()))?;
@@ -127,7 +132,7 @@ pub fn link_open(
 }
 
 /// The owner's copy of what makes a link, opened from its `secretEnvelope`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LinkSecret {
     /// The URL fragment, 32 bytes.
@@ -136,6 +141,17 @@ pub struct LinkSecret {
     pub token: Vec<u8>,
     /// The stretched password key; absent on envelopes from before it was kept.
     pub from_password: Option<Vec<u8>>,
+}
+
+/* Debug by hand: the secret opens the node, and the token with it finds the link. */
+impl fmt::Debug for LinkSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkSecret")
+            .field("secret", &Redacted)
+            .field("token", &Redacted)
+            .field("from_password", &self.from_password.as_ref().map(|_| Redacted))
+            .finish()
+    }
 }
 
 /// Seals the owner's copy under the node key: the 136-byte `secretEnvelope`.
@@ -147,11 +163,17 @@ pub fn link_secret_seal(
     token: Vec<u8>,
     from_password: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
+    let (node_key, secret, token, from_password) = (
+        Zeroizing::new(node_key),
+        Zeroizing::new(secret),
+        Zeroizing::new(token),
+        Zeroizing::new(from_password),
+    );
     expect_len("node key", &node_key, KEY_BYTES)?;
     expect_len("link secret", &secret, LINK_SECRET_BYTES).map_err(|_| input("Invalid link secret."))?;
     expect_len("link token", &token, LINK_TOKEN_BYTES).map_err(|_| input("Invalid link secret."))?;
     expect_len("link password key", &from_password, KEY_BYTES).map_err(|_| input("Invalid link secret."))?;
-    let mut plaintext = Vec::with_capacity(LINK_SECRET_BYTES + LINK_TOKEN_BYTES + KEY_BYTES);
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(LINK_SECRET_BYTES + LINK_TOKEN_BYTES + KEY_BYTES));
     plaintext.extend_from_slice(&secret);
     plaintext.extend_from_slice(&token);
     plaintext.extend_from_slice(&from_password);
@@ -165,7 +187,8 @@ pub fn link_secret_open(ctx: LinkContext, node_key: Vec<u8>, envelope: Vec<u8>) 
     if envelope.len() != SECRET_ENVELOPE_BYTES && envelope.len() != SECRET_ENVELOPE_LEGACY_BYTES {
         return Err(input("Invalid link secret envelope."));
     }
-    let plaintext = open(&node_key, &envelope, &link_context(&ctx, "hushos/drive/link-secret"))?;
+    let plaintext =
+        Zeroizing::new(open(&node_key, &envelope, &link_context(&ctx, "hushos/drive/link-secret"))?);
     let secret = plaintext[..LINK_SECRET_BYTES].to_vec();
     let token = plaintext[LINK_SECRET_BYTES..LINK_SECRET_BYTES + LINK_TOKEN_BYTES].to_vec();
     let rest = &plaintext[LINK_SECRET_BYTES + LINK_TOKEN_BYTES..];
@@ -174,7 +197,7 @@ pub fn link_secret_open(ctx: LinkContext, node_key: Vec<u8>, envelope: Vec<u8>) 
 }
 
 /// Everything the owner posts to `POST /api/drive/nodes/:id/links`, encoded.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CreatedLink {
     /// The path token, base64url: the URL is `{origin}/s/{token}#{secret}`.
@@ -185,6 +208,19 @@ pub struct CreatedLink {
     pub link_envelope: String,
     pub secret_envelope: String,
     pub has_password: bool,
+}
+
+impl fmt::Debug for CreatedLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CreatedLink")
+            .field("token", &Redacted)
+            .field("secret", &Redacted)
+            .field("link_salt", &self.link_salt)
+            .field("link_envelope", &self.link_envelope)
+            .field("secret_envelope", &self.secret_envelope)
+            .field("has_password", &self.has_password)
+            .finish()
+    }
 }
 
 /// Mints a link for a node the owner holds the key of: fresh secret, token
@@ -206,13 +242,14 @@ pub fn link_create(ctx: LinkContext, node_key: Vec<u8>, password: Option<String>
     if password.as_deref().is_some_and(str::is_empty) {
         return Err(input("A link password cannot be empty."));
     }
-    let secret = random(LINK_SECRET_BYTES);
-    let token = random(LINK_TOKEN_BYTES);
+    let secret = Zeroizing::new(random(LINK_SECRET_BYTES));
+    let token = Zeroizing::new(random(LINK_TOKEN_BYTES));
     let salt = random(LINK_SALT_BYTES);
     let has_password = password.is_some();
-    let from_password = link_password_key(password, salt.clone())?;
-    let link_envelope = link_seal(ctx.clone(), node_key.clone(), secret.clone(), from_password.clone())?;
-    let secret_envelope = link_secret_seal(ctx, node_key, secret.clone(), token.clone(), from_password)?;
+    let from_password = Zeroizing::new(link_password_key(password, salt.clone())?);
+    let link_envelope = link_seal(ctx.clone(), node_key.clone(), secret.to_vec(), from_password.to_vec())?;
+    let secret_envelope =
+        link_secret_seal(ctx, node_key, secret.to_vec(), token.to_vec(), from_password.to_vec())?;
     Ok(CreatedLink {
         token: encode(&token),
         secret: encode(&secret),
@@ -238,11 +275,11 @@ pub fn link_reseal(
     let owned = link_secret_open(ctx.clone(), node_key.clone(), secret_envelope)?;
     let salt = random(LINK_SALT_BYTES);
     let has_password = password.is_some();
-    let from_password = link_password_key(password, salt.clone())?;
+    let from_password = Zeroizing::new(link_password_key(password, salt.clone())?);
     let link_envelope =
-        link_seal(ctx.clone(), node_key.clone(), owned.secret.clone(), from_password.clone())?;
+        link_seal(ctx.clone(), node_key.clone(), owned.secret.clone(), from_password.to_vec())?;
     let secret_envelope =
-        link_secret_seal(ctx, node_key, owned.secret.clone(), owned.token.clone(), from_password)?;
+        link_secret_seal(ctx, node_key, owned.secret.clone(), owned.token.clone(), from_password.to_vec())?;
     Ok(CreatedLink {
         token: encode(&owned.token),
         secret: encode(&owned.secret),
@@ -287,11 +324,17 @@ pub fn link_parse(url: String) -> CoreResult<LinkParts> {
 }
 
 /// The two halves of a link URL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LinkParts {
     pub token: String,
     pub secret: String,
+}
+
+impl fmt::Debug for LinkParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkParts").field("token", &Redacted).field("secret", &Redacted).finish()
+    }
 }
 
 #[cfg(test)]
@@ -376,6 +419,24 @@ mod tests {
             .unwrap(),
             node_key
         );
+    }
+
+    #[test]
+    fn debug_prints_hide_the_link_secret_and_token() {
+        use crate::bytes::shows;
+        let node_key = random(32);
+        let link = link_create(ctx(), node_key.clone(), Some("open sesame".into())).unwrap();
+        let owned =
+            link_secret_open(ctx(), node_key, base64url_decode(link.secret_envelope.clone()).unwrap())
+                .unwrap();
+        let url = link_url("https://hushos.app".into(), link.token.clone(), link.secret.clone()).unwrap();
+        let parts = link_parse(url).unwrap();
+        for printed in [format!("{link:?}"), format!("{owned:?}"), format!("{parts:?}")] {
+            assert!(!printed.contains(&link.secret) && !printed.contains(&link.token), "{printed}");
+            assert!(!shows(&printed, &owned.secret) && !shows(&printed, &owned.token), "{printed}");
+            assert!(!shows(&printed, owned.from_password.as_ref().unwrap()), "{printed}");
+        }
+        assert!(format!("{link:?}").contains(&link.link_envelope), "the sealed envelope is not secret");
     }
 
     #[test]

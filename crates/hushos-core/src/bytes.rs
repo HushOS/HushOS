@@ -3,6 +3,7 @@
 use crate::error::{input, CoreResult};
 use base64::{engine::general_purpose as b64, Engine as _};
 use rand::RngCore;
+use std::fmt;
 
 pub(crate) const KEY_BYTES: usize = 32;
 pub(crate) const NONCE_BYTES: usize = 24;
@@ -32,6 +33,22 @@ pub(crate) fn expect_len(context: &str, bytes: &[u8], expected: usize) -> CoreRe
         return Err(input(format!("{context} must be {expected} bytes, got {}", bytes.len())));
     }
     Ok(())
+}
+
+/* What a Debug print shows in place of a key, a phrase or a link secret: that it is there, never what it is. */
+pub(crate) struct Redacted;
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/* Whether a Debug print shows these bytes in any form a careless impl would use: the derived list, hex or base64url. */
+#[cfg(test)]
+pub(crate) fn shows(printed: &str, secret: &[u8]) -> bool {
+    let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
+    printed.contains(&format!("{secret:?}")) || printed.contains(&hex) || printed.contains(&encode(secret))
 }
 
 pub(crate) fn random(length: usize) -> Vec<u8> {

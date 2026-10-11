@@ -20,6 +20,7 @@ use hkdf::Hkdf;
 use serde_json::json;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 const REPORT_KEY_INFO: &[u8] = b"hushos/drive/report-key/v2";
 const SEALED_BOX_BYTES: usize = 32 + 16 + KEY_BYTES + 32; // 112
@@ -106,15 +107,15 @@ pub fn kem_binding_verify(
 
 /* libsodium's crypto_box_seal: an ephemeral X25519 key, the nonce BLAKE2b-24 over both public keys, XSalsa20-Poly1305 with the tag first. */
 fn sealed_box(recipient_public: &[u8], plaintext: &[u8]) -> CoreResult<Vec<u8>> {
-    let ephemeral: [u8; 32] = random(32).try_into().expect("32 bytes");
-    let ephemeral_public = PublicKey::from(&StaticSecret::from(ephemeral));
-    let key = pair_key(recipient_public, &ephemeral)?;
+    let ephemeral = Zeroizing::new(<[u8; 32]>::try_from(random(32)).expect("32 bytes"));
+    let ephemeral_public = PublicKey::from(&StaticSecret::from(*ephemeral));
+    let key = pair_key(recipient_public, ephemeral.as_slice())?;
     let mut nonce_input = Vec::with_capacity(64);
     nonce_input.extend_from_slice(ephemeral_public.as_bytes());
     nonce_input.extend_from_slice(recipient_public);
     let nonce: [u8; 24] = Blake2b::<U24>::digest(&nonce_input).into();
     let mut body = plaintext.to_vec();
-    let tag = XSalsa20Poly1305::new((&key).into())
+    let tag = XSalsa20Poly1305::new((&*key).into())
         .encrypt_in_place_detached((&nonce).into(), b"", &mut body)
         .map_err(|_| CoreError::Sealed("encryption failed".into()))?;
     let mut out = Vec::with_capacity(SEALED_BOX_BYTES);
@@ -150,7 +151,7 @@ pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: Operator
         }
     };
     let suite = if kem.is_some() { 2 } else { 1 };
-    let mut plaintext = Vec::with_capacity(KEY_BYTES + 32);
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(KEY_BYTES + 32));
     plaintext.extend_from_slice(&node_key);
     plaintext.extend_from_slice(&digest(&report_context(&ctx, suite)));
     let Some(kem_public) = kem else {
@@ -158,19 +159,19 @@ pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: Operator
         debug_assert_eq!(sealed.len(), SEALED_BOX_BYTES);
         return Ok(sealed);
     };
-    let ephemeral: [u8; 32] = random(32).try_into().expect("32 bytes");
-    let ephemeral_public = PublicKey::from(&StaticSecret::from(ephemeral));
-    let pair = pair_key(&operator_public, &ephemeral)?;
+    let ephemeral = Zeroizing::new(<[u8; 32]>::try_from(random(32)).expect("32 bytes"));
+    let ephemeral_public = PublicKey::from(&StaticSecret::from(*ephemeral));
+    let pair = pair_key(&operator_public, ephemeral.as_slice())?;
     let (ciphertext, shared) = kem_encapsulate(&kem_public).map_err(|_| input("Invalid operator key."))?;
-    let mut material = Vec::with_capacity(64);
-    material.extend_from_slice(&pair);
-    material.extend_from_slice(&shared);
-    let mut body_key = [0u8; KEY_BYTES];
+    let mut material = Zeroizing::new(Vec::with_capacity(64));
+    material.extend_from_slice(pair.as_slice());
+    material.extend_from_slice(shared.as_slice());
+    let mut body_key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&ciphertext), &material)
-        .expand(REPORT_KEY_INFO, &mut body_key)
+        .expand(REPORT_KEY_INFO, body_key.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let nonce = random(NONCE_BYTES);
-    let body = seal_with_nonce(&body_key, &nonce, &plaintext, &report_context(&ctx, 2))?;
+    let body = seal_with_nonce(body_key.as_slice(), &nonce, &plaintext, &report_context(&ctx, 2))?;
     let mut out = Vec::with_capacity(HYBRID_BYTES);
     out.extend_from_slice(ephemeral_public.as_bytes());
     out.extend_from_slice(&ciphertext);
@@ -204,7 +205,7 @@ pub(crate) mod tests {
             nonce_input.extend_from_slice(public);
             let nonce: [u8; 24] = Blake2b::<U24>::digest(&nonce_input).into();
             let mut body = envelope[48..].to_vec();
-            XSalsa20Poly1305::new((&key).into())
+            XSalsa20Poly1305::new((&*key).into())
                 .decrypt_in_place_detached(
                     (&nonce).into(),
                     b"",
@@ -219,7 +220,7 @@ pub(crate) mod tests {
             let pair = pair_key(&envelope[..32], secret)?;
             let shared = kem_decapsulate(kem_seed.expect("a kem seed"), ciphertext)?;
             let mut material = pair.to_vec();
-            material.extend_from_slice(&shared);
+            material.extend_from_slice(shared.as_slice());
             let mut key = [0u8; KEY_BYTES];
             Hkdf::<Sha256>::new(Some(ciphertext), &material).expand(REPORT_KEY_INFO, &mut key).unwrap();
             (

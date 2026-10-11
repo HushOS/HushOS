@@ -4,13 +4,15 @@
 //! whose public key the server keeps to check a reset, and a third, off the
 //! account key instead, backs the secret up so the phrase can be shown again.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
+use std::fmt;
+use zeroize::Zeroizing;
 
 const WORDLIST: &str = include_str!("bip39-english.txt");
 
@@ -30,12 +32,18 @@ pub struct RecoveryEnvelope {
 }
 
 /// A fresh recovery key: the envelope for the server and the phrase for the person.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct NewRecovery {
     pub envelope: RecoveryEnvelope,
     /// 24 words, space separated. Show once; never store.
     pub phrase: String,
+}
+
+impl fmt::Debug for NewRecovery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewRecovery").field("envelope", &self.envelope).field("phrase", &Redacted).finish()
+    }
 }
 
 fn words() -> Vec<&'static str> {
@@ -47,7 +55,7 @@ pub(crate) fn phrase_from_entropy(entropy: &[u8]) -> String {
     let words = words();
     debug_assert_eq!(words.len(), 2048);
     let checksum = Sha256::digest(entropy)[0];
-    let mut bits = Vec::with_capacity(entropy.len() * 8 + 8);
+    let mut bits = Zeroizing::new(Vec::with_capacity(entropy.len() * 8 + 8));
     for byte in entropy.iter().chain(std::iter::once(&checksum)) {
         for i in (0..8).rev() {
             bits.push((byte >> i) & 1);
@@ -62,13 +70,13 @@ pub(crate) fn phrase_from_entropy(entropy: &[u8]) -> String {
 }
 
 /* The inverse: refuses unknown words, wrong counts and a bad checksum. */
-pub(crate) fn entropy_from_phrase(phrase: &str) -> CoreResult<Vec<u8>> {
+pub(crate) fn entropy_from_phrase(phrase: &str) -> CoreResult<Zeroizing<Vec<u8>>> {
     let words = words();
     let given: Vec<&str> = phrase.split_whitespace().collect();
     if given.len() != 24 {
         return Err(input("Enter your 24-word recovery phrase."));
     }
-    let mut bits = Vec::with_capacity(264);
+    let mut bits = Zeroizing::new(Vec::with_capacity(264));
     for word in given {
         let lower = word.to_lowercase();
         let index = words
@@ -79,8 +87,8 @@ pub(crate) fn entropy_from_phrase(phrase: &str) -> CoreResult<Vec<u8>> {
             bits.push(((index >> i) & 1) as u8);
         }
     }
-    let entropy: Vec<u8> =
-        bits[..256].chunks(8).map(|c| c.iter().fold(0u8, |acc, b| (acc << 1) | b)).collect();
+    let entropy: Zeroizing<Vec<u8>> =
+        Zeroizing::new(bits[..256].chunks(8).map(|c| c.iter().fold(0u8, |acc, b| (acc << 1) | b)).collect());
     let checksum = bits[256..].iter().fold(0u8, |acc, b| (acc << 1) | b);
     if checksum != Sha256::digest(&entropy)[0] {
         return Err(input("That is not a valid recovery phrase. Check each word and try again."));
@@ -88,10 +96,10 @@ pub(crate) fn entropy_from_phrase(phrase: &str) -> CoreResult<Vec<u8>> {
     Ok(entropy)
 }
 
-fn derive(secret: &[u8], salt: &[u8], purpose: &str) -> CoreResult<[u8; KEY_BYTES]> {
-    let mut out = [0u8; KEY_BYTES];
+fn derive(secret: &[u8], salt: &[u8], purpose: &str) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    let mut out = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(salt), secret)
-        .expand(format!("hushos/recovery/{purpose}/v1").as_bytes(), &mut out)
+        .expand(format!("hushos/recovery/{purpose}/v1").as_bytes(), out.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     Ok(out)
 }
@@ -127,11 +135,12 @@ pub fn recovery_create(
     recovery_version: u64,
     key_version: u64,
 ) -> CoreResult<NewRecovery> {
+    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     if recovery_version < 1 || key_version < 1 {
         return Err(input("recoveryVersion and keyVersion start at 1"));
     }
-    let secret = random(32);
+    let secret = Zeroizing::new(random(32));
     let salt = random(32);
     let nonce = random(NONCE_BYTES);
     let backup_nonce = random(NONCE_BYTES);
@@ -146,14 +155,14 @@ pub fn recovery_create(
         wrapping_salt: encode(&salt),
         wrapping_nonce: encode(&nonce),
         encrypted_key: encode(&seal_with_nonce(
-            &wrapping,
+            wrapping.as_slice(),
             &nonce,
             &account_key,
             &recovery_context("account-wrap", &user_id, recovery_version, key_version),
         )?),
         backup_nonce: encode(&backup_nonce),
         encrypted_recovery_key: encode(&seal_with_nonce(
-            &backup,
+            backup.as_slice(),
             &backup_nonce,
             &secret,
             &recovery_context("secret-backup", &user_id, recovery_version, key_version),
@@ -178,15 +187,16 @@ pub fn recovery_phrase(
     envelope: RecoveryEnvelope,
 ) -> CoreResult<String> {
     check(&envelope)?;
+    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     let salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
     let backup = derive(&account_key, &salt, "secret-backup")?;
-    let secret = open_with_nonce(
-        &backup,
+    let secret = Zeroizing::new(open_with_nonce(
+        backup.as_slice(),
         &decode("backupNonce", &envelope.backup_nonce, Some(NONCE_BYTES))?,
         &decode("encryptedRecoveryKey", &envelope.encrypted_recovery_key, Some(KEY_BYTES + TAG_BYTES))?,
         &recovery_context("secret-backup", &user_id, envelope.recovery_version, envelope.key_version),
-    )?;
+    )?);
     Ok(phrase_from_entropy(&secret))
 }
 
@@ -195,14 +205,15 @@ pub fn recovery_phrase(
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn recovery_open(user_id: String, phrase: String, envelope: RecoveryEnvelope) -> CoreResult<Vec<u8>> {
     check(&envelope)?;
+    let phrase = Zeroizing::new(phrase);
     let secret = entropy_from_phrase(&phrase)?;
     let salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
-    let signing = SigningKey::from_bytes(&derive(&secret, &salt, "authentication")?);
+    let signing = SigningKey::from_bytes(&*derive(&secret, &salt, "authentication")?);
     if encode(signing.verifying_key().as_bytes()) != envelope.public_key {
         return Err(CoreError::Sealed("The recovery phrase does not match this account.".into()));
     }
     let key = open_with_nonce(
-        &derive(&secret, &salt, "account-wrap")?,
+        derive(&secret, &salt, "account-wrap")?.as_slice(),
         &decode("wrappingNonce", &envelope.wrapping_nonce, Some(NONCE_BYTES))?,
         &decode("encryptedKey", &envelope.encrypted_key, Some(KEY_BYTES + TAG_BYTES))?,
         &recovery_context("account-wrap", &user_id, envelope.recovery_version, envelope.key_version),
@@ -270,9 +281,10 @@ pub fn recovery_reset_sign(
 ) -> CoreResult<String> {
     use ed25519_dalek::Signer as _;
     check(&current)?;
+    let phrase = Zeroizing::new(phrase);
     let secret = entropy_from_phrase(&phrase)?;
     let salt = decode("wrappingSalt", &current.wrapping_salt, Some(32))?;
-    let signing = SigningKey::from_bytes(&derive(&secret, &salt, "authentication")?);
+    let signing = SigningKey::from_bytes(&*derive(&secret, &salt, "authentication")?);
     if encode(signing.verifying_key().as_bytes()) != current.public_key {
         return Err(CoreError::Sealed("The recovery phrase does not match this account.".into()));
     }
@@ -382,6 +394,16 @@ mod tests {
     }
 
     #[test]
+    fn a_debug_print_of_a_new_recovery_key_hides_the_phrase() {
+        let made = recovery_create("user-1".into(), random(32), 1, 1).unwrap();
+        let printed = format!("{made:?}");
+        assert!(!printed.contains(&made.phrase), "{printed}");
+        let entropy = entropy_from_phrase(&made.phrase).unwrap();
+        assert!(!crate::bytes::shows(&printed, &entropy), "{printed}");
+        assert!(made.phrase.split(' ').all(|word| !printed.contains(&format!(" {word} "))));
+    }
+
+    #[test]
     fn the_phrase_is_the_bip39_test_vector_and_round_trips() {
         // The reference vector for 32 bytes of 0x7f (Trezor's python-mnemonic).
         let entropy = [0x7fu8; 32];
@@ -390,9 +412,9 @@ mod tests {
             phrase,
             "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title"
         );
-        assert_eq!(entropy_from_phrase(&phrase).unwrap(), entropy);
+        assert_eq!(*entropy_from_phrase(&phrase).unwrap(), entropy);
         assert_eq!(
-            entropy_from_phrase(&phrase.to_uppercase()).unwrap(),
+            *entropy_from_phrase(&phrase.to_uppercase()).unwrap(),
             entropy,
             "case and spacing are forgiven"
         );

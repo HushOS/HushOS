@@ -33,6 +33,7 @@ x25519-dalek = { version = "3", features = ["static_secrets"] }
 ml-kem = "0.3"
 crypto_secretbox = "0.1"
 ed25519-dalek = "3"
+zeroize = "1"
 
 [dev-dependencies]
 rand = "0.8"

@@ -4,7 +4,7 @@
 //! identifier and the argon2id parameters from `packages/crypto/protocol.ts`)
 //! is built in; there is no way to call this with another.
 
-use crate::bytes::{decode, encode};
+use crate::bytes::{decode, encode, Redacted};
 use crate::error::{CoreError, CoreResult};
 use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use generic_array::{ArrayLength, GenericArray};
@@ -16,6 +16,8 @@ use opaque_ke::{
     ClientLogin, ClientLoginFinishParameters, ClientRegistration, ClientRegistrationFinishParameters,
     CredentialResponse, Identifiers, RegistrationResponse,
 };
+use std::fmt;
+use zeroize::Zeroizing;
 
 const SERVER_IDENTIFIER: &[u8] = b"hushos/opaque/profile/1";
 const ARGON_ITERATIONS: u32 = 3;
@@ -76,7 +78,7 @@ fn identifiers() -> Identifiers<'static> {
 }
 
 /// The first login message and the state the second step needs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LoginStart {
     /// Keep in memory only; it holds the blinded password.
@@ -86,7 +88,7 @@ pub struct LoginStart {
 }
 
 /// What a correct password yields once the server has answered.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LoginFinish {
     /// Send as `finishLoginRequest`.
@@ -97,7 +99,7 @@ pub struct LoginFinish {
     pub server_static_public_key: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegistrationStart {
     pub state: Vec<u8>,
@@ -105,13 +107,48 @@ pub struct RegistrationStart {
     pub request: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegistrationFinish {
     /// Send as `registrationRecord`.
     pub record: String,
     pub export_key: Vec<u8>,
     pub server_static_public_key: String,
+}
+
+/* Debug by hand: the states hold the blinded password, the keys open the account. UniFFI records
+ * cannot implement Drop, so these are not wiped; the apps drop them as soon as they are used. */
+impl fmt::Debug for LoginStart {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginStart").field("state", &Redacted).field("request", &self.request).finish()
+    }
+}
+
+impl fmt::Debug for LoginFinish {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginFinish")
+            .field("request", &self.request)
+            .field("session_key", &Redacted)
+            .field("export_key", &Redacted)
+            .field("server_static_public_key", &self.server_static_public_key)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RegistrationStart {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegistrationStart").field("state", &Redacted).field("request", &self.request).finish()
+    }
+}
+
+impl fmt::Debug for RegistrationFinish {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegistrationFinish")
+            .field("record", &self.record)
+            .field("export_key", &Redacted)
+            .field("server_static_public_key", &self.server_static_public_key)
+            .finish()
+    }
 }
 
 /// Step one of a login: blind the password. Send `request` to
@@ -130,6 +167,7 @@ pub struct RegistrationFinish {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn opaque_start_login(password: String) -> CoreResult<LoginStart> {
+    let password = Zeroizing::new(password);
     let start = ClientLogin::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client login"))?;
     Ok(LoginStart { state: start.state.serialize().to_vec(), request: encode(&start.message.serialize()) })
@@ -143,6 +181,7 @@ pub fn opaque_finish_login(
     state: Vec<u8>,
     login_response: String,
 ) -> CoreResult<Option<LoginFinish>> {
+    let (password, state) = (Zeroizing::new(password), Zeroizing::new(state));
     let response = decode("loginResponse", &login_response, None)?;
     let state =
         ClientLogin::<Suite>::deserialize(&state).map_err(protocol("deserialize clientLoginState"))?;
@@ -164,6 +203,7 @@ pub fn opaque_finish_login(
 /// Step one of a registration; send `request` as `registrationRequest`.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn opaque_start_registration(password: String) -> CoreResult<RegistrationStart> {
+    let password = Zeroizing::new(password);
     let start = ClientRegistration::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client registration"))?;
     Ok(RegistrationStart {
@@ -181,6 +221,7 @@ pub fn opaque_finish_registration(
     state: Vec<u8>,
     registration_response: String,
 ) -> CoreResult<RegistrationFinish> {
+    let (password, state) = (Zeroizing::new(password), Zeroizing::new(state));
     let response = decode("registrationResponse", &registration_response, None)?;
     let state = ClientRegistration::<Suite>::deserialize(&state)
         .map_err(protocol("deserialize clientRegistrationState"))?;
@@ -271,6 +312,27 @@ mod tests {
         assert_eq!(login.export_key, registered.export_key, "the export key is stable across logins");
         assert_eq!(login.server_static_public_key, registered.server_static_public_key);
         assert_eq!(login.export_key.len(), 64);
+    }
+
+    #[test]
+    fn debug_prints_show_neither_the_login_state_nor_the_keys() {
+        use crate::bytes::shows;
+        let mut server = Server::new();
+        let registered = server.register("correct horse battery staple");
+        let (login, _) = server.login("correct horse battery staple").unwrap();
+        let start = opaque_start_login("correct horse battery staple".into()).unwrap();
+        let registration = opaque_start_registration("correct horse battery staple".into()).unwrap();
+        for (printed, secret) in [
+            (format!("{start:?}"), &start.state),
+            (format!("{registration:?}"), &registration.state),
+            (format!("{login:?}"), &login.session_key),
+            (format!("{login:?}"), &login.export_key),
+            (format!("{registered:?}"), &registered.export_key),
+        ] {
+            assert!(!shows(&printed, secret), "{printed}");
+            assert!(printed.contains("<redacted>"));
+        }
+        assert!(format!("{login:?}").contains(&login.request), "the public message still prints");
     }
 
     #[test]

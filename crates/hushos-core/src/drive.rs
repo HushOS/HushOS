@@ -2,7 +2,7 @@
 //! content chunks, sealed and opened exactly as `packages/crypto/drive.ts`
 //! does it. The chunk arithmetic lives here too, so no app repeats it.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open, open_key, open_with_nonce, seal, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use blake2::digest::consts::U32;
@@ -12,6 +12,7 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
+use std::fmt;
 
 const KEY_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES; // 72
 const VERSION_RECORD_BYTES: usize = KEY_BYTES + 8 + 4;
@@ -36,7 +37,7 @@ const THUMBNAIL_KDF_SUBKEY: u64 = 1;
 // ---------------------------------------------------------------------------
 
 /// A workspace key sealed to one account, as the server hands it out.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct WorkspaceGrant {
     pub version: u32,
@@ -46,6 +47,19 @@ pub struct WorkspaceGrant {
     pub wrapping_salt: String,
     pub wrapping_nonce: String,
     pub encrypted_key: String,
+}
+
+/* Debug by hand, like every record that carries a key: the sealed key stays out of prints too. */
+impl fmt::Debug for WorkspaceGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkspaceGrant")
+            .field("version", &self.version)
+            .field("workspace_id", &self.workspace_id)
+            .field("key_version", &self.key_version)
+            .field("workspace_key_version", &self.workspace_key_version)
+            .field("encrypted_key", &Redacted)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Account key -> workspace key: HKDF-SHA256 over the account key, then XChaCha.
@@ -180,7 +194,7 @@ pub fn node_wrap(ctx: NodeKeyContext, parent_key: Vec<u8>, node_key: Vec<u8>) ->
 
 /// What the server cannot read about a node. `size` and `modified` describe the
 /// file as the uploader saw it; the version envelope holds the sealed size.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct NodeMetadata {
     pub name: String,
@@ -188,6 +202,18 @@ pub struct NodeMetadata {
     pub size: Option<u64>,
     /// ISO 8601, at most 64 characters.
     pub modified: Option<String>,
+}
+
+/* The name is exactly what the server must not learn, so it is kept out of prints and logs as well. */
+impl fmt::Debug for NodeMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeMetadata")
+            .field("name", &Redacted)
+            .field("mime", &self.mime)
+            .field("size", &self.size)
+            .field("modified", &self.modified)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -387,12 +413,22 @@ fn version_context(ctx: &VersionContext, suite: u32) -> Vec<u8> {
 }
 
 /// What opens a version's object: its key, its true size and its thumbnail trailer.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ContentKey {
     pub key: Vec<u8>,
     pub plaintext_size: u64,
     pub thumbnail_bytes: u32,
+}
+
+impl fmt::Debug for ContentKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContentKey")
+            .field("key", &Redacted)
+            .field("plaintext_size", &self.plaintext_size)
+            .field("thumbnail_bytes", &self.thumbnail_bytes)
+            .finish()
+    }
 }
 
 /// Node key -> content key. Suite 1 (legacy, read-only) keeps the size on the
@@ -576,24 +612,30 @@ pub fn chunk_range(plaintext_size: u64, index: u64) -> ByteRange {
     ByteRange { start, end: start + chunk_plaintext_len(plaintext_size, index) + TAG_BYTES as u64 - 1 }
 }
 
-/// Where the thumbnail trailer sits in a suite 2 object, after the last chunk's tag.
+/// The bytes to fetch for a thumbnail: always the object's last 64 KiB and a
+/// tag (or all of it, when smaller), whatever the trailer's length. Asking for
+/// the trailer's own range would hand the store its length and with it the
+/// file's exact size; `thumbnail_decrypt` takes the trailer from the end.
 ///
 /// ```
 /// use hushos_core::{thumbnail_range, ByteRange};
-/// assert_eq!(thumbnail_range(100, 2000), ByteRange { start: 116, end: 116 + 2000 + 16 - 1 });
+/// // 100 bytes of content and a 2000-byte thumbnail: 2132 bytes, all of it fetched.
+/// assert_eq!(thumbnail_range(100, 2000), ByteRange { start: 0, end: 116 + 2000 + 16 - 1 });
+/// // Ten MB of content: the same window length for any thumbnail size.
+/// let a = thumbnail_range(10_000_000, 2000);
+/// let b = thumbnail_range(10_000_000, 60_000);
+/// assert_eq!(a.end - a.start, b.end - b.start);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn thumbnail_range(plaintext_size: u64, thumbnail_bytes: u32) -> ByteRange {
-    let layout = content_layout(plaintext_size, 0);
-    ByteRange {
-        start: layout.ciphertext_size,
-        end: layout.ciphertext_size + thumbnail_bytes as u64 + TAG_BYTES as u64 - 1,
-    }
+    let total = content_layout(plaintext_size, thumbnail_bytes).ciphertext_size;
+    let window = THUMBNAIL_MAX_BYTES as u64 + TAG_BYTES as u64;
+    ByteRange { start: total.saturating_sub(window), end: total - 1 }
 }
 
 /// Everything a chunk's seal is bound to. `nonce` is the 16-byte content nonce
 /// the version row carries; the chunk index completes it.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Content {
     pub workspace_id: String,
@@ -603,6 +645,20 @@ pub struct Content {
     pub nonce: Vec<u8>,
     pub plaintext_size: u64,
     pub thumbnail_bytes: u32,
+}
+
+impl fmt::Debug for Content {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Content")
+            .field("workspace_id", &self.workspace_id)
+            .field("object_id", &self.object_id)
+            .field("suite", &self.suite)
+            .field("key", &Redacted)
+            .field("nonce", &self.nonce)
+            .field("plaintext_size", &self.plaintext_size)
+            .field("thumbnail_bytes", &self.thumbnail_bytes)
+            .finish()
+    }
 }
 
 fn chunk_nonce(content: &Content, index: u64) -> CoreResult<[u8; NONCE_BYTES]> {
@@ -700,18 +756,21 @@ pub fn thumbnail_encrypt(content: Content, thumbnail: Vec<u8>) -> CoreResult<Vec
     seal_with_nonce(&thumbnail_key(&content)?, &nonce, &thumbnail, &thumbnail_context(&content))
 }
 
-/// The thumbnail opened; `ciphertext` is the bytes of `thumbnail_range`.
+/// The thumbnail opened; `fetched` is the bytes of `thumbnail_range`, whose
+/// last `thumbnail_bytes` and a tag are the trailer.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn thumbnail_decrypt(content: Content, ciphertext: Vec<u8>) -> CoreResult<Vec<u8>> {
+pub fn thumbnail_decrypt(content: Content, fetched: Vec<u8>) -> CoreResult<Vec<u8>> {
     if content.thumbnail_bytes == 0 {
         return Err(input("This version has no thumbnail."));
     }
-    if ciphertext.len() as u64 != content.thumbnail_bytes as u64 + TAG_BYTES as u64 {
+    let trailer = content.thumbnail_bytes as usize + TAG_BYTES;
+    if fetched.len() < trailer {
         return Err(CoreError::Sealed("This thumbnail could not be decrypted.".into()));
     }
+    let ciphertext = &fetched[fetched.len() - trailer..];
     let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
     let nonce = chunk_nonce(&content, layout.chunk_count)?;
-    open_with_nonce(&thumbnail_key(&content)?, &nonce, &ciphertext, &thumbnail_context(&content))
+    open_with_nonce(&thumbnail_key(&content)?, &nonce, ciphertext, &thumbnail_context(&content))
         .map_err(|_| CoreError::Sealed("This thumbnail could not be decrypted.".into()))
 }
 
@@ -781,6 +840,30 @@ mod tests {
             version_id: "v1".into(),
             object_id: "obj".into(),
         }
+    }
+
+    #[test]
+    fn debug_prints_hide_content_keys_the_sealed_workspace_key_and_names() {
+        use crate::bytes::shows;
+        let content = content(100, 0);
+        let printed = format!("{content:?}");
+        assert!(!shows(&printed, &content.key), "{printed}");
+        assert!(printed.contains("plaintext_size: 100"));
+        let key = ContentKey { key: random(32), plaintext_size: 5, thumbnail_bytes: 0 };
+        assert!(!shows(&format!("{key:?}"), &key.key));
+        let grant = WorkspaceGrant {
+            version: 1,
+            workspace_id: "ws".into(),
+            key_version: 1,
+            workspace_key_version: 1,
+            wrapping_salt: encode(&random(32)),
+            wrapping_nonce: encode(&random(24)),
+            encrypted_key: encode(&random(48)),
+        };
+        assert!(!format!("{grant:?}").contains(&grant.encrypted_key));
+        let metadata =
+            NodeMetadata { name: "Tax return 2025.pdf".into(), mime: None, size: Some(3), modified: None };
+        assert!(!format!("{metadata:?}").contains("Tax return"));
     }
 
     fn content(plaintext_size: u64, thumbnail_bytes: u32) -> Content {
@@ -1020,6 +1103,15 @@ mod tests {
         let sealed = thumbnail_encrypt(content.clone(), vec![9; 5]).unwrap();
         assert_eq!(sealed.len(), 5 + TAG_BYTES);
         assert_eq!(thumbnail_decrypt(content.clone(), sealed.clone()).unwrap(), vec![9; 5]);
+        // What thumbnail_range fetches: the object's tail, the last chunk's bytes before the trailer.
+        let mut window = vec![7u8; 116];
+        window.extend_from_slice(&sealed);
+        assert_eq!(thumbnail_decrypt(content.clone(), window).unwrap(), vec![9; 5]);
+        // A window cut short of the trailer must not open.
+        assert!(matches!(
+            thumbnail_decrypt(content.clone(), sealed[1..].to_vec()),
+            Err(CoreError::Sealed(_))
+        ));
         // The trailer under the plain content key must not open: the key is derived.
         let under_content_key = seal_with_nonce(
             &content.key,

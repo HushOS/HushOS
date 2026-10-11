@@ -23,22 +23,29 @@ pub struct SettingsEnvelope {
 }
 
 /// What two people read to each other over another channel: SHA-256 over a
-/// domain prefix and the identity's X25519 public key, the first 20 bytes as
-/// ten groups of four hex digits.
+/// domain prefix, the identity's X25519 public key and its Ed25519 signing
+/// key, the first 20 bytes as ten groups of four hex digits. The signing key
+/// is in it because that key vouches for the ML-KEM key: a fingerprint over
+/// X25519 alone would let a server swap the post-quantum half unnoticed.
 ///
 /// ```
-/// let print = hushos_core::identity_fingerprint(vec![7u8; 32])?;
+/// let print = hushos_core::identity_fingerprint(vec![7u8; 32], vec![9u8; 32])?;
 /// assert_eq!(print.split(' ').count(), 10);
 /// assert!(print.chars().all(|c| c.is_ascii_hexdigit() || c == ' '));
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn identity_fingerprint(encryption_public_key: Vec<u8>) -> CoreResult<String> {
+pub fn identity_fingerprint(
+    encryption_public_key: Vec<u8>,
+    signing_public_key: Vec<u8>,
+) -> CoreResult<String> {
     expect_len("identity public key", &encryption_public_key, 32)
         .map_err(|_| input("Invalid identity key."))?;
+    expect_len("signing public key", &signing_public_key, 32).map_err(|_| input("Invalid identity key."))?;
     let mut hasher = Sha256::new();
-    hasher.update(b"hushos/identity/fingerprint/v1");
+    hasher.update(b"hushos/identity/fingerprint/v2");
     hasher.update(&encryption_public_key);
+    hasher.update(&signing_public_key);
     let digest = hasher.finalize();
     let hex: String = digest[..20].iter().map(|b| format!("{b:02x}")).collect();
     Ok(hex.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).expect("hex")).collect::<Vec<_>>().join(" "))
@@ -133,12 +140,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_fingerprint_is_the_web_layout_and_changes_with_the_key() {
-        let a = identity_fingerprint(vec![1u8; 32]).unwrap();
-        let b = identity_fingerprint(vec![2u8; 32]).unwrap();
-        assert_eq!(a.len(), 49, "ten groups of four and nine spaces");
-        assert_ne!(a, b);
-        assert!(matches!(identity_fingerprint(vec![1u8; 31]), Err(CoreError::Input(_))));
+    fn the_fingerprint_is_the_web_layout_and_changes_with_either_key() {
+        // The same vector packages/crypto's fingerprint.test.ts checks: both clients must agree.
+        let a = identity_fingerprint(vec![1u8; 32], vec![2u8; 32]).unwrap();
+        assert_eq!(a, "8e5f 7614 6df7 df81 0a13 a5aa 35c7 ac7d b5db 2e38");
+        assert_ne!(
+            a,
+            identity_fingerprint(vec![1u8; 32], vec![3u8; 32]).unwrap(),
+            "a swapped signing key must show"
+        );
+        assert_ne!(a, identity_fingerprint(vec![4u8; 32], vec![2u8; 32]).unwrap());
+        assert!(matches!(identity_fingerprint(vec![1u8; 31], vec![2u8; 32]), Err(CoreError::Input(_))));
+        assert!(matches!(identity_fingerprint(vec![1u8; 32], vec![2u8; 31]), Err(CoreError::Input(_))));
         assert_eq!(key_digest(vec![]).len(), 64);
     }
 

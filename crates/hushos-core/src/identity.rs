@@ -4,7 +4,7 @@
 //! halves against the published public keys, so a swapped envelope cannot put
 //! a stranger's key in the session.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use ed25519_dalek::SigningKey;
@@ -13,7 +13,9 @@ use ml_kem::array::Array;
 use ml_kem::{ml_kem_768, Decapsulate, KeyExport, Seed};
 use serde_json::json;
 use sha2::Sha256;
+use std::fmt;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 pub(crate) const KEM_SEED_BYTES: usize = 64;
 pub(crate) const KEM_PUBLIC_KEY_BYTES: usize = 1184;
@@ -46,21 +48,35 @@ pub struct IdentityEnvelope {
 }
 
 /// The private halves, opened: what opens a share sealed to this account.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct IdentityKeys {
     pub encryption_public_key: String,
     /// X25519, 32 bytes.
     pub encryption_private_key: Vec<u8>,
+    /// Ed25519, checked against the signing seed: what this account's fingerprint covers beside the X25519 key.
+    pub signing_public_key: String,
     /// The ML-KEM-768 seed, 64 bytes; empty for an identity without a KEM key yet.
     pub kem_seed: Vec<u8>,
     pub kem_public_key: Option<String>,
 }
 
-fn wrapping_key(root: &[u8], salt: &[u8], purpose: &str) -> CoreResult<[u8; KEY_BYTES]> {
-    let mut wrap = [0u8; KEY_BYTES];
+impl fmt::Debug for IdentityKeys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IdentityKeys")
+            .field("encryption_public_key", &self.encryption_public_key)
+            .field("encryption_private_key", &Redacted)
+            .field("signing_public_key", &self.signing_public_key)
+            .field("kem_seed", &Redacted)
+            .field("kem_public_key", &self.kem_public_key)
+            .finish()
+    }
+}
+
+fn wrapping_key(root: &[u8], salt: &[u8], purpose: &str) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(salt), root)
-        .expand(format!("hushos/identity/{purpose}/v1").as_bytes(), &mut wrap)
+        .expand(format!("hushos/identity/{purpose}/v1").as_bytes(), wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     Ok(wrap)
 }
@@ -87,26 +103,27 @@ pub(crate) fn kem_public_key_from_seed(seed: &[u8]) -> CoreResult<Vec<u8>> {
 }
 
 /* ML-KEM-768 encapsulation to a public key: the ciphertext and the shared secret, from fresh randomness. */
-pub(crate) fn kem_encapsulate(public_key: &[u8]) -> CoreResult<(Vec<u8>, [u8; 32])> {
+pub(crate) fn kem_encapsulate(public_key: &[u8]) -> CoreResult<(Vec<u8>, Zeroizing<[u8; 32]>)> {
     expect_len("kem public key", public_key, KEM_PUBLIC_KEY_BYTES)
         .map_err(|_| input("Invalid identity key."))?;
     let key = ml_kem_768::EncapsulationKey::new(&Array::try_from(public_key).map_err(|_| input("kem key"))?)
         .map_err(|_| input("Invalid identity key."))?;
     let m: ml_kem::B32 = Array::try_from(crate::bytes::random(32).as_slice()).expect("32 bytes");
     let (ciphertext, shared) = key.encapsulate_deterministic(&m);
-    Ok((ciphertext.to_vec(), shared.into()))
+    Ok((ciphertext.to_vec(), Zeroizing::new(shared.into())))
 }
 
-pub(crate) fn kem_decapsulate(seed: &[u8], ciphertext: &[u8]) -> CoreResult<[u8; 32]> {
+pub(crate) fn kem_decapsulate(seed: &[u8], ciphertext: &[u8]) -> CoreResult<Zeroizing<[u8; 32]>> {
     expect_len("kem ciphertext", ciphertext, KEM_CIPHERTEXT_BYTES)?;
     let key = decapsulation_key(seed)?;
     let ct: ml_kem_768::Ciphertext = Array::try_from(ciphertext).map_err(|_| input("kem ciphertext"))?;
     let shared = key.decapsulate(&ct);
-    Ok(shared.into())
+    Ok(Zeroizing::new(shared.into()))
 }
 
 /// Opens the identity's private keys under the account key and checks each
-/// against its published public key.
+/// against its published public key, the signing seed included, so the
+/// fingerprint shown for this account covers keys it really holds.
 ///
 /// ```no_run
 /// # let (account_key, envelope) = (vec![0u8; 32], todo!());
@@ -123,11 +140,12 @@ pub fn identity_open(
     if envelope.version != 1 || envelope.key_version < 1 {
         return Err(input("Unsupported identity envelope."));
     }
+    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     let salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
     let wrap = wrapping_key(&account_key, &salt, "encryption-private-wrap")?;
-    let private_key = open_with_nonce(
-        &wrap,
+    let private_key = Zeroizing::new(open_with_nonce(
+        wrap.as_slice(),
         &decode("encryptionPrivateKeyNonce", &envelope.encryption_private_key_nonce, Some(24))?,
         &decode("encryptedEncryptionPrivateKey", &envelope.encrypted_encryption_private_key, Some(48))?,
         &identity_context(
@@ -136,32 +154,47 @@ pub fn identity_open(
             "encryption-private-wrap",
             &envelope.encryption_public_key,
         ),
-    )?;
-    let secret: [u8; 32] =
-        private_key.as_slice().try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?;
-    let derived = PublicKey::from(&StaticSecret::from(secret));
+    )?);
+    let secret: Zeroizing<[u8; 32]> = Zeroizing::new(
+        private_key.as_slice().try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?,
+    );
+    let derived = PublicKey::from(&StaticSecret::from(*secret));
     if encode(derived.as_bytes()) != envelope.encryption_public_key {
+        return Err(CoreError::Sealed("Identity keys do not match.".into()));
+    }
+    let signing_seed = Zeroizing::new(open_with_nonce(
+        wrapping_key(&account_key, &salt, "signing-seed-wrap")?.as_slice(),
+        &decode("signingSeedNonce", &envelope.signing_seed_nonce, Some(24))?,
+        &decode("encryptedSigningSeed", &envelope.encrypted_signing_seed, Some(48))?,
+        &identity_context(&user_id, envelope.key_version, "signing-seed-wrap", &envelope.signing_public_key),
+    )?);
+    let signing_seed: Zeroizing<[u8; 32]> = Zeroizing::new(
+        signing_seed.as_slice().try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?,
+    );
+    if encode(SigningKey::from_bytes(&signing_seed).verifying_key().as_bytes()) != envelope.signing_public_key
+    {
         return Err(CoreError::Sealed("Identity keys do not match.".into()));
     }
     let mut keys = IdentityKeys {
         encryption_public_key: envelope.encryption_public_key.clone(),
-        encryption_private_key: private_key,
+        encryption_private_key: private_key.to_vec(),
+        signing_public_key: envelope.signing_public_key.clone(),
         kem_seed: Vec::new(),
         kem_public_key: None,
     };
     if let Some(kem) = envelope.kem {
         decode("kem publicKey", &kem.public_key, Some(KEM_PUBLIC_KEY_BYTES))?;
         let wrap = wrapping_key(&account_key, &salt, "kem-seed-wrap")?;
-        let seed = open_with_nonce(
-            &wrap,
+        let seed = Zeroizing::new(open_with_nonce(
+            wrap.as_slice(),
             &decode("seedNonce", &kem.seed_nonce, Some(24))?,
             &decode("encryptedSeed", &kem.encrypted_seed, Some(KEM_SEED_BYTES + 16))?,
             &identity_context(&user_id, envelope.key_version, "kem-seed-wrap", &kem.public_key),
-        )?;
+        )?);
         if encode(&kem_public_key_from_seed(&seed)?) != kem.public_key {
             return Err(CoreError::Sealed("Identity keys do not match.".into()));
         }
-        keys.kem_seed = seed;
+        keys.kem_seed = seed.to_vec();
         keys.kem_public_key = Some(kem.public_key);
     }
     Ok(keys)
@@ -189,6 +222,7 @@ pub fn identity_rewrap(
     if envelope.version != 1 || envelope.key_version < 1 {
         return Err(input("Unsupported identity envelope."));
     }
+    let (old_root, new_root) = (Zeroizing::new(old_root), Zeroizing::new(new_root));
     expect_len("old account key", &old_root, KEY_BYTES)?;
     expect_len("new account key", &new_root, KEY_BYTES)?;
     let old_salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
@@ -198,16 +232,16 @@ pub fn identity_rewrap(
                   purpose: &str,
                   public_key: &str,
                   size: usize|
-     -> CoreResult<(Vec<u8>, String, String)> {
-        let private = open_with_nonce(
-            &wrapping_key(&old_root, &old_salt, purpose)?,
+     -> CoreResult<(Zeroizing<Vec<u8>>, String, String)> {
+        let private = Zeroizing::new(open_with_nonce(
+            wrapping_key(&old_root, &old_salt, purpose)?.as_slice(),
             &decode("nonce", nonce, Some(24))?,
             &decode("ciphertext", ciphertext, Some(size + 16))?,
             &identity_context(&user_id, envelope.key_version, purpose, public_key),
-        )?;
+        )?);
         let next_nonce = random(24);
         let sealed = seal_with_nonce(
-            &wrapping_key(&new_root, &salt, purpose)?,
+            wrapping_key(&new_root, &salt, purpose)?.as_slice(),
             &next_nonce,
             &private,
             &identity_context(&user_id, key_version, purpose, public_key),
@@ -221,9 +255,10 @@ pub fn identity_rewrap(
         &envelope.encryption_public_key,
         32,
     )?;
-    let secret: [u8; 32] =
-        secret.try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?;
-    if encode(PublicKey::from(&StaticSecret::from(secret)).as_bytes()) != envelope.encryption_public_key {
+    let secret: Zeroizing<[u8; 32]> = Zeroizing::new(
+        secret.as_slice().try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?,
+    );
+    if encode(PublicKey::from(&StaticSecret::from(*secret)).as_bytes()) != envelope.encryption_public_key {
         return Err(CoreError::Sealed("Identity keys do not match.".into()));
     }
     let (seed, signing_nonce, encrypted_signing) = rewrap(
@@ -233,7 +268,9 @@ pub fn identity_rewrap(
         &envelope.signing_public_key,
         32,
     )?;
-    let seed: [u8; 32] = seed.try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?;
+    let seed: Zeroizing<[u8; 32]> = Zeroizing::new(
+        seed.as_slice().try_into().map_err(|_| CoreError::Sealed("Invalid identity key.".into()))?,
+    );
     if encode(SigningKey::from_bytes(&seed).verifying_key().as_bytes()) != envelope.signing_public_key {
         return Err(CoreError::Sealed("Identity keys do not match.".into()));
     }
@@ -303,7 +340,7 @@ pub(crate) mod tests {
             encryption_private_key_nonce: encode(&enc_nonce),
             encrypted_encryption_private_key: encode(
                 &seal_with_nonce(
-                    &enc_wrap,
+                    enc_wrap.as_slice(),
                     &enc_nonce,
                     &secret,
                     &identity_context(user_id, 1, "encryption-private-wrap", &encryption_public_key),
@@ -314,7 +351,7 @@ pub(crate) mod tests {
             signing_seed_nonce: encode(&sign_nonce),
             encrypted_signing_seed: encode(
                 &seal_with_nonce(
-                    &sign_wrap,
+                    sign_wrap.as_slice(),
                     &sign_nonce,
                     &signing_seed,
                     &identity_context(user_id, 1, "signing-seed-wrap", &signing_public_key),
@@ -326,7 +363,7 @@ pub(crate) mod tests {
                 seed_nonce: encode(&kem_nonce),
                 encrypted_seed: encode(
                     &seal_with_nonce(
-                        &kem_wrap,
+                        kem_wrap.as_slice(),
                         &kem_nonce,
                         &kem_seed,
                         &identity_context(user_id, 1, "kem-seed-wrap", &kem_public_key),
@@ -340,7 +377,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn identity_open_checks_both_private_halves_against_the_published_keys() {
+    fn identity_open_checks_every_private_half_against_the_published_keys() {
         let root = random(32);
         let (envelope, secret, kem_seed) = make_identity("User-1", &root);
         let keys = identity_open("user-1".into(), root.clone(), envelope.clone()).unwrap();
@@ -361,10 +398,28 @@ pub(crate) mod tests {
             matches!(identity_open("user-1".into(), root.clone(), swapped), Err(CoreError::Sealed(_))),
             "the public key is in the context"
         );
+        assert_eq!(keys.signing_public_key, envelope.signing_public_key);
+        let mut other_signer = envelope.clone();
+        other_signer.signing_public_key = encode(&random(32));
+        assert!(
+            matches!(identity_open("user-1".into(), root.clone(), other_signer), Err(CoreError::Sealed(_))),
+            "a served signing key the seed does not make is refused: the fingerprint covers it"
+        );
         let mut legacy = envelope;
         legacy.kem = None;
         let keys = identity_open("user-1".into(), root, legacy).unwrap();
         assert!(keys.kem_seed.is_empty() && keys.kem_public_key.is_none());
+    }
+
+    #[test]
+    fn a_debug_print_of_the_opened_identity_hides_both_private_halves() {
+        let root = random(32);
+        let (envelope, secret, kem_seed) = make_identity("user-1", &root);
+        let keys = identity_open("user-1".into(), root, envelope).unwrap();
+        let printed = format!("{keys:?}");
+        assert!(!crate::bytes::shows(&printed, &secret), "{printed}");
+        assert!(!crate::bytes::shows(&printed, &kem_seed), "{printed}");
+        assert!(printed.contains(&keys.encryption_public_key));
     }
 
     #[test]

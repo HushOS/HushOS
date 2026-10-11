@@ -12,6 +12,7 @@ use hkdf::Hkdf;
 use serde_json::json;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 const SHARE_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES;
 const HYBRID_SHARE_ENVELOPE_BYTES: usize = NONCE_BYTES + KEM_CIPHERTEXT_BYTES + KEY_BYTES + TAG_BYTES;
@@ -78,25 +79,29 @@ fn hsalsa20(key: &[u8; 32], input: &[u8; 16]) -> [u8; 32] {
 }
 
 /* libsodium's crypto_box_beforenm: X25519, then HSalsa20 with a zero nonce. */
-pub(crate) fn pair_key(their_public: &[u8], my_private: &[u8]) -> CoreResult<[u8; KEY_BYTES]> {
+pub(crate) fn pair_key(their_public: &[u8], my_private: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("identity public key", their_public, 32).map_err(|_| input("Invalid identity key."))?;
     expect_len("identity private key", my_private, 32).map_err(|_| input("Invalid identity key."))?;
     let public: [u8; 32] = their_public.try_into().expect("32 bytes");
-    let secret: [u8; 32] = my_private.try_into().expect("32 bytes");
-    let shared = StaticSecret::from(secret).diffie_hellman(&PublicKey::from(public));
+    let secret = Zeroizing::new(<[u8; 32]>::try_from(my_private).expect("32 bytes"));
+    let shared = StaticSecret::from(*secret).diffie_hellman(&PublicKey::from(public));
     if !shared.was_contributory() {
         return Err(input("Invalid identity key."));
     }
-    Ok(hsalsa20(shared.as_bytes(), &[0u8; 16]))
+    Ok(Zeroizing::new(hsalsa20(shared.as_bytes(), &[0u8; 16])))
 }
 
-fn hybrid_key(pair: &[u8], kem_secret: &[u8], kem_ciphertext: &[u8]) -> CoreResult<[u8; KEY_BYTES]> {
-    let mut material = Vec::with_capacity(pair.len() + kem_secret.len());
+fn hybrid_key(
+    pair: &[u8],
+    kem_secret: &[u8],
+    kem_ciphertext: &[u8],
+) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    let mut material = Zeroizing::new(Vec::with_capacity(pair.len() + kem_secret.len()));
     material.extend_from_slice(pair);
     material.extend_from_slice(kem_secret);
-    let mut key = [0u8; KEY_BYTES];
+    let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(kem_ciphertext), &material)
-        .expand(SHARE_KEY_INFO, &mut key)
+        .expand(SHARE_KEY_INFO, key.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     Ok(key)
 }
@@ -125,12 +130,12 @@ pub fn share_seal(
     let nonce = random(NONCE_BYTES);
     let mut out = nonce.clone();
     match grantee_kem_public_key {
-        None => out.extend(seal_with_nonce(&pair, &nonce, &node_key, &share_context(&ctx, 1))?),
+        None => out.extend(seal_with_nonce(pair.as_slice(), &nonce, &node_key, &share_context(&ctx, 1))?),
         Some(public) => {
             let (ciphertext, secret) = kem_encapsulate(&public)?;
-            let body_key = hybrid_key(&pair, &secret, &ciphertext)?;
+            let body_key = hybrid_key(pair.as_slice(), secret.as_slice(), &ciphertext)?;
             out.extend_from_slice(&ciphertext);
-            out.extend(seal_with_nonce(&body_key, &nonce, &node_key, &share_context(&ctx, 2))?);
+            out.extend(seal_with_nonce(body_key.as_slice(), &nonce, &node_key, &share_context(&ctx, 2))?);
         }
     }
     Ok(out)
@@ -148,7 +153,8 @@ pub fn share_open(
     let nonce = envelope.get(..NONCE_BYTES).ok_or_else(|| input("Invalid share envelope."))?;
     match envelope.len() {
         SHARE_ENVELOPE_BYTES => {
-            let key = open_with_nonce(&pair, nonce, &envelope[NONCE_BYTES..], &share_context(&ctx, 1))?;
+            let key =
+                open_with_nonce(pair.as_slice(), nonce, &envelope[NONCE_BYTES..], &share_context(&ctx, 1))?;
             expect_len("node key", &key, KEY_BYTES)
                 .map_err(|_| CoreError::Sealed("Invalid share envelope.".into()))?;
             Ok(key)
@@ -161,9 +167,9 @@ pub fn share_open(
             }
             let ciphertext = &envelope[NONCE_BYTES..NONCE_BYTES + KEM_CIPHERTEXT_BYTES];
             let secret = kem_decapsulate(&grantee.kem_seed, ciphertext)?;
-            let key = hybrid_key(&pair, &secret, ciphertext)?;
+            let key = hybrid_key(pair.as_slice(), secret.as_slice(), ciphertext)?;
             let node_key = open_with_nonce(
-                &key,
+                key.as_slice(),
                 nonce,
                 &envelope[NONCE_BYTES + KEM_CIPHERTEXT_BYTES..],
                 &share_context(&ctx, 2),
@@ -269,6 +275,6 @@ mod tests {
         ))
         .to_bytes();
         let key = pair_key(&their_pk, &sk).unwrap();
-        assert_eq!(crate::bytes::encode(&key), "7Ij24Tsiv58E1IDg2FJcCKx-L0jiEnQry8r6EEp0sI0");
+        assert_eq!(crate::bytes::encode(key.as_slice()), "7Ij24Tsiv58E1IDg2FJcCKx-L0jiEnQry8r6EEp0sI0");
     }
 }
