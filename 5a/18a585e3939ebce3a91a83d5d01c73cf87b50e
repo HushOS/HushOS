@@ -1,0 +1,24 @@
+apps/web/src/lib/dropped-files.ts
+  s_b5938b5134af95::t_3663aa70eefc52 3-7,11-13,44-46,49,52-56,59,84-87,92,100-105,110-112
+apps/web/src/components/drive/upload-controls.tsx
+  s_b5938b5134af95::t_f129f027be84a9 109
+apps/web/src/lib/uploads.ts
+  s_b5938b5134af95::t_f129f027be84a9 5,10-13,20,23-39,42-43,45,47-57,63-70,74
+  s_b5938b5134af95::t_2c39ea3e33ceac 40-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5a18a585e3939ebce3a91a83d5d01c73cf87b50e",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
