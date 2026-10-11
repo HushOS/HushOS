@@ -1,11 +1,16 @@
 /*
  * Turns what a person dropped into a flat list of files with the folder path each
- * came from, walking dropped directories through the entries API. Browsers only
- * expose entries during the drop event, so the items are read synchronously
- * first and the tree is walked afterwards.
+ * came from, plus every folder the drop held (so an empty one is made too),
+ * walking dropped directories through the entries API. Browsers only expose
+ * entries during the drop event, so the items are read synchronously first and
+ * the tree is walked afterwards. Hidden files and folders (.DS_Store, .git) stay
+ * behind, as Finder and Explorer hide them.
  */
 
 export type DroppedFile = { file: File; path: string[]; handle?: FileSystemFileHandle };
+export type Dropped = { files: DroppedFile[]; folders: string[][] };
+
+const hidden = (name: string) => name.startsWith('.');
 
 type FileSystemEntryLike = {
     isFile: boolean;
@@ -36,18 +41,22 @@ function readAll(entry: FileSystemEntryLike) {
     });
 }
 
-async function walk(entry: FileSystemEntryLike, path: string[], out: DroppedFile[]) {
+async function walk(entry: FileSystemEntryLike, path: string[], out: Dropped) {
+    // Finder drops .DS_Store and friends, and a project brings its .git; nobody wants those in their Drive.
+    if (hidden(entry.name)) return;
     if (entry.isFile && entry.file) {
         const file = await new Promise<File>((resolve, reject) => entry.file!(resolve, reject));
-        // Finder drops .DS_Store and friends; nobody wants those in their Drive.
-        if (!file.name.startsWith('.')) out.push({ file, path });
+        out.files.push({ file, path });
         return;
     }
-    if (entry.isDirectory && entry.createReader)
-        for (const child of await readAll(entry)) await walk(child, [...path, entry.name], out);
+    if (entry.isDirectory && entry.createReader) {
+        const here = [...path, entry.name];
+        out.folders.push(here);
+        for (const child of await readAll(entry)) await walk(child, here, out);
+    }
 }
 
-export async function collectDroppedFiles(items: DataTransferItem[]): Promise<DroppedFile[]> {
+export async function collectDroppedFiles(items: DataTransferItem[]): Promise<Dropped> {
     const entries: (FileSystemEntryLike | null)[] = [];
     const plain: File[] = [];
     // Handles let Chromium reopen the file after a reload; they must be requested
@@ -72,12 +81,15 @@ export async function collectDroppedFiles(items: DataTransferItem[]): Promise<Dr
             if (file) plain.push(file);
         }
     }
-    const out: DroppedFile[] = plain.map((file) => ({ file, path: [] }));
+    const out: Dropped = {
+        files: plain.filter((file) => !hidden(file.name)).map((file) => ({ file, path: [] })),
+        folders: [],
+    };
     for (const entry of entries) if (entry) await walk(entry, [], out);
     const resolved = await Promise.all(handles);
     for (const handle of resolved) {
         if (!handle || handle.kind !== 'file') continue;
-        const match = out.find(
+        const match = out.files.find(
             (entry) => entry.path.length === 0 && entry.file.name === handle.name && !entry.handle,
         );
         if (match) match.handle = handle as FileSystemFileHandle;
@@ -85,13 +97,17 @@ export async function collectDroppedFiles(items: DataTransferItem[]): Promise<Dr
     return out;
 }
 
-/* From an <input type=file webkitdirectory>: the relative path carries the folders. */
-export function filesFromInput(list: FileList | File[]): DroppedFile[] {
-    return Array.from(list)
-        .filter((file) => !file.name.startsWith('.'))
+/*
+ * From an <input type=file webkitdirectory>: the relative path carries the folders.
+ * The input lists files only, so an empty folder in the pick cannot be made.
+ */
+export function filesFromInput(list: FileList | File[]): Dropped {
+    const files = Array.from(list)
         .map((file) => {
             const relative = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
             const parts = relative ? relative.split('/').slice(0, -1) : [];
             return { file, path: parts };
-        });
+        })
+        .filter(({ file, path }) => !hidden(file.name) && !path.some(hidden));
+    return { files, folders: [] };
 }

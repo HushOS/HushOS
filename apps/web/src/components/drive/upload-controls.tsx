@@ -106,7 +106,7 @@ export function useDropZone(
                 const items = [...source.items];
                 void collectDroppedFiles(items)
                     .then((dropped) => {
-                        if (!dropped.length) return;
+                        if (!dropped.files.length && !dropped.folders.length) return;
                         return enqueueDropped(queryClient, target, dropped, latest.current.known);
                     })
                     .catch((error: unknown) =>
