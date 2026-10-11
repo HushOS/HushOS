@@ -38,6 +38,7 @@ import { Highlight } from '@/components/drive/highlight';
 import { Kbd } from '@/components/drive/hotkey-hints';
 import { keyLabel, shortcuts } from '@/components/drive/shortcuts';
 import { useTheme } from '@/components/theme-provider';
+import { searchHash } from '@/lib/search';
 import { account } from '@/components/user-menu';
 import {
     AlertDialog,
@@ -69,6 +70,7 @@ import { useBillingEnabled } from '@/lib/queries';
 import { forgetSession } from '@/lib/session';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
+import { signOut as signOutOfBrowser } from '@/lib/sign-out';
 
 function Keys({ id }: { id: string }) {
     const shortcut = shortcuts.find((entry) => entry.id === id);
@@ -142,8 +144,8 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
         close(false);
         action();
     };
-    const go = (to: string, search?: Record<string, string>) =>
-        run(() => void navigate({ to, search } as never));
+    const go = (to: string, search?: Record<string, string>, hash?: string) =>
+        run(() => void navigate({ to, search, hash } as never));
     const selection = context?.selection ?? [];
     const one = selection.length === 1;
     const some = selection.length > 0;
@@ -172,7 +174,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     }
     async function signOut() {
         try {
-            await authClient.logout();
+            await signOutOfBrowser();
             forgetSession(queryClient, false);
             await router.navigate({ to: '/login' });
             queryClient.clear();
@@ -304,7 +306,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                                 ))}
                                 <CommandItem
                                     value="hit:all"
-                                    onSelect={go('/app/search', { q: typed })}
+                                    onSelect={go('/app/search', undefined, searchHash(typed))}
                                 >
                                     <SearchIcon />
                                     All matches for “{typed}”

@@ -7,6 +7,7 @@ import {
     HeadContent,
     Link,
     Outlet,
+    redirect,
     Scripts,
     useLocation,
 } from '@tanstack/react-router';
@@ -19,6 +20,7 @@ import {
     analyticsScript,
     getAnalyticsServerFn,
     installAnalyticsFilter,
+    leaveAnalytics,
 } from '@/lib/analytics';
 import {
     checkRelease,
@@ -40,6 +42,7 @@ import { operatorHint } from '@/lib/social';
 import { initSounds } from '@/lib/sounds';
 import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import { isAppleTouch, viewportContent } from '@/lib/viewport';
+import { forgetReturn } from '@/lib/return-to';
 import styles from '@/styles.css?url';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -48,12 +51,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     },
     // Public pages only need to know whether a session cookie exists; no lookup here.
     // The protected layout validates for real when the user goes in.
-    beforeLoad: async ({ context }) => ({
-        hasSession: sessionHint(context.queryClient),
-        billingEnabled: await billingHint(context.queryClient),
-        freeQuotaBytes: await freeQuotaHint(context.queryClient),
-        operatorName: await operatorHint(context.queryClient),
-    }),
+    beforeLoad: async ({ context, location }) => {
+        // Into a private page from one that loaded analytics: a full load leaves the script behind.
+        if (leaveAnalytics(location.pathname))
+            throw redirect({ href: location.href, reloadDocument: true });
+        return {
+            hasSession: sessionHint(context.queryClient),
+            billingEnabled: await billingHint(context.queryClient),
+            freeQuotaBytes: await freeQuotaHint(context.queryClient),
+            operatorName: await operatorHint(context.queryClient),
+        };
+    },
     // Then the loader, so `head` knows its shape: the theme, and whether analytics may load here.
     loader: async ({ location }) => ({
         theme: await getThemeServerFn(),
@@ -186,6 +194,8 @@ function Document({ children, release }: { children: ReactNode; release: string 
         startReleaseChecks();
         initSounds();
         installAnalyticsFilter();
+        // A link's key, saved for a sign-in that never came, is not kept past its hour.
+        forgetReturn(Date.now());
     }, [release]);
     // A public page has nothing in flight, so a stale one reloads as soon as it knows;
     // a sign-in, sign-up or recovery form waits for the next navigation rather than

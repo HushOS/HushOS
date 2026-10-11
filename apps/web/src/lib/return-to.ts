@@ -65,6 +65,22 @@ export function takeReturn(now = Date.now()): string | null {
     }
 }
 
+/* Drops a saved return without using it: at sign-out, and on start-up once it has gone stale. */
+export function forgetReturn(now?: number) {
+    try {
+        const raw = window.localStorage.getItem(STORAGE);
+        if (raw === null) return;
+        if (now !== undefined) {
+            const saved = JSON.parse(raw) as { at?: unknown };
+            if (typeof saved.at === 'number' && now - saved.at <= MAX_AGE_MS && now >= saved.at)
+                return;
+        }
+        window.localStorage.removeItem(STORAGE);
+    } catch {
+        /* No storage, nothing kept. */
+    }
+}
+
 /* Where a finished sign-in or sign-up goes: a saved return first, then `?redirect=`, then Home. */
 export function returnTarget(redirect?: string | null) {
     return takeReturn() ?? safeReturnPath(redirect) ?? '/app';

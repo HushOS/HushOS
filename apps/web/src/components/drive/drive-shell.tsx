@@ -16,6 +16,7 @@ import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
+import { signOut as signOutOfBrowser } from '@/lib/sign-out';
 
 /*
  * Every Drive page needs the account key unlocked on this device and
@@ -99,7 +100,7 @@ export function DriveShell({ user, children }: { user: SessionUser; children: Re
     const router = useRouter();
     async function signOut() {
         try {
-            await authClient.logout();
+            await signOutOfBrowser();
         } finally {
             forgetSession(router.options.context.queryClient, false);
             await router.navigate({ to: '/login' });

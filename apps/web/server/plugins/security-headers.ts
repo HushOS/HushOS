@@ -1,6 +1,7 @@
 import { appEnv } from '@hushos/env/app';
 import { storageEnv } from '@hushos/env/storage';
 import { definePlugin } from 'nitro';
+import { analyticsAllowed } from '../../src/lib/analytics-paths';
 import { buildCsp, parseOrigins, storeOrigin } from '../csp';
 
 /*
@@ -41,12 +42,18 @@ export default definePlugin((nitroApp) => {
                 dev,
                 storeOrigins,
                 extraConnect,
-                analyticsOrigins,
+                // A private page never lets the analytics script in, even one left in the head.
+                analyticsOrigins: analyticsAllowed(new URL(event.req.url).pathname)
+                    ? analyticsOrigins
+                    : [],
             }),
         );
         response.headers.set('X-Content-Type-Options', 'nosniff');
         response.headers.set('X-Frame-Options', 'DENY');
-        response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+        // The origin alone, even to this server: a path or query sent along in Referer
+        // (a search, a tag, a folder) would reach the server and any proxy in front of it.
+        // Not no-referrer, which can turn the Origin the auth routes check into null.
+        response.headers.set('Referrer-Policy', 'strict-origin');
         response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
         response.headers.set(
             'Permissions-Policy',

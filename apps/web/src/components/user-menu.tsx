@@ -42,6 +42,7 @@ import { forgetSession } from '@/lib/session';
 import { useBillingEnabled } from '@/lib/queries';
 import { helpContactQueryOptions } from '@/lib/social';
 import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
+import { signOut as signOutOfBrowser } from '@/lib/sign-out';
 
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -189,7 +190,7 @@ function SignOutDialog({
         setPending(true);
         setFailed(false);
         try {
-            await authClient.logout();
+            await signOutOfBrowser();
             forgetSession(router.options.context.queryClient, false);
             await router.navigate({ to: '/login' });
             // Clearing before leaving would refetch queries the old page still holds.

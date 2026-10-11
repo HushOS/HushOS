@@ -73,10 +73,10 @@ function startDownload(data, port) {
         }
     };
     downloads.set(id, { stream, headers });
-    const url = new URL(
-        `/hushos-download/${encodeURIComponent(id)}/${encodeURIComponent(data.filename)}`,
-        self.registration.scope,
-    ).href;
+    // The name goes in Content-Disposition, never the path: were this worker ever
+    // bypassed, the request would reach the server and its logs with it.
+    const url = new URL(`/hushos-download/file/${encodeURIComponent(id)}`, self.registration.scope)
+        .href;
     port.postMessage({ type: 'ready', url });
 }
 
@@ -219,7 +219,7 @@ self.addEventListener('fetch', (event) => {
         );
         return;
     }
-    const match = url.pathname.match(/^\/hushos-download\/([^/]+)\//);
+    const match = url.pathname.match(/^\/hushos-download\/file\/([^/]+)$/);
     if (!match) return;
     const id = decodeURIComponent(match[1]);
     const entry = downloads.get(id);

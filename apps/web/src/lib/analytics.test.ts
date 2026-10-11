@@ -22,6 +22,7 @@ describe('analytics', () => {
             '/app/drive/folder',
             '/login',
             '/register/complete',
+            '/setup/recovery-key',
             '/recover',
             '/s/abcdef',
             '/account-deleted',
@@ -53,5 +54,39 @@ describe('analytics', () => {
         expect(filter('event', { url: '/app/drive' })).toBe(false);
         expect(filter('event', { url: 'https://hushos.com/s/token' })).toBe(false);
         expect(filter('event', { url: 'http://[bad' })).toBe(false);
+    });
+
+    test('a private page the visitor came from is cut from the referrer', () => {
+        Object.defineProperty(globalThis, 'window', {
+            value: globalThis,
+            configurable: true,
+            writable: true,
+        });
+        (globalThis as Record<string, unknown>).location = { origin: 'https://hushos.com' };
+        installAnalyticsFilter();
+        const filter = (globalThis as Record<string, unknown>)[BEFORE_SEND] as (
+            type: string,
+            payload: { url?: string; referrer?: string },
+        ) => unknown;
+        // Back out of a search to the home page: the search must not ride along.
+        expect(
+            filter('event', {
+                url: '/',
+                referrer: 'https://hushos.com/login?redirect=/app/search',
+            }),
+        ).toEqual({ url: '/', referrer: '' });
+        expect(filter('event', { url: '/', referrer: '/app/drive/f/1' })).toEqual({
+            url: '/',
+            referrer: '',
+        });
+        // Public referrers, and other sites, are kept.
+        expect(filter('event', { url: '/', referrer: '/pricing' })).toEqual({
+            url: '/',
+            referrer: '/pricing',
+        });
+        expect(filter('event', { url: '/', referrer: 'https://news.example/x' })).toEqual({
+            url: '/',
+            referrer: 'https://news.example/x',
+        });
     });
 });
