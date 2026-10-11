@@ -13,9 +13,10 @@ public struct Contact: Sendable, Equatable {
     public let encryptionPublicKey: String
     public let signingPublicKey: String
     public let kem: Kem?
-    /* Ten groups of four hex digits, to compare over another channel. */
+    /* Ten groups of four hex digits over both public keys, to compare over another channel. */
     public let fingerprint: String
-    /* Whether the post-quantum key carries a signature by this identity. */
+    /* Whether the post-quantum key carries a signature by the signing key served with it. Vouches only for a
+     * contact not pinned yet, whose words cover that signing key; a pinned contact's KEM key is checked against the pin. */
     public let kemSigned: Bool
 }
 
@@ -82,7 +83,8 @@ extension Auth {
         return Contact(
             userId: userId, name: json["name"] as? String ?? "", email: json["email"] as? String ?? email,
             encryptionPublicKey: encryption, signingPublicKey: signing, kem: kem,
-            fingerprint: try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: encryption)), kemSigned: signed
+            fingerprint: try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: encryption), signingPublicKey: try base64urlDecode(value: signing)),
+            kemSigned: signed
         )
     }
 
@@ -148,7 +150,8 @@ extension Vault {
 
     /* This account's own fingerprint, for the other person to check. */
     public func ownFingerprint() async throws -> String {
-        try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: try await identityKeys().encryptionPublicKey))
+        let keys = try await identityKeys()
+        return try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey))
     }
 
     /* A person by email, with what the pin says about them. */
@@ -157,7 +160,8 @@ extension Vault {
         let pinned = try await loadSettings().contacts[contact.userId]
         var changed = false
         if let pinned {
-            if pinned.encryptionPublicKey != contact.encryptionPublicKey { changed = true }
+            // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
+            if pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey { changed = true }
             if let hash = pinned.kemPublicKeyHash, contact.kem.map({ keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) }) != hash { changed = true }
         }
         return Lookup(contact: contact, pinned: pinned, changed: changed)
@@ -201,7 +205,8 @@ extension Vault {
         let contact = try await Auth.lookupContact(email: pin.email)
         guard contact.userId == pin.userId, contact.encryptionPublicKey == pin.encryptionPublicKey else { throw ContactError.changed }
         var kemPublic: Data? = nil
-        if let kem = contact.kem, contact.kemSigned {
+        // Only the pinned signing key may vouch for a KEM key: the words compared cover it, the served one could be anyone's.
+        if let kem = contact.kem, kemBindingVerify(userId: pin.userId, encryptionPublicKey: pin.encryptionPublicKey, signingPublicKey: pin.signingPublicKey, kemPublicKey: kem.publicKey, signature: kem.signature) {
             let bytes = try base64urlDecode(value: kem.publicKey)
             let hash = keyDigest(publicKey: bytes)
             if let known = pin.kemPublicKeyHash {

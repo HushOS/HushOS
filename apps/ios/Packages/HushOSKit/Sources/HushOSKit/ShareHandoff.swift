@@ -49,6 +49,22 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
 
     public static func directory(_ id: UUID) -> URL { transfers.appendingPathComponent(id.uuidString, isDirectory: true) }
 
+    /* Where the extension copies what it was handed, one folder per sheet, until Save seals it into `transfers`. */
+    public static var staging: URL { transfers.deletingLastPathComponent().appendingPathComponent("share-staging", isDirectory: true) }
+
+    /*
+     * Plaintext copies a sheet left behind: an extension killed before it closed never removed its
+     * folder. Folders untouched for an hour go (a sheet still open longer than that loses its copies,
+     * and says it couldn't read them); sign-out takes the rest (AccountStore).
+     */
+    public static func sweepStaging(now: Date = Date()) {
+        let files = FileManager.default
+        for folder in (try? files.contentsOfDirectory(at: staging, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let touched = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if now.timeIntervalSince(touched) > 3600 { try? files.removeItem(at: folder) }
+        }
+    }
+
     private static func note(_ id: UUID) -> URL { directory(id).appendingPathComponent("handoff.json") }
 
     /* Written once the parts are sealed on disk, before they go to the session; written again to release it. */

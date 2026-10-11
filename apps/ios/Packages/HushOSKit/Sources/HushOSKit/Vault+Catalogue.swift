@@ -235,8 +235,10 @@ extension Vault {
         if let kept = mirror?.thumbnail(current.id) { return kept }
         let urls = try await api.thumbnails(workspaceId: item.node.workspaceId, versionIds: [current.id])
         guard let entry = urls.urls.first, let url = URL(string: entry.url) else { return nil }
-        let ciphertext = try await api.range(url, thumbnailRange(plaintextSize: version.content.plaintextSize, thumbnailBytes: version.content.thumbnailBytes))
-        mirror?.putThumbnail(current.id, ciphertext)
-        return ciphertext
+        // The range is a fixed tail window (so the store never learns the trailer's length); keep only the trailer at its end.
+        let window = try await api.range(url, thumbnailRange(plaintextSize: version.content.plaintextSize, thumbnailBytes: version.content.thumbnailBytes))
+        let trailer = Data(window.suffix(Int(version.content.thumbnailBytes) + 16))
+        mirror?.putThumbnail(current.id, trailer)
+        return trailer
     }
 }

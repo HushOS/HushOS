@@ -39,8 +39,9 @@ final class SaveModel {
     private let staging: URL
 
     init() {
-        staging = ShareHandoff.transfers.deletingLastPathComponent()
-            .appendingPathComponent("share-staging", isDirectory: true).appendingPathComponent(UUID().uuidString, isDirectory: true)
+        Unbacked.apply()
+        ShareHandoff.sweepStaging()
+        staging = ShareHandoff.staging.appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 
     // MARK: - Opening
@@ -48,6 +49,8 @@ final class SaveModel {
     func open(_ extensionItems: [NSExtensionItem]) async {
         guard let vault = Vault.fromKeychain() else { phase = .signedOut; return }
         self.vault = vault
+        // Plaintext of what was shared, until it is sealed: never in a backup.
+        Unbacked.folder(ShareHandoff.staging)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         phase = .ready
         async let place: Void = findFolder(vault)
@@ -212,6 +215,7 @@ final class SaveModel {
             let id = UUID()
             let directory = ShareHandoff.directory(id)
             do {
+                Unbacked.folder(ShareHandoff.transfers)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let content = directory.appendingPathComponent("content")
                 try FileManager.default.moveItem(at: copy, to: content)

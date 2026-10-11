@@ -7,7 +7,7 @@ import Foundation
  * one, and forgotten with the rest of the account (AccountStore).
  */
 public enum Places {
-    public struct Folder: Hashable, Sendable {
+    public struct Folder: Codable, Hashable, Sendable {
         public init(id: String, name: String) {
             self.id = id
             self.name = name
@@ -17,21 +17,12 @@ public enum Places {
         public let name: String
     }
 
-    static let idKey = "places.lastFolder"
-    static let nameKey = "places.lastFolderName"
+    /* A JSON file beside the kept-file lists, out of backups (`Unbacked`); an earlier version used the group's defaults. */
+    static let file = "last-folder.json"
 
-    public static func last() -> Folder? {
-        guard let id = Offline.defaults.string(forKey: idKey) else { return nil }
-        return Folder(id: id, name: Offline.defaults.string(forKey: nameKey) ?? "Files")
-    }
+    public static func last() -> Folder? { Unbacked.read(Folder.self, file) }
 
-    public static func used(_ id: String, name: String) {
-        Offline.defaults.set(id, forKey: idKey)
-        Offline.defaults.set(name, forKey: nameKey)
-    }
+    public static func used(_ id: String, name: String) { Unbacked.write(Folder(id: id, name: name), file) }
 
-    public static func forget() {
-        Offline.defaults.removeObject(forKey: idKey)
-        Offline.defaults.removeObject(forKey: nameKey)
-    }
+    public static func forget() { Unbacked.write(nil as Folder?, file) }
 }

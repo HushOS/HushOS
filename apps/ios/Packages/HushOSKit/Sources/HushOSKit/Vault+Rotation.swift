@@ -102,7 +102,7 @@ extension Vault {
      * The keys a grantee's share is sealed to, by the pin: no pin or a changed
      * X25519 key drops the share (it keeps its old envelope, which the rotation
      * leaves unopenable); a served post-quantum key is used when the pin knows
-     * it, or when it is signed and the pin has none yet.
+     * it, or when the pinned signing key signed it and the pin has none yet.
      */
     private func trustedKeys(for share: RotationWorkNode.Share, pins: [String: ContactPin]) -> (Data, Data?)? {
         guard let pin = pins[share.granteeUserId], pin.encryptionPublicKey == share.grantee.encryptionPublicKey,
@@ -112,8 +112,9 @@ extension Vault {
         }
         let digest = keyDigest(publicKey: kemBytes)
         if let known = pin.kemPublicKeyHash { return known == digest ? (publicKey, kemBytes) : nil }
-        let signed = kemBindingVerify(userId: share.granteeUserId, encryptionPublicKey: share.grantee.encryptionPublicKey,
-                                      signingPublicKey: share.grantee.signingPublicKey, kemPublicKey: kem.publicKey, signature: kem.signature)
+        // Only the pinned signing key may vouch: the words compared cover it, the served one could be anyone's.
+        let signed = kemBindingVerify(userId: share.granteeUserId, encryptionPublicKey: pin.encryptionPublicKey,
+                                      signingPublicKey: pin.signingPublicKey, kemPublicKey: kem.publicKey, signature: kem.signature)
         return (publicKey, signed ? kemBytes : nil)
     }
 

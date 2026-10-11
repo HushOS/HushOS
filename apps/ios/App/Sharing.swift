@@ -408,7 +408,7 @@ private struct LinkCard: View {
             store.notify("This link was made before links could be shown again. Turn it off and make a new one.")
             return
         }
-        UIPasteboard.general.url = url
+        UIPasteboard.general.setItems([["public.url": url]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
         copied = true
         let until = parseDate(link.expiresAt).map { " until \($0.formatted(.dateTime.day().month(.wide).locale(.dayMonth)))" } ?? ""
         store.notify("Link copied. Anyone with it can view “\(item.name)”\(until).")

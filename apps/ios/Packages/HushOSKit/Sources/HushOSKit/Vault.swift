@@ -394,7 +394,7 @@ public actor Vault {
         guard opened.content.thumbnailBytes > 0 else { return nil }
         _ = version
         guard let ciphertext = try await sealedThumbnail(for: item, opened: opened) else { return nil }
-        return try thumbnailDecrypt(content: opened.content, ciphertext: ciphertext)
+        return try thumbnailDecrypt(content: opened.content, fetched: ciphertext)
     }
 
     /* Every page of the trash, opened; items whose parent is also trashed are marked. */

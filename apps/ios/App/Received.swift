@@ -191,6 +191,22 @@ struct SharedView: View {
                 Button("Report", systemImage: "flag") { action = .report(root) }
             }
             .itemRow()
+        } else if let trust = mount.trust {
+            // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
+            let unverified = trust.unverified
+            Button { showingPeople = true } label: {
+                HStack(spacing: Alpine.Space.s3) {
+                    Image(systemName: unverified ? "person.badge.shield.checkmark" : "exclamationmark.triangle")
+                        .foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
+                        .frame(width: Theme.mark, height: Theme.mark).background(unverified ? Alpine.ink.opacity(0.07) : Alpine.dangerSoft, in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Shared by \(granter(mount))").foregroundStyle(Alpine.ink)
+                        Text(trust.errorDescription ?? "").font(Theme.Text.footnote).foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
+                    }
+                }
+                .frame(minHeight: Theme.row).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).itemRow()
         } else {
             HStack(spacing: Alpine.Space.s3) {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(Alpine.danger)
@@ -268,7 +284,7 @@ struct SharedView: View {
                 Button("Copy link", systemImage: "doc.on.doc") {
                     Task {
                         if let url = try? await store.vault.linkURL(link, for: item) {
-                            UIPasteboard.general.url = url
+                            UIPasteboard.general.setItems([["public.url": url]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
                             store.notify("Link copied")
                         } else {
                             store.notify("This link was made before links could be shown again. Turn it off and make a new one.")

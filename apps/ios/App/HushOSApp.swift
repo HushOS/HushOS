@@ -9,6 +9,9 @@ struct HushOSApp: App {
     @State private var model = AppModel()
 
     init() {
+        // Decrypted copies and the lists naming them stay out of backups; a restore can drop the mark, so set it again.
+        Unbacked.apply()
+        ShareHandoff.sweepStaging()
         // Before launch finishes, or iOS will not run it.
         BackgroundTransfers.registerTask()
         // Before launch finishes, so a tap on a transfers notification that launched the app arrives.

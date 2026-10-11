@@ -17,6 +17,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
+        Unbacked.apply()
         vault = Vault.fromKeychain()
         super.init()
     }
@@ -24,7 +25,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     func invalidate() {}
 
     static func translate(_ error: Error) -> Error {
-        log.error("\(String(describing: error), privacy: .public)")
+        // An error's text can carry decrypted names and paths: only its type is public.
+        log.error("\(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
         switch error {
         case DriveAPIError.notAuthenticated:
             return NSFileProviderError(.notAuthenticated)

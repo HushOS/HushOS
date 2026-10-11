@@ -282,7 +282,7 @@ public actor LinkVault {
         let urls = try await api.linkThumbnails(token: token, versionIds: [version.id])
         guard let entry = urls.urls.first, let url = URL(string: entry.url) else { return nil }
         let ciphertext = try await api.range(url, thumbnailRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes))
-        return try thumbnailDecrypt(content: opened.content, ciphertext: ciphertext)
+        return try thumbnailDecrypt(content: opened.content, fetched: ciphertext)
     }
 
     /* Files a report on the linked item, sealing its key to every operator; anonymous. */

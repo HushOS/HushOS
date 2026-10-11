@@ -34,7 +34,7 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.didEnumerate(items)
                 observer.finishEnumerating(upTo: nil)
             } catch {
-                log.error("container \(self.container.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                log.error("container \(self.container.rawValue, privacy: .public) failed: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
                 observer.finishEnumeratingWithError(FileProviderExtension.translate(error))
             }
         }

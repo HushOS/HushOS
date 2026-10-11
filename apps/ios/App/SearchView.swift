@@ -15,9 +15,8 @@ struct SearchView: View {
     @State private var filter: HomeFilter = .all
     @State private var action: NodeAction?
     @State private var viewing: Opened?
-    @AppStorage("search.recent") private var recentRaw = ""
-
-    private var recent: [String] { recentRaw.split(separator: "\n").map(String.init) }
+    /* In a file out of backups (`RecentSearches`), not the app's defaults: the words name what is in the drive. */
+    @State private var recent = RecentSearches.load()
 
     private var words: [String] {
         query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
@@ -148,7 +147,8 @@ struct SearchView: View {
     private func remember(_ term: String) {
         let clean = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        recentRaw = ([clean] + recent.filter { $0.caseInsensitiveCompare(clean) != .orderedSame }).prefix(5).joined(separator: "\n")
+        recent = Array(([clean] + recent.filter { $0.caseInsensitiveCompare(clean) != .orderedSame }).prefix(5))
+        RecentSearches.save(recent)
     }
 }
 

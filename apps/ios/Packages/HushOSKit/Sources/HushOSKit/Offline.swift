@@ -6,8 +6,9 @@ import HushOSCore
  * "Keep downloaded": the app keeps a decrypted copy of a file in the app
  * group container, so it opens without the network. iOS gives third-party
  * File Providers no pinning, so this is the app's own feature, the way the
- * other drives do it. The list and the names shown offline live in the
- * group's defaults, so the Offline section on Home needs no round trip.
+ * other drives do it. The list and the names shown offline live in JSON
+ * files in the app group (`Unbacked`, out of backups like the copies), so the
+ * Offline section on Home needs no round trip.
  */
 private let offlineLog = Logger(subsystem: "com.hushos.app", category: "offline")
 
@@ -33,12 +34,13 @@ public enum Offline {
         public let keptAt: String
     }
 
+    /* Where an earlier version kept the lists, in the group's defaults; `Unbacked` moves them out. */
     static let foldersKey = "offline.folders"
+    static let foldersFile = "offline-folders.json"
 
     /* Every kept folder, newest first. */
     public static func keptFolders() -> [KeptFolder] {
-        guard let data = defaults.data(forKey: foldersKey), let list = try? JSONDecoder().decode([KeptFolder].self, from: data) else { return [] }
-        return list.sorted { $0.keptAt > $1.keptAt }
+        (Unbacked.read([KeptFolder].self, foldersFile) ?? []).sorted { $0.keptAt > $1.keptAt }
     }
 
     public static func isFolderKept(_ id: String) -> Bool { keptFolders().contains { $0.id == id } }
@@ -56,12 +58,12 @@ public enum Offline {
         var list = keptFolders().filter { $0.id != folder.id }
         list.append(KeptFolder(id: folder.id, name: folder.name, workspaceId: folder.node.workspaceId,
                                keptAt: ISO8601DateFormatter().string(from: Date())))
-        defaults.set(try? JSONEncoder().encode(list), forKey: foldersKey)
+        Unbacked.write(list, foldersFile)
     }
 
     /* The folder stops being kept and every file kept with it goes; files kept on their own stay. */
     public static func forgetFolder(_ id: String) {
-        defaults.set(try? JSONEncoder().encode(keptFolders().filter { $0.id != id }), forKey: foldersKey)
+        Unbacked.write(keptFolders().filter { $0.id != id }, foldersFile)
         for entry in entries(keptWith: id) { forget(entry.id) }
         writeFailures(keepFailures().filter { $0.value.folderId != id })
     }
@@ -91,14 +93,14 @@ public enum Offline {
     }
 
     static let failuresKey = "offline.failures"
+    static let failuresFile = "offline-failures.json"
 
     public static func keepFailures() -> [String: KeepFailure] {
-        guard let data = defaults.data(forKey: failuresKey), let map = try? JSONDecoder().decode([String: KeepFailure].self, from: data) else { return [:] }
-        return map
+        Unbacked.read([String: KeepFailure].self, failuresFile) ?? [:]
     }
 
     static func writeFailures(_ map: [String: KeepFailure]) {
-        defaults.set(try? JSONEncoder().encode(map), forKey: failuresKey)
+        Unbacked.write(map, failuresFile)
     }
 
     /* Half a minute after the first failure, doubling to an hour: a file that keeps failing doesn't fail every sync. */
@@ -137,19 +139,19 @@ public enum Offline {
 
     static let group = "group.com.hushos.app"
     static let key = "offline.entries"
+    static let entriesFile = "offline-entries.json"
 
     static var defaults: UserDefaults { UserDefaults(suiteName: group) ?? .standard }
 
     /* Everything kept, newest first. */
     public static func entries() -> [Entry] {
-        guard let data = defaults.data(forKey: key), let list = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
-        return list.sorted { $0.keptAt > $1.keptAt }
+        (Unbacked.read([Entry].self, entriesFile) ?? []).sorted { $0.keptAt > $1.keptAt }
     }
 
     public static func isKept(_ id: String) -> Bool { entries().contains { $0.id == id } }
 
     static func write(_ list: [Entry]) {
-        defaults.set(try? JSONEncoder().encode(list), forKey: key)
+        Unbacked.write(list, entriesFile)
     }
 
     static func root() -> URL {
@@ -205,6 +207,9 @@ public enum Offline {
      * nobody else (AccountStore removes them with the rest of the account's data).
      */
     public static func forgetAll() {
+        Unbacked.write(nil as [Entry]?, entriesFile)
+        Unbacked.write(nil as [KeptFolder]?, foldersFile)
+        Unbacked.write(nil as [String: KeepFailure]?, failuresFile)
         defaults.removeObject(forKey: key)
         defaults.removeObject(forKey: foldersKey)
         defaults.removeObject(forKey: failuresKey)
@@ -218,6 +223,7 @@ extension Vault {
     /* Keeps a file: downloads its current version into the offline store and records it. */
     public func keepDownloaded(_ item: Opened, folder: String? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
+        Unbacked.folder(Offline.root())
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: destination.path) {
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
@@ -294,7 +300,8 @@ extension Vault {
             do {
                 try await keepDownloaded(item) { progress(entry.id, $0) }
             } catch {
-                offlineLog.warning("refreshing the kept copy of \(entry.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                // The error's text can carry the file's name or path: only its type is public.
+                offlineLog.warning("refreshing the kept copy of \(entry.id, privacy: .public) failed: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
                 failed[entry.id] = error
             }
         }
@@ -352,6 +359,7 @@ extension Vault {
         }
         let opened = try openVersion(item)
         let files = FileManager.default
+        Unbacked.folder(Offline.root())
         try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let partial = destination.appendingPathExtension("part")
         files.createFile(atPath: partial.path, contents: nil)

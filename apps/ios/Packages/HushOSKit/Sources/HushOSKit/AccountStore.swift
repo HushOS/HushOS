@@ -20,8 +20,9 @@ public struct AccountStore: Sendable {
     /* What lives outside files: preferences, the keychain, SQLite. */
     let forgetStores: @Sendable () -> Void
 
-    /* Under the group container: kept files, the queue's copies, the node-to-parent index. */
-    static let accountFiles = ["offline", "transfers", "files-parents.json"]
+    /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
+     * lists of kept files, the last folder and recent searches (`Unbacked.state`), the node-to-parent index. */
+    static let accountFiles = ["offline", "transfers", "share-staging", "state", "files-parents.json"]
 
     private var ownerFile: URL { root.appendingPathComponent("account-owner") }
 
@@ -84,7 +85,7 @@ public struct AccountStore: Sendable {
             Mirror(url: group.appendingPathComponent("mirror.sqlite"))?.wipe()
             // The remembered device opens this account's key; the next account makes its own.
             SharedKeychain.delete(SharedKeychain.deviceAccount)
-            // Recent searches and the address the sign-in screen offers.
+            // Recent searches (an earlier version kept them here) and the address the sign-in screen offers.
             UserDefaults.standard.removeObject(forKey: "search.recent")
             UserDefaults.standard.removeObject(forKey: "lastEmail")
         }

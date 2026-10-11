@@ -88,7 +88,8 @@ final class BackgroundTransfers {
         let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
             ?? FileManager.default.temporaryDirectory
         root = group.appendingPathComponent("transfers", isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // Plaintext waiting to be sealed and the records naming it: on this phone only, never in a backup.
+        Unbacked.folder(root)
         relay.root = root
         if let data = try? Data(contentsOf: root.appendingPathComponent("records.json")),
            let saved = try? JSONDecoder().decode([Record].self, from: data) {

@@ -673,7 +673,11 @@ enum KitShare {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(RecoveryKit.fileName)
         guard (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil else { return }
-        TextPrompt.topController()?.present(UIActivityViewController(activityItems: [file], applicationActivities: nil), animated: true)
+        let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+        // The kit holds the phrase in plain text: gone once the sheet has handed it on or was dismissed.
+        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: directory) }
+        guard let top = TextPrompt.topController() else { try? FileManager.default.removeItem(at: directory); return }
+        top.present(sheet, animated: true)
     }
 }
 
@@ -706,7 +710,7 @@ struct RecoveryPhraseSheet: View {
                             }
                             .buttonStyle(PrimaryCapsuleStyle())
                             Button {
-                                UIPasteboard.general.string = phrase
+                                UIPasteboard.general.setItems([["public.utf8-plain-text": phrase]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
                                 copied = true
                                 Task { try? await Task.sleep(for: .seconds(1.6)); copied = false }
                             } label: { Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") }
