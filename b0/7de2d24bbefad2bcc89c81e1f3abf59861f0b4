@@ -1,0 +1,29 @@
+apps/ios/App/Uploads.swift
+  s_b5938b5134af95::t_b3e3be7b18d22f 14,37-39,41,75,78-80,87-90,118,136,144,241,244-248,261,263-266,268-271,293-295,345,347-348,350-352,354-374,379,382,386-387,458-461,463-470,472-475,477,479-489,491-492,498-508,510-513,519,523-526
+  s_b5938b5134af95::t_8fbf9c73104c31 159-163
+  s_b5938b5134af95::t_2f8a04a0cadcda 249,490
+  s_b5938b5134af95::t_8da000613c0542 121-124,127-135,137-143,146,215,217,223-225,227-238,240,275-286,289,392-393
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/UploadNames.swift
+  s_b5938b5134af95::t_b7a58c9e02d55e 25-26,29-30
+  s_b5938b5134af95::t_d6208b93a2f272 1-24,27-28,31-48
+apps/ios/App/DriveStore.swift
+  s_b5938b5134af95::t_b045916596050d 1311-1322,1325-1326,1331,1335,1354
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/UploadNamesTests.swift
+  s_b5938b5134af95::t_c3d2206d551947 1-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b07de2d24bbefad2bcc89c81e1f3abf59861f0b4",
+  "prompts": {},
+  "sessions": {
+    "s_b5938b5134af95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a14488de-a981-4ae4-896f-0829a4fb0b59",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
