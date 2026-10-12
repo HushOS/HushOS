@@ -601,7 +601,8 @@ Nitro emits one evlog completion event for each request, including pre-parser au
 
 - A personal workspace and initial quota are created in the signup transaction.
 - Quota counts use PostgreSQL bigint and serialize as decimal strings.
-- Extra entitlements are separate, expiring/revocable records keyed by the billing subscription that granted them.
+- Extra entitlements are separate, expiring/revocable records keyed by what granted them: a billing subscription, a referral, or an operator.
+- An operator adds storage from an account's page under Management (Add storage: an amount up to 100 TB, optionally an end date and a note). It counts at once, is listed with the account's other grants with who added it, and is logged as `storage-granted` with the operator's and the account's ids. Only these grants can be revoked there (`storage-revoked`); a plan's or an invite bonus's ends through its own system. Revoking never deletes files: while they take more than the allowance, uploads are refused.
 - Changing the initial-quota environment variable affects new accounts only.
 
 ### Enforcement

@@ -47,3 +47,16 @@ export const adminWorkspacesQueryOptions = (filters: {
 export function setAccountSuspended(id: string, suspended: boolean) {
     return unwrap(apiClient().admin.accounts({ id }).suspension.post({ suspended }));
 }
+
+/* Adds storage to one account by hand, optionally until a date; answers with its new allowance. */
+export function grantAccountStorage(
+    id: string,
+    input: { quotaBytes: string; expiresAt: string | null; note?: string | null },
+) {
+    return unwrap(apiClient().admin.accounts({ id }).storage.post(input));
+}
+
+/* Ends storage an operator added; plans and invite bonuses are not revoked here. */
+export function revokeAccountStorage(id: string, entitlementId: string) {
+    return unwrap(apiClient().admin.accounts({ id }).storage({ entitlementId }).revoke.post({}));
+}

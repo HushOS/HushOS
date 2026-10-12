@@ -1692,6 +1692,50 @@ export const apiApp = new Elysia({ prefix: '/api' })
             return { suspendedAt: result.suspendedAt };
         },
     )
+    .post(
+        '/admin/accounts/:id/storage',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({
+                // Decimal bytes, as every byte count on the wire; the bound is the server's.
+                quotaBytes: t.String({ pattern: '^[0-9]{1,20}$' }),
+                expiresAt: t.Optional(t.Nullable(t.String({ format: 'date-time' }))),
+                note: t.Optional(t.Nullable(t.String({ maxLength: 500 }))),
+            }),
+        },
+        async ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            const result = await auth.grantAdminAccountStorage(sessionToken, params.id, body);
+            useLogger().set({
+                admin: {
+                    action: 'storage-granted',
+                    operatorId: result.operatorId,
+                    accountId: params.id,
+                },
+            });
+            return { entitlementId: result.entitlementId, quotaBytes: result.quotaBytes };
+        },
+    )
+    .post(
+        '/admin/accounts/:id/storage/:entitlementId/revoke',
+        { params: t.Object({ id: uuidSchema, entitlementId: uuidSchema }), body: t.Object({}) },
+        async ({ request, sessionToken, params }) => {
+            guardAuthMutation(request);
+            const result = await auth.revokeAdminAccountStorage(
+                sessionToken,
+                params.id,
+                params.entitlementId,
+            );
+            useLogger().set({
+                admin: {
+                    action: 'storage-revoked',
+                    operatorId: result.operatorId,
+                    accountId: params.id,
+                },
+            });
+            return { quotaBytes: result.quotaBytes };
+        },
+    )
     .get(
         '/admin/workspaces',
         {
