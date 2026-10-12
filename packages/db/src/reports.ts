@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { db } from './client';
-import { selectNodes, walk, type NodeRow, type VersionRow } from './drive';
+import { removeNodeIn, selectNodes, walk, type NodeRow, type VersionRow } from './drive';
 import {
     accountIdentities,
     driveNodes,
@@ -316,11 +316,7 @@ export async function addReportKeys(
     keys: { operatorUserId: string; keyEnvelope: Buffer }[],
 ) {
     return db.transaction(async (tx) => {
-        const [report] = await tx
-            .select({ status: driveReports.status, heldAt: driveReports.heldAt })
-            .from(driveReports)
-            .where(eq(driveReports.id, reportId))
-            .for('update');
+        const report = await lockReport(tx, reportId);
         if (!report) return { status: 'not-found' as const };
         if (isReleased(report)) return { status: 'released' as const };
         const operators = new Set((await listOperators()).map((o) => o.userId));
@@ -413,20 +409,57 @@ export async function getReportVersions(reportId: string, versionIds: string[]) 
 }
 
 /*
- * Closed without a hold: what the report held is released. Its operator keys
- * are deleted when that happens, and nothing serves its content any more.
+ * Closed without a hold: what the report held is released, for good. Its
+ * operator keys are deleted, nothing serves its content any more, and no
+ * operator can resolve, hold, reopen or re-seal it again; a report about the
+ * same thing has to be filed anew. `released_at` records it, so a later write
+ * to the status or the hold cannot quietly undo it.
  */
-export function isReleased(report: { status: ReportStatus; heldAt: Date | null }) {
-    return report.status !== 'open' && report.heldAt === null;
+export function isReleased(report: { releasedAt: Date | null }) {
+    return report.releasedAt !== null;
 }
 
-/* Deletes what lets anyone open a released report, and the anonymous reporter's address with it. */
-async function release(tx: Tx, reportId: string) {
+/*
+ * The report row, locked for the rest of the transaction, so a release and
+ * another operator's write to the same report happen one after the other.
+ */
+async function lockReport(tx: Tx, reportId: string) {
+    const [report] = await tx
+        .select({
+            workspaceId: driveReports.workspaceId,
+            nodeId: driveReports.nodeId,
+            status: driveReports.status,
+            heldAt: driveReports.heldAt,
+            releasedAt: driveReports.releasedAt,
+        })
+        .from(driveReports)
+        .where(eq(driveReports.id, reportId))
+        .for('update');
+    return report ?? null;
+}
+
+/*
+ * Deletes what lets anyone open a released report, and what it kept about
+ * people: the anonymous reporter's address and email and the uploader's email.
+ * The audit trail stays, and so does the snapshot in `drive_report_items`: the
+ * evidence purge needs its object ids to find the copies it deletes, and the
+ * envelopes in it open nothing without an operator key.
+ */
+async function release(tx: Tx, reportId: string, now: Date) {
     await tx.delete(driveReportKeys).where(eq(driveReportKeys.reportId, reportId));
-    await tx
+    const [report] = await tx
         .update(driveReports)
-        .set({ reporterAddressHash: null })
-        .where(eq(driveReports.id, reportId));
+        .set({
+            heldAt: null,
+            releasedAt: now,
+            reporterAddressHash: null,
+            reporterEmail: null,
+            uploaderEmail: null,
+            updatedAt: now,
+        })
+        .where(eq(driveReports.id, reportId))
+        .returning();
+    return report!;
 }
 
 export type Resolution =
@@ -434,18 +467,39 @@ export type Resolution =
     | { status: 'removed'; hold: boolean }
     | { status: 'filed'; filedWith: string; filedReference: string | null };
 
-/* Closes a report; a filed one is always held, since someone else now relies on the bytes. */
+/*
+ * Closes an open report; a filed one is always held, since someone else now
+ * relies on the bytes. Removal takes the content down in the same transaction:
+ * trashed, unrestorable, every share and link on it revoked. A report that is
+ * already closed is refused rather than closed again, so a second resolve can
+ * neither turn a release back into a hold nor take content down after the fact.
+ */
 export async function resolveReport(reportId: string, actorUserId: string, resolution: Resolution) {
     return db.transaction(async (tx) => {
-        const [current] = await tx
-            .select({ status: driveReports.status, heldAt: driveReports.heldAt })
-            .from(driveReports)
-            .where(eq(driveReports.id, reportId))
-            .for('update');
+        const current = await lockReport(tx, reportId);
         if (!current) return { status: 'not-found' as const };
+        if (isReleased(current)) return { status: 'released' as const };
+        if (current.status !== 'open') return { status: 'closed' as const };
+        if (resolution.status === 'removed') {
+            const removed = await removeNodeIn(tx, {
+                workspaceId: current.workspaceId,
+                nodeId: current.nodeId,
+            });
+            // Two events in one transaction: the clock, not now(), keeps them in order.
+            await tx.insert(driveReportEvents).values({
+                reportId,
+                actorUserId,
+                createdAt: sql`clock_timestamp()`,
+                action: 'content-removed',
+                note:
+                    removed.status === 'ok'
+                        ? `${removed.shares} shares and ${removed.links} links revoked`
+                        : 'already gone',
+            });
+        }
         const now = new Date();
         const hold = resolution.status === 'filed' ? true : resolution.hold;
-        const [report] = await tx
+        let [report] = await tx
             .update(driveReports)
             .set({
                 status: resolution.status,
@@ -459,10 +513,11 @@ export async function resolveReport(reportId: string, actorUserId: string, resol
             })
             .where(eq(driveReports.id, reportId))
             .returning();
-        if (!hold) await release(tx, reportId);
+        if (!hold) report = await release(tx, reportId, now);
         await tx.insert(driveReportEvents).values({
             reportId,
             actorUserId,
+            createdAt: sql`clock_timestamp()`,
             action: resolution.status,
             note:
                 resolution.status === 'filed'
@@ -475,37 +530,48 @@ export async function resolveReport(reportId: string, actorUserId: string, resol
     });
 }
 
+/* Holds or lets go; letting go of a closed report releases it. */
 export async function setReportHold(reportId: string, actorUserId: string, held: boolean) {
     return db.transaction(async (tx) => {
-        const [report] = await tx
+        const current = await lockReport(tx, reportId);
+        if (!current) return { status: 'not-found' as const };
+        if (isReleased(current)) return { status: 'released' as const };
+        const now = new Date();
+        let [report] = await tx
             .update(driveReports)
-            .set({
-                heldAt: held ? sql`coalesce(${driveReports.heldAt}, now())` : null,
-                updatedAt: new Date(),
-            })
+            .set({ heldAt: held ? (current.heldAt ?? now) : null, updatedAt: now })
             .where(eq(driveReports.id, reportId))
             .returning();
-        if (!report) return null;
-        if (isReleased(report)) await release(tx, reportId);
+        if (!held && current.status !== 'open') report = await release(tx, reportId, now);
         await tx.insert(driveReportEvents).values({
             reportId,
             actorUserId,
             action: held ? 'held' : 'released',
         });
-        return report;
+        return { status: 'ok' as const, report: report! };
     });
 }
 
+/* Reopens a closed report that is still held; an open one is left as it is. */
 export async function reopenReport(reportId: string, actorUserId: string) {
     return db.transaction(async (tx) => {
+        const current = await lockReport(tx, reportId);
+        if (!current) return { status: 'not-found' as const };
+        if (isReleased(current)) return { status: 'released' as const };
+        if (current.status === 'open') {
+            const [report] = await tx
+                .select()
+                .from(driveReports)
+                .where(eq(driveReports.id, reportId));
+            return { status: 'ok' as const, report: report! };
+        }
         const [report] = await tx
             .update(driveReports)
             .set({ status: 'open', resolvedAt: null, resolvedBy: null, updatedAt: new Date() })
             .where(eq(driveReports.id, reportId))
             .returning();
-        if (!report) return null;
         await tx.insert(driveReportEvents).values({ reportId, actorUserId, action: 'reopened' });
-        return report;
+        return { status: 'ok' as const, report: report! };
     });
 }
 

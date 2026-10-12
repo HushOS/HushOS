@@ -403,6 +403,8 @@ export const driveReports = pgTable(
         status: text().notNull().$type<ReportStatus>().default('open'),
         // Keeps the bytes past resolution: the deletion outbox skips what an open or held report names.
         heldAt: timestamp('held_at', { withTimezone: true }),
+        // Closed without a hold: the keys and personal details are gone, and nothing reopens or holds it again.
+        releasedAt: timestamp('released_at', { withTimezone: true }),
         evidenceStatus: text('evidence_status')
             .notNull()
             .$type<EvidenceStatus>()
@@ -426,6 +428,10 @@ export const driveReports = pgTable(
         check(
             'drive_reports_status_valid',
             sql`${table.status} in ('open', 'dismissed', 'removed', 'filed')`,
+        ),
+        check(
+            'drive_reports_release_valid',
+            sql`${table.releasedAt} is null or (${table.status} <> 'open' and ${table.heldAt} is null)`,
         ),
         check(
             'drive_reports_evidence_valid',

@@ -659,34 +659,36 @@ export async function trashNode(input: { workspaceId: string; nodeId: string }) 
  * Anything shared or linked beneath it is cut by the trashed ancestor.
  */
 export async function removeNode(input: { workspaceId: string; nodeId: string }) {
-    return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
-        const chain = await walk(tx, input.nodeId);
-        if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
-            return { status: 'not-found' as const };
-        if (chain.node.parent_id === null) return { status: 'root' as const };
-        const now = new Date();
-        await tx
-            .update(driveNodes)
-            .set({
-                trashedAt: chain.node.trashed_at ?? now,
-                removedAt: now,
-                changeSeq,
-                updatedAt: now,
-            })
-            .where(eq(driveNodes.id, input.nodeId));
-        const shares = await tx
-            .update(driveShares)
-            .set({ revokedAt: now, updatedAt: now })
-            .where(and(eq(driveShares.nodeId, input.nodeId), isNull(driveShares.revokedAt)))
-            .returning({ id: driveShares.id });
-        const links = await tx
-            .update(driveLinks)
-            .set({ revokedAt: now })
-            .where(and(eq(driveLinks.nodeId, input.nodeId), isNull(driveLinks.revokedAt)))
-            .returning({ id: driveLinks.id });
-        return { status: 'ok' as const, shares: shares.length, links: links.length };
-    });
+    return db.transaction((tx) => removeNodeIn(tx, input));
+}
+/* The same inside a caller's transaction: resolving a report removes and closes at once. */
+export async function removeNodeIn(tx: Tx, input: { workspaceId: string; nodeId: string }) {
+    const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+    const chain = await walk(tx, input.nodeId);
+    if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
+        return { status: 'not-found' as const };
+    if (chain.node.parent_id === null) return { status: 'root' as const };
+    const now = new Date();
+    await tx
+        .update(driveNodes)
+        .set({
+            trashedAt: chain.node.trashed_at ?? now,
+            removedAt: now,
+            changeSeq,
+            updatedAt: now,
+        })
+        .where(eq(driveNodes.id, input.nodeId));
+    const shares = await tx
+        .update(driveShares)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(driveShares.nodeId, input.nodeId), isNull(driveShares.revokedAt)))
+        .returning({ id: driveShares.id });
+    const links = await tx
+        .update(driveLinks)
+        .set({ revokedAt: now })
+        .where(and(eq(driveLinks.nodeId, input.nodeId), isNull(driveLinks.revokedAt)))
+        .returning({ id: driveLinks.id });
+    return { status: 'ok' as const, shares: shares.length, links: links.length };
 }
 
 export async function restoreNode(input: {

@@ -314,8 +314,21 @@ describe('holds', () => {
             'dismissed',
             'released',
         ]);
+        // Released is final: filing it now would put the drained bytes back under a hold.
+        expect(
+            (
+                await reports.resolveReport(made.report.id, operator.userId, {
+                    status: 'filed',
+                    filedWith: 'NCMEC CyberTipline',
+                    filedReference: 'CT-1',
+                })
+            ).status,
+        ).toBe('released');
+        expect(await reports.isObjectHeld(objectId)).toBe(false);
         // Filing with an authority always holds, whatever the caller says.
-        const filed = await reports.resolveReport(made.report.id, operator.userId, {
+        const second = await report(await folder(rootId, rootEpoch));
+        if (second.status !== 'ok') throw new Error(second.status);
+        const filed = await reports.resolveReport(second.report.id, operator.userId, {
             status: 'filed',
             filedWith: 'NCMEC CyberTipline',
             filedReference: 'CT-1',
@@ -323,7 +336,6 @@ describe('holds', () => {
         if (filed.status !== 'ok') throw new Error(filed.status);
         expect(filed.report.heldAt).not.toBeNull();
         expect(filed.report.filedWith).toBe('NCMEC CyberTipline');
-        expect(await reports.isObjectHeld(objectId)).toBe(true);
         expect(
             (
                 await reports.resolveReport(randomUUID(), operator.userId, {
@@ -547,7 +559,9 @@ describe('re-sealing', () => {
 
 describe('release', () => {
     test('closing without a hold deletes every operator key and the reporter’s address; with a hold both stay', async () => {
-        const dismissed = await report(await folder(rootId, rootEpoch));
+        const dismissed = await report(await folder(rootId, rootEpoch), {
+            reporterEmail: 'someone@example.com',
+        });
         const held = await report(await folder(rootId, rootEpoch));
         if (dismissed.status !== 'ok' || held.status !== 'ok') throw new Error('not filed');
 
@@ -563,8 +577,133 @@ describe('release', () => {
         const closed = (await reports.getReport(dismissed.report.id))!.report;
         expect(reports.isReleased(closed)).toBe(true);
         expect(closed.reporterAddressHash).toBeNull();
+        // Who reported it and whose it was go too; the audit trail stays.
+        expect(closed.reporterEmail).toBeNull();
+        expect(closed.uploaderEmail).toBeNull();
+        expect(closed.releasedAt).not.toBeNull();
+        expect((await reports.getReport(dismissed.report.id))?.events.map((e) => e.action)).toEqual(
+            ['reported', 'dismissed'],
+        );
         expect(await reports.getReportKey(held.report.id, operator.userId)).toHaveLength(112);
-        expect(reports.isReleased((await reports.getReport(held.report.id))!.report)).toBe(false);
+        const kept = (await reports.getReport(held.report.id))!.report;
+        expect(reports.isReleased(kept)).toBe(false);
+        expect(kept.reporterAddressHash).toHaveLength(32);
+        expect(kept.uploaderEmail).toBe(owner.email);
+    });
+
+    test('a released report refuses every way back: resolve, hold, reopen', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const made = await report(project);
+        if (made.status !== 'ok') throw new Error(made.status);
+        await reports.resolveReport(made.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        const before = (await reports.getReport(made.report.id))!;
+
+        for (const resolution of [
+            { status: 'dismissed', hold: true },
+            { status: 'removed', hold: false },
+            { status: 'filed', filedWith: 'A hotline', filedReference: null },
+        ] as const)
+            expect(
+                (await reports.resolveReport(made.report.id, operator.userId, resolution)).status,
+            ).toBe('released');
+        expect((await reports.setReportHold(made.report.id, operator.userId, true)).status).toBe(
+            'released',
+        );
+        expect((await reports.setReportHold(made.report.id, operator.userId, false)).status).toBe(
+            'released',
+        );
+        expect((await reports.reopenReport(made.report.id, operator.userId)).status).toBe(
+            'released',
+        );
+
+        const after = (await reports.getReport(made.report.id))!;
+        expect(after.report).toEqual(before.report);
+        expect(after.events).toEqual(before.events);
+        // Removal on a released report would have taken the owner's folder down.
+        expect((await drive.authorize(owner.userId, owner.workspaceId, project.id))?.trashed).toBe(
+            false,
+        );
+        expect((await reports.reopenReport(randomUUID(), operator.userId)).status).toBe(
+            'not-found',
+        );
+        expect((await reports.setReportHold(randomUUID(), operator.userId, true)).status).toBe(
+            'not-found',
+        );
+    });
+
+    test('a closed report is not resolved again, held or not: it is reopened first', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const made = await report(project);
+        if (made.status !== 'ok') throw new Error(made.status);
+        await reports.resolveReport(made.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: true,
+        });
+        expect(
+            (
+                await reports.resolveReport(made.report.id, operator.userId, {
+                    status: 'removed',
+                    hold: true,
+                })
+            ).status,
+        ).toBe('closed');
+        expect((await drive.authorize(owner.userId, owner.workspaceId, project.id))?.trashed).toBe(
+            false,
+        );
+        const reopened = await reports.reopenReport(made.report.id, operator.userId);
+        if (reopened.status !== 'ok') throw new Error(reopened.status);
+        expect(reopened.report.status).toBe('open');
+        expect(reopened.report.heldAt).not.toBeNull();
+        const removed = await reports.resolveReport(made.report.id, operator.userId, {
+            status: 'removed',
+            hold: true,
+        });
+        if (removed.status !== 'ok') throw new Error(removed.status);
+        expect((await drive.authorize(owner.userId, owner.workspaceId, project.id))?.trashed).toBe(
+            true,
+        );
+        expect((await reports.getReport(made.report.id))?.events.map((e) => e.action)).toEqual([
+            'reported',
+            'dismissed',
+            'reopened',
+            'content-removed',
+            'removed',
+        ]);
+    });
+
+    test('two operators closing at once: one closes it, the other is refused, and a release stays released', async () => {
+        const made = await report(await folder(rootId, rootEpoch));
+        if (made.status !== 'ok') throw new Error(made.status);
+        const results = await Promise.all([
+            reports.resolveReport(made.report.id, operator.userId, {
+                status: 'dismissed',
+                hold: false,
+            }),
+            reports.resolveReport(made.report.id, operator.userId, {
+                status: 'filed',
+                filedWith: 'A hotline',
+                filedReference: null,
+            }),
+            reports.setReportHold(made.report.id, operator.userId, true),
+        ]);
+        const [dismissal, filing, hold] = results.map((result) => result.status);
+        const final = (await reports.getReport(made.report.id))!.report;
+        // Whichever closed it first decided; nothing after a release could hold it again.
+        if (final.releasedAt) {
+            expect([dismissal, filing]).toEqual(['ok', 'released']);
+            expect(final.status).toBe('dismissed');
+            expect(final.heldAt).toBeNull();
+            expect(await reports.getReportKey(made.report.id, operator.userId)).toBeNull();
+        } else {
+            expect([dismissal, filing]).toEqual(['closed', 'ok']);
+            expect(final.status).toBe('filed');
+            expect(final.heldAt).not.toBeNull();
+            expect(await reports.getReportKey(made.report.id, operator.userId)).toHaveLength(112);
+        }
+        expect(['ok', 'released']).toContain(hold);
     });
 
     test('releasing the hold of a closed report releases it; of an open one, nothing is lost', async () => {

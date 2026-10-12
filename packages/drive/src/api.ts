@@ -478,6 +478,8 @@ export type ReportView = {
     uploader: { userId: string | null; email: string | null; suspended: boolean };
     status: ReportStatus;
     heldAt: string | null;
+    /* Closed without a hold: its keys are gone and it can no longer be opened, held or reopened. */
+    releasedAt: string | null;
     evidenceStatus: 'pending' | 'copied' | 'skipped' | 'failed' | 'purged';
     itemCount: number;
     itemsTruncated: boolean;

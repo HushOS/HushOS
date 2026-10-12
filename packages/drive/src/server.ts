@@ -1672,6 +1672,7 @@ function reportView(report: ReportRow, uploaderSuspended = false) {
         },
         status: report.status,
         heldAt: report.heldAt?.toISOString() ?? null,
+        releasedAt: report.releasedAt?.toISOString() ?? null,
         evidenceStatus: report.evidenceStatus,
         itemCount: report.itemCount,
         itemsTruncated: report.itemsTruncated,
@@ -1897,7 +1898,9 @@ async function loadReport(reportId: string) {
  * A report closed without a hold has released what it held: its operator keys
  * are deleted (see reportsRepository.resolveReport), and every route that
  * reads its content is shut, so dismissing a report ends the operators' view of
- * the owner's files rather than leaving it open for good.
+ * the owner's files rather than leaving it open for good. Release is final: the
+ * repository refuses every later resolve, hold, reopen and re-seal under the
+ * report's row lock, so the checks here only spare a request the work.
  */
 const reportReleased = () =>
     new DriveError(
@@ -1905,6 +1908,8 @@ const reportReleased = () =>
         'This report was closed without a hold, so its content was released and can no longer be opened.',
         410,
     );
+const reportClosed = () =>
+    new DriveError('conflict', 'This report is already closed. Reopen it first.', 409);
 async function loadHeldReport(reportId: string) {
     const found = await loadReport(reportId);
     if (reportsRepository.isReleased(found.report)) throw reportReleased();
@@ -2057,46 +2062,36 @@ export type ReportResolution =
     | { status: 'removed'; hold: boolean }
     | { status: 'filed'; filedWith: string; filedReference: string | null };
 
-/* Closes a report. Removal takes the content down first: trashed, unrestorable, every share and link on it revoked. */
+/* Closes an open report. Removal takes the content down with it: trashed, unrestorable, every share and link on it revoked. */
 export async function resolveReport(
     operatorUserId: string,
     reportId: string,
     resolution: ReportResolution,
 ) {
-    const found = await loadReport(reportId);
-    if (resolution.status === 'removed') {
-        const removed = await driveRepository.removeNode({
-            workspaceId: found.report.workspaceId,
-            nodeId: found.report.nodeId,
-        });
-        await reportsRepository.addReportEvent(
-            reportId,
-            operatorUserId,
-            'content-removed',
-            removed.status === 'ok'
-                ? `${removed.shares} shares and ${removed.links} links revoked`
-                : 'already gone',
-        );
-    }
+    const found = await loadHeldReport(reportId);
     const result = await reportsRepository.resolveReport(reportId, operatorUserId, resolution);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status === 'closed') throw reportClosed();
     if (result.status !== 'ok') throw reportGone();
     return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 export async function holdReport(operatorUserId: string, reportId: string, held: boolean) {
-    // A released report has no keys left to hold the content for.
-    const found = held ? await loadHeldReport(reportId) : await loadReport(reportId);
-    const report = await reportsRepository.setReportHold(reportId, operatorUserId, held);
-    if (!report) throw reportGone();
-    return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };
+    // A released report has no keys left to hold the content for, and nothing to let go of.
+    const found = await loadHeldReport(reportId);
+    const result = await reportsRepository.setReportHold(reportId, operatorUserId, held);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status !== 'ok') throw reportGone();
+    return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 export async function reopenReport(operatorUserId: string, reportId: string) {
     // Its keys went when it was released: a report about the same thing must be filed again.
     const found = await loadHeldReport(reportId);
-    const report = await reportsRepository.reopenReport(reportId, operatorUserId);
-    if (!report) throw reportGone();
-    return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };
+    const result = await reportsRepository.reopenReport(reportId, operatorUserId);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status !== 'ok') throw reportGone();
+    return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 /* Suspends or reinstates whoever owns the reported workspace; their sessions end at once. */
