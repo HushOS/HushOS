@@ -44,6 +44,39 @@ export type SecurityUpdate = {
     workspaces?: WorkspaceKeyEnvelope[];
 };
 
+/*
+ * What a master-key rotation carries over to the new root, beside the password
+ * and recovery envelopes: the identity and every earlier one (shares sealed to
+ * them open with nothing else), each keeping its key version and public keys;
+ * the settings key, when the account has one; and every workspace grant, at
+ * the new root revision with its workspace key epoch unchanged. The server
+ * refuses a rotation that leaves any of them behind.
+ */
+export async function rewrapAccountKeys(
+    root: Uint8Array<ArrayBuffer>,
+    nextRoot: Uint8Array<ArrayBuffer>,
+    userId: string,
+    keyVersion: number,
+    keys: Pick<SecurityChallenge, 'identity' | 'identityHistory' | 'settingsKey' | 'workspaces'>,
+) {
+    return {
+        identity: await rewrapIdentity(root, nextRoot, userId, keys.identity),
+        identityHistory: await Promise.all(
+            (keys.identityHistory ?? []).map((earlier) =>
+                rewrapIdentity(root, nextRoot, userId, earlier),
+            ),
+        ),
+        settingsKey: keys.settingsKey
+            ? await rewrapSettingsKey(root, nextRoot, userId, keys.settingsKey)
+            : undefined,
+        workspaces: await Promise.all(
+            keys.workspaces.map((grant) =>
+                rewrapWorkspaceGrant(root, nextRoot, userId, grant, keyVersion),
+            ),
+        ),
+    };
+}
+
 // A single short-lived exchange proves the current password and prepares replacement
 // envelopes. Plaintext roots stay here; only encrypted bundles leave the worker.
 export function createSecurityChange() {
@@ -167,39 +200,9 @@ export function createSecurityChange() {
                               )
                           ).recovery
                         : undefined,
-                // The identity, and every earlier one shares may still be sealed to, follow the
-                // root; each keeps its own key version and public keys.
-                identity:
-                    input.action === 'master-key'
-                        ? await rewrapIdentity(root, nextRoot, input.userId, input.identity)
-                        : undefined,
-                identityHistory:
-                    input.action === 'master-key'
-                        ? await Promise.all(
-                              (input.identityHistory ?? []).map((earlier) =>
-                                  rewrapIdentity(root, nextRoot, input.userId, earlier),
-                              ),
-                          )
-                        : undefined,
-                settingsKey:
-                    input.action === 'master-key' && input.settingsKey
-                        ? await rewrapSettingsKey(root, nextRoot, input.userId, input.settingsKey)
-                        : undefined,
-                // Every workspace grant follows the root; the workspace keys themselves stay put.
-                workspaces:
-                    input.action === 'master-key'
-                        ? await Promise.all(
-                              input.workspaces.map((grant) =>
-                                  rewrapWorkspaceGrant(
-                                      root,
-                                      nextRoot,
-                                      input.userId,
-                                      grant,
-                                      keyVersion,
-                                  ),
-                              ),
-                          )
-                        : undefined,
+                ...(input.action === 'master-key'
+                    ? await rewrapAccountKeys(root, nextRoot, input.userId, keyVersion, input)
+                    : {}),
             };
         } finally {
             attempt.password = '';

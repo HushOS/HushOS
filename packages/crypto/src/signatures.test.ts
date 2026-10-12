@@ -87,7 +87,7 @@ describe('statements', () => {
         const link = {
             userId: NODE,
             oldKeyVersion: 2,
-            newKeyVersion: 4,
+            newKeyVersion: 2,
             oldEncryptionPublicKey: key,
             oldSigningPublicKey: key,
             newEncryptionPublicKey: key,

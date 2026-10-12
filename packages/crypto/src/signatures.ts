@@ -127,11 +127,14 @@ export async function shareStatement(ctx: ShareStatement, sealed: Uint8Array) {
  * ["hushos/identity/succession", 1, userId, oldKeyVersion, newKeyVersion,
  *  oldX25519, oldEd25519, newX25519, newEd25519, sha256(newKemPublicKey)]
  * Keys are base64url as the server serves them; the KEM key is digested from
- * its bytes. The new version is the old one plus one, always.
+ * its bytes. The new version is above the old one (one above, when minted).
  */
 export async function successionStatement(link: SuccessionStatement) {
+    // A succession mints current + 1; a reader asks only that the version rose, since a
+    // master-key rotation may have raised it to the root's revision between two links.
     const oldVersion = count(link.oldKeyVersion, 'key version');
-    if (link.newKeyVersion !== oldVersion + 1) throw new CryptoError('Invalid key version.');
+    if (!Number.isSafeInteger(link.newKeyVersion) || link.newKeyVersion <= oldVersion)
+        throw new CryptoError('Invalid key version.');
     // Canonical base64url of the right length, or refused: decode checks both.
     const key = (value: string, length: number) => {
         decode(value, length);

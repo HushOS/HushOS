@@ -119,7 +119,8 @@ describe('succession', () => {
             signingPublicKey: second.identity.signingPublicKey,
         };
         expect(await verifySuccessionChain(USER, fromSecond, served, links.slice(1))).toBe(true);
-        expect(await verifySuccessionChain(USER, fromSecond, served, links)).toBe(false);
+        // Links before the pinned keys are not part of the chain; the chain starts at them.
+        expect(await verifySuccessionChain(USER, fromSecond, served, links)).toBe(true);
 
         // A server that mints its own v3 and signs the link with a key it holds: v2's key did not sign.
         const forged = await createIdentity(root, USER, 3);
@@ -145,7 +146,8 @@ describe('succession', () => {
         ).toBe(false);
         // The real chain does not vouch for keys the server serves beside it.
         for (const change of [
-            { keyVersion: 4 },
+            // A served version below the chain's end: a rollback.
+            { keyVersion: 2 },
             { encryptionPublicKey: forged.encryptionPublicKey },
             { signingPublicKey: forged.signingPublicKey },
             { kemPublicKey: forged.kem!.publicKey },
@@ -171,6 +173,48 @@ describe('succession', () => {
         expect(await verifySuccessionChain(USER, pinned, served, [])).toBe(false);
         // Another account's id under the same links.
         expect(await verifySuccessionChain(FRIEND, pinned, served, links)).toBe(false);
+    });
+
+    test('a version raised by a rotation between two links leaves the chain whole', async () => {
+        const { root, first, second, pinned } = await generations();
+        // A master-key rotation lifted v2 to the root's revision, 4, before the next succession.
+        const raised = { ...second.identity, keyVersion: 4 };
+        const secondKey = await openIdentitySigningKey(root, USER, second.identity);
+        const next = await createSuccessor(root, USER, raised, secondKey);
+        expect(next.identity.keyVersion).toBe(5);
+        const links = [
+            linkOf(first, second.identity, second.signature),
+            linkOf(raised, next.identity, next.signature),
+        ];
+        const served = {
+            keyVersion: 5,
+            encryptionPublicKey: next.identity.encryptionPublicKey,
+            signingPublicKey: next.identity.signingPublicKey,
+            kemPublicKey: next.identity.kem!.publicKey,
+        };
+        expect(await verifySuccessionChain(USER, pinned, served, links)).toBe(true);
+        // Raised again by a later rotation, the served version may be above the last link's.
+        expect(await verifySuccessionChain(USER, pinned, { ...served, keyVersion: 6 }, links)).toBe(
+            true,
+        );
+        // But versions never fall back along the chain, even under good signatures.
+        const lowered = { ...second.identity, keyVersion: 1 };
+        const back = await createSuccessor(root, USER, lowered, secondKey);
+        const fallen = [links[0]!, linkOf(lowered, back.identity, back.signature)];
+        expect(await verifySuccessionLink(USER, fallen[1]!)).toBe(true);
+        expect(
+            await verifySuccessionChain(
+                USER,
+                pinned,
+                {
+                    keyVersion: 2,
+                    encryptionPublicKey: back.identity.encryptionPublicKey,
+                    signingPublicKey: back.identity.signingPublicKey,
+                    kemPublicKey: back.identity.kem!.publicKey,
+                },
+                fallen,
+            ),
+        ).toBe(false);
     });
 
     test('a master-key rotation keeps each identity’s key version and opens it under the new root', async () => {

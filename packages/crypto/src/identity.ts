@@ -567,12 +567,13 @@ export async function verifySuccessionLink(userId: string, link: SuccessionLink)
 }
 
 /*
- * Whether `links` carry a contact from the keys pinned to the keys served:
- * the first link starts at the pinned keys (and version, when the pin has
- * one; links before the pinned keys are skipped when it has none), each link
- * starts where the one before ended and is signed by the signing key it
- * replaces, and the last ends at the served version and names the served
- * X25519, Ed25519 and ML-KEM keys. Any gap, fork or bad signature and the
+ * Whether `links` carry a contact from the keys pinned to the keys served.
+ * Continuity is by keys, not version numbers (a master-key rotation may raise
+ * an identity's version between two successions): the chain starts at the
+ * link whose old keys are the pinned ones, each link's old keys are the
+ * previous link's new keys and its signature is by the signing key it
+ * replaces, versions only rise, and the last link's new X25519, Ed25519 and
+ * ML-KEM keys are the served ones. Any gap, fork or bad signature and the
  * chain does not hold; that is the changed-key warning, never a silent update.
  */
 export async function verifySuccessionChain(
@@ -581,25 +582,22 @@ export async function verifySuccessionChain(
     served: ServedKeys,
     links: SuccessionLink[],
 ) {
-    const start =
-        pinned.keyVersion === null
-            ? links.findIndex(
-                  (link) =>
-                      link.oldEncryptionPublicKey === pinned.encryptionPublicKey &&
-                      link.oldSigningPublicKey === pinned.signingPublicKey,
-              )
-            : 0;
+    const start = links.findIndex(
+        (link) =>
+            link.oldEncryptionPublicKey === pinned.encryptionPublicKey &&
+            link.oldSigningPublicKey === pinned.signingPublicKey,
+    );
     if (start < 0) return false;
     const chain = links.slice(start);
     let at = {
-        keyVersion: pinned.keyVersion ?? chain[0]?.oldKeyVersion,
+        keyVersion: pinned.keyVersion ?? 0,
         encryptionPublicKey: pinned.encryptionPublicKey,
         signingPublicKey: pinned.signingPublicKey,
         kemPublicKey: null as string | null,
     };
     for (const link of chain) {
         if (
-            link.oldKeyVersion !== at.keyVersion ||
+            link.oldKeyVersion < at.keyVersion ||
             link.oldEncryptionPublicKey !== at.encryptionPublicKey ||
             link.oldSigningPublicKey !== at.signingPublicKey ||
             !(await verifySuccessionLink(userId, link))
@@ -613,8 +611,7 @@ export async function verifySuccessionChain(
         };
     }
     return (
-        chain.length > 0 &&
-        at.keyVersion === served.keyVersion &&
+        served.keyVersion >= at.keyVersion &&
         at.encryptionPublicKey === served.encryptionPublicKey &&
         at.signingPublicKey === served.signingPublicKey &&
         at.kemPublicKey === served.kemPublicKey
