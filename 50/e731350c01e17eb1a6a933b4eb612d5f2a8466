@@ -1,0 +1,65 @@
+crates/hushos-core/Cargo.toml
+  s_75dbe24a0bc379::t_9549732296884e 33,35
+  s_75dbe24a0bc379::t_2146b61edd748b 38
+crates/hushos-core/examples/fixtures.rs
+  s_75dbe24a0bc379::t_f78fca18077b70 175
+crates/hushos-core/src/drive.rs
+  s_75dbe24a0bc379::t_cf31c70e16c464 601-604,609-612,615,617-620,729-732
+  s_75dbe24a0bc379::t_4106e911203b25 736-742
+  s_75dbe24a0bc379::t_7c404ad3a005e0 16,76,78,88,111,115,117,134,456,498,745,773,790,816,827
+  s_75dbe24a0bc379::t_be21c7df4cc362 1113
+  s_75dbe24a0bc379::t_8d4e7a4a837f5e 1118-1128
+  s_75dbe24a0bc379::t_dfea948026503f 1117
+crates/hushos-core/src/identity.rs
+  s_75dbe24a0bc379::t_3a0ea56e97722f 18,111-118,125-128
+crates/hushos-core/src/reports.rs
+  s_75dbe24a0bc379::t_1caa048b23ebf3 22
+  s_75dbe24a0bc379::t_a47c6fc24604f7 14-15,18,20,30-31
+  s_75dbe24a0bc379::t_f798085406a36d 16,149-151,290-293
+  s_75dbe24a0bc379::t_cff767e5f24fc6 109
+  s_75dbe24a0bc379::t_8c21f6d382b4fa 121-124,282,284-289,294-302
+  s_75dbe24a0bc379::t_f11dce37f34540 114-118,147,153-155,168-173,230
+crates/hushos-core/src/recovery.rs
+  s_75dbe24a0bc379::t_4f30e7e65f8f2f 335,372
+crates/hushos-core/fixtures/web.json
+  s_75dbe24a0bc379::t_3e06c3608076ea 4-5,10-12,14,18,21,23-24,26-27,30-31,34,37-39,41,45-47,61-62
+  s_75dbe24a0bc379::t_620ad479448218 51-53,65,68-71,74-75,78,82,86,90-91,95-98,101,103,108,112-114,120-122,124-127,129-132,134,136-137,139-140,142-144,148-149,151,153-156,158-159,162-163,168-173,175,178-180,184-185
+crates/hushos-core/src/opaque.rs
+  s_75dbe24a0bc379::t_1e748e4e322029 20,155-161,178,192,214,232
+  s_75dbe24a0bc379::t_f913853950935e 354-362
+  s_75dbe24a0bc379::t_7823a2a36ca4dd 353
+crates/hushos-core/src/contacts.rs
+  s_75dbe24a0bc379::t_f798085406a36d 207-208
+  s_75dbe24a0bc379::t_d6a80508ab181f 12,61,64,66,71-84,121-126,142,147,149
+  s_75dbe24a0bc379::t_0b5805c2035767 161
+  s_75dbe24a0bc379::t_5264acca3dab64 192-206,209
+  s_75dbe24a0bc379::t_acd38760634c7e 210-211
+crates/hushos-core/src/shares.rs
+  s_75dbe24a0bc379::t_9549732296884e 12-13,17,57-58,60
+  s_75dbe24a0bc379::t_8f0304c6f00921 78-81,86,225-228
+  s_75dbe24a0bc379::t_cff767e5f24fc6 101-103
+  s_75dbe24a0bc379::t_eabd930ed126e0 56,59
+  s_75dbe24a0bc379::t_71d6b7c2688782 199-203
+crates/hushos-core/src/links.rs
+  s_75dbe24a0bc379::t_5a1105ba166bb9 265
+  s_75dbe24a0bc379::t_54e9ccdddc978d 26-47,63,96,102,377,381
+  s_75dbe24a0bc379::t_6b5eaba4cfbc85 293
+Cargo.lock
+  s_75dbe24a0bc379::t_8d78d10d34acf7 768,773,787,879,891,1391-1396,1448-1456
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50e731350c01e17eb1a6a933b4eb612d5f2a8466",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
