@@ -17,16 +17,69 @@ public struct Tag: Codable, Sendable, Identifiable, Hashable {
     }
 }
 
-public struct TagRegistry: Codable, Sendable, Equatable {
+/*
+ * The registry as edited here, over the document as read: `raw` is the opened JSON, kept whole, so a
+ * field a newer client writes (beside `tags`, inside a tag, or in `items` under a key that is no tag)
+ * survives a save from this one. `tags` and `items` are the parts this version reads and edits; `json()`
+ * writes them over `raw` and leaves the rest as it was.
+ */
+public struct TagRegistry: Sendable, Equatable {
     public var version: Int
     public var tags: [Tag]
     /* Tag id -> the ids of the nodes carrying it. */
     public var items: [String: [String]]
+    /* The document as read, serialised; empty for a registry that has none yet. */
+    private var raw: Data = Data()
+    /* The ids `items` speaks for: the tags as read and any made since. A key in raw `items` outside these is not ours to drop. */
+    private var known: Set<String> = []
 
     public static let empty = TagRegistry(version: 2, tags: [], items: [:])
     public static let presets = ["blue", "ink", "yellow", "teal", "coral"]
     public static let maxTags = 200
     public static let maxPerNode = 16
+
+    public init(version: Int, tags: [Tag], items: [String: [String]]) {
+        self.version = version
+        self.tags = tags
+        self.items = items
+        known = Set(tags.map(\.id))
+    }
+
+    /* Reads an opened document; a version this app doesn't know is a format it can't write back, as on the web. */
+    public init(json: Data) throws {
+        guard let document = try JSONSerialization.jsonObject(with: json) as? [String: Any] else { throw AuthError.message("The tag list could not be read.") }
+        guard let version = document["version"] as? Int, version == 1 || version == 2 else { throw AuthError.message("The tag list was made by a newer app.") }
+        struct Known: Decodable { let tags: [Tag] }
+        let tags = try JSONDecoder().decode(Known.self, from: json).tags
+        let rawItems = document["items"] as? [String: Any] ?? [:]
+        var items: [String: [String]] = [:]
+        for tag in tags { if let nodes = rawItems[tag.id] as? [String] { items[tag.id] = nodes } }
+        self.init(version: 2, tags: tags, items: items)
+        raw = json
+    }
+
+    /* The document to seal: what was read, with the tags and memberships as they are now. */
+    public func json() throws -> String {
+        var document = raw.isEmpty ? [:] : (try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:])
+        var rawTags: [String: [String: Any]] = [:]
+        for entry in document["tags"] as? [Any] ?? [] {
+            if let entry = entry as? [String: Any], let id = entry["id"] as? String { rawTags[id] = entry }
+        }
+        document["tags"] = tags.map { tag -> [String: Any] in
+            var entry = rawTags[tag.id] ?? [:]
+            entry["id"] = tag.id
+            entry["name"] = tag.name
+            entry["colour"] = tag.colour
+            return entry
+        }
+        var rawItems = document["items"] as? [String: Any] ?? [:]
+        for id in known { rawItems[id] = nil }
+        for (id, nodes) in items where !nodes.isEmpty { rawItems[id] = nodes }
+        document["items"] = rawItems
+        document["version"] = 2
+        let data = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys, .withoutEscapingSlashes])
+        return String(decoding: data, as: UTF8.self)
+    }
 
     public func tags(of nodeId: String) -> [Tag] {
         tags.filter { items[$0.id]?.contains(nodeId) ?? false }
@@ -40,6 +93,7 @@ public struct TagRegistry: Codable, Sendable, Equatable {
         guard tags.count < TagRegistry.maxTags else { throw AuthError.message("A workspace can have at most 200 tags.") }
         let tag = Tag(id: UUID().uuidString.lowercased(), name: clean, colour: TagRegistry.presets[tags.count % TagRegistry.presets.count])
         tags.append(tag)
+        known.insert(tag.id)
         return tag
     }
 
@@ -61,10 +115,10 @@ public struct TagRegistry: Codable, Sendable, Equatable {
 
     public mutating func assign(_ nodeId: String, tagIds: [String]) throws {
         guard tagIds.count <= TagRegistry.maxPerNode else { throw AuthError.message("An item can carry at most 16 tags.") }
+        // A tag the node keeps keeps its place in the list, as on the web; only what changed moves.
         for tag in tags {
             var nodes = items[tag.id] ?? []
-            nodes.removeAll { $0 == nodeId }
-            if tagIds.contains(tag.id) { nodes.append(nodeId) }
+            if tagIds.contains(tag.id) { if !nodes.contains(nodeId) { nodes.append(nodeId) } } else { nodes.removeAll { $0 == nodeId } }
             if nodes.isEmpty { items[tag.id] = nil } else { items[tag.id] = nodes }
         }
     }
@@ -124,7 +178,7 @@ extension Vault {
             ctx: DocumentContext(workspaceId: workspace.workspaceId, kind: Self.tagsKind, version: UInt64(document.version)),
             workspaceKey: key, envelope: try base64urlDecode(value: document.envelope)
         )
-        let registry = try JSONDecoder().decode(TagRegistry.self, from: Data(json.utf8))
+        let registry = try TagRegistry(json: Data(json.utf8))
         return (registry, document.version)
     }
 
@@ -136,7 +190,7 @@ extension Vault {
         while true {
             var (registry, version) = try await tags()
             try change(&registry)
-            let json = String(decoding: try JSONEncoder().encode(registry), as: UTF8.self)
+            let json = try registry.json()
             let envelope = try documentSeal(
                 ctx: DocumentContext(workspaceId: workspace.workspaceId, kind: Self.tagsKind, version: UInt64(version + 1)),
                 workspaceKey: key, json: json

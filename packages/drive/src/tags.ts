@@ -28,9 +28,19 @@ export function normaliseColour(value: TagColour): TagColour {
     return HEX.test(value) ? (value.toLowerCase() as TagColour) : value;
 }
 
-export type Tag = { id: string; name: string; colour: TagColour };
-/* `items` maps a tag id to the ids of the nodes carrying it. */
-export type TagRegistry = { version: 2; tags: Tag[]; items: Record<string, string[]> };
+/* A tag may carry fields a newer app added; they ride along untouched. */
+export type Tag = { id: string; name: string; colour: TagColour; [field: string]: unknown };
+/*
+ * `items` maps a tag id to the ids of the nodes carrying it. `kept` holds what
+ * this app does not understand, so saving never drops a newer app's work: the
+ * document's other top-level fields, and memberships of tags it could not read.
+ */
+export type TagRegistry = {
+    version: 2;
+    tags: Tag[];
+    items: Record<string, string[]>;
+    kept?: { fields: Record<string, unknown>; items: Record<string, unknown> };
+};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -78,7 +88,7 @@ export function parseRegistry(document: unknown): TagRegistry {
             ? normaliseColour(tag.colour)
             : TAG_PRESETS[tags.length % TAG_PRESETS.length]!;
         seen.add(tag.id);
-        tags.push({ id: tag.id, name, colour });
+        tags.push({ ...tag, id: tag.id, name, colour });
         if (tags.length === MAX_TAGS) break;
     }
     const items: Record<string, string[]> = {};
@@ -94,7 +104,23 @@ export function parseRegistry(document: unknown): TagRegistry {
         ];
         if (ids.length) items[tag.id] = ids;
     }
-    return { version: 2, tags, items };
+    const { version: _version, tags: _tags, items: _items, ...fields } = value;
+    const known = new Set(tags.map((tag) => tag.id));
+    const otherItems = Object.fromEntries(Object.entries(raw).filter(([id]) => !known.has(id)));
+    return { version: 2, tags, items, kept: { fields, items: otherItems } };
+}
+
+/*
+ * The registry as it is sealed: what this app edited, with everything it kept
+ * unread put back, so a newer app's fields and tags survive an older app's save.
+ */
+export function serialiseRegistry(registry: TagRegistry) {
+    return {
+        ...registry.kept?.fields,
+        version: 2,
+        tags: registry.tags,
+        items: { ...registry.kept?.items, ...registry.items },
+    };
 }
 
 export function findTag(registry: TagRegistry, name: string) {
@@ -149,7 +175,7 @@ export function recolourTag(registry: TagRegistry, id: string, colour: TagColour
 /* The tag and every item's membership in it go together. */
 export function removeTag(registry: TagRegistry, id: string): TagRegistry {
     const { [id]: _gone, ...items } = registry.items;
-    return { version: 2, tags: registry.tags.filter((tag) => tag.id !== id), items };
+    return { ...registry, tags: registry.tags.filter((tag) => tag.id !== id), items };
 }
 
 /* The ids of the tags a node carries, in the registry's order. */
@@ -213,5 +239,10 @@ export function mergeRegistries(base: TagRegistry, ours: TagRegistry, theirs: Ta
         for (const id of was) if (!mine.has(id)) merged.delete(id);
         if (merged.size) items[tag.id] = [...merged];
     }
-    return { version: 2 as const, tags, items };
+    // What neither side's app understands: the other device's copy, with ours over it.
+    const kept = {
+        fields: { ...theirs.kept?.fields, ...ours.kept?.fields },
+        items: { ...theirs.kept?.items, ...ours.kept?.items },
+    };
+    return { version: 2 as const, tags, items, kept };
 }

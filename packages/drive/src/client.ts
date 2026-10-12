@@ -15,6 +15,7 @@ import {
     emptyRegistry,
     mergeRegistries,
     parseRegistry,
+    serialiseRegistry,
     tagsOf as registryTagsOf,
     type TagRegistry,
 } from './tags';
@@ -514,7 +515,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 workspaceId: ws,
                 kind: TAGS_DOCUMENT,
                 version: attempt.version + 1,
-                document: attempt.value,
+                document: serialiseRegistry(attempt.value),
             });
             try {
                 const { document } = await api.putDocument(ws, TAGS_DOCUMENT, {

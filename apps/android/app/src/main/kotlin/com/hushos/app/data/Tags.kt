@@ -16,7 +16,16 @@ import java.util.UUID
  */
 data class Tag(val id: String, val name: String, val colour: String)
 
-class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, MutableList<String>>) {
+/*
+ * The registry as edited here, over the document as read: `raw` is the opened JSON, kept whole, so a
+ * field a newer client writes (beside `tags`, inside a tag, or in `items` under a key that is no tag)
+ * survives a save from this one. `tags` and `items` are the parts this version reads and edits; a save
+ * writes them over `raw` and leaves the rest as it was.
+ */
+class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, MutableList<String>>, private val raw: JSONObject = JSONObject()) {
+    /* The ids `items` speaks for: the tags as read and any made since. A key in raw `items` outside these is not ours to drop. */
+    private val known: MutableSet<String> = tags.mapTo(HashSet()) { it.id }
+
     companion object {
         val PRESETS = listOf("blue", "ink", "yellow", "teal", "coral")
         /* The presets the web offers for new tags, in its order (apps/web/src/lib/tags.ts OFFERED_COLOURS). */
@@ -25,18 +34,29 @@ class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, Muta
 
         fun parse(json: String): TagRegistry {
             val root = JSONObject(json)
+            // As the web's parseRegistry: a version this app doesn't know is a format it can't write back.
+            val version = root.opt("version")
+            if (version != 1 && version != 2) throw AuthFailure("The tag list was made by a newer app.")
             val tags = root.getJSONArray("tags").let { a -> (0 until a.length()).map { a.getJSONObject(it) }.map { Tag(it.getString("id"), it.getString("name"), it.getString("colour")) } }
             val items = mutableMapOf<String, MutableList<String>>()
-            val raw = root.getJSONObject("items")
-            for (key in raw.keys()) items[key] = raw.getJSONArray(key).let { a -> (0 until a.length()).map { a.getString(it) } }.toMutableList()
-            return TagRegistry(tags.toMutableList(), items)
+            val raw = root.optJSONObject("items") ?: JSONObject()
+            for (tag in tags) raw.optJSONArray(tag.id)?.let { a -> items[tag.id] = (0 until a.length()).map { a.getString(it) }.toMutableList() }
+            return TagRegistry(tags.toMutableList(), items, root)
         }
     }
 
     fun toJson(): String {
-        val items = JSONObject()
-        for ((k, v) in this.items) items.put(k, JSONArray(v))
-        return JSONObject().put("version", 2).put("tags", JSONArray(tags.map { JSONObject().put("id", it.id).put("name", it.name).put("colour", it.colour) })).put("items", items).toString()
+        val out = JSONObject(raw.toString())
+        val rawTags = HashMap<String, JSONObject>()
+        raw.optJSONArray("tags")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { t -> t.optString("id").ifEmpty { null }?.let { rawTags[it] = t } } }
+        val tagArray = JSONArray(tags.map { tag ->
+            val entry = rawTags[tag.id]?.let { JSONObject(it.toString()) } ?: JSONObject()
+            entry.put("id", tag.id).put("name", tag.name).put("colour", tag.colour)
+        })
+        val items = out.optJSONObject("items") ?: JSONObject()
+        for (id in known) items.remove(id)
+        for ((k, v) in this.items) if (v.isNotEmpty()) items.put(k, JSONArray(v))
+        return out.put("version", 2).put("tags", tagArray).put("items", items).toString()
     }
 
     fun tagsOf(nodeId: String): List<Tag> = tags.filter { items[it.id]?.contains(nodeId) == true }
@@ -49,6 +69,7 @@ class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, Muta
         if (tags.size >= 200) throw AuthFailure("A workspace can have at most 200 tags.")
         val tag = Tag(UUID.randomUUID().toString(), clean, colour ?: OFFERED[tags.size % OFFERED.size])
         tags.add(tag)
+        known.add(tag.id)
         return tag
     }
 
@@ -70,10 +91,10 @@ class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, Muta
 
     fun assign(nodeId: String, tagIds: Collection<String>) {
         if (tagIds.size > 16) throw AuthFailure("An item can carry at most 16 tags.")
+        // A tag the node keeps keeps its place in the list, as on the web; only what changed moves.
         for (tag in tags) {
             val nodes = items.getOrPut(tag.id) { mutableListOf() }
-            nodes.remove(nodeId)
-            if (tag.id in tagIds) nodes.add(nodeId)
+            if (tag.id in tagIds) { if (nodeId !in nodes) nodes.add(nodeId) } else nodes.remove(nodeId)
             if (nodes.isEmpty()) items.remove(tag.id)
         }
     }
