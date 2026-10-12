@@ -1,0 +1,23 @@
+packages/drive/src/tags.test.ts
+  s_75dbe24a0bc379::t_df861cb92888f5 1-77
+packages/drive/src/tags.ts
+  s_75dbe24a0bc379::t_6662cf9f12159d 31-43,91,107-123,178,242-247
+packages/drive/src/client.ts
+  s_75dbe24a0bc379::t_6662cf9f12159d 18,518
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b1e01fed7a009739c9dd925dc0b9aee7b97d6423",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
