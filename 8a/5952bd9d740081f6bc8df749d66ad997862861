@@ -1,0 +1,37 @@
+packages/db/src/drive.links.test.ts
+  s_75dbe24a0bc379::t_dc6d812310dfb1 261-287
+packages/db/drizzle/20261012135331_envelope_versions/snapshot.json
+  s_75dbe24a0bc379::t_f536d4e394c1be 1-7937
+packages/db/src/rotations.ts
+  s_75dbe24a0bc379::t_dd099775040d11 368
+  s_75dbe24a0bc379::t_9cd1ea846408bc 4
+packages/db/drizzle/20261012135331_envelope_versions/migration.sql
+  s_75dbe24a0bc379::t_f536d4e394c1be 4-5
+  s_75dbe24a0bc379::t_f889de45666e2a 1-3
+packages/db/src/drive.ts
+  s_75dbe24a0bc379::t_ba2f31fee6b5da 2779,3108-3114,3121,3141
+  s_75dbe24a0bc379::t_f536d4e394c1be 206
+  s_75dbe24a0bc379::t_dd099775040d11 2854-2855,3102-3107
+packages/drive/src/server.ts
+  s_75dbe24a0bc379::t_f889de45666e2a 171,855,1419,1570
+packages/db/src/schema/drive.ts
+  s_75dbe24a0bc379::t_f536d4e394c1be 49-50,352-353,640
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_f889de45666e2a 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a5952bd9d740081f6bc8df749d66ad997862861",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
