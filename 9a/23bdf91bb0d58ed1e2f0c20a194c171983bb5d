@@ -1,0 +1,62 @@
+packages/drive/src/trust.ts
+  s_75dbe24a0bc379::t_f6a30de1cdbdb4 1-166
+  s_75dbe24a0bc379::t_6193e4b06bfd8f 167
+packages/drive/src/trust.test.ts
+  s_75dbe24a0bc379::t_68feaf845b371b 1-165
+  s_75dbe24a0bc379::t_fb268b4ee9d203 166-199
+apps/web/src/lib/contacts.ts
+  s_75dbe24a0bc379::t_d30e7ed1638e90 1,9-18,21,24-26,28-31,34-49,51-53,55-58,62-67,69-70,74-83,97,102,114-146,183-213,215-216,222-259,292,295,305,325-400,406-407,411-412,417,431,445,447-449,451-459,464-476,478,487-491,497-505,509-513,518-519,521-523,525,527-528,530,538,554,564,590-595,601,603-604,608-609,613-615,617,619-621,623,625,627
+  s_75dbe24a0bc379::t_56d939549faca0 622,624,626,628-663,670
+apps/web/src/components/drive/drive-shell.tsx
+  s_75dbe24a0bc379::t_7dd839c12e53fa 12,51-52,75-76
+apps/web/src/components/drive/transfers-panel.tsx
+  s_75dbe24a0bc379::t_75c0d0feb98fb0 2,74-75
+apps/web/src/lib/auth-api.ts
+  s_75dbe24a0bc379::t_25ef59981f3c19 31-35
+apps/web/src/lib/drive-api.ts
+  s_75dbe24a0bc379::t_ee439f53f3161d 40-49,59
+apps/web/src/lib/drive.ts
+  s_75dbe24a0bc379::t_3be8d6b8806cc2 11-21,30-35,39-46
+apps/web/src/lib/previews.ts
+  s_75dbe24a0bc379::t_96c145cb5de6a7 200-202
+apps/web/src/lib/progress.test.ts
+  s_75dbe24a0bc379::t_3630b617da6ca3 15-17,51-62
+apps/web/src/lib/progress.ts
+  s_75dbe24a0bc379::t_876ab43da7d751 2,47-51
+e2e/sharing.spec.ts
+  s_75dbe24a0bc379::t_73a33fea4ad5ba 82,85
+packages/auth/src/client.ts
+  s_75dbe24a0bc379::t_a02abafcb04fa4 366-369,373-375
+packages/drive/package.json
+  s_75dbe24a0bc379::t_b99d930be70944 17
+packages/drive/src/catalogue.ts
+  s_75dbe24a0bc379::t_f8a02f53c0f9cf 80-84
+packages/drive/src/client.test.ts
+  s_75dbe24a0bc379::t_cde06a42dc4400 36-37,42,58,62-64,82,118-144,159-179,195,210,250-401
+packages/drive/src/client.ts
+  s_75dbe24a0bc379::t_cf5569fba3b089 5-6,41,71-76,90-113,150-158,171-174,176,183-205,247-248,297,310,315-348,362,373,387,563-580,730,746,755,758,769,828,832,881-885,891-905,910,940-944,968-972,975,979-998,1002-1004,1006,1010,1012,1014,1018-1045,1047-1049,1159,1307,1331,1358-1359,1369,1474,1501-1527,1540,1721
+packages/drive/src/downloads.test.ts
+  s_75dbe24a0bc379::t_5781ea656bf0c7 3,52-53,64-75,106-107,126-129,132-134,136,157-158,484-526
+packages/drive/src/downloads.ts
+  s_75dbe24a0bc379::t_fa9a3846ff2aeb 2,71-76,276-282,320,382,411-423,487-493
+packages/drive/src/transfers.test.ts
+  s_75dbe24a0bc379::t_b950e24e84a4b6 43-45
+packages/drive/src/transfers.ts
+  s_75dbe24a0bc379::t_eee34bd18416ad 2,216-243,568,590,609-610,616,833-834,842,853,868,883,898,901,1011,1013,1071-1072,1465,1467,1514,1516
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a23bdf91bb0d58ed1e2f0c20a194c171983bb5d",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
