@@ -8,7 +8,9 @@ Breaking compatibility with data written before is acceptable: the instance has 
 
 ### What it hides
 
-Under suite 2 the server could compute a file's exact size: `ciphertextSize - 16 * chunkCount` is the plaintext size plus the thumbnail trailer. Suite 3 pads every object so that number is a Padmé bucket: the server learns the size to within about 12% for small files and under 2% for large ones, and nothing about whether there is a thumbnail. Padding is stored and counted against quota like any other byte.
+Under suite 2 the server could compute a file's exact size: `ciphertextSize - 16 * chunkCount` is the plaintext size plus the thumbnail trailer. Suite 3 pads every object so that number is a Padmé bucket: the server learns the size of the file and its trailer together to within the bucket, at most 6.25% above it up to 64 KiB, 3.125% up to 4 GiB and 1.5625% beyond, and from the size alone nothing about whether there is a thumbnail. Padding is stored and counted against quota like any other byte.
+
+One residue: `chunkCount` is the padded content's chunk count, and content is the bucket less the trailer, so for a bucket that lands within a trailer's length past a multiple of 8 MiB, a file with a thumbnail has one chunk fewer than one without. The window is at most 64 KiB in every 8 MiB, and it says only that a thumbnail exists.
 
 ### Padmé
 
@@ -26,7 +28,7 @@ padme(L):
   return (L + mask) & ~mask
 ```
 
-Integer arithmetic only (BigInt in TypeScript, u64 in Rust). `padded` never shrinks a length and is idempotent.
+Integer arithmetic only (BigInt in TypeScript, u64 in Rust). `paddedLength` never shrinks a length, is idempotent and monotonic, and the padding it adds is under `L / 2^S`. Known values: 0 → 256, 257 → 272, 1000 → 1024, 2^20 + 1 → 1081344, 10^10 → 10066329600.
 
 ### Layout
 
@@ -40,7 +42,7 @@ object      = chunk_0 || ... || chunk_(chunkCount-1) || trailer?
 ciphertextSize = content + 16 * chunkCount + trailer
 ```
 
-Chunk `i` encrypts bytes `[i * CHUNK_SIZE, min(content, (i + 1) * CHUNK_SIZE))` of the file followed by zeros up to `content`. Associated data is suite 2's with the suite number 3 in place of 2: `["hushos/drive/content", 3, workspaceId, objectId, index, chunkCount, plaintextSize]`, where `plaintextSize` is `P`, the real size. The thumbnail trailer is as in suite 2, its nonce index `chunkCount`. The version envelope is suite 2's 84-byte record (`contentKey || u64be(P) || u32be(T)`) sealed under the version context with suite 3.
+Chunk `i` encrypts bytes `[i * CHUNK_SIZE, min(content, (i + 1) * CHUNK_SIZE))` of the file followed by zeros up to `content`. Associated data is suite 2's with the suite number 3 in place of 2: `["hushos/drive/content", 3, workspaceId, objectId, index, chunkCount, plaintextSize]`, where `plaintextSize` is `P`, the real size, and `chunkCount` the padded count above. The thumbnail trailer is as in suite 2 (same derived key) with 3 in its associated data too, `["hushos/drive/thumbnail", 3, workspaceId, objectId, T]`, and its nonce index the padded `chunkCount`. The version envelope is suite 2's 84-byte record (`contentKey || u64be(P) || u32be(T)`) sealed under the version context with suite 3, `["hushos/drive/content-key", 3, ...]`. A reader can trust nothing about the padding but its length: it is under the content key like the file, and the reader drops it unread.
 
 A reader decrypts chunks and keeps the first `P` bytes. A full download, a zip and a whole-file preview fetch every chunk, padding included, so the fetches do not tell the store where the file ends; a ranged read (seeking in a video) fetches only what it needs. The last chunk's range runs to the end of the object, trailer included, as in suite 2.
 

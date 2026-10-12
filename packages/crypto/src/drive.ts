@@ -17,15 +17,12 @@ import { encryptKey, decryptKey } from './aead';
 
 export const DRIVE_ENVELOPE_SUITE = 1;
 /*
- * Content suite 2 is suite 1's chunk framing with the thumbnail sealed as a
- * trailer of the same object and a version envelope that carries the plaintext
- * size and the trailer's length, so the server holds neither. Suite 1 objects
- * are read forever and never written again.
- */
-/*
- * Suite 3 pads every object to a Padmé bucket (see padded() and
- * docs/integrity-design.md); suite 2 is the same without padding and is read,
- * never written; suite 1 kept the size on the object row and is read only too.
+ * Content suite 3, the one written, pads every object to a Padmé bucket (see
+ * paddedLength and docs/integrity-design.md). Suite 2 is the same framing
+ * without the padding: the thumbnail sealed as a trailer of the object and a
+ * version envelope that carries the plaintext size and the trailer's length.
+ * Suite 1 kept the size on the object row. Both are read forever and never
+ * written again.
  */
 export const CONTENT_SUITE = 3;
 export const UNPADDED_CONTENT_SUITE = 2;
@@ -100,7 +97,7 @@ export type ContentKeyContext = {
     nodeId: string;
     versionId: string;
     objectId: string;
-    /* The object's content suite: 2 seals the sizes with the key, 1 the key alone. */
+    /* The object's content suite: 2 and 3 seal the sizes with the key, 1 the key alone. */
     suite: number;
 };
 /* What a version envelope holds. Suite 1 never sealed the sizes, so an opened one has no plaintext size. */
@@ -117,8 +114,8 @@ export type ChunkContext = {
     chunkCount: number;
     /* The file's real size, bound in the associated data. */
     plaintextSize: number;
-    /* What the chunks cover: the file and, under suite 3, its padding (see contentLength). */
-    contentLength: number;
+    /* The trailer's thumbnail: under suite 3 it decides how much padding the chunks carry. */
+    thumbnailBytes: number;
 };
 export type ThumbnailContext = {
     workspaceId: string;
@@ -138,7 +135,7 @@ function epoch(value: number, what: string) {
     if (!Number.isSafeInteger(value) || value < 1) throw new CryptoError(`Invalid ${what}.`);
     return value;
 }
-function suite(value: number) {
+function checkSuite(value: number) {
     if (!READABLE_CONTENT_SUITES.includes(value))
         throw new CryptoError('This file was stored in a way this app does not support.');
     return value;
@@ -224,7 +221,7 @@ export function documentContext(ctx: DocumentContext) {
 export function contentKeyContext(ctx: ContentKeyContext) {
     return context([
         'hushos/drive/content-key',
-        suite(ctx.suite),
+        checkSuite(ctx.suite),
         id(ctx.workspaceId, 'workspace id'),
         id(ctx.nodeId, 'node id'),
         id(ctx.versionId, 'version id'),
@@ -413,7 +410,7 @@ export async function sealVersion(
     ctx: ContentKeyContext,
 ) {
     if (record.contentKey.length !== KEY_BYTES) throw new CryptoError('Invalid content key.');
-    if (suite(ctx.suite) === LEGACY_CONTENT_SUITE) {
+    if (checkSuite(ctx.suite) === LEGACY_CONTENT_SUITE) {
         if (record.thumbnailBytes !== 0)
             throw new CryptoError('This file was stored without room for a thumbnail.');
         return wrapContentKey(record.contentKey, nodeKey, ctx);
@@ -447,7 +444,7 @@ export async function openVersion(
     nodeKey: Uint8Array,
     ctx: ContentKeyContext,
 ): Promise<OpenedVersion> {
-    if (suite(ctx.suite) === LEGACY_CONTENT_SUITE)
+    if (checkSuite(ctx.suite) === LEGACY_CONTENT_SUITE)
         return {
             contentKey: await openContentKey(envelope, nodeKey, ctx),
             plaintextSize: null,
@@ -498,9 +495,10 @@ export function trailerLength(thumbnailBytes: number) {
 /*
  * Padmé: a length rounded up so that only its top bits survive, about log2 of
  * log2 of them. What the server can learn of a suite 3 object's size is this
- * bucket; at most about 12% of padding on a small file, under 2% on a large one.
- * Everything up to 256 bytes is one bucket. (`padded` above is the other kind:
- * metadata padded to fixed steps.)
+ * bucket. The padding is under 2^-S of the length, S = floor(log2(log2 L)) + 1:
+ * under 6.25% up to 64 KiB, 3.125% up to 4 GiB, 1.5625% beyond. Everything up
+ * to 256 bytes is one bucket. (`padded` above is the other kind: metadata
+ * padded to fixed steps.)
  */
 export function paddedLength(length: number) {
     if (!Number.isSafeInteger(length) || length < 0) throw new CryptoError('Invalid file size.');
@@ -509,7 +507,9 @@ export function paddedLength(length: number) {
     const e = BigInt(value.toString(2).length - 1);
     const s = BigInt(e.toString(2).length);
     const mask = (1n << (e - s)) - 1n;
-    return Number((value + mask) & ~mask);
+    const out = (value + mask) & ~mask;
+    if (out > BigInt(Number.MAX_SAFE_INTEGER)) throw new CryptoError('Invalid file size.');
+    return Number(out);
 }
 /*
  * What the chunks of an object cover: under suite 3 the file and then zeros,
@@ -517,10 +517,9 @@ export function paddedLength(length: number) {
  * and 2 the file alone.
  */
 export function contentLength(suite: number, plaintextSize: number, thumbnailBytes: number) {
-    if (!Number.isSafeInteger(plaintextSize) || plaintextSize < 0)
-        throw new CryptoError('Invalid file size.');
-    if (suite < CONTENT_SUITE) return plaintextSize;
+    byteCount(plaintextSize, 'file size');
     const trailer = trailerLength(thumbnailBytes);
+    if (checkSuite(suite) < CONTENT_SUITE) return plaintextSize;
     return paddedLength(plaintextSize + trailer) - trailer;
 }
 /* The whole object: every chunk with its tag, then the trailer when there is one. */
@@ -601,7 +600,8 @@ export function chunkRange(
 }
 /*
  * The part of chunk `index`'s plaintext that is the file: under suite 3 the
- * chunks run on past the file into padding, which a reader drops.
+ * chunks run on past the file into zeros, which a reader drops. A chunk past
+ * the file's end gives nothing; it is still fetched (see driveDownloadOpen).
  */
 export function fileBytesOf(chunk: Uint8Array, plaintextSize: number, index: number) {
     const start = index * CHUNK_SIZE;
@@ -622,7 +622,7 @@ export function chunkNonce(contentNonce: Uint8Array, index: number) {
 export function chunkContext(ctx: ChunkContext) {
     return context([
         'hushos/drive/content',
-        suite(ctx.suite),
+        checkSuite(ctx.suite),
         id(ctx.workspaceId, 'workspace id'),
         id(ctx.objectId, 'object id'),
         ctx.index,
@@ -631,9 +631,12 @@ export function chunkContext(ctx: ChunkContext) {
     ]);
 }
 export function thumbnailContext(ctx: ThumbnailContext) {
+    // Suite 1 has no trailer; suites 2 and 3 bind their own number, so a trailer is one suite's.
+    if (checkSuite(ctx.suite) === LEGACY_CONTENT_SUITE)
+        throw new CryptoError('This file was stored without room for a thumbnail.');
     return context([
         'hushos/drive/thumbnail',
-        suite(ctx.suite),
+        ctx.suite,
         id(ctx.workspaceId, 'workspace id'),
         id(ctx.objectId, 'object id'),
         ctx.thumbnailBytes,
@@ -641,18 +644,13 @@ export function thumbnailContext(ctx: ThumbnailContext) {
 }
 
 /*
- * A chunk's context must agree with itself: the count is the one its content
- * length gives, and that length the one its suite gives the file size (a
- * suite 3 length is at least the file, never shorter).
+ * A chunk's context must agree with itself: the count is the one the suite's
+ * layout gives the file and its trailer. Returns what the chunks cover.
  */
 function checkChunkContext(ctx: ChunkContext) {
-    byteCount(ctx.plaintextSize, 'file size');
-    if (
-        ctx.chunkCount !== chunkCount(ctx.contentLength) ||
-        ctx.contentLength < ctx.plaintextSize ||
-        (suite(ctx.suite) < CONTENT_SUITE && ctx.contentLength !== ctx.plaintextSize)
-    )
-        throw new CryptoError('Invalid chunk.');
+    const length = contentLength(ctx.suite, ctx.plaintextSize, ctx.thumbnailBytes);
+    if (ctx.chunkCount !== chunkCount(length)) throw new CryptoError('Invalid chunk.');
+    return length;
 }
 
 /*
@@ -666,8 +664,7 @@ export async function encryptChunk(
     ctx: ChunkContext,
 ) {
     await sodium.ready;
-    checkChunkContext(ctx);
-    if (plaintext.length !== chunkPlaintextLength(ctx.contentLength, ctx.index))
+    if (plaintext.length !== chunkPlaintextLength(checkChunkContext(ctx), ctx.index))
         throw new CryptoError('Invalid chunk.');
     return new Uint8Array(
         sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
@@ -687,12 +684,12 @@ export async function decryptChunk(
 ) {
     await sodium.ready;
     // The last chunk may come with the trailer behind it (see chunkRange); every other must be exact.
+    let length: number;
     try {
-        checkChunkContext(ctx);
+        length = chunkCiphertextLength(checkChunkContext(ctx), ctx.index);
     } catch {
         throw new CryptoError('This file could not be decrypted. It may be damaged.');
     }
-    const length = chunkCiphertextLength(ctx.contentLength, ctx.index);
     const last = ctx.index === ctx.chunkCount - 1;
     if (last ? ciphertext.length < length : ciphertext.length !== length)
         throw new CryptoError('This file could not be decrypted. It may be damaged.');

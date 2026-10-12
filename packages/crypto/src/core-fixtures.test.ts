@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { restoreAccountKey } from './device';
 import {
-    chunkCount,
-    CONTENT_SUITE,
     decryptChunk,
     decryptThumbnail,
     openDocument,
@@ -71,7 +69,7 @@ describe('records sealed by the Rust core', () => {
         expect(metadata).toEqual(node.metadata);
     });
 
-    it('opens a suite 2 version, its last chunk and its thumbnail', async () => {
+    it('opens a version, its last chunk and its thumbnail', async () => {
         const node = core.node;
         const version = node.version;
         const opened = await openVersion(
@@ -88,12 +86,12 @@ describe('records sealed by the Rust core', () => {
         const ctx = {
             workspaceId: version.ctx.workspaceId,
             objectId: version.ctx.objectId,
-            suite: CONTENT_SUITE,
+            suite: version.ctx.suite,
             index: version.lastChunk.index,
-            chunkCount: chunkCount(version.plaintextSize),
+            chunkCount: 2,
             plaintextSize: version.plaintextSize,
+            thumbnailBytes: version.thumbnailBytes,
         };
-        expect(chunkCount(version.plaintextSize)).toBe(2);
         expect(
             await decryptChunk(
                 decode(version.lastChunk.ciphertext),
@@ -116,6 +114,7 @@ describe('records sealed by the Rust core', () => {
                 {
                     workspaceId: version.ctx.workspaceId,
                     objectId: version.ctx.objectId,
+                    suite: version.ctx.suite,
                     plaintextSize: version.plaintextSize,
                     thumbnailBytes: version.thumbnailBytes,
                 },
@@ -142,10 +141,11 @@ describe('records sealed by the Rust core', () => {
             {
                 workspaceId: node.version.ctx.workspaceId,
                 objectId: node.emptyFile.objectId,
-                suite: CONTENT_SUITE,
+                suite: node.version.ctx.suite,
                 index: 0,
                 chunkCount: 1,
                 plaintextSize: 0,
+                thumbnailBytes: 0,
             },
         );
         expect(plaintext).toEqual(new Uint8Array(0));

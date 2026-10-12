@@ -4,8 +4,12 @@ import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import {
     CHUNK_SIZE,
+    CHUNK_TAG_BYTES,
     ciphertextSize,
+    CONTENT_SUITE,
+    decryptChunk,
     decryptThumbnail,
+    paddedLength,
     openMetadata,
     openNodeKey,
     openVersion,
@@ -254,7 +258,7 @@ describe('drive session operations', () => {
                 id: sourceVersion,
                 objectId,
                 contentKeyEnvelope: prepared.contentKeyEnvelope,
-                contentSuite: 2,
+                contentSuite: CONTENT_SUITE,
                 plaintextSize: null,
             },
             node: {
@@ -312,14 +316,14 @@ describe('drive session operations', () => {
             nodeId: C,
             versionId: sourceVersion,
             objectId,
-            suite: 2,
+            suite: CONTENT_SUITE,
         });
         const rewrapped = await openVersion(decode(copied.contentKeyEnvelope, 84), copyKey, {
             workspaceId: WS,
             nodeId: copyId,
             versionId: copyVersion,
             objectId,
-            suite: 2,
+            suite: CONTENT_SUITE,
         });
         expect(Buffer.from(rewrapped.contentKey).equals(Buffer.from(original.contentKey))).toBe(
             true,
@@ -334,7 +338,7 @@ describe('drive session operations', () => {
                 nodeId: C,
                 versionId: sourceVersion,
                 objectId,
-                suite: 2,
+                suite: CONTENT_SUITE,
             }),
         ).rejects.toThrow();
         // The copy's key is cached: a rename of the copy needs no reopen.
@@ -355,7 +359,7 @@ describe('drive session operations', () => {
                     id: sourceVersion,
                     objectId,
                     contentKeyEnvelope: prepared.contentKeyEnvelope,
-                    contentSuite: 2,
+                    contentSuite: CONTENT_SUITE,
                     plaintextSize: null,
                 },
                 node: {
@@ -431,7 +435,7 @@ describe('the thumbnail trailer', () => {
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         const webp = crypto.getRandomValues(new Uint8Array(1234));
         const size = CHUNK_SIZE + 3; // two chunks; the trailer rides behind the 3-byte one
-        const version = { id: C, objectId: D, contentSuite: 2, plaintextSize: null };
+        const version = { id: C, objectId: D, contentSuite: CONTENT_SUITE, plaintextSize: null };
         const prepared = (await call('driveUploadPrepare', {
             workspaceId: WS,
             nodeId: B,
@@ -448,7 +452,10 @@ describe('the thumbnail trailer', () => {
         };
         expect(prepared.chunkCount).toBe(2);
         expect(prepared.thumbnail).toHaveLength(1234 + 16);
-        expect(prepared.ciphertextSize).toBe(ciphertextSize(size, 1234));
+        expect(prepared.ciphertextSize).toBe(ciphertextSize(CONTENT_SUITE, size, 1234));
+        // What the store learns is a Padmé bucket of the file and its trailer together.
+        const seen = prepared.ciphertextSize - CHUNK_TAG_BYTES * prepared.chunkCount;
+        expect(seen).toBe(paddedLength(size + 1234 + 16));
         expect(decode(prepared.contentKeyEnvelope)).toHaveLength(84);
 
         // The raw primitives agree on what was sealed: the sizes, and a trailer the content key opens.
@@ -473,7 +480,7 @@ describe('the thumbnail trailer', () => {
             nodeId: B,
             versionId: C,
             objectId: D,
-            suite: 2,
+            suite: CONTENT_SUITE,
         });
         expect(opened.plaintextSize).toBe(size);
         expect(opened.thumbnailBytes).toBe(1234);
@@ -482,11 +489,17 @@ describe('the thumbnail trailer', () => {
                 prepared.thumbnail!,
                 opened.contentKey,
                 decode(prepared.contentNonce, 16),
-                { workspaceId: WS, objectId: D, plaintextSize: size, thumbnailBytes: 1234 },
+                {
+                    workspaceId: WS,
+                    objectId: D,
+                    suite: CONTENT_SUITE,
+                    plaintextSize: size,
+                    thumbnailBytes: 1234,
+                },
             ),
         ).toEqual(webp);
 
-        // The first part is a bare chunk; the last is the last chunk and the trailer.
+        // The first part is a bare chunk; the last is the last chunk, its padding and the trailer.
         const file = new Blob([new Uint8Array(size)]);
         const first = (await call('driveUploadEncrypt', { objectId: D, file, index: 0 })) as {
             bytes: number;
@@ -495,7 +508,8 @@ describe('the thumbnail trailer', () => {
         const last = (await call('driveUploadEncrypt', { objectId: D, file, index: 1 })) as {
             bytes: number;
         };
-        expect(last.bytes).toBe(3 + 16 + 1234 + 16);
+        expect(last.bytes).toBe(prepared.ciphertextSize - (CHUNK_SIZE + 16));
+        expect(last.bytes).toBeGreaterThan(3 + 16 + 1234 + 16);
 
         // A listing opens the sizes beside the name; a download opens them too.
         const envelope = { ...version, contentKeyEnvelope: prepared.contentKeyEnvelope };
@@ -540,7 +554,7 @@ describe('the thumbnail trailer', () => {
         expect(versions.versions[1]!.error).toBeDefined();
 
         // A thumbnail fetch asks the object's URL for the fixed-length tail, not the trailer's own range.
-        const range = thumbnailRange(size, 1234);
+        const range = thumbnailRange(CONTENT_SUITE, size, 1234);
         const fetched = vi.fn(async (_url: string, init?: RequestInit) => {
             expect((init?.headers as Record<string, string> | undefined)?.Range).toBe(
                 `bytes=${range.start}-${range.end}`,
@@ -563,14 +577,14 @@ describe('the thumbnail trailer', () => {
         }
 
         // Reopen resumes only from a journal that holds the very trailer that was sealed,
-        // agrees on the size, and was written under suite 2.
+        // agrees on the size, and was written under the current suite.
         await call('driveUploadForget', { objectId: D });
         const reopen = {
             workspaceId: WS,
             nodeId: B,
             versionId: C,
             objectId: D,
-            contentSuite: 2,
+            contentSuite: CONTENT_SUITE,
             contentKeyEnvelope: prepared.contentKeyEnvelope,
             contentNonce: prepared.contentNonce,
             plaintextSize: size,
@@ -585,9 +599,10 @@ describe('the thumbnail trailer', () => {
         await expect(
             call('driveUploadReopen', { ...reopen, plaintextSize: size + 1 }),
         ).rejects.toThrow();
-        await expect(call('driveUploadReopen', { ...reopen, contentSuite: 1 })).rejects.toThrow(
-            /older version/,
-        );
+        for (const contentSuite of [1, 2])
+            await expect(call('driveUploadReopen', { ...reopen, contentSuite })).rejects.toThrow(
+                /older version/,
+            );
         expect(await call('driveUploadReopen', reopen)).toEqual({
             chunkCount: 2,
             ciphertextSize: prepared.ciphertextSize,
@@ -607,7 +622,7 @@ describe('the thumbnail trailer', () => {
             thumbnail: null,
         })) as { ciphertextSize: number; thumbnail: Uint8Array | null; contentKeyEnvelope: string };
         expect(bare.thumbnail).toBeNull();
-        expect(bare.ciphertextSize).toBe(5 + 16);
+        expect(bare.ciphertextSize).toBe(256 + 16);
         await expect(
             call('driveThumbnailFetch', {
                 workspaceId: WS,
@@ -617,6 +632,242 @@ describe('the thumbnail trailer', () => {
                 url: 'https://store/object',
             }),
         ).rejects.toThrow(/no thumbnail/);
+    });
+});
+
+/*
+ * What a PUT carries, captured: the worker sends parts with XMLHttpRequest,
+ * which the test environment lacks, so a stand-in records the body and answers
+ * with an ETag the way the store does.
+ */
+function captureUploads() {
+    const sent = new Map<string, Uint8Array>();
+    class FakeRequest {
+        upload: { onprogress: ((event: { loaded: number }) => void) | null } = { onprogress: null };
+        status = 0;
+        timeout = 0;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        ontimeout: (() => void) | null = null;
+        onabort: (() => void) | null = null;
+        private url = '';
+        open(_method: string, url: string) {
+            this.url = url;
+        }
+        setRequestHeader() {}
+        getResponseHeader(name: string) {
+            return name === 'ETag' ? '"etag"' : null;
+        }
+        abort() {
+            this.onabort?.();
+        }
+        send(body: Uint8Array) {
+            sent.set(this.url, body.slice());
+            this.status = 200;
+            queueMicrotask(() => this.onload?.());
+        }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeRequest);
+    return sent;
+}
+
+describe('a suite 3 object end to end', () => {
+    test('uploads the file and zeros, and downloads exactly the file, every chunk fetched', async () => {
+        const { call, grant } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
+                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('clip.mp4') },
+            ],
+        });
+        // Just past a chunk, with a thumbnail: the padding pushes past the file into a full second chunk.
+        const size = CHUNK_SIZE + 3;
+        const content = Uint8Array.from({ length: size }, (_, i) => (i * 7 + 1) & 0xff);
+        const file = new Blob([content]);
+        const webp = new Uint8Array(500).fill(9);
+        const prepared = (await call('driveUploadPrepare', {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            plaintextSize: size,
+            thumbnail: webp,
+        })) as {
+            contentNonce: string;
+            contentKeyEnvelope: string;
+            chunkCount: number;
+            ciphertextSize: number;
+        };
+        const sent = captureUploads();
+        try {
+            for (let index = 0; index < prepared.chunkCount; index++) {
+                await call('driveUploadEncrypt', { objectId: D, file, index });
+                const result = (await call('driveUploadSend', {
+                    objectId: D,
+                    index,
+                    url: `https://store/part/${index}`,
+                })) as { ok: boolean };
+                expect(result.ok).toBe(true);
+            }
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        const object = new Uint8Array(prepared.ciphertextSize);
+        let offset = 0;
+        for (let index = 0; index < prepared.chunkCount; index++) {
+            const part = sent.get(`https://store/part/${index}`)!;
+            object.set(part, offset);
+            offset += part.length;
+        }
+        expect(offset).toBe(prepared.ciphertextSize);
+
+        // The last chunk, opened with the primitives, is the file's tail and then zeros.
+        const { contentKey } = (await call('driveExportKeys', {
+            workspaceId: WS,
+            nodeId: B,
+            version: {
+                id: C,
+                objectId: D,
+                contentKeyEnvelope: prepared.contentKeyEnvelope,
+                contentNonce: prepared.contentNonce,
+                contentSuite: CONTENT_SUITE,
+                plaintextSize: null,
+            },
+        }).then((keys) => ({
+            contentKey: decode((keys as { content: { key: string } }).content.key, 32),
+        }))) as { contentKey: Uint8Array };
+        const lastStart = CHUNK_SIZE + 16;
+        const last = await decryptChunk(
+            object.subarray(lastStart),
+            contentKey,
+            decode(prepared.contentNonce, 16),
+            {
+                workspaceId: WS,
+                objectId: D,
+                suite: CONTENT_SUITE,
+                index: 1,
+                chunkCount: 2,
+                plaintextSize: size,
+                thumbnailBytes: 500,
+            },
+        );
+        expect(Array.from(last.subarray(0, 3))).toEqual(Array.from(content.subarray(CHUNK_SIZE)));
+        expect(last.length).toBeGreaterThan(3);
+        expect(last.subarray(3).every((byte) => byte === 0)).toBe(true);
+
+        // The download fetches both chunks by range and hands back the file and nothing else.
+        const version = {
+            id: C,
+            objectId: D,
+            contentKeyEnvelope: prepared.contentKeyEnvelope,
+            contentSuite: CONTENT_SUITE,
+            plaintextSize: null,
+        };
+        const opened = (await call('driveDownloadOpen', {
+            workspaceId: WS,
+            nodeId: B,
+            version,
+            contentNonce: prepared.contentNonce,
+        })) as { chunkCount: number; plaintextSize: number };
+        expect(opened.chunkCount).toBe(2);
+        const ranges: string[] = [];
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            const range = (init.headers as Record<string, string>).Range!;
+            ranges.push(range);
+            const [start, end] = range.replace('bytes=', '').split('-').map(Number) as [
+                number,
+                number,
+            ];
+            return new Response(object.slice(start, end + 1), { status: 206 });
+        });
+        const received: Uint8Array[] = [];
+        try {
+            for (let index = 0; index < opened.chunkCount; index++) {
+                const chunk = (await call('driveDownloadChunk', {
+                    objectId: D,
+                    url: 'https://store/object',
+                    index,
+                })) as { ok: true; plaintext: Uint8Array };
+                expect(chunk.ok).toBe(true);
+                received.push(chunk.plaintext);
+            }
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        expect(received[1]).toHaveLength(3);
+        expect(Buffer.concat(received).equals(Buffer.from(content))).toBe(true);
+        // The last range runs to the object's end, padding and trailer included.
+        expect(ranges[1]).toBe(`bytes=${lastStart}-${prepared.ciphertextSize - 1}`);
+    });
+
+    test('a suite 2 object written before padding still downloads', async () => {
+        const { call, grant, root } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        const created = (await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
+                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('old.txt') },
+            ],
+        })) as { nodes: { keyEnvelope: string }[] };
+        const { openWorkspaceKey } = await import('./workspace');
+        const { encryptChunk, generateContentNonce, generateKey, sealVersion } =
+            await import('./drive');
+        const aKey = await openNodeKey(
+            decode(created.nodes[0]!.keyEnvelope, 72),
+            await openWorkspaceKey(root, USER, grant),
+            { workspaceId: WS, nodeId: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1 },
+        );
+        const bKey = await openNodeKey(decode(created.nodes[1]!.keyEnvelope, 72), aKey, {
+            workspaceId: WS,
+            nodeId: B,
+            parentId: A,
+            parentKeyEpoch: 1,
+            keyEpoch: 2,
+        });
+        const contentKey = generateKey();
+        const nonce = generateContentNonce();
+        const text = new TextEncoder().encode('written under suite 2');
+        const envelope = await sealVersion(
+            { contentKey, plaintextSize: text.length, thumbnailBytes: 0 },
+            bKey,
+            { workspaceId: WS, nodeId: B, versionId: C, objectId: D, suite: 2 },
+        );
+        const object = await encryptChunk(text, contentKey, nonce, {
+            workspaceId: WS,
+            objectId: D,
+            suite: 2,
+            index: 0,
+            chunkCount: 1,
+            plaintextSize: text.length,
+            thumbnailBytes: 0,
+        });
+        expect(object).toHaveLength(text.length + 16);
+        await call('driveDownloadOpen', {
+            workspaceId: WS,
+            nodeId: B,
+            version: {
+                id: C,
+                objectId: D,
+                contentKeyEnvelope: encode(envelope),
+                contentSuite: 2,
+                plaintextSize: null,
+            },
+            contentNonce: encode(nonce),
+        });
+        vi.stubGlobal('fetch', async () => new Response(object.slice(), { status: 206 }));
+        try {
+            const chunk = (await call('driveDownloadChunk', {
+                objectId: D,
+                url: 'https://store/object',
+                index: 0,
+            })) as { ok: true; plaintext: Uint8Array };
+            expect(new TextDecoder().decode(chunk.plaintext)).toBe('written under suite 2');
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
 
@@ -658,7 +909,7 @@ describe('exporting keys', () => {
                 objectId: D,
                 contentKeyEnvelope: prepared.contentKeyEnvelope,
                 contentNonce: prepared.contentNonce,
-                contentSuite: 2,
+                contentSuite: CONTENT_SUITE,
                 plaintextSize: null,
             },
         })) as {
@@ -685,7 +936,7 @@ describe('exporting keys', () => {
             nodeId: B,
             versionId: C,
             objectId: D,
-            suite: 2,
+            suite: CONTENT_SUITE,
         });
         expect(encode(contentKey)).toBe(file.content.key);
         expect(file.content.nonce).toBe(prepared.contentNonce);

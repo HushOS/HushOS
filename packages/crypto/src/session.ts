@@ -637,7 +637,6 @@ export function createCryptoSession() {
         plaintextSize: number;
         /* The trailer's length: the last chunk's range runs on through it (see chunkRange). */
         thumbnailBytes: number;
-        contentLength: number;
         chunkCount: number;
         controllers: Map<number, AbortController>;
     };
@@ -1954,7 +1953,7 @@ export function createCryptoSession() {
                         index,
                         chunkCount: upload.chunkCount,
                         plaintextSize: upload.plaintextSize,
-                        contentLength: upload.contentLength,
+                        thumbnailBytes: upload.thumbnailBytes,
                     }),
                     chunkDigest(plaintext, upload.contentKey),
                 ]);
@@ -2076,7 +2075,6 @@ export function createCryptoSession() {
                     contentNonce: decode(message.input.contentNonce, 16) as Uint8Array<ArrayBuffer>,
                     plaintextSize: opened.plaintextSize,
                     thumbnailBytes: opened.thumbnailBytes,
-                    contentLength: length,
                     chunkCount: chunkCount(length),
                     controllers: new Map(),
                 });
@@ -2173,10 +2171,14 @@ export function createCryptoSession() {
                             index,
                             chunkCount: download.chunkCount,
                             plaintextSize: download.plaintextSize,
-                            contentLength: download.contentLength,
+                            thumbnailBytes: download.thumbnailBytes,
                         },
                     );
-                    return { ok: true, plaintext: fileBytesOf(plaintext, download.plaintextSize, index), index };
+                    return {
+                        ok: true,
+                        plaintext: fileBytesOf(plaintext, download.plaintextSize, index),
+                        index,
+                    };
                 } finally {
                     download.controllers.delete(index);
                 }

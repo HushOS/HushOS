@@ -6,9 +6,12 @@ import {
     checkName,
     chunkCiphertextLength,
     chunkCount,
+    chunkPlaintextLength as chunkPlaintextLengthOf,
     chunkNonce,
     chunkRange,
     ciphertextSize,
+    CONTENT_SUITE,
+    contentLength,
     decryptChunk,
     encryptChunk,
     generateContentNonce,
@@ -28,6 +31,9 @@ import {
     wrapNodeKey,
     decryptThumbnail,
     encryptThumbnail,
+    fileBytesOf,
+    paddedLength,
+    UNPADDED_CONTENT_SUITE,
     DOCUMENT_MAX_BYTES,
     METADATA_PAD_STEP,
     metadataContext,
@@ -129,27 +135,34 @@ describe('content key envelopes', () => {
     });
 });
 
-describe('content suite 1 framing', () => {
+describe('suite 2 framing (read, never written)', () => {
+    const S2 = UNPADDED_CONTENT_SUITE;
     test('chunk arithmetic matches the design', () => {
         expect(chunkCount(0)).toBe(1);
-        expect(ciphertextSize(0)).toBe(16);
+        expect(ciphertextSize(S2, 0, 0)).toBe(16);
         expect(chunkCount(CHUNK_SIZE)).toBe(1);
         expect(chunkCount(CHUNK_SIZE + 1)).toBe(2);
-        expect(ciphertextSize(CHUNK_SIZE + 1)).toBe(CHUNK_SIZE + 1 + 2 * CHUNK_TAG_BYTES);
+        expect(ciphertextSize(S2, CHUNK_SIZE + 1, 0)).toBe(CHUNK_SIZE + 1 + 2 * CHUNK_TAG_BYTES);
         expect(chunkCiphertextLength(CHUNK_SIZE + 1, 0)).toBe(CHUNK_SIZE + 16);
         expect(chunkCiphertextLength(CHUNK_SIZE + 1, 1)).toBe(17);
-        expect(chunkRange(CHUNK_SIZE + 1, 0, 1)).toEqual({
+        expect(chunkRange(S2, CHUNK_SIZE + 1, 0, 1)).toEqual({
             start: CHUNK_SIZE + 16,
             end: CHUNK_SIZE + 16 + 16,
         });
         // With a thumbnail the last chunk's range runs to the object's end, never stopping at the
         // trailer's start (which would say the file's exact size); earlier chunks are unchanged.
-        expect(chunkRange(CHUNK_SIZE + 1, 3000, 1)).toEqual({
+        expect(chunkRange(S2, CHUNK_SIZE + 1, 3000, 1)).toEqual({
             start: CHUNK_SIZE + 16,
-            end: ciphertextSize(CHUNK_SIZE + 1, 3000) - 1,
+            end: ciphertextSize(S2, CHUNK_SIZE + 1, 3000) - 1,
         });
-        expect(chunkRange(CHUNK_SIZE + 1, 3000, 0)).toEqual(chunkRange(CHUNK_SIZE + 1, 0, 0));
+        expect(chunkRange(S2, CHUNK_SIZE + 1, 3000, 0)).toEqual(
+            chunkRange(S2, CHUNK_SIZE + 1, 0, 0),
+        );
         expect(() => chunkCiphertextLength(CHUNK_SIZE + 1, 2)).toThrow(CryptoError);
+        // Suites 1 and 2 cover the file alone; an unknown suite is refused rather than guessed.
+        expect(contentLength(1, 1000, 0)).toBe(1000);
+        expect(contentLength(S2, 1000, 3000)).toBe(1000);
+        expect(() => contentLength(4, 1000, 0)).toThrow(CryptoError);
     });
 
     test('chunk nonces differ by index in the trailing counter', () => {
@@ -170,10 +183,11 @@ describe('content suite 1 framing', () => {
         const ctx = {
             workspaceId: WS,
             objectId: OBJECT,
-            suite: 2,
+            suite: S2,
             index: 1,
             chunkCount: 2,
             plaintextSize,
+            thumbnailBytes: 0,
         };
         const plain = new TextEncoder().encode('hello');
         const cipher = await encryptChunk(plain, key, nonce, ctx);
@@ -201,7 +215,7 @@ describe('content suite 1 framing', () => {
         await expect(decryptChunk(cipher, key, nonce, { ...ctx, suite: 1 })).rejects.toBeInstanceOf(
             CryptoError,
         );
-        await expect(encryptChunk(plain, key, nonce, { ...ctx, suite: 3 })).rejects.toBeInstanceOf(
+        await expect(encryptChunk(plain, key, nonce, { ...ctx, suite: 4 })).rejects.toBeInstanceOf(
             CryptoError,
         );
         await expect(decryptChunk(cipher, generateKey(), nonce, ctx)).rejects.toBeInstanceOf(
@@ -222,10 +236,11 @@ describe('content suite 1 framing', () => {
         const ctx = {
             workspaceId: WS,
             objectId: OBJECT,
-            suite: 2,
+            suite: S2,
             index: 0,
             chunkCount: 1,
             plaintextSize: 0,
+            thumbnailBytes: 0,
         };
         const cipher = await encryptChunk(new Uint8Array(0), key, nonce, ctx);
         expect(cipher).toHaveLength(16);
@@ -234,7 +249,13 @@ describe('content suite 1 framing', () => {
 });
 
 describe('version envelopes', () => {
-    const ctx = { workspaceId: WS, nodeId: FOLDER, versionId: VERSION, objectId: OBJECT, suite: 2 };
+    const ctx = {
+        workspaceId: WS,
+        nodeId: FOLDER,
+        versionId: VERSION,
+        objectId: OBJECT,
+        suite: CONTENT_SUITE,
+    };
 
     test('seals the key with the sizes and opens them back, 84 bytes', async () => {
         const nodeKey = generateKey();
@@ -264,6 +285,8 @@ describe('version envelopes', () => {
             { ...ctx, objectId: OTHER },
             { ...ctx, nodeId: OTHER },
             { ...ctx, suite: 1 },
+            // The same 84-byte record under suite 2 would be read without the padding: refused.
+            { ...ctx, suite: 2 },
         ])
             await expect(openVersion(envelope, nodeKey, wrong)).rejects.toBeInstanceOf(CryptoError);
         await expect(openVersion(envelope, generateKey(), ctx)).rejects.toBeInstanceOf(CryptoError);
@@ -298,13 +321,18 @@ describe('version envelopes', () => {
         await expect(
             sealVersion({ contentKey, plaintextSize: 9, thumbnailBytes: 1 }, nodeKey, legacy),
         ).rejects.toBeInstanceOf(CryptoError);
-        // A suite 1 envelope is not a suite 2 envelope, whatever the row says.
+        // A suite 1 envelope is not a suite 3 envelope, whatever the row says.
         await expect(openVersion(envelope, nodeKey, ctx)).rejects.toBeInstanceOf(CryptoError);
     });
 });
 
 describe('the thumbnail trailer', () => {
-    const base = { workspaceId: WS, objectId: OBJECT, plaintextSize: CHUNK_SIZE + 5 };
+    const base = {
+        workspaceId: WS,
+        objectId: OBJECT,
+        suite: CONTENT_SUITE,
+        plaintextSize: CHUNK_SIZE + 5,
+    };
 
     test('sits after the last chunk and opens only under its own framing', async () => {
         const contentKey = generateKey();
@@ -316,14 +344,16 @@ describe('the thumbnail trailer', () => {
         expect(await decryptThumbnail(trailer, contentKey, nonce, ctx)).toEqual(webp);
         // The object ends with it, and the fetch is the same-length tail whatever its size,
         // so the store cannot read the trailer's length (and the file's exact size) off it.
-        const range = thumbnailRange(base.plaintextSize, 3000);
-        expect(range.end + 1).toBe(ciphertextSize(base.plaintextSize, 3000));
-        const other = thumbnailRange(base.plaintextSize, THUMBNAIL_MAX_BYTES);
+        const range = thumbnailRange(CONTENT_SUITE, base.plaintextSize, 3000);
+        expect(range.end + 1).toBe(ciphertextSize(CONTENT_SUITE, base.plaintextSize, 3000));
+        const other = thumbnailRange(CONTENT_SUITE, base.plaintextSize, THUMBNAIL_MAX_BYTES);
         expect(other.end - other.start).toBe(range.end - range.start);
         expect(range.end - range.start + 1).toBe(THUMBNAIL_MAX_BYTES + 16);
-        expect(ciphertextSize(base.plaintextSize, 0)).toBe(ciphertextSize(base.plaintextSize));
         // A small object is fetched whole.
-        expect(thumbnailRange(10, 3000)).toEqual({ start: 0, end: ciphertextSize(10, 3000) - 1 });
+        expect(thumbnailRange(CONTENT_SUITE, 10, 3000)).toEqual({
+            start: 0,
+            end: ciphertextSize(CONTENT_SUITE, 10, 3000) - 1,
+        });
         // The trailer opens from the end of that window, and a window short of it does not.
         const window = new Uint8Array(range.end - range.start + 1);
         window.set(trailer, window.length - trailer.length);
@@ -336,6 +366,9 @@ describe('the thumbnail trailer', () => {
             { ...ctx, objectId: OTHER },
             { ...ctx, thumbnailBytes: 2999 },
             { ...ctx, plaintextSize: 5 },
+            // A suite 3 trailer is not a suite 2 one, though their bytes sit in the same place.
+            { ...ctx, suite: UNPADDED_CONTENT_SUITE },
+            { ...ctx, suite: 1 },
         ])
             await expect(
                 decryptThumbnail(trailer, contentKey, nonce, wrong),
@@ -344,10 +377,11 @@ describe('the thumbnail trailer', () => {
             decryptChunk(trailer, contentKey, nonce, {
                 workspaceId: WS,
                 objectId: OBJECT,
-                suite: 2,
+                suite: CONTENT_SUITE,
                 index: 0,
                 chunkCount: 1,
                 plaintextSize: 3000,
+                thumbnailBytes: 0,
             }),
         ).rejects.toBeInstanceOf(CryptoError);
         await expect(
@@ -362,12 +396,164 @@ describe('the thumbnail trailer', () => {
     });
 });
 
+describe('content suite 3: padded objects', () => {
+    test('Padmé buckets: known values, never smaller, idempotent, monotonic, bounded', () => {
+        const known: [number, number][] = [
+            [0, 256],
+            [1, 256],
+            [256, 256],
+            [257, 272],
+            [1000, 1024],
+            [1024, 1024],
+            [65_537, 67_584],
+            [2 ** 20 + 1, 1_081_344],
+            [2 ** 32 + 1, 4_362_076_160],
+            [10_000_000_000, 10_066_329_600],
+            [2 ** 40, 2 ** 40],
+        ];
+        for (const [length, bucket] of known) expect(paddedLength(length)).toBe(bucket);
+        const samples = [
+            ...Array.from({ length: 2000 }, (_, i) => 250 + i),
+            ...Array.from({ length: 200 }, () => Math.floor(Math.random() * 2 ** 40)),
+            CHUNK_SIZE - 1,
+            CHUNK_SIZE,
+            CHUNK_SIZE + 1,
+            Math.floor(Number.MAX_SAFE_INTEGER / 16),
+        ];
+        let previous = 0;
+        for (const length of samples.sort((a, b) => a - b)) {
+            const bucket = paddedLength(length);
+            expect(bucket).toBeGreaterThanOrEqual(length);
+            expect(paddedLength(bucket)).toBe(bucket);
+            expect(bucket).toBeGreaterThanOrEqual(previous);
+            previous = bucket;
+            if (length > 256) {
+                // The padding is under 2^-S of the length, S = floor(log2(log2 L)) + 1 >= 4.
+                const s = Math.floor(Math.log2(Math.floor(Math.log2(length)))) + 1;
+                expect((bucket - length) * 2 ** s).toBeLessThan(length);
+            }
+        }
+        for (const bad of [-1, 0.5, Number.MAX_SAFE_INTEGER, Number.NaN])
+            expect(() => paddedLength(bad)).toThrow(CryptoError);
+    });
+
+    test('the server sees a bucket, whether or not there is a thumbnail', () => {
+        const sizes = [0, 1, 255, 256, 257, 4000, 70_000, CHUNK_SIZE - 300, CHUNK_SIZE, 5e8];
+        for (const size of sizes)
+            for (const thumbnail of [0, 1, 2000, THUMBNAIL_MAX_BYTES]) {
+                const total = ciphertextSize(CONTENT_SUITE, size, thumbnail);
+                const length = contentLength(CONTENT_SUITE, size, thumbnail);
+                const count = chunkCount(length);
+                const seen = total - CHUNK_TAG_BYTES * count;
+                expect(paddedLength(seen)).toBe(seen);
+                expect(seen).toBe(paddedLength(size + (thumbnail ? thumbnail + 16 : 0)));
+                expect(length).toBeGreaterThanOrEqual(size);
+                expect(validObjectSize(total, count)).toBe(true);
+            }
+        // Two files a few bytes apart, one with a thumbnail, land on the same object size.
+        expect(ciphertextSize(CONTENT_SUITE, 8500, 0)).toBe(
+            ciphertextSize(CONTENT_SUITE, 8000, 300),
+        );
+    });
+
+    test('chunks carry the file then zeros, and the reader keeps exactly the file', async () => {
+        const key = generateKey();
+        const nonce = generateContentNonce();
+        const size = CHUNK_SIZE + 1000;
+        const thumbnailBytes = 2000;
+        const file = Uint8Array.from({ length: size }, (_, i) => (i * 131 + 7) & 0xff);
+        const length = contentLength(CONTENT_SUITE, size, thumbnailBytes);
+        const count = chunkCount(length);
+        expect(count).toBe(2);
+        const ctx = (index: number) => ({
+            workspaceId: WS,
+            objectId: OBJECT,
+            suite: CONTENT_SUITE,
+            index,
+            chunkCount: count,
+            plaintextSize: size,
+            thumbnailBytes,
+        });
+        // What the uploader encrypts: the file's bytes for the index, zero-filled to the chunk's length.
+        const plaintextOf = (index: number) => {
+            const chunk = new Uint8Array(chunkPlaintextLengthOf(length, index));
+            chunk.set(file.subarray(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE));
+            return chunk;
+        };
+        const chunks = [
+            await encryptChunk(plaintextOf(0), key, nonce, ctx(0)),
+            await encryptChunk(plaintextOf(1), key, nonce, ctx(1)),
+        ];
+        const trailer = await encryptThumbnail(new Uint8Array(thumbnailBytes), key, nonce, {
+            workspaceId: WS,
+            objectId: OBJECT,
+            suite: CONTENT_SUITE,
+            plaintextSize: size,
+        });
+        const object = new Uint8Array(ciphertextSize(CONTENT_SUITE, size, thumbnailBytes));
+        object.set(chunks[0]!, 0);
+        object.set(chunks[1]!, chunks[0]!.length);
+        object.set(trailer, object.length - trailer.length);
+        expect(chunks[0]!.length + chunks[1]!.length + trailer.length).toBe(object.length);
+
+        // The reader fetches the ranges and keeps the first `size` bytes.
+        const read: Uint8Array[] = [];
+        for (let index = 0; index < count; index++) {
+            const range = chunkRange(CONTENT_SUITE, size, thumbnailBytes, index);
+            const plain = await decryptChunk(
+                object.subarray(range.start, range.end + 1),
+                key,
+                nonce,
+                ctx(index),
+            );
+            if (index === count - 1) expect(plain.subarray(1000).every((b) => b === 0)).toBe(true);
+            read.push(fileBytesOf(plain, size, index));
+        }
+        expect(Buffer.concat(read).equals(Buffer.from(file))).toBe(true);
+        // The trailer's nonce index follows the padded chunk count, not the file's.
+        const range = thumbnailRange(CONTENT_SUITE, size, thumbnailBytes);
+        expect(range.end + 1).toBe(object.length);
+        await expect(
+            decryptThumbnail(object.subarray(range.start), key, nonce, {
+                ...ctx(0),
+                thumbnailBytes,
+            }),
+        ).resolves.toEqual(new Uint8Array(thumbnailBytes));
+
+        // A suite 3 chunk does not open as suite 2, where the same bytes would be the whole file.
+        await expect(
+            decryptChunk(chunks[1]!, key, nonce, { ...ctx(1), suite: UNPADDED_CONTENT_SUITE }),
+        ).rejects.toBeInstanceOf(CryptoError);
+        // Nor with the padding claimed for a different thumbnail, which moves the chunk count.
+        await expect(
+            decryptChunk(chunks[1]!, key, nonce, { ...ctx(1), thumbnailBytes: 0 }),
+        ).rejects.toBeInstanceOf(CryptoError);
+        // The file's bytes alone are not a suite 3 chunk: the writer must pad.
+        await expect(
+            encryptChunk(file.subarray(CHUNK_SIZE), key, nonce, ctx(1)),
+        ).rejects.toBeInstanceOf(CryptoError);
+    });
+
+    test('a chunk wholly past the file reads as nothing, and fileBytesOf never reaches past the file', () => {
+        const chunk = new Uint8Array(100).fill(7);
+        expect(fileBytesOf(chunk, 50, 0)).toHaveLength(50);
+        expect(fileBytesOf(chunk, CHUNK_SIZE + 10, 1)).toHaveLength(10);
+        expect(fileBytesOf(chunk, CHUNK_SIZE, 1)).toHaveLength(0);
+        expect(fileBytesOf(chunk, 0, 3)).toHaveLength(0);
+    });
+});
+
 describe('what the server can check', () => {
+    const S2 = UNPADDED_CONTENT_SUITE;
     test('part lengths follow from the declared size and chunk count', () => {
-        const size = ciphertextSize(2 * CHUNK_SIZE + 100, 4000);
+        const size = ciphertextSize(S2, 2 * CHUNK_SIZE + 100, 4000);
         expect(partLength(size, 3, 1)).toBe(CHUNK_SIZE + 16);
         expect(partLength(size, 3, 2)).toBe(CHUNK_SIZE + 16);
         expect(partLength(size, 3, 3)).toBe(100 + 16 + 4000 + 16);
+        // Suite 3 pads the last part, and only the last part.
+        const padded = ciphertextSize(CONTENT_SUITE, 2 * CHUNK_SIZE + 100, 4000);
+        expect(partLength(padded, 3, 1)).toBe(CHUNK_SIZE + 16);
+        expect(partLength(padded, 3, 3)).toBe(padded - 2 * (CHUNK_SIZE + 16));
         expect(() => partLength(size, 3, 4)).toThrow(CryptoError);
         expect(() => partLength(size, 3, 0)).toThrow(CryptoError);
     });
@@ -375,15 +561,17 @@ describe('what the server can check', () => {
     test('an object size is valid only when its last part can hold a chunk and a trailer', () => {
         expect(validObjectSize(16, 1)).toBe(true); // an empty file
         expect(validObjectSize(15, 1)).toBe(false);
-        expect(validObjectSize(ciphertextSize(CHUNK_SIZE, THUMBNAIL_MAX_BYTES), 1)).toBe(true);
-        expect(validObjectSize(ciphertextSize(CHUNK_SIZE, THUMBNAIL_MAX_BYTES) + 1, 1)).toBe(false);
+        expect(validObjectSize(ciphertextSize(S2, CHUNK_SIZE, THUMBNAIL_MAX_BYTES), 1)).toBe(true);
+        expect(validObjectSize(ciphertextSize(S2, CHUNK_SIZE, THUMBNAIL_MAX_BYTES) + 1, 1)).toBe(
+            false,
+        );
         // Two chunks need a last chunk of at least one byte.
         expect(validObjectSize(CHUNK_SIZE + 16 + 16, 2)).toBe(false);
         expect(validObjectSize(CHUNK_SIZE + 16 + 17, 2)).toBe(true);
         // A chunk and a bit reads as one chunk with a small trailer: that is the documented residual.
-        expect(validObjectSize(ciphertextSize(CHUNK_SIZE + 1), 1)).toBe(true);
+        expect(validObjectSize(ciphertextSize(S2, CHUNK_SIZE + 1, 0), 1)).toBe(true);
         // More than a chunk and a full trailer cannot be one part.
-        const over = ciphertextSize(CHUNK_SIZE + THUMBNAIL_MAX_BYTES + 1);
+        const over = ciphertextSize(S2, CHUNK_SIZE + THUMBNAIL_MAX_BYTES + 1, 0);
         expect(validObjectSize(over, 1)).toBe(false);
         expect(validObjectSize(over, 2)).toBe(true);
         expect(validObjectSize(100, 0)).toBe(false);
