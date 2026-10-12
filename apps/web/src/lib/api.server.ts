@@ -525,10 +525,11 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post('/auth/identity/kem', { body: identityKemSchema }, ({ sessionToken, body }) =>
         auth.addIdentityKem(sessionToken, body),
     )
-    .get(
+    // A POST so the address is in the body: a query string sits in proxy and access logs.
+    .post(
         '/auth/contacts/lookup',
-        { query: t.Object({ email: emailSchema }) },
-        ({ sessionToken, query }) => auth.lookupContact(sessionToken, query.email),
+        { body: t.Object({ email: emailSchema }) },
+        ({ sessionToken, body }) => auth.lookupContact(sessionToken, body.email),
     )
     .get('/auth/settings', ({ sessionToken }) => auth.getSettings(sessionToken))
     .put(
@@ -1729,6 +1730,8 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     }
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
+    // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
+    const SETTINGS_BODY_LIMIT = 96 * 1024;
     if (!pathname.startsWith('/api/auth/')) return apiApp.fetch(request);
     const log = useLogger();
     log.set({ auth: { action: authLogAction(new URL(request.url).pathname) } });
@@ -1748,7 +1751,9 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                     const { done, value } = await reader.read();
                     if (done) break;
                     length += value.byteLength;
-                    if (length > 16_384) {
+                    if (
+                        length > (pathname === '/api/auth/settings' ? SETTINGS_BODY_LIMIT : 16_384)
+                    ) {
                         await reader.cancel();
                         log.set({ auth: { outcome: 'rejected' } });
                         return Response.json(

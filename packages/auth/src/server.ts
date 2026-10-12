@@ -5,6 +5,7 @@ import type {
     WorkspaceKeyEnvelope,
 } from '@hushos/crypto';
 import { kemBinding, type IdentityEnvelope, type IdentityKem } from '@hushos/crypto/identity';
+import { SETTINGS_MAX_BYTES, SETTINGS_PAD_STEP } from '@hushos/crypto/contacts';
 import {
     verifyRecoveryReset,
     type RecoveryEnvelope,
@@ -564,6 +565,11 @@ export async function putSettings(
     input: { expectedVersion: number; nonce: string; ciphertext: string },
 ) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
+    // Every client pads settings to 1 KiB steps (see @hushos/crypto/contacts); an unpadded one
+    // would tell the server how many people are pinned, so it is refused rather than stored.
+    const body = Buffer.from(input.ciphertext, 'base64url').length - 16;
+    if (body < SETTINGS_PAD_STEP || body > SETTINGS_MAX_BYTES || body % SETTINGS_PAD_STEP !== 0)
+        throw new AuthError('These settings were not sealed the way this server expects.', 400);
     const result = await authRepository.putSettings({
         userId: user.id,
         expectedVersion: input.expectedVersion,

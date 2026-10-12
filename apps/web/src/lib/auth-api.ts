@@ -29,7 +29,7 @@ export const authApi: AuthApi = {
     updateProfile: (name) => unwrap(api().profile.post({ name })),
     identity: () => unwrap(api().identity.get()),
     addIdentityKem: (kem) => unwrap(api().identity.kem.post(kem)),
-    lookupContact: (email) => unwrap(api().contacts.lookup.get({ query: { email } })),
+    lookupContact: (email) => unwrap(api().contacts.lookup.post({ email })),
     settings: () => unwrap(api().settings.get()),
     saveSettings: (input) => unwrap(api().settings.put(input)),
 };
