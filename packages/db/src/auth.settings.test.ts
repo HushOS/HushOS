@@ -78,6 +78,54 @@ describe('settings', () => {
     });
 });
 
+describe('the settings key', () => {
+    test('is stored once: a second device’s key is refused and the first stands', async () => {
+        const { userId } = await createTestAccount();
+        expect(await auth.getSettingsKey(userId)).toBeNull();
+        const first = { nonce: randomBytes(24), ciphertext: randomBytes(48) };
+        expect(await auth.putSettingsKey({ userId, ...first })).toBe(true);
+        expect(
+            await auth.putSettingsKey({
+                userId,
+                nonce: randomBytes(24),
+                ciphertext: randomBytes(48),
+            }),
+        ).toBe(false);
+        const stored = await auth.getSettingsKey(userId);
+        expect(stored?.ciphertext.equals(first.ciphertext)).toBe(true);
+        expect(stored?.nonce.equals(first.nonce)).toBe(true);
+        // A key of any other size is not a wrapped 32-byte key.
+        const other = await createTestAccount();
+        await expect(
+            auth.putSettingsKey({
+                userId: other.userId,
+                nonce: randomBytes(24),
+                ciphertext: randomBytes(32),
+            }),
+        ).rejects.toThrow();
+    });
+
+    test('version 2 settings need a stored key; version 1 is still taken', async () => {
+        const { userId } = await createTestAccount();
+        const save = (expectedVersion: number, version: 1 | 2) =>
+            auth.putSettings({
+                userId,
+                expectedVersion,
+                version,
+                nonce: randomBytes(24),
+                ciphertext: randomBytes(64),
+            });
+        // Sealed under a key the server never received: nobody could open it again.
+        expect(await save(0, 2)).toEqual({ status: 'no-key', settingsVersion: 0 });
+        expect(await auth.getSettings(userId)).toBeNull();
+        expect(await save(0, 1)).toEqual({ status: 'ok', settingsVersion: 1 });
+        expect((await auth.getSettings(userId))?.version).toBe(1);
+        await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
+        expect(await save(1, 2)).toEqual({ status: 'ok', settingsVersion: 2 });
+        expect((await auth.getSettings(userId))?.version).toBe(2);
+    });
+});
+
 describe('identity lookup', () => {
     test('finds a person by normalised email and returns only public keys', async () => {
         const { userId, email } = await createTestAccount({ email: 'someone@hushos.test' });
@@ -91,6 +139,7 @@ describe('identity lookup', () => {
                 'encryptionPublicKey',
                 'kemPublicKey',
                 'kemSignature',
+                'keyVersion',
                 'name',
                 'signingPublicKey',
                 'userId',

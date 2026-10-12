@@ -100,8 +100,12 @@ const authActions = new Set([
     'delete/finish',
     'identity',
     'identity/kem',
+    'identity/succession',
+    'identity/history',
     'contacts/lookup',
+    'contacts/:userId/succession',
     'settings',
+    'settings-key',
     'profile',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -158,7 +162,10 @@ function privatePage(path: string) {
     return pagePatterns.find(([pattern]) => pattern.test(path))?.[1] ?? '/private/unknown';
 }
 export function authLogAction(pathname: string) {
-    const action = pathname.slice('/api/auth/'.length);
+    // A contact's succession chain names the account in its path: logged as the pattern.
+    const action = pathname
+        .slice('/api/auth/'.length)
+        .replace(/^contacts\/[0-9a-f-]{36}\/succession$/, 'contacts/:userId/succession');
     return authActions.has(action) ? action : 'unknown';
 }
 

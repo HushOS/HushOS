@@ -463,7 +463,22 @@ async function requireSession(sessionToken: string | null, message: string) {
 /* Identity, contacts, settings                                               */
 /* ------------------------------------------------------------------------- */
 
-type IdentityRow = NonNullable<Awaited<ReturnType<typeof authRepository.getIdentity>>>;
+/* The columns an identity envelope is made of: the current row and every row of its history. */
+type IdentityRow = Pick<
+    NonNullable<Awaited<ReturnType<typeof authRepository.getIdentity>>>,
+    | 'keyVersion'
+    | 'wrappingSalt'
+    | 'encryptionPublicKey'
+    | 'encryptionPrivateKeyNonce'
+    | 'encryptedEncryptionPrivateKey'
+    | 'signingPublicKey'
+    | 'signingSeedNonce'
+    | 'encryptedSigningSeed'
+    | 'kemPublicKey'
+    | 'kemSeedNonce'
+    | 'encryptedKemSeed'
+    | 'kemSignature'
+>;
 function encodeIdentity(i: IdentityRow): IdentityEnvelope {
     return {
         version: 1,
@@ -517,6 +532,82 @@ export async function addIdentityKem(sessionToken: string | null, kem: IdentityK
 }
 
 /*
+ * Replaces the person's identity with one minted on their device at the next
+ * key version, vouched for by the current signing key (docs/integrity-design.md).
+ * The new KEM key's binding is checked against the new signing key here; the
+ * succession statement, the key version and the session are checked under the
+ * account's lock in the repository. The old identity stays, sealed, in the
+ * history, because shares sealed to it still open only with it.
+ */
+export async function succeedIdentity(
+    sessionToken: string | null,
+    input: { identity: IdentityEnvelope; signature: string },
+) {
+    const { user, token } = await requireSession(sessionToken, 'Sign in to replace your keys.');
+    if (!input.identity.kem) throw new AuthError('A new identity needs its post-quantum key.', 400);
+    const decoded = decodeIdentity(input.identity, input.identity.keyVersion, user.id);
+    const result = await authRepository.succeedIdentity({
+        userId: user.id,
+        credentialVersion: user.credentialVersion,
+        sessionTokenHash: hash(token),
+        identity: { ...decoded, kemPublicKey: decoded.kemPublicKey! },
+        signature: decodeField(input.signature, 64),
+    });
+    switch (result.status) {
+        case 'ok':
+            return { keyVersion: result.keyVersion };
+        case 'session':
+            throw new AuthError('Sign in again to replace your keys.', 401);
+        case 'no-identity':
+            throw new AuthError('Finish account setup first.', 409);
+        case 'stale':
+            throw new AuthError('Your keys changed on another device. Reload and try again.', 409);
+        case 'unchanged':
+            throw new AuthError('The new keys must differ from the current ones.', 400);
+        case 'bad-signature':
+            throw new AuthError('The new keys are not signed by your current keys.', 400);
+    }
+}
+
+/* The person's own earlier identities, oldest first, to open shares sealed to earlier keys. */
+export async function getIdentityHistory(sessionToken: string | null) {
+    const { user } = await requireSession(sessionToken, 'Sign in to open your identity.');
+    const history = await authRepository.listIdentityHistory(user.id);
+    return { identities: history.map(encodeIdentity) };
+}
+
+/*
+ * How an account's identity got from key version `from` to the current one:
+ * each succession with the keys on both sides and the old signing key's
+ * signature. A contact whose pin is at `from` checks every link before taking
+ * the new keys. Bounded per person like a lookup.
+ */
+export async function contactSuccession(sessionToken: string | null, userId: string, from: number) {
+    const { user } = await requireSession(sessionToken, 'Sign in to look up a contact.');
+    if (
+        !(await authRepository.consumeRateLimit(hash(`contacts:succession:${user.id}`), 60, 60_000))
+    )
+        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+    if (!Number.isSafeInteger(from) || from < 1)
+        throw new AuthError('Ask from a key version of 1 or more.', 400);
+    const chain = await authRepository.successionChain(userId, from);
+    if (!chain) throw new AuthError('No HushOS account with that id has finished setup.', 404);
+    const b64 = (bytes: Buffer) => bytes.toString('base64url');
+    return {
+        links: chain.map((link) => ({
+            oldKeyVersion: link.oldKeyVersion,
+            newKeyVersion: link.newKeyVersion,
+            oldEncryptionPublicKey: b64(link.oldEncryptionPublicKey),
+            oldSigningPublicKey: b64(link.oldSigningPublicKey),
+            newEncryptionPublicKey: b64(link.newEncryptionPublicKey),
+            newSigningPublicKey: b64(link.newSigningPublicKey),
+            newKemPublicKey: b64(link.newKemPublicKey),
+            signature: b64(link.signature),
+        })),
+    };
+}
+
+/*
  * Another person's public identity, by email. Bounded per person so the
  * directory cannot be walked; an unknown address and an account without an
  * identity are the same answer.
@@ -532,6 +623,7 @@ export async function lookupContact(sessionToken: string | null, email: string) 
             userId: found.userId,
             name: found.name,
             email: found.email,
+            keyVersion: found.keyVersion,
             encryptionPublicKey: found.encryptionPublicKey.toString('base64url'),
             signingPublicKey: found.signingPublicKey.toString('base64url'),
             kem:
@@ -545,24 +637,62 @@ export async function lookupContact(sessionToken: string | null, email: string) 
     };
 }
 
+/* The settings key wrapped under the account root: a nonce and the sealed 32-byte key. */
+export type SettingsKeyEnvelope = { nonce: string; ciphertext: string };
+function encodeSettingsKey(key: { nonce: Buffer; ciphertext: Buffer } | null) {
+    return key
+        ? {
+              nonce: key.nonce.toString('base64url'),
+              ciphertext: key.ciphertext.toString('base64url'),
+          }
+        : null;
+}
+function decodeSettingsKey(key: SettingsKeyEnvelope) {
+    return { nonce: decodeField(key.nonce, 24), ciphertext: decodeField(key.ciphertext, 48) };
+}
+
 export async function getSettings(sessionToken: string | null) {
     const { user } = await requireSession(sessionToken, 'Sign in to read your settings.');
-    const stored = await authRepository.getSettings(user.id);
+    const [stored, settingsKey] = await Promise.all([
+        authRepository.getSettings(user.id),
+        authRepository.getSettingsKey(user.id),
+    ]);
     return {
         settings: stored
             ? {
-                  version: 1 as const,
+                  version: (stored.version === 2 ? 2 : 1) as 1 | 2,
                   settingsVersion: stored.settingsVersion,
                   nonce: stored.nonce.toString('base64url'),
                   ciphertext: stored.ciphertext.toString('base64url'),
               }
             : null,
+        settingsKey: encodeSettingsKey(settingsKey),
     };
+}
+
+/*
+ * Stores the settings key once, wrapped on the person's device under the
+ * account root. A device that raced is told so, and uses the stored one.
+ */
+export async function putSettingsKey(sessionToken: string | null, input: SettingsKeyEnvelope) {
+    const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
+    if (!(await authRepository.putSettingsKey({ userId: user.id, ...decodeSettingsKey(input) })))
+        throw new AuthError(
+            'Your settings key was already saved on another device. Reload and try again.',
+            409,
+        );
+    return { ok: true as const };
 }
 
 export async function putSettings(
     sessionToken: string | null,
-    input: { expectedVersion: number; nonce: string; ciphertext: string },
+    input: {
+        expectedVersion: number;
+        /* 2: sealed under the settings key; 1, the identity-derived key, until every client moves. */
+        version?: 1 | 2;
+        nonce: string;
+        ciphertext: string;
+    },
 ) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
     // Every client pads settings to 1 KiB steps (see @hushos/crypto/contacts); an unpadded one
@@ -573,6 +703,7 @@ export async function putSettings(
     const result = await authRepository.putSettings({
         userId: user.id,
         expectedVersion: input.expectedVersion,
+        version: input.version ?? 1,
         nonce: Buffer.from(input.nonce, 'base64url'),
         ciphertext: Buffer.from(input.ciphertext, 'base64url'),
     });
@@ -581,6 +712,8 @@ export async function putSettings(
             'Your settings changed on another device. They have been reloaded; try again.',
             409,
         );
+    if (result.status === 'no-key')
+        throw new AuthError('Save your settings key before settings sealed under it.', 409);
     return { settingsVersion: result.settingsVersion };
 }
 
@@ -1049,7 +1182,12 @@ function decodeKem(
     return decoded;
 }
 function decodeIdentity(input: IdentityEnvelope, keyVersion = 1, userId?: string) {
-    if (input.version !== 1 || input.keyVersion !== keyVersion)
+    if (
+        input.version !== 1 ||
+        input.keyVersion !== keyVersion ||
+        !Number.isSafeInteger(keyVersion) ||
+        keyVersion < 1
+    )
         throw new AuthError('Unsupported identity key version.');
     const signingPublicKey = decodeField(input.signingPublicKey, 32);
     const kem =
@@ -1178,7 +1316,7 @@ export async function startSecurityChange(
         startLoginRequest: string;
         registrationRequest: string;
     },
-): Promise<SecurityChallenge> {
+): Promise<ServerSecurityChallenge> {
     const { user, token } = await requireSession(
         sessionToken,
         'Sign in before changing account security.',
@@ -1219,12 +1357,28 @@ export async function startSecurityChange(
         recovery: encodeRecovery(bundles.recovery),
         workspaces: bundles.workspaces.map(encodeWorkspaceGrant),
         identity: encodeIdentity(i),
+        identityHistory: bundles.identityHistory.map(encodeIdentity),
+        settingsKey: encodeSettingsKey(bundles.settingsKey),
     };
 }
 
+/*
+ * What a security change carries beyond the worker's own types: every earlier
+ * identity and the settings key, since a master-key rotation must re-wrap
+ * those under the new root too or what they open is lost with the old root.
+ */
+export type ServerSecurityChallenge = SecurityChallenge & {
+    identityHistory: IdentityEnvelope[];
+    settingsKey: SettingsKeyEnvelope | null;
+};
+export type ServerSecurityUpdate = SecurityUpdate & {
+    identityHistory?: IdentityEnvelope[];
+    settingsKey?: SettingsKeyEnvelope;
+};
+
 export async function finishSecurityChange(
     sessionToken: string | null,
-    input: SecurityUpdate & { action: SecurityAction; attemptToken: string },
+    input: ServerSecurityUpdate & { action: SecurityAction; attemptToken: string },
 ) {
     const { user, token } = await requireSession(
         sessionToken,
@@ -1271,7 +1425,9 @@ export async function finishSecurityChange(
         input.envelope.credentialVersion !== user.credentialVersion + 1 ||
         (input.action === 'password' ? input.recovery !== undefined : !input.recovery) ||
         (input.action === 'master-key' ? !input.identity : input.identity !== undefined) ||
-        (input.action === 'master-key' ? !input.workspaces : input.workspaces !== undefined)
+        (input.action === 'master-key' ? !input.workspaces : input.workspaces !== undefined) ||
+        (input.action !== 'master-key' &&
+            (input.identityHistory !== undefined || input.settingsKey !== undefined))
     )
         throw failure();
     const changed = await authRepository.changeAccountSecurity({
@@ -1289,7 +1445,15 @@ export async function finishSecurityChange(
         recovery: input.recovery
             ? decodeRecovery(input.recovery, old.recovery.recoveryVersion + 1, keyVersion)
             : undefined,
-        identity: input.identity ? decodeIdentity(input.identity, keyVersion, user.id) : undefined,
+        // The identity keeps its own key version (or takes the root's, when higher); the
+        // repository holds it to the current one, since a succession moves it on its own.
+        identity: input.identity
+            ? decodeIdentity(input.identity, input.identity.keyVersion, user.id)
+            : undefined,
+        identityHistory: input.identityHistory?.map((earlier) =>
+            decodeIdentity(earlier, earlier.keyVersion, user.id),
+        ),
+        settingsKey: input.settingsKey ? decodeSettingsKey(input.settingsKey) : undefined,
         workspaces: input.workspaces?.map((grant) =>
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),

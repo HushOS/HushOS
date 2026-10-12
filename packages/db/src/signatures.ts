@@ -1,0 +1,100 @@
+import { createHash, createPublicKey, verify } from 'node:crypto';
+
+/*
+ * The statements writers sign, as docs/integrity-design.md fixes them: a UTF-8
+ * JSON array in the same canonical form as associated data (lowercase ids, no
+ * spaces, numbers as numbers), digests SHA-256 in Base64url without padding.
+ * Every client builds the same bytes; the server rebuilds them from what it is
+ * about to store and refuses a write whose signature does not verify against
+ * the writer's current signing key. Clients check again on read and never rely
+ * on this check: it exists so a client bug fails loudly at the write.
+ */
+
+export const SIGNATURE_BYTES = 64;
+
+/* SHA-256, Base64url without padding. */
+export function digest(bytes: Uint8Array) {
+    return createHash('sha256').update(bytes).digest('base64url');
+}
+
+function statement(parts: (string | number)[]) {
+    return Buffer.from(JSON.stringify(parts), 'utf8');
+}
+
+export function metadataStatement(input: {
+    workspaceId: string;
+    nodeId: string;
+    kind: 'folder' | 'file';
+    metadataVersion: number;
+    metadataEnvelope: Uint8Array;
+}) {
+    return statement([
+        'hushos/drive/sig/metadata',
+        1,
+        input.workspaceId.toLowerCase(),
+        input.nodeId.toLowerCase(),
+        input.kind,
+        input.metadataVersion,
+        digest(input.metadataEnvelope),
+    ]);
+}
+
+export function versionStatement(input: {
+    workspaceId: string;
+    nodeId: string;
+    versionId: string;
+    objectId: string;
+    contentSuite: number;
+    contentKeyEnvelope: Uint8Array;
+}) {
+    return statement([
+        'hushos/drive/sig/version',
+        1,
+        input.workspaceId.toLowerCase(),
+        input.nodeId.toLowerCase(),
+        input.versionId.toLowerCase(),
+        input.objectId.toLowerCase(),
+        input.contentSuite,
+        digest(input.contentKeyEnvelope),
+    ]);
+}
+
+/* Keys are Base64url here, as the statement names them; the KEM key only by its digest. */
+export function successionStatement(input: {
+    userId: string;
+    oldKeyVersion: number;
+    newKeyVersion: number;
+    oldEncryptionPublicKey: Uint8Array;
+    oldSigningPublicKey: Uint8Array;
+    newEncryptionPublicKey: Uint8Array;
+    newSigningPublicKey: Uint8Array;
+    newKemPublicKey: Uint8Array;
+}) {
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
+    return statement([
+        'hushos/identity/succession',
+        1,
+        input.userId.toLowerCase(),
+        input.oldKeyVersion,
+        input.newKeyVersion,
+        b64(input.oldEncryptionPublicKey),
+        b64(input.oldSigningPublicKey),
+        b64(input.newEncryptionPublicKey),
+        b64(input.newSigningPublicKey),
+        digest(input.newKemPublicKey),
+    ]);
+}
+
+/* Ed25519 over `message` by the raw 32-byte `publicKey`; false for anything malformed. */
+export function verifySignature(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array) {
+    if (publicKey.length !== 32 || signature.length !== SIGNATURE_BYTES) return false;
+    try {
+        const key = createPublicKey({
+            key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(publicKey).toString('base64url') },
+            format: 'jwk',
+        });
+        return verify(null, message, key, signature);
+    } catch {
+        return false;
+    }
+}

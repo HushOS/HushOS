@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { keyedHash } from './hash-key';
@@ -9,11 +9,14 @@ import {
     storageEntitlements,
     workspaces,
 } from './schema';
+import { successionStatement, verifySignature } from './signatures';
 import {
     accountEnrollments,
     accountIntents,
     accountRecoveryKeys,
     accountIdentities,
+    accountIdentityHistory,
+    accountSettingsKeys,
     accountRecoveryAttempts,
     accountKeys,
     authRateLimits,
@@ -634,6 +637,34 @@ export async function getAccountSetup(userId: string) {
     };
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/* Whether the session is live and on the account's current credential: a rotation since ends it. */
+async function sessionIsCurrent(
+    tx: Tx,
+    input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
+) {
+    const [session] = await tx
+        .select({ id: sessions.id })
+        .from(sessions)
+        .innerJoin(
+            opaqueCredentials,
+            and(
+                eq(opaqueCredentials.userId, sessions.userId),
+                eq(opaqueCredentials.version, sessions.credentialVersion),
+            ),
+        )
+        .where(
+            and(
+                eq(sessions.userId, input.userId),
+                eq(sessions.tokenHash, input.sessionTokenHash),
+                eq(sessions.credentialVersion, input.credentialVersion),
+                gt(sessions.expiresAt, new Date()),
+            ),
+        );
+    return session !== undefined;
+}
+
 // Existing accounts can add missing features, but can never overwrite permanent keys here.
 export async function initializeAccount(input: {
     userId: string;
@@ -731,7 +762,40 @@ export async function getSecurityBundles(userId: string) {
         .from(workspaceKeys)
         .where(eq(workspaceKeys.userId, userId))
         .orderBy(workspaceKeys.workspaceId);
-    return { ...bundles, workspaces: grants };
+    // Earlier identities and the settings key are sealed under the root too: a master-key
+    // rotation re-wraps them.
+    return {
+        ...bundles,
+        workspaces: grants,
+        identityHistory: await listIdentityHistory(userId),
+        settingsKey: await getSettingsKey(userId),
+    };
+}
+
+/* An identity's wrapped halves, as a rotation re-wraps them; the public keys stay. */
+export type IdentityWrap = Pick<
+    typeof accountIdentities.$inferInsert,
+    | 'keyVersion'
+    | 'wrappingSalt'
+    | 'encryptionPublicKey'
+    | 'encryptionPrivateKeyNonce'
+    | 'encryptedEncryptionPrivateKey'
+    | 'signingPublicKey'
+    | 'signingSeedNonce'
+    | 'encryptedSigningSeed'
+    | 'kemPublicKey'
+    | 'kemSeedNonce'
+    | 'encryptedKemSeed'
+>;
+function samePublicKeys(
+    a: { encryptionPublicKey: Buffer; signingPublicKey: Buffer; kemPublicKey?: Buffer | null },
+    b: { encryptionPublicKey: Buffer; signingPublicKey: Buffer; kemPublicKey?: Buffer | null },
+) {
+    return (
+        a.encryptionPublicKey.equals(b.encryptionPublicKey) &&
+        a.signingPublicKey.equals(b.signingPublicKey) &&
+        (a.kemPublicKey ? Boolean(b.kemPublicKey?.equals(a.kemPublicKey)) : !b.kemPublicKey)
+    );
 }
 
 export type WorkspaceGrantInput = {
@@ -751,6 +815,10 @@ export async function changeAccountSecurity(input: {
     >;
     recovery?: Omit<typeof accountRecoveryKeys.$inferInsert, 'userId'>;
     identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
+    /* Every earlier identity, re-wrapped under the new root at its own key version. */
+    identityHistory?: IdentityWrap[];
+    /* The settings key re-wrapped under the new root, whenever the account has one. */
+    settingsKey?: SettingsKeyInput;
     workspaces?: WorkspaceGrantInput[];
 }) {
     return db.transaction(async (tx) => {
@@ -803,17 +871,48 @@ export async function changeAccountSecurity(input: {
             return false;
         if (input.action === 'master-key') {
             // Public identity survives the rotation: the same X25519, signing and, once
-            // it exists, KEM key. A KEM key is added by its own path, never here.
-            const sameKem =
-                current.identity.kemPublicKey === null
-                    ? !input.identity?.kemPublicKey
-                    : Boolean(input.identity?.kemPublicKey?.equals(current.identity.kemPublicKey));
+            // it exists, KEM key. A KEM key is added by its own path, never here. The key
+            // version stays, or (as clients before succession labelled it) follows the
+            // root's when that is higher; it never goes back, which would reuse a version
+            // the history or a contact's pin already names.
+            const identityVersion = input.identity?.keyVersion;
             if (
                 !input.identity ||
-                input.identity.keyVersion !== input.envelope.keyVersion ||
-                !input.identity.encryptionPublicKey.equals(current.identity.encryptionPublicKey) ||
-                !input.identity.signingPublicKey.equals(current.identity.signingPublicKey) ||
-                !sameKem
+                !(
+                    identityVersion === current.identity.keyVersion ||
+                    (identityVersion === input.envelope.keyVersion &&
+                        identityVersion > current.identity.keyVersion)
+                ) ||
+                !samePublicKeys(current.identity, {
+                    encryptionPublicKey: input.identity.encryptionPublicKey,
+                    signingPublicKey: input.identity.signingPublicKey,
+                    kemPublicKey: input.identity.kemPublicKey ?? null,
+                })
+            )
+                return false;
+            // Each earlier identity follows the root as well, unchanged but for its wrapping.
+            const history = await tx
+                .select()
+                .from(accountIdentityHistory)
+                .where(eq(accountIdentityHistory.userId, user.id))
+                .for('update');
+            const rewrapped = new Map(
+                (input.identityHistory ?? []).map((wrap) => [wrap.keyVersion, wrap]),
+            );
+            if (
+                rewrapped.size !== (input.identityHistory ?? []).length ||
+                rewrapped.size !== history.length ||
+                history.some((row) => {
+                    const next = rewrapped.get(row.keyVersion);
+                    return (
+                        !next ||
+                        !samePublicKeys(row, {
+                            encryptionPublicKey: next.encryptionPublicKey,
+                            signingPublicKey: next.signingPublicKey,
+                            kemPublicKey: next.kemPublicKey ?? null,
+                        })
+                    );
+                })
             )
                 return false;
             // Every grant this member holds must follow the root, with its workspace key
@@ -841,7 +940,15 @@ export async function changeAccountSecurity(input: {
                 })
             )
                 return false;
-        } else if (input.identity || input.workspaces) return false;
+            // The settings key follows the root; one left behind would seal settings nobody opens.
+            const [settingsKey] = await tx
+                .select({ userId: accountSettingsKeys.userId })
+                .from(accountSettingsKeys)
+                .where(eq(accountSettingsKeys.userId, user.id))
+                .for('update');
+            if (Boolean(settingsKey) !== Boolean(input.settingsKey)) return false;
+        } else if (input.identity || input.workspaces || input.identityHistory || input.settingsKey)
+            return false;
         const version = input.credentialVersion + 1;
         await tx
             .update(opaqueCredentials)
@@ -861,6 +968,29 @@ export async function changeAccountSecurity(input: {
                 .update(accountIdentities)
                 .set(input.identity)
                 .where(eq(accountIdentities.userId, user.id));
+        if (input.settingsKey)
+            await tx
+                .update(accountSettingsKeys)
+                .set({ ...input.settingsKey, updatedAt: new Date() })
+                .where(eq(accountSettingsKeys.userId, user.id));
+        for (const wrap of input.identityHistory ?? [])
+            await tx
+                .update(accountIdentityHistory)
+                .set({
+                    wrappingSalt: wrap.wrappingSalt,
+                    encryptionPrivateKeyNonce: wrap.encryptionPrivateKeyNonce,
+                    encryptedEncryptionPrivateKey: wrap.encryptedEncryptionPrivateKey,
+                    signingSeedNonce: wrap.signingSeedNonce,
+                    encryptedSigningSeed: wrap.encryptedSigningSeed,
+                    kemSeedNonce: wrap.kemSeedNonce ?? null,
+                    encryptedKemSeed: wrap.encryptedKemSeed ?? null,
+                })
+                .where(
+                    and(
+                        eq(accountIdentityHistory.userId, user.id),
+                        eq(accountIdentityHistory.keyVersion, wrap.keyVersion!),
+                    ),
+                );
         for (const workspace of input.workspaces ?? [])
             await tx
                 .update(workspaceKeys)
@@ -910,11 +1040,126 @@ export async function lookupIdentity(normalizedEmail: string) {
             signingPublicKey: accountIdentities.signingPublicKey,
             kemPublicKey: accountIdentities.kemPublicKey,
             kemSignature: accountIdentities.kemSignature,
+            keyVersion: accountIdentities.keyVersion,
         })
         .from(users)
         .innerJoin(accountIdentities, eq(accountIdentities.userId, users.id))
         .where(eq(users.normalizedEmail, normalizedEmail));
     return row ?? null;
+}
+
+export type SuccessionResult =
+    | { status: 'ok'; keyVersion: number }
+    | { status: 'session' | 'no-identity' | 'stale' | 'unchanged' | 'bad-signature' };
+
+/*
+ * Replaces an account's identity with one minted at the next key version and
+ * vouched for by the current signing key (docs/integrity-design.md). Under the
+ * account's row lock, so it cannot interleave with a master-key rotation or a
+ * second succession: the session must still be current, the key version must
+ * be the next one, the statement must verify against the current signing key,
+ * and the keys must actually change. The replaced identity moves to the
+ * history whole, still sealed, with the succession that replaced it.
+ */
+export async function succeedIdentity(input: {
+    userId: string;
+    credentialVersion: number;
+    sessionTokenHash: Buffer;
+    /* The new identity, its KEM binding already checked against its own signing key. */
+    identity: Omit<typeof accountIdentities.$inferInsert, 'userId'> & {
+        keyVersion: number;
+        kemPublicKey: Buffer;
+    };
+    signature: Buffer;
+}): Promise<SuccessionResult> {
+    return db.transaction(async (tx) => {
+        const [user] = await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, input.userId))
+            .for('update');
+        if (!user || !(await sessionIsCurrent(tx, input))) return { status: 'session' };
+        const [current] = await tx
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, user.id));
+        if (!current) return { status: 'no-identity' };
+        if (input.identity.keyVersion !== current.keyVersion + 1) return { status: 'stale' };
+        if (
+            input.identity.encryptionPublicKey.equals(current.encryptionPublicKey) ||
+            input.identity.signingPublicKey.equals(current.signingPublicKey) ||
+            (current.kemPublicKey && input.identity.kemPublicKey.equals(current.kemPublicKey))
+        )
+            return { status: 'unchanged' };
+        const statement = successionStatement({
+            userId: user.id,
+            oldKeyVersion: current.keyVersion,
+            newKeyVersion: input.identity.keyVersion,
+            oldEncryptionPublicKey: current.encryptionPublicKey,
+            oldSigningPublicKey: current.signingPublicKey,
+            newEncryptionPublicKey: input.identity.encryptionPublicKey,
+            newSigningPublicKey: input.identity.signingPublicKey,
+            newKemPublicKey: input.identity.kemPublicKey,
+        });
+        if (!verifySignature(current.signingPublicKey, statement, input.signature))
+            return { status: 'bad-signature' };
+        const { userId: _userId, ...old } = current;
+        await tx.insert(accountIdentityHistory).values({
+            ...old,
+            userId: user.id,
+            replacedByKeyVersion: input.identity.keyVersion,
+            newEncryptionPublicKey: input.identity.encryptionPublicKey,
+            newSigningPublicKey: input.identity.signingPublicKey,
+            newKemPublicKey: input.identity.kemPublicKey,
+            successionSignature: input.signature,
+        });
+        await tx
+            .update(accountIdentities)
+            .set({ ...input.identity, createdAt: new Date() })
+            .where(eq(accountIdentities.userId, user.id));
+        return { status: 'ok', keyVersion: input.identity.keyVersion };
+    });
+}
+
+/* The account's own earlier identities, oldest first: what opens shares sealed to old keys. */
+export async function listIdentityHistory(userId: string) {
+    return db
+        .select()
+        .from(accountIdentityHistory)
+        .where(eq(accountIdentityHistory.userId, userId))
+        .orderBy(asc(accountIdentityHistory.keyVersion));
+}
+
+/*
+ * The succession links of an account from key version `from` on, in order:
+ * each names the identity it replaced, the one that replaced it, and the old
+ * signing key's signature. Null when the account has no identity at all.
+ */
+export async function successionChain(userId: string, from: number) {
+    const [identity] = await db
+        .select({ keyVersion: accountIdentities.keyVersion })
+        .from(accountIdentities)
+        .where(eq(accountIdentities.userId, userId));
+    if (!identity) return null;
+    return db
+        .select({
+            oldKeyVersion: accountIdentityHistory.keyVersion,
+            newKeyVersion: accountIdentityHistory.replacedByKeyVersion,
+            oldEncryptionPublicKey: accountIdentityHistory.encryptionPublicKey,
+            oldSigningPublicKey: accountIdentityHistory.signingPublicKey,
+            newEncryptionPublicKey: accountIdentityHistory.newEncryptionPublicKey,
+            newSigningPublicKey: accountIdentityHistory.newSigningPublicKey,
+            newKemPublicKey: accountIdentityHistory.newKemPublicKey,
+            signature: accountIdentityHistory.successionSignature,
+        })
+        .from(accountIdentityHistory)
+        .where(
+            and(
+                eq(accountIdentityHistory.userId, userId),
+                gte(accountIdentityHistory.keyVersion, from),
+            ),
+        )
+        .orderBy(asc(accountIdentityHistory.keyVersion));
 }
 
 /*
@@ -941,6 +1186,7 @@ export async function addIdentityKem(input: {
 export async function getSettings(userId: string) {
     const [row] = await db
         .select({
+            version: userSettings.version,
             settingsVersion: userSettings.settingsVersion,
             nonce: userSettings.nonce,
             ciphertext: userSettings.ciphertext,
@@ -957,9 +1203,12 @@ export async function getSettings(userId: string) {
 export async function putSettings(input: {
     userId: string;
     expectedVersion: number;
+    /* The envelope's version: 1 under the identity-derived key, 2 under the settings key. */
+    version?: 1 | 2;
     nonce: Buffer;
     ciphertext: Buffer;
 }) {
+    const version = input.version ?? 1;
     return db.transaction(async (tx) => {
         const [current] = await tx
             .select({ settingsVersion: userSettings.settingsVersion })
@@ -969,11 +1218,15 @@ export async function putSettings(input: {
         const stored = current?.settingsVersion ?? 0;
         if (stored !== input.expectedVersion)
             return { status: 'conflict' as const, settingsVersion: stored };
+        // Sealed under a settings key the server does not have: no device could open it again.
+        if (version === 2 && !(await getSettingsKey(input.userId, tx)))
+            return { status: 'no-key' as const, settingsVersion: stored };
         const settingsVersion = stored + 1;
         await tx
             .insert(userSettings)
             .values({
                 userId: input.userId,
+                version,
                 settingsVersion,
                 nonce: input.nonce,
                 ciphertext: input.ciphertext,
@@ -981,6 +1234,7 @@ export async function putSettings(input: {
             .onConflictDoUpdate({
                 target: userSettings.userId,
                 set: {
+                    version,
                     settingsVersion,
                     nonce: input.nonce,
                     ciphertext: input.ciphertext,
@@ -989,6 +1243,31 @@ export async function putSettings(input: {
             });
         return { status: 'ok' as const, settingsVersion };
     });
+}
+
+export type SettingsKeyInput = { nonce: Buffer; ciphertext: Buffer };
+
+/* The wrapped settings key, if the account has one yet. */
+export async function getSettingsKey(userId: string, tx: Tx | typeof db = db) {
+    const [row] = await tx
+        .select({ nonce: accountSettingsKeys.nonce, ciphertext: accountSettingsKeys.ciphertext })
+        .from(accountSettingsKeys)
+        .where(eq(accountSettingsKeys.userId, userId));
+    return row ?? null;
+}
+
+/*
+ * Stores the wrapped settings key once. A second device that minted its own
+ * meanwhile is refused and must use the stored one, or the two would seal
+ * settings the other cannot open.
+ */
+export async function putSettingsKey(input: { userId: string } & SettingsKeyInput) {
+    const [row] = await db
+        .insert(accountSettingsKeys)
+        .values(input)
+        .onConflictDoNothing()
+        .returning({ userId: accountSettingsKeys.userId });
+    return row !== undefined;
 }
 
 /* An operator's suspension on a report: sessions stop being served and sign-in is refused until cleared. */

@@ -1,6 +1,14 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { db } from './client';
-import { removeNodeIn, selectNodes, walk, type NodeRow, type VersionRow } from './drive';
+import {
+    removeNodeIn,
+    selectNodes,
+    signersById,
+    walk,
+    type NodeRow,
+    type Signer,
+    type VersionRow,
+} from './drive';
 import {
     accountIdentities,
     driveNodes,
@@ -30,7 +38,23 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export const REPORT_ITEM_CAP = 2000;
 
 export type ReportRow = typeof driveReports.$inferSelect;
-export type ReportItemRow = typeof driveReportItems.$inferSelect;
+type RawReportItemRow = typeof driveReportItems.$inferSelect;
+/* A snapshot row with the accounts its signatures name, when they still exist. */
+export type ReportItemRow = RawReportItemRow & {
+    metadataSigner: Signer | null;
+    versionSigner: Signer | null;
+};
+async function withSigners(rows: RawReportItemRow[]): Promise<ReportItemRow[]> {
+    const signers = await signersById(
+        db,
+        rows.flatMap((row) => [row.metadataSignerId, row.versionSignerId]),
+    );
+    return rows.map((row) => ({
+        ...row,
+        metadataSigner: row.metadataSignerId ? (signers.get(row.metadataSignerId) ?? null) : null,
+        versionSigner: row.versionSignerId ? (signers.get(row.versionSignerId) ?? null) : null,
+    }));
+}
 export type ReportEventRow = typeof driveReportEvents.$inferSelect;
 
 /* Every operator a report must be sealed to: admins with a published identity. */
@@ -42,6 +66,7 @@ export async function listOperators() {
             signingPublicKey: accountIdentities.signingPublicKey,
             kemPublicKey: accountIdentities.kemPublicKey,
             kemSignature: accountIdentities.kemSignature,
+            keyVersion: accountIdentities.keyVersion,
         })
         .from(users)
         .innerJoin(accountIdentities, eq(accountIdentities.userId, users.id))
@@ -189,6 +214,10 @@ export async function createReport(input: CreateReport) {
                     keyEnvelope: item.keyEnvelope!,
                     metadataVersion: item.metadataVersion,
                     metadataEnvelope: item.metadataEnvelope!,
+                    metadataSignerId: item.metadataSignerId,
+                    metadataSignature: item.metadataSignature,
+                    versionSignerId: item.currentVersion?.signerId ?? null,
+                    versionSignature: item.currentVersion?.signature ?? null,
                     versionId: item.currentVersion?.id ?? null,
                     objectId: item.currentVersion?.objectId ?? null,
                     objectKey: item.currentVersion ? objectKeyOf(item) : null,
@@ -371,7 +400,7 @@ export async function listReportChildren(reportId: string, parentId: string) {
             and(eq(driveReportItems.reportId, reportId), eq(driveReportItems.parentId, parentId)),
         )
         .orderBy(asc(driveReportItems.nodeId));
-    const ancestors: ReportItemRow[] = [];
+    const ancestors: RawReportItemRow[] = [];
     let cursor = folder.parentId;
     while (cursor && ancestors.length < REPORT_ITEM_CAP) {
         const [row] = await db
@@ -384,7 +413,12 @@ export async function listReportChildren(reportId: string, parentId: string) {
         ancestors.unshift(row);
         cursor = row.parentId;
     }
-    return { folder, ancestors, children };
+    const signed = await withSigners([folder, ...ancestors, ...children]);
+    return {
+        folder: signed[0]!,
+        ancestors: signed.slice(1, 1 + ancestors.length),
+        children: signed.slice(1 + ancestors.length),
+    };
 }
 
 export async function getReportItem(reportId: string, nodeId: string) {
@@ -392,20 +426,22 @@ export async function getReportItem(reportId: string, nodeId: string) {
         .select()
         .from(driveReportItems)
         .where(and(eq(driveReportItems.reportId, reportId), eq(driveReportItems.nodeId, nodeId)));
-    return row ?? null;
+    return row ? (await withSigners([row]))[0]! : null;
 }
 
 export async function getReportVersions(reportId: string, versionIds: string[]) {
     if (!versionIds.length) return [];
-    return db
-        .select()
-        .from(driveReportItems)
-        .where(
-            and(
-                eq(driveReportItems.reportId, reportId),
-                inArray(driveReportItems.versionId, versionIds),
+    return withSigners(
+        await db
+            .select()
+            .from(driveReportItems)
+            .where(
+                and(
+                    eq(driveReportItems.reportId, reportId),
+                    inArray(driveReportItems.versionId, versionIds),
+                ),
             ),
-        );
+    );
 }
 
 /*

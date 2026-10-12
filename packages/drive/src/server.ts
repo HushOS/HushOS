@@ -12,6 +12,7 @@ import {
 import {
     documentPadStep,
     METADATA_PAD_STEP,
+    paddedLength,
     partLength,
     validObjectSize,
 } from '@hushos/crypto/drive';
@@ -26,10 +27,12 @@ import {
     DRIVE_ENVELOPE_SUITE,
     DRIVE_PROTOCOL_VERSION,
     KEY_ENVELOPE_BYTES,
-    LEGACY_CONTENT_SUITE,
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
     MAX_PART_URLS_PER_REQUEST,
+    SHARE_ENVELOPE_BYTES,
+    SHARE_SUITE,
+    shareEnvelopeSuite,
     THUMBNAIL_BATCH,
     THUMBNAIL_MAX_BYTES,
     VERSION_ENVELOPE_BYTES,
@@ -43,6 +46,7 @@ import {
     UPLOAD_TTL_HOURS,
     type Capabilities,
     type DriveErrorCode,
+    type ShareSuite,
 } from './protocol';
 
 /*
@@ -81,6 +85,8 @@ export function capabilities(): Capabilities {
 }
 
 /* Wire shapes: envelopes as Base64url, byte counts as decimal strings, dates as ISO. */
+/* Who the server says wrote a record: for display; the signature is what a reader checks. */
+export type Signer = { id: string; name: string; email: string };
 export type VersionView = {
     id: string;
     objectId: string;
@@ -95,6 +101,9 @@ export type VersionView = {
     plaintextSize: string | null;
     ciphertextSize: string;
     readyAt: string | null;
+    /* The account that sealed the content-key envelope and its Ed25519 signature; null before signatures. */
+    signer: Signer | null;
+    signature: string | null;
 };
 /* A sealed workspace document as it travels: kind, version, Base64url bytes. */
 export type DocumentView = {
@@ -125,6 +134,9 @@ export type NodeView = {
     updatedAt: string;
     /* How the key and metadata envelopes are sealed; every row is suite 1 today. */
     envelopeSuite: number;
+    /* The account that wrote the metadata envelope and its Ed25519 signature; null before signatures. */
+    metadataSigner: Signer | null;
+    metadataSignature: string | null;
 };
 
 function b64(buffer: Buffer | Uint8Array) {
@@ -145,6 +157,8 @@ function versionView(version: VersionRow | null | undefined): VersionView | null
         plaintextSize: version.plaintextSize?.toString() ?? null,
         ciphertextSize: version.ciphertextSize.toString(),
         readyAt: version.readyAt?.toISOString() ?? null,
+        signer: version.signer,
+        signature: version.signature ? b64(version.signature) : null,
     };
 }
 export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null }): NodeView {
@@ -169,6 +183,8 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
         createdAt: node.createdAt.toISOString(),
         updatedAt: node.updatedAt.toISOString(),
         envelopeSuite: node.envelopeSuite,
+        metadataSigner: node.metadataSigner,
+        metadataSignature: node.metadataSignature ? b64(node.metadataSignature) : null,
     };
 }
 
@@ -185,11 +201,18 @@ export function decodeEnvelope(value: string, exact?: number, max?: number) {
     return bytes;
 }
 const keyEnvelope = (value: string) => decodeEnvelope(value, KEY_ENVELOPE_BYTES);
-/* A share envelope of either suite: 72 bytes under X25519 alone, 1160 hybrid. */
+/* An Ed25519 signature: 64 bytes, checked against the writer's key in the repository. */
+const signature = (value: string) => decodeEnvelope(value, 64);
+/*
+ * A share envelope as written now: suite 3, signed by the granter. An older
+ * suite is a client that has not updated, told so with 409; anything else is
+ * not a share envelope at all.
+ */
 function shareEnvelope(value: string) {
-    const bytes = decodeEnvelope(value, undefined, 1160);
-    if (bytes.length !== 72 && bytes.length !== 1160)
-        throw new DriveError('invalid', 'Invalid envelope.');
+    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES[SHARE_SUITE]);
+    const suite = shareEnvelopeSuite(bytes.length);
+    if (suite === null) throw new DriveError('invalid', 'Invalid envelope.');
+    if (suite !== SHARE_SUITE) throw new DriveError('unsupported', 'Update HushOS to share.', 409);
     return bytes;
 }
 /* A version envelope for an upload of the current suite: the key sealed with the sizes. */
@@ -304,6 +327,9 @@ const parentTrashed = () =>
     new DriveError('parent-trashed', 'The destination folder is in the trash.', 409);
 const tooDeep = () =>
     new DriveError('too-deep', `Folders cannot be nested more than ${MAX_DEPTH} levels deep.`, 409);
+/* The repository verified the writer's signature against their current signing key and it failed. */
+const badSignature = (data?: unknown) =>
+    new DriveError('bad-signature', 'This change was not signed by your keys.', 400, data);
 const stale = (data?: unknown) =>
     new DriveError(
         'stale',
@@ -351,6 +377,8 @@ export type NodeEnvelopesInput = {
     parentKeyEpoch: number;
     keyEnvelope: string;
     metadataEnvelope: string;
+    /* The writer's signature over the metadata statement (docs/integrity-design.md). */
+    metadataSignature: string;
 };
 function envelopes(input: NodeEnvelopesInput) {
     return {
@@ -358,6 +386,7 @@ function envelopes(input: NodeEnvelopesInput) {
         parentKeyEpoch: input.parentKeyEpoch,
         keyEnvelope: keyEnvelope(input.keyEnvelope),
         metadataEnvelope: metadataEnvelope(input.metadataEnvelope),
+        metadataSignature: signature(input.metadataSignature),
     };
 }
 
@@ -374,6 +403,7 @@ export async function createRoot(
         envelopes: envelopes(input),
     });
     if (result.status === 'stale') throw stale();
+    if (result.status === 'bad-signature') throw badSignature();
     return { created: result.status === 'created', root: nodeView(result.root) };
 }
 
@@ -433,6 +463,8 @@ export async function createFolders(
             throw tooDeep();
         case 'stale':
             throw stale({ id: result.id });
+        case 'bad-signature':
+            throw badSignature();
         case 'conflict':
             throw new DriveError('conflict', 'An item with this id already exists.', 409, {
                 id: result.id,
@@ -444,18 +476,27 @@ export async function renameNode(
     userId: string,
     workspaceId: string,
     nodeId: string,
-    input: { metadataVersion: number; keyEpoch: number; metadataEnvelope: string },
+    input: {
+        metadataVersion: number;
+        keyEpoch: number;
+        metadataEnvelope: string;
+        /* Over the version the envelope will have: `metadataVersion + 1`. */
+        metadataSignature: string;
+    },
 ) {
     await requireAccess(userId, workspaceId, nodeId, 'editor');
     const result = await driveRepository.renameNode({
         workspaceId,
         nodeId,
+        userId,
         metadataVersion: input.metadataVersion,
         keyEpoch: input.keyEpoch,
         metadataEnvelope: metadataEnvelope(input.metadataEnvelope),
+        metadataSignature: signature(input.metadataSignature),
     });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
+    if (result.status === 'bad-signature') throw badSignature();
     if (result.status === 'stale') throw stale({ node: nodeView(result.node) });
     return { node: nodeView(result.node) };
 }
@@ -583,6 +624,8 @@ export type CopyInput = {
     node: { id: string; parentId: string } & NodeEnvelopesInput;
     versionId: string;
     contentKeyEnvelope: string;
+    /* Over the copy's node and version and the source's object and suite. */
+    versionSignature: string;
 };
 
 /*
@@ -611,11 +654,14 @@ export async function copyNode(
         version: {
             id: input.versionId,
             contentKeyEnvelope: anyVersionEnvelope(input.contentKeyEnvelope),
+            signature: signature(input.versionSignature),
         },
     });
     switch (result.status) {
         case 'ok':
             return { node: nodeView(result.node) };
+        case 'bad-signature':
+            throw badSignature();
         case 'invalid':
             throw new DriveError('invalid', 'The envelope does not match how this file is stored.');
         case 'over-quota':
@@ -701,7 +747,8 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
-        suite: (row.suite === 1 ? 1 : 2) as 1 | 2,
+        // Told apart by length in the query: 1, 2 (hybrid) or 3 (signed).
+        suite: row.suite as ShareSuite,
         grantee: row.grantee,
     };
 }
@@ -790,6 +837,7 @@ export async function listSharedByMe(userId: string) {
             ...shareView(row),
             node: nodeView(row.node),
             granteeIdentity: {
+                keyVersion: row.granteeIdentity.keyVersion,
                 encryptionPublicKey: b64(row.granteeIdentity.encryptionPublicKey),
                 signingPublicKey: b64(row.granteeIdentity.signingPublicKey),
                 kem:
@@ -824,6 +872,8 @@ export async function listSharedWithMe(userId: string) {
                 name: row.granter.name,
                 email: row.granter.email,
                 encryptionPublicKey: b64(row.granter.encryptionPublicKey),
+                signingPublicKey: b64(row.granter.signingPublicKey),
+                keyVersion: row.granter.keyVersion,
             },
             node: nodeView(row.node),
         })),
@@ -920,6 +970,8 @@ export type UploadBeginInput = {
     versionId: string;
     objectId: string;
     contentKeyEnvelope: string;
+    /* The writer's signature over the version statement. */
+    versionSignature: string;
     contentNonce: string;
     contentSuite: number;
     chunkCount: number;
@@ -973,10 +1025,18 @@ function uploadView(row: UploadRow): UploadView {
 
 /*
  * What the server can check about a declared object: that a last part of the
- * declared size can hold a chunk and a trailer, and that the plaintext it bounds
- * (the object less its tags, allowing for a trailer) is within the file limit.
+ * declared size can hold a chunk and a trailer, and that what it bounds (the
+ * object less its tags) is no larger than the largest file allowed would be
+ * once its thumbnail trailer is added and the whole is padded to its bucket.
  * The plaintext size itself is sealed in the envelope and never seen here.
  */
+let maxPadded: bigint | undefined;
+const MAX_PADDED_BYTES = () =>
+    (maxPadded ??= BigInt(
+        paddedLength(
+            Number(storageEnv.DRIVE_MAX_FILE_BYTES) + THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES,
+        ),
+    ));
 function parseCiphertextSize(value: string, chunkCount: number) {
     if (!Number.isInteger(chunkCount) || chunkCount < 1 || chunkCount > 10_000)
         throw new DriveError('invalid', 'Invalid chunk count.');
@@ -984,9 +1044,7 @@ function parseCiphertextSize(value: string, chunkCount: number) {
     const size = BigInt(value);
     if (!validObjectSize(Number(size), chunkCount))
         throw new DriveError('invalid', 'The object size does not fit its chunk count.');
-    const contentBound =
-        size - BigInt(CHUNK_TAG_BYTES * chunkCount) - BigInt(THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES);
-    if (contentBound > storageEnv.DRIVE_MAX_FILE_BYTES)
+    if (size - BigInt(CHUNK_TAG_BYTES * chunkCount) > MAX_PADDED_BYTES())
         throw new DriveError(
             'too-large',
             `Files can be at most ${Number(storageEnv.DRIVE_MAX_FILE_BYTES / (1024n * 1024n * 1024n))} GiB on this server.`,
@@ -1030,13 +1088,9 @@ async function presignParts(upload: UploadRow, from: number, count: number) {
 export async function beginUpload(userId: string, workspaceId: string, input: UploadBeginInput) {
     if (input.node.existing) await requireAccess(userId, workspaceId, input.node.id, 'editor');
     else await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
+    // Suite 3 alone is written: an older suite would hand the server the file's exact size.
     if (input.contentSuite !== CONTENT_SUITE)
-        throw new DriveError(
-            'unsupported',
-            input.contentSuite === LEGACY_CONTENT_SUITE
-                ? 'This app is out of date for this server. Reload and try again.'
-                : 'This server does not accept files stored that way.',
-        );
+        throw new DriveError('unsupported', 'Update HushOS to upload.', 409);
     const ciphertextSize = parseCiphertextSize(input.ciphertextSize, input.chunkCount);
     const contentNonce = decodeEnvelope(input.contentNonce, 16);
     const key = objectKey(workspaceId, input.objectId);
@@ -1061,6 +1115,7 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
         version: {
             id: input.versionId,
             contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+            signature: signature(input.versionSignature),
         },
         object: {
             id: input.objectId,
@@ -1094,6 +1149,8 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                 throw tooDeep();
             case 'stale':
                 throw stale();
+            case 'bad-signature':
+                throw badSignature();
             case 'conflict':
                 throw new DriveError('conflict', 'An item with this id already exists.', 409);
         }
@@ -1214,12 +1271,14 @@ export async function completeUpload(
     }
 }
 
+/* A fresh content-key envelope either way, so a fresh signature over the version where it lands. */
 export type UploadAttachInput =
-    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string }
+    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string; versionSignature: string }
     | {
           mode: 'sibling';
           node: { id: string; parentId: string } & NodeEnvelopesInput;
           contentKeyEnvelope: string;
+          versionSignature: string;
       };
 
 /*
@@ -1240,8 +1299,10 @@ export async function attachUpload(
         input.mode === 'same-node'
             ? {
                   mode: 'same-node',
+                  userId,
                   keyEpoch: input.keyEpoch,
                   contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+                  versionSignature: signature(input.versionSignature),
               }
             : {
                   mode: 'sibling',
@@ -1252,6 +1313,7 @@ export async function attachUpload(
                       ...envelopes(input.node),
                   },
                   contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+                  versionSignature: signature(input.versionSignature),
               },
     );
     switch (result.status) {
@@ -1286,6 +1348,8 @@ export async function attachUpload(
             throw tooDeep();
         case 'stale':
             throw stale();
+        case 'bad-signature':
+            throw badSignature();
         case 'conflict':
             throw new DriveError('conflict', 'An item with this id already exists.', 409);
     }
@@ -1556,6 +1620,20 @@ async function limitLink(token: string, address: string) {
 }
 
 /* The linked node with what the visitor's device needs to open it; the secret stays in their URL. */
+/*
+ * What a link's visitor sees of a node: the signatures, never who wrote it. A
+ * visitor has no account and no pins, so a signer's name and email would tell
+ * an anonymous holder of the URL who owns and edits the files, and buy them
+ * nothing they could check.
+ */
+function visitorView(node: NodeView): NodeView {
+    return {
+        ...node,
+        metadataSigner: null,
+        currentVersion: node.currentVersion ? { ...node.currentVersion, signer: null } : null,
+    };
+}
+
 export async function openLink(token: string, address: string) {
     await limitLink(token, address);
     const resolved = await driveRepository.resolveLink(hashToken(token));
@@ -1572,7 +1650,7 @@ export async function openLink(token: string, address: string) {
             linkEnvelope: b64(resolved.link.linkEnvelope),
             expiresAt: resolved.link.expiresAt?.toISOString() ?? null,
         },
-        node: nodeView(resolved.node),
+        node: visitorView(nodeView(resolved.node)),
     };
 }
 
@@ -1593,9 +1671,9 @@ export async function linkChildren(
     });
     if (result.status !== 'ok') throw linkGone();
     return {
-        folder: nodeView(result.folder),
-        ancestors: result.ancestors.map(nodeView),
-        children: result.children.map(nodeView),
+        folder: visitorView(nodeView(result.folder)),
+        ancestors: result.ancestors.map((row) => visitorView(nodeView(row))),
+        children: result.children.map((row) => visitorView(nodeView(row))),
         nextCursor: result.nextCursor,
     };
 }
@@ -1606,7 +1684,12 @@ export async function linkDownloadUrl(token: string, address: string, versionId:
         versionId,
     ]);
     if (!workspaceId || !allowed.has(versionId)) throw linkGone();
-    return presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    const presigned = await presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    return {
+        ...presigned,
+        node: visitorView(presigned.node),
+        version: { ...presigned.version, signer: null },
+    };
 }
 
 export async function linkDownloadUrls(token: string, address: string, versionIds: string[]) {
@@ -1732,6 +1815,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
                   plaintextSize: item.plaintextSize?.toString() ?? null,
                   ciphertextSize: (item.ciphertextSize ?? 0n).toString(),
                   readyAt: null,
+                  signer: item.versionSigner,
+                  signature: item.versionSignature ? b64(item.versionSignature) : null,
               }
             : null;
     return {
@@ -1753,6 +1838,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.createdAt.toISOString(),
         envelopeSuite: DRIVE_ENVELOPE_SUITE,
+        metadataSigner: item.metadataSigner,
+        metadataSignature: item.metadataSignature ? b64(item.metadataSignature) : null,
     };
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
@@ -1760,6 +1847,7 @@ const reportGone = () => new DriveError('not-found', 'This report does not exist
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: {
     userId: string;
+    keyVersion: number;
     encryptionPublicKey: Buffer;
     signingPublicKey: Buffer;
     kemPublicKey: Buffer | null;
@@ -1767,6 +1855,7 @@ function servedOperator(o: {
 }) {
     return {
         userId: o.userId,
+        keyVersion: o.keyVersion,
         encryptionPublicKey: b64(o.encryptionPublicKey),
         signingPublicKey: b64(o.signingPublicKey),
         kem:
@@ -2146,11 +2235,14 @@ function rotationWorkView(row: RotationWorkRow) {
             contentKeyEnvelope: b64(v.contentKeyEnvelope),
             contentSuite: v.contentSuite,
             plaintextSize: v.plaintextSize?.toString() ?? null,
+            signer: v.signer,
+            signature: v.signature ? b64(v.signature) : null,
         })),
         shares: row.shares.map((share) => ({
             id: share.id,
             granteeUserId: share.granteeUserId,
             grantee: {
+                keyVersion: share.granteeKeyVersion,
                 encryptionPublicKey: b64(share.granteePublicKey),
                 signingPublicKey: b64(share.granteeSigningPublicKey),
                 kem:
@@ -2251,7 +2343,9 @@ export async function rotateNodes(
         keyEnvelope: string;
         rotated: {
             metadataEnvelope: string;
-            versions: { id: string; contentKeyEnvelope: string }[];
+            /* The rotating account's signature over the node's unchanged metadata version. */
+            metadataSignature: string;
+            versions: { id: string; contentKeyEnvelope: string; signature: string }[];
             shares: { id: string; shareEnvelope: string }[];
             links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
             unsealableLinks: string[];
@@ -2265,6 +2359,7 @@ export async function rotateNodes(
         workspaceId,
         rootId: nodeId,
         targetEpoch: rotation.targetEpoch,
+        userId,
         nodes: nodes.map((node) => ({
             id: node.id,
             changeSeq: node.changeSeq,
@@ -2273,10 +2368,12 @@ export async function rotateNodes(
             rotated: node.rotated
                 ? {
                       metadataEnvelope: metadataEnvelope(node.rotated.metadataEnvelope),
+                      metadataSignature: signature(node.rotated.metadataSignature),
                       versions: node.rotated.versions.map((v) => ({
                           id: v.id,
-                          // Resealed in the object's own suite: 72 bytes for suite 1, 84 for suite 2.
+                          // Resealed in the object's own suite: 72 bytes for suite 1, 84 for 2 and 3.
                           contentKeyEnvelope: anyVersionEnvelope(v.contentKeyEnvelope),
+                          signature: signature(v.signature),
                       })),
                       shares: node.rotated.shares.map((share) => ({
                           id: share.id,
@@ -2292,6 +2389,9 @@ export async function rotateNodes(
                 : null,
         })),
     });
+    // Each node is its own transaction: the ones before a refused one stand, and say so.
+    if (results.some((result) => result.status === 'bad-signature'))
+        throw badSignature({ results });
     return { results };
 }
 

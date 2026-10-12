@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { workspaceKeys } from './schema';
@@ -23,7 +29,7 @@ async function epoch() {
     return (await drive.allocateKeyEpochs(owner.workspaceId, 1))!.from;
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -47,6 +53,7 @@ beforeEach(async () => {
     await resetDatabase();
     owner = await createTestAccount();
     guest = await createTestAccount();
+    for (const person of [owner, guest]) await createTestIdentity(person.userId);
     await db.insert(workspaceKeys).values({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
@@ -55,7 +62,7 @@ beforeEach(async () => {
         wrappingNonce: randomBytes(24),
         encryptedKey: randomBytes(48),
     });
-    const created = await drive.createRoot({
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),

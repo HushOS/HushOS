@@ -178,18 +178,23 @@ const uuidSchema = t.String({
 const epochSchema = t.Integer({ minimum: 1, maximum: 2147483646 });
 // 72 bytes of nonce || wrapped key is 96 Base64url characters; metadata is bounded by its column.
 const keyEnvelopeSchema = t.String({ minLength: 96, maxLength: 96, pattern: '^[A-Za-z0-9_-]+$' });
-/* A share envelope: 72 bytes under X25519 alone, 1160 with the ML-KEM ciphertext beside it. */
 const MAX_REPORT_OPERATORS = 500;
 /* A report key envelope: 112 bytes sealed under X25519 alone, or 1224 hybrid. */
 const reportEnvelopeSchema = t.Union([
     t.String({ minLength: 150, maxLength: 150, pattern: '^[A-Za-z0-9_-]+$' }),
     t.String({ minLength: 1632, maxLength: 1632, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
+/*
+ * A share envelope of any suite by length (72, 1160 or 1256 bytes), so a client
+ * still sealing an older suite hears 409 "Update HushOS to share" from the domain
+ * rather than a bare 400.
+ */
 const shareEnvelopeSchema = t.Union([
     keyEnvelopeSchema,
     t.String({ minLength: 1547, maxLength: 1547, pattern: '^[A-Za-z0-9_-]+$' }),
+    t.String({ minLength: 1675, maxLength: 1675, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
-/* A suite 2 version envelope (84 bytes): the content key sealed with the sizes. */
+/* A version envelope of suites 2 and 3 (84 bytes): the content key sealed with the sizes. */
 const versionEnvelopeSchema = t.String({
     minLength: 112,
     maxLength: 112,
@@ -213,11 +218,14 @@ const documentEnvelopeSchema = t.String({
     pattern: '^[A-Za-z0-9_-]+$',
 });
 const documentKindSchema = t.String({ pattern: '^[a-z][a-z0-9-]{0,31}$' });
+/* An Ed25519 signature, 64 bytes; the domain checks it against the writer's current key. */
+const signatureSchema = t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' });
 const nodeEnvelopesSchema = {
     keyEpoch: epochSchema,
     parentKeyEpoch: epochSchema,
     keyEnvelope: keyEnvelopeSchema,
     metadataEnvelope: metadataEnvelopeSchema,
+    metadataSignature: signatureSchema,
 };
 const cursorSchema = t.Optional(uuidSchema);
 /* The trash pages on its own order, so its cursor is the last row's place in it, not an id. */
@@ -305,6 +313,12 @@ const identitySchema = t.Object({
     signingPublicKey: tokenSchema,
     signingSeedNonce: t.String({ minLength: 32, maxLength: 32 }),
     encryptedSigningSeed: t.String({ minLength: 64, maxLength: 64 }),
+});
+
+/* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */
+const settingsKeySchema = t.Object({
+    nonce: t.String({ minLength: 32, maxLength: 32, pattern: '^[A-Za-z0-9_-]+$' }),
+    ciphertext: t.String({ minLength: 64, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' }),
 });
 
 const workspaceIdSchema = t.String({
@@ -502,6 +516,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 envelope: envelopeSchema,
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
+                // Every earlier identity, re-wrapped under the new root by a master-key rotation.
+                identityHistory: t.Optional(t.Array(identitySchema, { maxItems: 1000 })),
+                settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
         },
@@ -525,6 +542,28 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post('/auth/identity/kem', { body: identityKemSchema }, ({ sessionToken, body }) =>
         auth.addIdentityKem(sessionToken, body),
     )
+    // Identity succession: new keys at the next version, signed by the current signing key.
+    .post(
+        '/auth/identity/succession',
+        { body: t.Object({ identity: identitySchema, signature: signatureSchema }) },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.succeedIdentity(sessionToken, body);
+        },
+    )
+    .get('/auth/identity/history', ({ sessionToken, set }) => {
+        set.headers['Cache-Control'] = 'no-store';
+        return auth.getIdentityHistory(sessionToken);
+    })
+    .get(
+        '/auth/contacts/:userId/succession',
+        {
+            params: t.Object({ userId: uuidSchema }),
+            query: t.Object({ from: t.Numeric({ minimum: 1, maximum: 2147483646 }) }),
+        },
+        ({ sessionToken, params, query }) =>
+            auth.contactSuccession(sessionToken, params.userId, query.from),
+    )
     // A POST so the address is in the body: a query string sits in proxy and access logs.
     .post(
         '/auth/contacts/lookup',
@@ -532,11 +571,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ sessionToken, body }) => auth.lookupContact(sessionToken, body.email),
     )
     .get('/auth/settings', ({ sessionToken }) => auth.getSettings(sessionToken))
+    .put('/auth/settings-key', { body: settingsKeySchema }, ({ request, sessionToken, body }) => {
+        guardAuthMutation(request);
+        return auth.putSettingsKey(sessionToken, body);
+    })
     .put(
         '/auth/settings',
         {
             body: t.Object({
                 expectedVersion: t.Integer({ minimum: 0, maximum: 2147483646 }),
+                // 2 is sealed under the settings key; 1 under the identity, from older clients.
+                version: t.Optional(t.Union([t.Literal(1), t.Literal(2)])),
                 nonce: t.String({ minLength: 32, maxLength: 32, pattern: '^[A-Za-z0-9_-]+$' }),
                 ciphertext: t.String({
                     minLength: 22,
@@ -764,6 +809,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 metadataVersion: epochSchema,
                 keyEpoch: epochSchema,
                 metadataEnvelope: metadataEnvelopeSchema,
+                metadataSignature: signatureSchema,
             }),
         },
         async ({ request, sessionToken, params, body }) =>
@@ -831,6 +877,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 versionId: uuidSchema,
                 objectId: uuidSchema,
                 contentKeyEnvelope: versionEnvelopeSchema,
+                versionSignature: signatureSchema,
                 contentNonce: t.String({
                     minLength: 22,
                     maxLength: 22,
@@ -905,6 +952,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         mode: t.Literal('same-node'),
                         keyEpoch: epochSchema,
                         contentKeyEnvelope: versionEnvelopeSchema,
+                        versionSignature: signatureSchema,
                     }),
                     t.Object({
                         mode: t.Literal('sibling'),
@@ -914,6 +962,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                             ...nodeEnvelopesSchema,
                         }),
                         contentKeyEnvelope: versionEnvelopeSchema,
+                        versionSignature: signatureSchema,
                     }),
                 ]),
             }),
@@ -971,6 +1020,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 node: t.Object({ id: uuidSchema, parentId: uuidSchema, ...nodeEnvelopesSchema }),
                 versionId: uuidSchema,
                 contentKeyEnvelope: anyVersionEnvelopeSchema,
+                versionSignature: signatureSchema,
             }),
         },
         async ({ request, sessionToken, params, body }) =>
@@ -1249,10 +1299,12 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         rotated: t.Nullable(
                             t.Object({
                                 metadataEnvelope: metadataEnvelopeSchema,
+                                metadataSignature: signatureSchema,
                                 versions: t.Array(
                                     t.Object({
                                         id: uuidSchema,
                                         contentKeyEnvelope: anyVersionEnvelopeSchema,
+                                        signature: signatureSchema,
                                     }),
                                     { maxItems: 1000 },
                                 ),

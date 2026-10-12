@@ -20,8 +20,12 @@ export {
 } from '@hushos/crypto/drive';
 export { LINK_KDF_VERSION, LINK_PASSWORD_MIN_LENGTH } from '@hushos/crypto/links';
 
-/* 2: the thumbnail is a trailer of the object and the version envelope carries the sizes. */
-export const DRIVE_PROTOCOL_VERSION = 2;
+/*
+ * 2: the thumbnail is a trailer of the object and the version envelope carries the sizes.
+ * 3: objects are padded to a Padmé bucket (content suite 3), and every metadata and
+ *    content-key envelope carries its writer's signature.
+ */
+export const DRIVE_PROTOCOL_VERSION = 3;
 export const MAX_DEPTH = 64;
 export const ANCESTOR_WALK_CAP = 128;
 export const TOMBSTONE_DAYS = 90;
@@ -33,6 +37,21 @@ export const SHARE_URL_TTL_SECONDS = 15 * 60;
 export const LISTING_PAGE_SIZE = 500;
 export const MAX_PART_URLS_PER_REQUEST = 64;
 export const MAX_FOLDER_BATCH = 64;
+
+/*
+ * Share envelopes, told apart by length: suite 1 (X25519 between the two
+ * identities), suite 2 (hybrid with ML-KEM-768), suite 3 (an ephemeral X25519
+ * key, ML-KEM-768 and the granter's signature). Only suite 3 is written now;
+ * the older ones are served as they were stored.
+ */
+export const SHARE_ENVELOPE_BYTES = { 1: 72, 2: 1160, 3: 1256 } as const;
+export const SHARE_SUITE = 3;
+export type ShareSuite = keyof typeof SHARE_ENVELOPE_BYTES;
+export function shareEnvelopeSuite(length: number): ShareSuite | null {
+    for (const suite of [1, 2, 3] as const)
+        if (SHARE_ENVELOPE_BYTES[suite] === length) return suite;
+    return null;
+}
 export const THUMBNAIL_BATCH = 100;
 
 /* The name a client shows for the root; never stored, the root's metadata names it. */
@@ -68,7 +87,9 @@ export type DriveErrorCode =
     | 'invalid'
     | 'expired'
     | 'rotating'
-    | 'forbidden';
+    | 'forbidden'
+    /* A write's signature did not verify against the writer's current signing key. */
+    | 'bad-signature';
 
 /* ------------------------------------------------------------------------- */
 /* The client header                                                          */

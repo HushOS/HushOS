@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import {
@@ -45,11 +51,14 @@ async function storage() {
 async function begin(
     plaintext: bigint,
     existing?: { nodeId: string; keyEpoch: number; expectedVersionId: string | null },
+    framing?: { contentSuite: number; chunkCount: number; ciphertextSize: bigint },
 ) {
-    const chunkCount = Number(plaintext === 0n ? 1n : (plaintext + 8n * MiB - 1n) / (8n * MiB));
-    const ciphertext = plaintext + 16n * BigInt(chunkCount);
+    const chunkCount =
+        framing?.chunkCount ??
+        Number(plaintext === 0n ? 1n : (plaintext + 8n * MiB - 1n) / (8n * MiB));
+    const ciphertext = framing?.ciphertextSize ?? plaintext + 16n * BigInt(chunkCount);
     const objectId = randomUUID();
-    const result = await drive.beginUpload({
+    const result = await signed.beginUpload({
         workspaceId: account.workspaceId,
         userId: account.userId,
         node: existing
@@ -74,7 +83,7 @@ async function begin(
         object: {
             id: objectId,
             objectKey: `ws/${account.workspaceId}/${objectId}`,
-            contentSuite: 2,
+            contentSuite: framing?.contentSuite ?? 2,
             chunkSize: Number(8n * MiB),
             chunkCount,
             contentNonce: randomBytes(16),
@@ -95,7 +104,8 @@ async function publish(uploadId: string, size: bigint) {
 beforeEach(async () => {
     await resetDatabase();
     account = await createTestAccount({ quotaBytes: 100n * MiB });
-    const created = await drive.createRoot({
+    await createTestIdentity(account.userId);
+    const created = await signed.createRoot({
         workspaceId: account.workspaceId,
         userId: account.userId,
         id: randomUUID(),
@@ -272,8 +282,9 @@ describe('complete', () => {
         expect((await publish(b.result.uploadId, b.ciphertext)).status).toBe('conflicted');
 
         // Same node is refused: the version begin recorded is no longer current.
-        const sameNode = await drive.attachUpload(account.workspaceId, b.result.uploadId, {
+        const sameNode = await signed.attachUpload(account.workspaceId, b.result.uploadId, {
             mode: 'same-node',
+            userId: account.userId,
             keyEpoch: node.keyEpoch,
             contentKeyEnvelope: keyEnvelope(),
         });
@@ -282,7 +293,7 @@ describe('complete', () => {
 
         // A sibling under the same parent publishes the bytes already at the store.
         const siblingId = randomUUID();
-        const attached = await drive.attachUpload(account.workspaceId, b.result.uploadId, {
+        const attached = await signed.attachUpload(account.workspaceId, b.result.uploadId, {
             mode: 'sibling',
             userId: account.userId,
             node: {
@@ -314,8 +325,9 @@ describe('complete', () => {
             'completed',
         );
         // Attach is not repeatable as a write, and a finished upload cannot be attached again.
-        const again = await drive.attachUpload(account.workspaceId, b.result.uploadId, {
+        const again = await signed.attachUpload(account.workspaceId, b.result.uploadId, {
             mode: 'same-node',
+            userId: account.userId,
             keyEpoch: node.keyEpoch,
             contentKeyEnvelope: keyEnvelope(),
         });
@@ -346,8 +358,9 @@ describe('complete', () => {
         if (open.result.status !== 'ok') throw new Error(open.result.status);
         expect(
             (
-                await drive.attachUpload(account.workspaceId, open.result.uploadId, {
+                await signed.attachUpload(account.workspaceId, open.result.uploadId, {
                     mode: 'same-node',
+                    userId: account.userId,
                     keyEpoch: node.keyEpoch,
                     contentKeyEnvelope: keyEnvelope(),
                 })
@@ -355,16 +368,18 @@ describe('complete', () => {
         ).toBe('not-conflicted');
         expect(
             (
-                await drive.attachUpload(account.workspaceId, next.result.uploadId, {
+                await signed.attachUpload(account.workspaceId, next.result.uploadId, {
                     mode: 'same-node',
+                    userId: account.userId,
                     keyEpoch: node.keyEpoch,
                     contentKeyEnvelope: keyEnvelope(),
                 })
             ).status,
         ).toBe('stale');
         const freshEnvelope = keyEnvelope();
-        const attached = await drive.attachUpload(account.workspaceId, next.result.uploadId, {
+        const attached = await signed.attachUpload(account.workspaceId, next.result.uploadId, {
             mode: 'same-node',
+            userId: account.userId,
             keyEpoch: node.keyEpoch + 1,
             contentKeyEnvelope: freshEnvelope,
         });
@@ -450,6 +465,32 @@ describe('the object row', () => {
         if (again.result.status !== 'ok') throw new Error(again.result.status);
         expect((await publish(again.result.uploadId, again.ciphertext)).status).toBe('published');
         expect(await storage()).toEqual({ used: again.ciphertext, reserved: 0n });
+        expect(await drive.auditUsage(50)).toEqual([]);
+    });
+});
+
+describe('padded objects', () => {
+    test('a suite 3 object is stored without a plaintext size and charged its padding', async () => {
+        // 1 MiB with a 1000-byte thumbnail: the trailer is 1016 bytes and chunks and
+        // trailer together pad to the Padmé bucket 1,081,344; one chunk adds its tag.
+        const padded = 1_081_344n + 16n;
+        const { result, objectId } = await begin(1n * MiB, undefined, {
+            contentSuite: 3,
+            chunkCount: 1,
+            ciphertextSize: padded,
+        });
+        if (result.status !== 'ok') throw new Error(result.status);
+        const [object] = await db
+            .select({
+                suite: driveObjects.contentSuite,
+                plaintextSize: driveObjects.plaintextSize,
+            })
+            .from(driveObjects)
+            .where(eq(driveObjects.id, objectId));
+        expect(object).toEqual({ suite: 3, plaintextSize: null });
+        expect(await storage()).toEqual({ used: 0n, reserved: padded });
+        expect((await publish(result.uploadId, padded)).status).toBe('published');
+        expect(await storage()).toEqual({ used: padded, reserved: 0n });
         expect(await drive.auditUsage(50)).toEqual([]);
     });
 });

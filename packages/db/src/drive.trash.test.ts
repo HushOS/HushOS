@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { driveNodes } from './schema';
@@ -37,7 +43,7 @@ async function trashedFolders(count: number) {
             },
         });
     }
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: account.workspaceId,
         userId: account.userId,
         folders,
@@ -75,7 +81,8 @@ async function walk(limit: number) {
 beforeEach(async () => {
     await resetDatabase();
     account = await createTestAccount({ quotaBytes: 1024n * 1024n });
-    const created = await drive.createRoot({
+    await createTestIdentity(account.userId);
+    const created = await signed.createRoot({
         workspaceId: account.workspaceId,
         userId: account.userId,
         id: randomUUID(),

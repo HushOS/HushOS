@@ -1,6 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { accountIdentities, workspaceKeys } from './schema';
@@ -27,7 +34,7 @@ async function epoch() {
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
     const id = randomUUID();
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -49,7 +56,7 @@ async function folder(parentId: string, parentKeyEpoch: number) {
 async function file(parentId: string, parentKeyEpoch: number) {
     const plaintext = 1n * MiB;
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         node: {
@@ -101,16 +108,7 @@ async function share(
     });
 }
 async function identityFor(userId: string) {
-    await db.insert(accountIdentities).values({
-        userId,
-        wrappingSalt: randomBytes(32),
-        encryptionPublicKey: randomBytes(32),
-        encryptionPrivateKeyNonce: randomBytes(24),
-        encryptedEncryptionPrivateKey: randomBytes(48),
-        signingPublicKey: randomBytes(32),
-        signingSeedNonce: randomBytes(24),
-        encryptedSigningSeed: randomBytes(48),
-    });
+    await createTestIdentity(userId);
 }
 
 beforeEach(async () => {
@@ -129,7 +127,7 @@ beforeEach(async () => {
     });
     // Every account has an identity; the owner's listing joins the grantee's.
     for (const person of [owner, guest, stranger]) await identityFor(person.userId);
-    const created = await drive.createRoot({
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),
@@ -349,6 +347,40 @@ describe('hybrid envelopes and re-sealing', () => {
         ).toBe('ok');
         await expect(
             share(project, stranger.userId, 'viewer', { shareEnvelope: randomBytes(100) }),
+        ).rejects.toThrow();
+    });
+
+    test('a suite 3 envelope is stored and listed as suite 3 beside the older suites', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const signedShare = randomBytes(1256);
+        expect(
+            (await share(project, guest.userId, 'editor', { shareEnvelope: signedShare })).status,
+        ).toBe('ok');
+        expect(
+            (await share(project, stranger.userId, 'viewer', { shareEnvelope: randomBytes(72) }))
+                .status,
+        ).toBe('ok');
+        const suites = Object.fromEntries(
+            (await drive.listNodeShares(owner.workspaceId, project.id)).map((row) => [
+                row.grantee.id,
+                row.suite,
+            ]),
+        );
+        expect(suites).toEqual({ [guest.userId]: 3, [stranger.userId]: 1 });
+        // The grantee gets the envelope and the granter's current identity to check its signature.
+        const received = await drive.listSharesForGrantee(guest.userId);
+        expect(received[0]?.shareEnvelope.equals(signedShare)).toBe(true);
+        const [ownerIdentity] = await db
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, owner.userId));
+        expect(received[0]?.granter.signingPublicKey.equals(ownerIdentity!.signingPublicKey)).toBe(
+            true,
+        );
+        expect(received[0]?.granter.keyVersion).toBe(ownerIdentity!.keyVersion);
+        // One byte off is no suite at all.
+        await expect(
+            share(project, guest.userId, 'viewer', { shareEnvelope: randomBytes(1255) }),
         ).rejects.toThrow();
     });
 

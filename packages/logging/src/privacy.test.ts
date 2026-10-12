@@ -38,6 +38,13 @@ describe('paths', () => {
         expect(authLogAction('/api/auth/login/start/extra')).toBe('unknown');
     });
 
+    test('a contact’s succession chain is logged as its pattern, never the account it names', () => {
+        expect(redact({ path: `/api/auth/contacts/${FOLDER}/succession?from=2` }).path).toBe(
+            '/api/auth/contacts/:userId/succession',
+        );
+        expect(authLogAction(`/api/auth/contacts/${FOLDER}/succession/extra`)).toBe('unknown');
+    });
+
     test('a page that carries an identifier is logged as its pattern', () => {
         expect(redact({ path: `/app/drive/f/${FOLDER}` }).path).toBe('/app/drive/f/:folderId');
         expect(redact({ path: `/app/tags/${FOLDER}` }).path).toBe('/app/tags/:tagId');

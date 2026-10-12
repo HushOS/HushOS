@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, resetDatabase } from '../test/helpers';
+import { closeDatabase, resetDatabase, signingKeyFromSeed } from '../test/helpers';
+import { successionStatement } from './signatures';
 import * as auth from './auth';
 import { db } from './client';
 import {
@@ -461,5 +462,378 @@ describe('the identity’s KEM key', () => {
         expect((await auth.getIdentity(user.id))?.kemPublicKey?.equals(minted.kemPublicKey)).toBe(
             true,
         );
+    });
+});
+
+describe('identity succession', () => {
+    const seed = (label: string) => createHash('sha256').update(label).digest();
+    const kemKey = () => ({
+        kemPublicKey: bytes(1184),
+        kemSeedNonce: bytes(24),
+        encryptedKemSeed: bytes(80),
+        kemSignature: bytes(64),
+    });
+    /* A registered account whose identity signs for real, at key version 1 with a KEM key. */
+    async function account(email: string) {
+        const user = await registered(email);
+        const key = signingKeyFromSeed(seed(`old:${email}`));
+        await db
+            .update(accountIdentities)
+            .set({ signingPublicKey: key.publicKey, ...kemKey() })
+            .where(eq(accountIdentities.userId, user.id));
+        return { user, key, sessionTokenHash: await signedIn(user.id) };
+    }
+    /* A new identity at `keyVersion`, and the old key's signature over its succession statement. */
+    async function successor(
+        userId: string,
+        signer: ReturnType<typeof signingKeyFromSeed>,
+        keyVersion: number,
+        label: string,
+    ) {
+        const current = (await auth.getIdentity(userId))!;
+        const next = signingKeyFromSeed(seed(`new:${label}`));
+        const identity = {
+            keyVersion,
+            wrappingSalt: bytes(32),
+            encryptionPublicKey: bytes(32),
+            encryptionPrivateKeyNonce: bytes(24),
+            encryptedEncryptionPrivateKey: bytes(48),
+            signingPublicKey: next.publicKey,
+            signingSeedNonce: bytes(24),
+            encryptedSigningSeed: bytes(48),
+            ...kemKey(),
+        };
+        const statement = successionStatement({
+            userId,
+            oldKeyVersion: current.keyVersion,
+            newKeyVersion: keyVersion,
+            oldEncryptionPublicKey: current.encryptionPublicKey,
+            oldSigningPublicKey: current.signingPublicKey,
+            newEncryptionPublicKey: identity.encryptionPublicKey,
+            newSigningPublicKey: identity.signingPublicKey,
+            newKemPublicKey: identity.kemPublicKey,
+        });
+        return { identity, next, statement, signature: signer.sign(statement) };
+    }
+
+    test('replaces the identity and keeps the old one, still sealed, with its succession', async () => {
+        const { user, key, sessionTokenHash } = await account('succeed@hushos.test');
+        const before = (await auth.getIdentity(user.id))!;
+        const { identity, signature } = await successor(user.id, key, 2, 'a');
+        expect(
+            await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity,
+                signature,
+            }),
+        ).toEqual({ status: 'ok', keyVersion: 2 });
+        const now = (await auth.getIdentity(user.id))!;
+        expect(now.keyVersion).toBe(2);
+        expect(now.signingPublicKey.equals(identity.signingPublicKey)).toBe(true);
+        // Contacts look the account up under its new keys and version.
+        const served = await auth.lookupIdentity('succeed@hushos.test');
+        expect(served?.keyVersion).toBe(2);
+        expect(served?.encryptionPublicKey.equals(identity.encryptionPublicKey)).toBe(true);
+        // The old envelope, byte for byte, so the account's devices still open shares sealed to it.
+        const [old] = await auth.listIdentityHistory(user.id);
+        expect(old).toMatchObject({
+            keyVersion: 1,
+            replacedByKeyVersion: 2,
+            createdAt: before.createdAt,
+        });
+        for (const field of [
+            'wrappingSalt',
+            'encryptionPublicKey',
+            'encryptedEncryptionPrivateKey',
+            'signingPublicKey',
+            'encryptedSigningSeed',
+            'kemPublicKey',
+            'encryptedKemSeed',
+            'kemSignature',
+        ] as const)
+            expect(old![field]?.equals(before[field]!)).toBe(true);
+        expect(old!.successionSignature.equals(signature)).toBe(true);
+    });
+
+    test('refuses a key version other than the next one, and changes nothing', async () => {
+        const { user, key, sessionTokenHash } = await account('version@hushos.test');
+        for (const keyVersion of [1, 3]) {
+            const { identity, signature } = await successor(user.id, key, keyVersion, 'v');
+            expect(
+                await auth.succeedIdentity({
+                    userId: user.id,
+                    credentialVersion: 1,
+                    sessionTokenHash,
+                    identity,
+                    signature,
+                }),
+            ).toEqual({ status: 'stale' });
+        }
+        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(1);
+        expect(await auth.listIdentityHistory(user.id)).toEqual([]);
+    });
+
+    test('refuses a statement not signed by the current key, or not the one stored', async () => {
+        const { user, key, sessionTokenHash } = await account('forged@hushos.test');
+        // Signed by the new key: anyone holding only the new identity could make that.
+        const selfSigned = await successor(user.id, key, 2, 'b');
+        const attempt = (
+            identity: Parameters<typeof auth.succeedIdentity>[0]['identity'],
+            signature: Buffer,
+        ): ReturnType<typeof auth.succeedIdentity> =>
+            auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity,
+                signature,
+            });
+        expect(
+            await attempt(selfSigned.identity, selfSigned.next.sign(selfSigned.statement)),
+        ).toEqual({ status: 'bad-signature' });
+        // A genuine signature, but the server is handed a different KEM key than the one signed.
+        expect(
+            await attempt(
+                { ...selfSigned.identity, kemPublicKey: bytes(1184) },
+                selfSigned.signature,
+            ),
+        ).toEqual({ status: 'bad-signature' });
+        // The same keys again are not a succession.
+        const current = (await auth.getIdentity(user.id))!;
+        expect(
+            await attempt(
+                { ...selfSigned.identity, signingPublicKey: current.signingPublicKey },
+                selfSigned.signature,
+            ),
+        ).toEqual({ status: 'unchanged' });
+        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(1);
+    });
+
+    test('refuses a session that a rotation or sign-out has ended', async () => {
+        const { user, key } = await account('ended@hushos.test');
+        const { identity, signature } = await successor(user.id, key, 2, 'c');
+        expect(
+            await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash: hash('no such session'),
+                identity,
+                signature,
+            }),
+        ).toEqual({ status: 'session' });
+    });
+
+    test('the chain lists each succession in order from the version asked for', async () => {
+        const { user, key, sessionTokenHash } = await account('chain@hushos.test');
+        const first = await successor(user.id, key, 2, 'chain-1');
+        await auth.succeedIdentity({
+            userId: user.id,
+            credentialVersion: 1,
+            sessionTokenHash,
+            ...first,
+        });
+        const second = await successor(user.id, first.next, 3, 'chain-2');
+        expect(
+            await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                ...second,
+            }),
+        ).toEqual({ status: 'ok', keyVersion: 3 });
+        const chain = await auth.successionChain(user.id, 1);
+        expect(chain?.map((link) => [link.oldKeyVersion, link.newKeyVersion])).toEqual([
+            [1, 2],
+            [2, 3],
+        ]);
+        // Each link names the keys it hands over to, and the next starts from them.
+        expect(chain![0]!.newSigningPublicKey.equals(first.identity.signingPublicKey)).toBe(true);
+        expect(chain![1]!.oldSigningPublicKey.equals(first.identity.signingPublicKey)).toBe(true);
+        expect(chain![1]!.newKemPublicKey.equals(second.identity.kemPublicKey)).toBe(true);
+        expect(chain![1]!.signature.equals(second.signature)).toBe(true);
+        expect((await auth.successionChain(user.id, 2))?.map((l) => l.oldKeyVersion)).toEqual([2]);
+        expect(await auth.successionChain(user.id, 3)).toEqual([]);
+        expect(await auth.successionChain(randomUUID(), 1)).toBeNull();
+    });
+
+    test('a master-key rotation re-wraps every earlier identity and never lowers the key version', async () => {
+        const workspaceId = randomUUID();
+        const created = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment('rewrap@hushos.test'),
+            ...registration(workspaceId),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        const user = created.user;
+        const key = signingKeyFromSeed(seed('old:rewrap'));
+        await db
+            .update(accountIdentities)
+            .set({ signingPublicKey: key.publicKey, ...kemKey() })
+            .where(eq(accountIdentities.userId, user.id));
+        const sessionTokenHash = await signedIn(user.id);
+        const succession = await successor(user.id, key, 2, 'rewrap');
+        await auth.succeedIdentity({
+            userId: user.id,
+            credentialVersion: 1,
+            sessionTokenHash,
+            ...succession,
+        });
+        const current = (await auth.getIdentity(user.id))!;
+        const [old] = await auth.listIdentityHistory(user.id);
+        const rewrap = <T extends typeof current | typeof old>(row: T, keyVersion: number) => ({
+            keyVersion,
+            wrappingSalt: bytes(32),
+            encryptionPublicKey: row!.encryptionPublicKey,
+            encryptionPrivateKeyNonce: bytes(24),
+            encryptedEncryptionPrivateKey: bytes(48),
+            signingPublicKey: row!.signingPublicKey,
+            signingSeedNonce: bytes(24),
+            encryptedSigningSeed: bytes(48),
+            kemPublicKey: row!.kemPublicKey,
+            kemSeedNonce: bytes(24),
+            encryptedKemSeed: bytes(80),
+            kemSignature: row!.kemSignature,
+        });
+        // The account root is at version 1 and goes to 2; the identity is already at 2.
+        const change = (
+            identityVersion: number,
+            identityHistory: ReturnType<typeof rewrap>[] | undefined,
+        ) =>
+            auth.changeAccountSecurity({
+                userId: user.id,
+                action: 'master-key',
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery: {
+                    keyVersion: 2,
+                    recoveryVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                    backupNonce: bytes(24),
+                    encryptedRecoveryKey: bytes(48),
+                    publicKey: bytes(32),
+                },
+                identity: rewrap(current, identityVersion),
+                identityHistory,
+                workspaces: [
+                    {
+                        id: workspaceId,
+                        grant: {
+                            keyVersion: 2,
+                            workspaceKeyVersion: 1,
+                            wrappingSalt: bytes(32),
+                            wrappingNonce: bytes(24),
+                            encryptedKey: bytes(48),
+                        },
+                    },
+                ],
+            });
+        // Left behind under the old root, the earlier identity would be lost with it.
+        expect(await change(2, undefined)).toBe(false);
+        // A history entry that changes the old public keys is not a re-wrap.
+        expect(await change(2, [{ ...rewrap(old, 1), signingPublicKey: bytes(32) }])).toBe(false);
+        // Back to version 1 would reuse the version the history and contacts' pins name.
+        expect(await change(1, [rewrap(old, 1)])).toBe(false);
+        const history = rewrap(old, 1);
+        expect(await change(2, [history])).toBe(true);
+        const [after] = await auth.listIdentityHistory(user.id);
+        expect(after!.encryptedSigningSeed.equals(history.encryptedSigningSeed)).toBe(true);
+        expect(after!.signingPublicKey.equals(old!.signingPublicKey)).toBe(true);
+        expect(after!.successionSignature.equals(old!.successionSignature)).toBe(true);
+        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(2);
+    });
+});
+
+describe('the settings key in a master-key rotation', () => {
+    test('is re-wrapped with the root when the account has one, and only then', async () => {
+        const workspaceId = randomUUID();
+        const created = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment('settings-key@hushos.test'),
+            ...registration(workspaceId),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        const user = created.user;
+        const sessionTokenHash = await signedIn(user.id);
+        const stored = (await auth.getIdentity(user.id))!;
+        const change = (
+            action: 'master-key' | 'password',
+            settingsKey: { nonce: Buffer; ciphertext: Buffer } | undefined,
+        ) =>
+            auth.changeAccountSecurity({
+                userId: user.id,
+                action,
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: action === 'master-key' ? 2 : 1,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery:
+                    action === 'master-key'
+                        ? {
+                              keyVersion: 2,
+                              recoveryVersion: 2,
+                              wrappingSalt: bytes(32),
+                              wrappingNonce: bytes(24),
+                              encryptedKey: bytes(48),
+                              backupNonce: bytes(24),
+                              encryptedRecoveryKey: bytes(48),
+                              publicKey: bytes(32),
+                          }
+                        : undefined,
+                identity:
+                    action === 'master-key'
+                        ? {
+                              keyVersion: 2,
+                              wrappingSalt: bytes(32),
+                              encryptionPublicKey: stored.encryptionPublicKey,
+                              encryptionPrivateKeyNonce: bytes(24),
+                              encryptedEncryptionPrivateKey: bytes(48),
+                              signingPublicKey: stored.signingPublicKey,
+                              signingSeedNonce: bytes(24),
+                              encryptedSigningSeed: bytes(48),
+                          }
+                        : undefined,
+                settingsKey,
+                workspaces:
+                    action === 'master-key'
+                        ? [
+                              {
+                                  id: workspaceId,
+                                  grant: {
+                                      keyVersion: 2,
+                                      workspaceKeyVersion: 1,
+                                      wrappingSalt: bytes(32),
+                                      wrappingNonce: bytes(24),
+                                      encryptedKey: bytes(48),
+                                  },
+                              },
+                          ]
+                        : undefined,
+            });
+        const rewrapped = { nonce: bytes(24), ciphertext: bytes(48) };
+        // No key stored yet: a rotation carrying one would invent it.
+        expect(await change('master-key', rewrapped)).toBe(false);
+        await auth.putSettingsKey({ userId: user.id, nonce: bytes(24), ciphertext: bytes(48) });
+        // A key stored and not carried along would stay sealed under a root that is gone.
+        expect(await change('master-key', undefined)).toBe(false);
+        // A password change keeps the root, so it has no settings key to carry.
+        expect(await change('password', rewrapped)).toBe(false);
+        expect(await change('master-key', rewrapped)).toBe(true);
+        const now = await auth.getSettingsKey(user.id);
+        expect(now?.ciphertext.equals(rewrapped.ciphertext)).toBe(true);
+        expect(now?.nonce.equals(rewrapped.nonce)).toBe(true);
     });
 });

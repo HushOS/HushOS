@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { driveObjects } from './schema';
@@ -26,7 +32,7 @@ async function epoch() {
 async function upload(plaintext = 1n * MiB) {
     const objectId = randomUUID();
     const ciphertext = plaintext + 16n;
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: account.workspaceId,
         userId: account.userId,
         node: {
@@ -76,7 +82,8 @@ const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 3600 * 1000)
 beforeEach(async () => {
     await resetDatabase();
     account = await createTestAccount({ quotaBytes: 100n * MiB });
-    const created = await drive.createRoot({
+    await createTestIdentity(account.userId);
+    const created = await signed.createRoot({
         workspaceId: account.workspaceId,
         userId: account.userId,
         id: randomUUID(),

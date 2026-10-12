@@ -46,23 +46,81 @@ export type ContactIdentity = {
     userId: string;
     name: string;
     email: string;
+    /* Raised by each succession; a pin remembers it to ask for the chain from there. */
+    keyVersion: number;
     encryptionPublicKey: string;
     signingPublicKey: string;
     /* The ML-KEM key and the signing key's binding of it; null until the person unlocks on the new code. */
     kem: { publicKey: string; signature: string } | null;
 };
 
+/*
+ * One identity succession, as a contact walks it: the identity it replaced, the
+ * one that replaced it (the KEM key whole, the statement signs its digest), and
+ * the replaced signing key's signature over the statement in
+ * docs/integrity-design.md. Keys Base64url.
+ */
+export type SuccessionLink = {
+    oldKeyVersion: number;
+    newKeyVersion: number;
+    oldEncryptionPublicKey: string;
+    oldSigningPublicKey: string;
+    newEncryptionPublicKey: string;
+    newSigningPublicKey: string;
+    newKemPublicKey: string;
+    signature: string;
+};
+
+/* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */
+export type SettingsKeyEnvelope = { nonce: string; ciphertext: string };
+/* A settings envelope as stored: version 2 sealed under the settings key, 1 under the identity. */
+export type StoredSettingsEnvelope = Omit<SettingsEnvelope, 'version'> & { version: 1 | 2 };
+
+/*
+ * A security change's challenge and request, with what a master key re-wraps
+ * beyond the worker's own bundle: the earlier identities and the settings key
+ * (required in the request whenever the challenge served one).
+ */
+export type AccountSecurityChallenge = SecurityChallenge & {
+    identityHistory: IdentityEnvelope[];
+    settingsKey: SettingsKeyEnvelope | null;
+};
+export type AccountSecurityUpdate = SecurityUpdate & {
+    identityHistory?: IdentityEnvelope[];
+    settingsKey?: SettingsKeyEnvelope;
+};
+
 export interface AuthApi {
     identity(): Promise<{ identity: IdentityEnvelope }>;
+    /* The account's earlier identities, oldest first, still sealed under the root. */
+    identityHistory(): Promise<{ identities: IdentityEnvelope[] }>;
+    /*
+     * Replaces the identity with one at the current key version + 1 (KEM key
+     * required), signed by the current signing key; 409 when the version is
+     * not the next one, 400 when the signature does not verify.
+     */
+    succeedIdentity(input: {
+        identity: IdentityEnvelope;
+        signature: string;
+    }): Promise<{ keyVersion: number }>;
+    /* A contact's successions from key version `from` to the current one, in order. */
+    contactSuccession(userId: string, from: number): Promise<{ links: SuccessionLink[] }>;
     /* Gives an identity made before hybrid sharing its KEM key, once; 409 when it already has one. */
     addIdentityKem(kem: IdentityKem): Promise<{ ok: true }>;
     lookupContact(email: string): Promise<{ contact: ContactIdentity }>;
-    settings(): Promise<{ settings: SettingsEnvelope | null }>;
+    settings(): Promise<{
+        settings: StoredSettingsEnvelope | null;
+        settingsKey: SettingsKeyEnvelope | null;
+    }>;
+    /* Version 2 is refused with 409 until the settings key is stored. */
     saveSettings(input: {
         expectedVersion: number;
+        version?: 1 | 2;
         nonce: string;
         ciphertext: string;
     }): Promise<{ settingsVersion: number }>;
+    /* Stores the wrapped settings key once; 409 when one exists (read it and use that). */
+    saveSettingsKey(input: SettingsKeyEnvelope): Promise<{ ok: true }>;
     requestEmail(
         purpose: 'register' | 'recover',
         email: string,
@@ -104,9 +162,9 @@ export interface AuthApi {
         action: SecurityAction;
         startLoginRequest: string;
         registrationRequest: string;
-    }): Promise<SecurityChallenge>;
+    }): Promise<AccountSecurityChallenge>;
     securityFinish(
-        input: { action: SecurityAction; attemptToken: string } & SecurityUpdate,
+        input: { action: SecurityAction; attemptToken: string } & AccountSecurityUpdate,
     ): Promise<unknown>;
     deleteStart(input: { startLoginRequest: string }): Promise<LoginChallenge>;
     deleteFinish(input: { attemptToken: string; finishLoginRequest: string }): Promise<unknown>;
