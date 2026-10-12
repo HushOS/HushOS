@@ -54,6 +54,15 @@ describe('analytics', () => {
         expect(filter('event', { url: '/app/drive' })).toBe(false);
         expect(filter('event', { url: 'https://hushos.com/s/token' })).toBe(false);
         expect(filter('event', { url: 'http://[bad' })).toBe(false);
+        // The router matches case-insensitively and decoded: these are a shared link too.
+        expect(filter('event', { url: '/S/token' })).toBe(false);
+        expect(filter('event', { url: '/%73/token' })).toBe(false);
+        expect(filter('event', { url: '//s/token' })).toBe(false);
+        expect(filter('event', { url: '/APP/drive' })).toBe(false);
+        // A public page goes out as its path alone: no query, no fragment.
+        expect(filter('event', { url: 'https://hushos.com/pricing?ref=x#secret' })).toEqual({
+            url: '/pricing',
+        });
     });
 
     test('a private page the visitor came from is cut from the referrer', () => {
@@ -80,9 +89,13 @@ describe('analytics', () => {
             referrer: '',
         });
         // Public referrers, and other sites, are kept.
-        expect(filter('event', { url: '/', referrer: '/pricing' })).toEqual({
+        expect(filter('event', { url: '/', referrer: '/pricing?x=1#y' })).toEqual({
             url: '/',
             referrer: '/pricing',
+        });
+        expect(filter('event', { url: '/', referrer: '/S/token#secret' })).toEqual({
+            url: '/',
+            referrer: '',
         });
         expect(filter('event', { url: '/', referrer: 'https://news.example/x' })).toEqual({
             url: '/',

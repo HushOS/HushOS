@@ -16,6 +16,23 @@ const PRIVATE = [
     '/api',
 ];
 
+/*
+ * A path as the router matches it: percent-decoded, lowercased, slashes
+ * collapsed. `/S/x`, `/%73/x` and `//s/x` all serve a shared link, so a check on
+ * the raw path would wave them through. Null when it does not decode.
+ */
+export function routePath(pathname: string) {
+    try {
+        return decodeURIComponent(pathname)
+            .toLowerCase()
+            .replace(/\/{2,}/g, '/');
+    } catch {
+        return null;
+    }
+}
+
 export function analyticsAllowed(pathname: string) {
-    return !PRIVATE.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+    const path = routePath(pathname);
+    if (path === null) return false;
+    return !PRIVATE.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }

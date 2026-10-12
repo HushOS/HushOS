@@ -10,6 +10,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { comparisons } from '@/lib/compare';
 import { useInApp } from '@/lib/in-app';
 import { rememberReturn, safeReturnPath } from '@/lib/return-to';
+import { routePath } from '@/lib/analytics-paths';
 
 /*
  * The public site's header and footer. The header names every page (the one
@@ -38,7 +39,8 @@ const isAt = (pathname: string, to: string) => pathname === to || pathname.start
 /* Sign in comes back to the page it was pressed on; a shared link keeps its key in this browser. */
 function useSignIn() {
     const location = useLocation();
-    const onLink = location.pathname.startsWith('/s/');
+    // As the router matches it: `/S/…` or `/%73/…` is a shared link too, with a key in its fragment.
+    const onLink = routePath(location.pathname)?.startsWith('/s/') ?? true;
     const redirect = onLink
         ? undefined
         : (safeReturnPath(location.pathname + location.searchStr) ?? undefined);

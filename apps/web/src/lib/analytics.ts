@@ -31,6 +31,9 @@ export function analyticsScript(analytics: Analytics): JSX.IntrinsicElements['sc
         ...({
             'data-website-id': analytics.websiteId,
             'data-before-send': BEFORE_SEND,
+            // Never the query or the fragment: a link's key and a search live there.
+            'data-exclude-search': 'true',
+            'data-exclude-hash': 'true',
         } as Record<string, string>),
     };
 }
@@ -47,16 +50,16 @@ export function installAnalyticsFilter() {
     w[BEFORE_SEND] = (_type: string, payload: { url?: string; referrer?: string }) => {
         try {
             const url = new URL(payload.url ?? '/', window.location.origin);
-            if (!analyticsAllowed(url.pathname)) return false;
+            if (url.origin !== window.location.origin || !analyticsAllowed(url.pathname))
+                return false;
+            // The path alone, whatever Umami was told: a query or fragment can carry a key.
+            const sent = { ...payload, url: url.pathname };
             if (payload.referrer) {
                 const referrer = new URL(payload.referrer, window.location.origin);
-                if (
-                    referrer.origin === window.location.origin &&
-                    !analyticsAllowed(referrer.pathname)
-                )
-                    return { ...payload, referrer: '' };
+                if (referrer.origin === window.location.origin)
+                    sent.referrer = analyticsAllowed(referrer.pathname) ? referrer.pathname : '';
             }
-            return payload;
+            return sent;
         } catch {
             return false;
         }
@@ -64,14 +67,12 @@ export function installAnalyticsFilter() {
 }
 
 /*
- * Whether this page's JavaScript has the analytics script in it: it came with
- * the first page loaded, and in-app navigation never unloads it.
+ * Whether this page's JavaScript runs the analytics script: it defines `umami`
+ * once loaded, and in-app navigation never unloads it. A tag the router put in
+ * the head does not count: on a page that started private the CSP keeps it out.
  */
 function analyticsLoaded() {
-    return (
-        typeof window !== 'undefined' &&
-        ('umami' in window || document.querySelector(`script[data-before-send="${BEFORE_SEND}"]`))
-    );
+    return typeof window !== 'undefined' && 'umami' in window;
 }
 
 /* True when going to `pathname` must be a full page load, so the script is left behind. */

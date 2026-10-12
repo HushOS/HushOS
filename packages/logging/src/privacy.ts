@@ -169,10 +169,24 @@ export function authLogAction(pathname: string) {
  * bypassed. Logged as their patterns.
  */
 const secretPaths: [RegExp, string][] = [
-    [/^\/s\/[^/]+$/, '/s/:token'],
+    [/^\/s\/[^/]+(?:\/.*)?$/, '/s/:token'],
     [/^\/api\/drive\/links\/[^/]+/, '/api/drive/links/:link'],
-    [/^\/hushos-download\/.*$/, '/hushos-download/:download'],
+    [/^\/hushos-download(?:\/.*)?$/, '/hushos-download/:download'],
 ];
+/*
+ * The path as the router matches it, so every check below sees what was
+ * served: percent-decoded, lowercased, slashes collapsed. `/S/<token>` and
+ * `/%73/<token>` serve a link page as surely as `/s/<token>` does.
+ */
+function routePath(path: string) {
+    try {
+        return decodeURIComponent(path)
+            .toLowerCase()
+            .replace(/\/{2,}/g, '/');
+    } catch {
+        return '/unreadable';
+    }
+}
 function withoutSecrets(path: string) {
     for (const [pattern, replacement] of secretPaths)
         if (pattern.test(path)) return path.replace(pattern, replacement);
@@ -183,7 +197,7 @@ function withoutSecrets(path: string) {
 // Keep auth telemetry allowlisted even if a future handler attaches a raw object.
 export function redactAuthenticationEvent(event: WideEvent) {
     const path = withoutSecrets(
-        typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : '',
+        routePath(typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : ''),
     );
     const privateRoute =
         /^\/(api\/auth(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$)|setup(?:\/|$))/.test(

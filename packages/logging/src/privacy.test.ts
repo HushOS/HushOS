@@ -62,6 +62,24 @@ describe('paths', () => {
         );
     });
 
+    test('a link page the router serves under another spelling is redacted too', () => {
+        for (const path of [
+            `/S/${TOKEN}`,
+            `/%73/${TOKEN}`,
+            `//s/${TOKEN}`,
+            `/s/${TOKEN}/`,
+            `/s/${TOKEN}/x`,
+        ]) {
+            const event = redact({ path });
+            expect(event.path, path).toBe('/s/:token');
+            expect(JSON.stringify(event)).not.toContain(TOKEN);
+        }
+        // An app page in capitals is still a private page, held to the allowlist.
+        const event = redact({ path: `/APP/drive/f/${FOLDER}`, campaign: ADDRESS });
+        expect(event.path).toBe('/app/drive/f/:folderId');
+        expect(event.campaign).toBeUndefined();
+    });
+
     test('a download path that reached the server is logged without its name', () => {
         const event = redact({ path: `/hushos-download/${FOLDER}/tax-return-2026.pdf` });
         expect(event.path).toBe('/hushos-download/:download');
