@@ -1,0 +1,40 @@
+packages/crypto/src/contacts.ts
+  s_75dbe24a0bc379::t_54409b8bafd503 45-50
+packages/crypto/src/session.ts
+  s_75dbe24a0bc379::t_57a9b86a0c1136 12-16,139-168,581,585-586,588-589,743-750,756-774,793-797,1389,1392-1405,1414-1430,1441,1443,1449-1470,1985-1989
+docs/opaque-auth-design.md
+  s_75dbe24a0bc379::t_a2d40f0f0354b4 208
+packages/crypto/src/identity.ts
+  s_75dbe24a0bc379::t_54409b8bafd503 504-518,571-576,584-593,595,600,616
+  s_75dbe24a0bc379::t_a2d40f0f0354b4 534-536,538-540
+  s_75dbe24a0bc379::t_fca3784f98102d 6-11,211-217,224,501-503,519-533,537,541-570,577-583,594,596-599,601-615,617-622
+packages/crypto/src/contacts.test.ts
+  s_75dbe24a0bc379::t_fca3784f98102d 115,211
+packages/crypto/src/security.ts
+  s_75dbe24a0bc379::t_fca3784f98102d 27-28,37-38,165-166,169-176
+packages/crypto/src/succession.test.ts
+  s_75dbe24a0bc379::t_d1d41949b1f7f8 16-17,124,127-128,143
+  s_75dbe24a0bc379::t_a2d40f0f0354b4 112-114,129-132,228-243,263-272,283-287
+  s_75dbe24a0bc379::t_bbaeff10090e42 1-15,18-111,115-123,125-126,133-142,144-227,244-262,273-282,288-384
+docs/integrity-design.md
+  s_75dbe24a0bc379::t_a2d40f0f0354b4 130-140,147
+  s_75dbe24a0bc379::t_1b46a5feb8b4de 183
+packages/crypto/src/__fixtures__/core.json
+  s_75dbe24a0bc379::t_a2d40f0f0354b4 2-728
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "332801d82e41674527f0a1d7dbd045c13344f2f5",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
