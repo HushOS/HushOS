@@ -152,7 +152,12 @@ test('the operator sees it in the queue, opens the content under their own ident
     await expect(row(operator, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await expect(operator.locator('ol li')).toHaveCount(2);
     await expect(operator.locator('ol li').nth(1)).toContainText('Opened by an operator');
-    await row(operator, 'notes.md').locator('button').click();
+    // The operator never checked the owner's words: the file is theirs to open, but not verified.
+    await expect(row(operator, 'notes.md').locator('[data-integrity]')).toHaveAttribute(
+        'data-integrity',
+        'unknown-signer',
+    );
+    await row(operator, 'notes.md').locator('button').first().click();
     await expect(dialog(operator).locator('.rt-markdown')).toContainText('Notes', {
         timeout: 60_000,
     });
