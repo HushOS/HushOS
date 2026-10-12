@@ -1,0 +1,19 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_75dbe24a0bc379::t_c6cc9734046c11 437,552,607,657,674,676-677,684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da6c04e8e76e3b85d97be34a78d1fb4e6c61d1f0",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
