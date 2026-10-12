@@ -1,0 +1,21 @@
+e2e/admin-storage.spec.ts
+  s_75dbe24a0bc379::t_0d826d125fae40 52,55
+  s_75dbe24a0bc379::t_6b32133598b0ee 36,76-82
+  s_75dbe24a0bc379::t_f9f0f0fb0997c5 1-35,37-51,53-54,56-75,83-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c69bfc19e436269f097babc1cf79da918088576",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
