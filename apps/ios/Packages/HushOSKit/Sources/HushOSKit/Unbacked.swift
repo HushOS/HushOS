@@ -7,7 +7,9 @@ import Foundation
  * the queue's records, the parents index, the mirror). A backup takes the app group
  * container and the app's Library unless an item is marked, and a restore can drop the
  * mark, so each top folder is marked when it is made and `apply()` marks everything again
- * at every launch of the app and of each extension.
+ * at every launch of the app and of each extension. Only folders are marked: an atomic
+ * write replaces a file and its mark with it, and SQLite makes its side files when it
+ * likes, so loose files (the parents index, the owner, the mirror) live in `local`.
  */
 public enum Unbacked {
     static var group: URL {
@@ -15,12 +17,21 @@ public enum Unbacked {
             ?? FileManager.default.temporaryDirectory
     }
 
-    /* The app group's items that hold any of it; the SQLite side files come and go with the mirror. */
-    static let names = ["offline", "transfers", "share-staging", "state", "files-parents.json", "account-owner",
-                        "mirror.sqlite", "mirror.sqlite-wal", "mirror.sqlite-shm"]
+    /* The app group's folders that hold any of it. */
+    static let names = ["offline", "transfers", "share-staging", "state", "local"]
+
+    /* Loose files that once sat at the top of the group, unmarked after any atomic write; moved into `local` once. */
+    static let looseFiles = ["files-parents.json", "account-owner", "mirror.sqlite", "mirror.sqlite-wal", "mirror.sqlite-shm"]
 
     /* The lists the app and its extensions share, as JSON: the group's defaults are a plist that backups take. */
     static var state: URL { group.appendingPathComponent("state", isDirectory: true) }
+
+    /*
+     * Files that are not lists the account shares between processes: the parents index, the
+     * owner record, the mirror and its side files, and the settings marks. Made marked, so
+     * whatever is written in it later is covered by the folder's mark.
+     */
+    static var local: URL { folder(group.appendingPathComponent("local", isDirectory: true)) }
 
     /* Makes a folder (with its parents) and keeps it, and everything that will be put in it, out of backups. */
     @discardableResult
@@ -44,7 +55,26 @@ public enum Unbacked {
             let url = group.appendingPathComponent(name)
             if files.fileExists(atPath: url.path) { exclude(url) }
         }
+        moveLooseFiles(in: group)
         migrate()
+    }
+
+    /*
+     * The loose files an earlier version kept at the top of the group, moved into `local` once:
+     * the mirror with its side files together, or not at all (a half-moved database is worse than
+     * a rebuilt one, which is all a mirror lost here costs).
+     */
+    static func moveLooseFiles(in group: URL) {
+        let files = FileManager.default
+        let local = folder(group.appendingPathComponent("local", isDirectory: true))
+        for name in looseFiles {
+            let old = group.appendingPathComponent(name)
+            guard files.fileExists(atPath: old.path) else { continue }
+            let new = local.appendingPathComponent(name)
+            if files.fileExists(atPath: new.path) || (try? files.moveItem(at: old, to: new)) == nil {
+                try? files.removeItem(at: old)
+            }
+        }
     }
 
     static func read<T: Decodable>(_ type: T.Type, _ name: String) -> T? {
@@ -76,6 +106,10 @@ public enum Unbacked {
             shared.removeObject(forKey: "places.lastFolder")
             shared.removeObject(forKey: "places.lastFolderName")
         }
+        if let email = UserDefaults.standard.string(forKey: "lastEmail") {
+            if LastEmail.load() == nil { LastEmail.save(email) }
+            UserDefaults.standard.removeObject(forKey: "lastEmail")
+        }
         if let recent = UserDefaults.standard.string(forKey: "search.recent") {
             if RecentSearches.load().isEmpty { RecentSearches.save(recent.split(separator: "\n").map(String.init)) }
             UserDefaults.standard.removeObject(forKey: "search.recent")
@@ -90,4 +124,44 @@ public enum RecentSearches {
     public static func load() -> [String] { Unbacked.read([String].self, file) ?? [] }
 
     public static func save(_ terms: [String]) { Unbacked.write(terms.isEmpty ? nil : terms, file) }
+}
+
+/* The address the sign-in screen offers again: the account's, so out of backups and gone with the account. */
+public enum LastEmail {
+    static let file = "last-email.json"
+
+    public static func load() -> String? { Unbacked.read(String.self, file) }
+
+    public static func save(_ email: String?) { Unbacked.write(email?.isEmpty == false ? email : nil, file) }
+}
+
+/*
+ * Plaintext the app's temporary folder can be left holding, which iOS empties when it likes
+ * rather than when the app would: a recovery kit a share sheet never finished with (always
+ * removed, it is the phrase in plain text), and files opened, or fetched through a link, more
+ * than a day ago. Run at launch, before anything new is written there.
+ */
+public enum TemporaryCopies {
+    static let maxAge: TimeInterval = 24 * 3600
+
+    public static func sweep(in temporary: URL = FileManager.default.temporaryDirectory, now: Date = Date()) {
+        let files = FileManager.default
+        func contents(_ url: URL) -> [URL] {
+            (try? files.contentsOfDirectory(at: url, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        }
+        func old(_ url: URL) -> Bool {
+            let touched = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return now.timeIntervalSince(touched) > maxAge
+        }
+        for entry in contents(temporary) {
+            let name = entry.lastPathComponent
+            if name.hasPrefix("kit-") { try? files.removeItem(at: entry); continue }
+            guard name == "opened" || name == "links" else { continue }
+            // opened/<node>/<version>/<file>: a version's folder is as old as the copy in it.
+            for node in contents(entry) {
+                for version in contents(node) where old(version) { try? files.removeItem(at: version) }
+                if contents(node).isEmpty { try? files.removeItem(at: node) }
+            }
+        }
+    }
 }

@@ -7,9 +7,12 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
     case notFound(String)
     /* The item, or a folder above it, is in the trash: the server's `trashed` code. */
     case trashed(String)
+    /* A row or document sealed in an envelope suite newer than this app reads. */
+    case newerEnvelope
 
     public var errorDescription: String? {
         switch self {
+        case .newerEnvelope: return "This item was made by a newer version of HushOS. Update the app to open it."
         case .notAuthenticated: return "Sign in to HushOS to see your files."
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.

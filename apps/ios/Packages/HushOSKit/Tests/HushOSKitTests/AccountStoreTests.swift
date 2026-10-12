@@ -39,7 +39,7 @@ extension OfflineStore {
             root.appendingPathComponent("transfers/job-1/content"),
             root.appendingPathComponent("share-staging/sheet-1/Scan.pdf"),
             root.appendingPathComponent("state/offline-entries.json"),
-            root.appendingPathComponent("files-parents.json"),
+            root.appendingPathComponent("local/files-parents.json"),
             temporary.appendingPathComponent("opened/node-a/version-1/Tax return.pdf"),
             temporary.appendingPathComponent("links/node-d/version-3/Shared.pdf"),
             temporary.appendingPathComponent("kit-1/hushos-recovery-kit.txt"),

@@ -940,11 +940,16 @@ final class DriveStore {
         holdBackground()
         defer { releaseBackground() }
         let stale = Set(folders.keys.filter { $0 == item.id || isInside($0, item.id) } + [item.node.parentId].compactMap { $0 })
-        let work = Task { @MainActor in _ = try await self.vault.rotate(item) { _ in } }
+        let work = Task { @MainActor in try await self.vault.rotate(item) { _ in } }
         rotation = Task { _ = try? await work.value }
         defer { rotation = nil }
         do {
-            try await work.value
+            let outcome = try await work.value
+            // Someone whose share was left out (their words not checked, no post-quantum key) lost access: say who, and why.
+            if let first = outcome.skipped.first {
+                let more = outcome.skipped.count > 1 ? " And \(outcome.skipped.count - 1) more not shared again." : ""
+                notify("Not shared again: " + first + more, important: true)
+            }
         } catch {
             rotation = nil
             // Half-rotated: what is on screen may not open any more, so those folders say so with Try again.

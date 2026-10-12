@@ -135,8 +135,9 @@ private struct TransferWords: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             // A long folder name shrinks a little before it truncates.
-            title.font(.callout.weight(.semibold)).foregroundStyle(palette.ink).lineLimit(1)
-            if !state.detail.isEmpty { detail.font(.footnote).foregroundStyle(palette.muted).lineLimit(1) }
+            // The app sends counts, not names; marked anyway, so a later change can't put a name on a locked screen.
+            title.font(.callout.weight(.semibold)).foregroundStyle(palette.ink).lineLimit(1).privacySensitive()
+            if !state.detail.isEmpty { detail.font(.footnote).foregroundStyle(palette.muted).lineLimit(1).privacySensitive() }
         }
     }
 }

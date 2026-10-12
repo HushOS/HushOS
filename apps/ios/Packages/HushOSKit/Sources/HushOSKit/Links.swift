@@ -11,6 +11,22 @@ public struct LinkView: Codable, Sendable, Identifiable, Hashable {
     public let useCount: Int
     public let lastUsedAt: String?
     public let createdAt: String
+    /* How the link's key is derived; anything but the current version is refused (see `LinkKdf`). */
+    public var kdfVersion: Int? = nil
+}
+
+/*
+ * Links are made with one key derivation (`linkKdfVersion()` in the core); a link the
+ * server says was made another way is not opened, shown or sealed again, since the same
+ * secret under an older derivation is weaker than what the owner thinks they handed out.
+ */
+public enum LinkKdf {
+    public static let older = "This link was made by an older version of HushOS. Ask for a new link."
+
+    /* Absent counts as older: a server that does not say predates the current derivation. */
+    public static func check(_ version: Int?) throws {
+        guard let version, version == Int(linkKdfVersion()) else { throw DriveAPIError.server(400, older) }
+    }
 }
 
 struct LinksResponse: Codable, Sendable { let links: [LinkView] }
@@ -26,6 +42,7 @@ public struct OpenedLink: Codable, Sendable {
         public let linkSalt: String
         public let linkEnvelope: String
         public let expiresAt: String?
+        public var kdfVersion: Int? = nil
     }
     public let link: Link
     public let node: NodeView
@@ -133,7 +150,7 @@ extension Vault {
 
     /* Mints a link for an item this account holds the key of, and returns the URL to hand out. */
     public func createLink(for item: Opened, password: String?, expiresAt: Date?) async throws -> (link: LinkView, url: URL) {
-        guard let nodeKey = nodeKeys[item.id] else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, linkId: UUID().uuidString.lowercased())
         let created = try linkCreate(ctx: ctx, nodeKey: nodeKey, password: password)
         var body: [String: Any] = [
@@ -143,6 +160,8 @@ extension Vault {
         ]
         if let expiresAt { body["expiresAt"] = ISO8601DateFormatter().string(from: expiresAt) }
         let link = try await api.createLink(nodeId: item.id, body: body)
+        // The ledger is what a rotation re-seals links from; one missing from it dies at the next rotation.
+        try await updateSettings { $0.ledger.addLink(ctx.linkId, node: item.id) }
         guard let url = URL(string: try linkUrl(origin: session.origin, token: created.token, secret: created.secret)) else {
             throw DriveAPIError.server(500, "Bad link URL")
         }
@@ -151,13 +170,16 @@ extension Vault {
 
     /* The URL of an existing link, from the owner's sealed copy of its secret. */
     public func linkURL(_ link: LinkView, for item: Opened) throws -> URL? {
-        guard let nodeKey = nodeKeys[item.id], let sealed = link.secretEnvelope else { return nil }
+        guard let nodeKey = nodeKey(of: item), let sealed = link.secretEnvelope else { return nil }
+        try LinkKdf.check(link.kdfVersion)
         let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: link.keyEpoch, linkId: link.id)
         let owned = try linkSecretOpen(ctx: ctx, nodeKey: nodeKey, envelope: try base64urlDecode(value: sealed))
         return URL(string: try linkUrl(origin: session.origin, token: base64urlEncode(bytes: owned.token), secret: base64urlEncode(bytes: owned.secret)))
     }
 
+    /* Out of the ledger first, so the rotation that follows never seals it again. */
     public func revokeLink(_ link: LinkView, for item: Opened) async throws {
+        try await updateSettings { $0.ledger.removeLink(link.id) }
         try await api.revokeLink(link.id, workspaceId: item.node.workspaceId)
     }
 }
@@ -190,6 +212,11 @@ public actor LinkVault {
     private func load() async throws -> OpenedLink {
         if let link { return link }
         let fetched = try await api.openLink(token: token)
+        try LinkKdf.check(fetched.link.kdfVersion)
+        guard fetched.node.workspaceId.lowercased() == fetched.link.workspaceId.lowercased() else {
+            throw DriveAPIError.server(400, "This link doesn’t match what it opens.")
+        }
+        try fetched.node.checkEnvelopeSuite()
         link = fetched
         return fetched
     }
@@ -217,9 +244,12 @@ public actor LinkVault {
 
     private func open(_ node: NodeView) throws -> Opened {
         if let done = opened[node.id] { return done }
-        guard let parentId = node.parentId, let parentKey = nodeKeys[parentId] else {
+        // One workspace, the link's: a row naming another is not below the linked item.
+        guard let link, node.workspaceId.lowercased() == link.link.workspaceId.lowercased(),
+              let parentId = node.parentId, let parentKey = nodeKeys[parentId] else {
             throw DriveAPIError.server(500, "This item is outside the link.")
         }
+        try node.checkEnvelopeSuite()
         let ctx = NodeKeyContext(workspaceId: node.workspaceId, nodeId: node.id, parentId: parentId, parentKeyEpoch: node.parentKeyEpoch, keyEpoch: node.keyEpoch)
         let key = try nodeOpen(ctx: ctx, parentKey: parentKey, keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
         let metadata = try metadataOpen(
@@ -270,7 +300,7 @@ public actor LinkVault {
             onExpired: { if let fresh = URL(string: (try await api.linkVersionURL(token: token, versionId: opened.versionId)).url) { objectURL = fresh } },
             progress: progress
         ) { index in
-            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, index: index))
+            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }
@@ -309,9 +339,10 @@ extension Vault {
     public func updateLink(_ link: LinkView, for item: Opened, password: String?? = nil, expiresAt: Date?? = nil) async throws -> LinkView {
         var body: [String: Any] = ["workspaceId": item.node.workspaceId, "keyEpoch": link.keyEpoch]
         if let password {
-            guard let nodeKey = nodeKeys[item.id], let sealed = link.secretEnvelope else {
+            guard let nodeKey = nodeKey(of: item), let sealed = link.secretEnvelope else {
                 throw DriveAPIError.server(400, "This link can’t be changed. Make a new one.")
             }
+            try LinkKdf.check(link.kdfVersion)
             let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: link.keyEpoch, linkId: link.id)
             let resealed = try linkReseal(ctx: ctx, nodeKey: nodeKey, secretEnvelope: try base64urlDecode(value: sealed), password: password)
             body["seal"] = [

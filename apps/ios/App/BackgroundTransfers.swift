@@ -549,12 +549,18 @@ final class BackgroundTransfers {
 
     private func record(_ id: UUID) -> Record? { records.first { $0.id == id } }
 
+    /*
+     * The queue's folder, made again marked whenever it is written to: sign-out removes it, and
+     * a plain createDirectory with intermediates would bring it back without the mark.
+     */
+    private var queue: URL { Unbacked.folder(root) }
+
     private func save() {
         TransferLive.shared.refresh()
-        if let data = try? JSONEncoder().encode(records) { try? data.write(to: root.appendingPathComponent("records.json"), options: .atomic) }
+        if let data = try? JSONEncoder().encode(records) { try? data.write(to: queue.appendingPathComponent("records.json"), options: .atomic) }
     }
 
-    private func folder(_ id: UUID) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
+    private func folder(_ id: UUID) -> URL { queue.appendingPathComponent(id.uuidString, isDirectory: true) }
 
     private func currentVault() -> Vault? {
         if vault == nil { vault = Vault.fromKeychain() }

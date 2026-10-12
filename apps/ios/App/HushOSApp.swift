@@ -12,6 +12,8 @@ struct HushOSApp: App {
         // Decrypted copies and the lists naming them stay out of backups; a restore can drop the mark, so set it again.
         Unbacked.apply()
         ShareHandoff.sweepStaging()
+        // A recovery kit left behind, and decrypted copies older than a day.
+        TemporaryCopies.sweep()
         // Before launch finishes, or iOS will not run it.
         BackgroundTransfers.registerTask()
         // Before launch finishes, so a tap on a transfers notification that launched the app arrives.

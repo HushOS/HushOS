@@ -667,12 +667,22 @@ struct RevealingSecureField: View {
     }
 }
 
-/* The 24 words, numbered, in two or three columns. */
+/* The 24 words, numbered, in two or three columns; not drawn while the screen is recorded or mirrored. */
 struct PhraseGrid: View {
     let phrase: String
     var columns = 2
+    @State private var capture = ScreenCapture.shared
 
     var body: some View {
+        if capture.active {
+            Label("Hidden while your screen is recorded or shared. Stop that to see the words.", systemImage: "eye.slash")
+                .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+        } else {
+            grid
+        }
+    }
+
+    @ViewBuilder private var grid: some View {
         let words = phrase.split(separator: " ").map(String.init)
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Alpine.Space.s2), count: columns), alignment: .leading, spacing: Alpine.Space.s2) {
             ForEach(words.indices, id: \.self) { index in
@@ -700,6 +710,8 @@ enum KitShare {
         let file = directory.appendingPathComponent(RecoveryKit.fileName)
         guard (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil else { return }
         let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+        // Not onto the clipboard: every app can read it, and Universal Clipboard takes it to the person's other devices.
+        sheet.excludedActivityTypes = [.copyToPasteboard]
         // The kit holds the phrase in plain text: gone once the sheet has handed it on or was dismissed.
         sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: directory) }
         guard let top = TextPrompt.topController() else { try? FileManager.default.removeItem(at: directory); return }

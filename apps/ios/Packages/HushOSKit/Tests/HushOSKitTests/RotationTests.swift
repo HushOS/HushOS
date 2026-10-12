@@ -27,7 +27,7 @@ extension OnFakeDrive {
         await vault.markCatalogueReady()
         let oldFileKey = try #require(await vault.nodeKey(server.f))
 
-        let rotated = try await vault.rotate(try #require(await vault.item(server.a)))
+        let rotated = try await vault.rotate(try #require(await vault.item(server.a))).rotated
         #expect(rotated == 2)
 
         // The server now holds A and F at the new epoch; nothing outside the subtree changed.

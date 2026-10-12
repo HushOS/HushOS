@@ -339,7 +339,7 @@ extension Vault {
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
         var ranges: [Int: [UInt64]] = [:]
         for index in 0 ..< opened.layout.chunkCount {
-            let range = chunkRange(plaintextSize: opened.content.plaintextSize, index: index)
+            let range = chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index)
             ranges[Int(index)] = [range.start, range.end]
         }
         return KeepPlan(nodeId: item.id, versionId: current.id, name: item.name, chunkCount: Int(opened.layout.chunkCount), ranges: ranges, url: url.url)

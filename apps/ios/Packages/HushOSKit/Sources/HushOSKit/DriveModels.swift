@@ -30,6 +30,8 @@ public struct NodeView: Codable, Sendable, Equatable, Hashable {
     public let changeSeq: Int?
     public let createdAt: String?
     public let updatedAt: String?
+    /* How the row's envelopes are sealed; absent (from an older server) means 1. */
+    public var envelopeSuite: Int? = nil
 
     public var isFolder: Bool { kind == "folder" }
 }

@@ -65,10 +65,17 @@ extension Vault {
         return (ordered, orphans)
     }
 
-    /* Opens rows into the catalogue (parents first) and files them under their parents. */
+    /* An item of this account's own workspace by id: the catalogue is that workspace and nothing else. */
+    func own(_ id: String) -> Opened? {
+        guard let ws = workspace?.workspaceId else { return nil }
+        return opened[NodeRef(workspaceId: ws, nodeId: id)]
+    }
+
+    /* Opens rows into the catalogue (parents first) and files them under their parents; a row of another workspace is not the feed's. */
     private func file(_ rows: [NodeView]) {
-        for row in rows {
-            forget(row.id)
+        guard let ws = workspace?.workspaceId.lowercased() else { return }
+        for row in rows where row.workspaceId.lowercased() == ws {
+            opened[row.ref] = nil
             guard let done = try? open(row) else { continue }
             if let parent = row.parentId {
                 rememberParent(row.id, parent: parent)
@@ -150,14 +157,14 @@ extension Vault {
         for change in changes {
             switch change.kind {
             case "node":
-                guard let node = change.node else { continue }
-                if let old = opened[node.id]?.node.parentId, old != node.parentId { catalogueChildren[old]?.remove(node.id) }
+                guard let node = change.node, node.workspaceId.lowercased() == workspaceId.lowercased() else { continue }
+                if let old = own(node.id)?.node.parentId, old != node.parentId { catalogueChildren[old]?.remove(node.id) }
                 rows.append(node)
                 touched.insert(node.id)
                 if let parent = node.parentId { touched.insert(parent) }
             case "tombstone":
                 guard let id = change.nodeId else { continue }
-                if let parent = opened[id]?.node.parentId ?? parents[id] { catalogueChildren[parent]?.remove(id); touched.insert(parent) }
+                if let parent = own(id)?.node.parentId ?? parents[id] { catalogueChildren[parent]?.remove(id); touched.insert(parent) }
                 forget(id)
                 touched.insert(id)
             default: continue
@@ -166,7 +173,7 @@ extension Vault {
         // Changed rows may include a folder whose key rotated: its children are re-opened after it.
         let batchRows = rows + descendants(of: rows.map(\.id), except: Set(rows.map(\.id)))
         let batch = Set(batchRows.map(\.id))
-        let (ordered, orphans) = parentsFirst(batchRows) { id in !batch.contains(id) && opened[id] != nil }
+        let (ordered, orphans) = parentsFirst(batchRows) { id in !batch.contains(id) && own(id) != nil }
         file(ordered)
         // A row under a folder this device never saw: the next build fills the gap.
         if !orphans.isEmpty || !mirror.hasRows(workspaceId) { catalogueState = .idle }
@@ -179,7 +186,7 @@ extension Vault {
         while !queue.isEmpty {
             let id = queue.removeFirst()
             for child in catalogueChildren[id] ?? [] where !except.contains(child) {
-                if let node = opened[child]?.node { out.append(node) }
+                if let node = own(child)?.node { out.append(node) }
                 queue.append(child)
             }
         }
@@ -188,9 +195,9 @@ extension Vault {
 
     /* This folder's children from the catalogue, or nil when the catalogue cannot answer for it. */
     public func catalogueChildren(of folderId: String) -> [Opened]? {
-        guard catalogueState == .ready, let folder = opened[folderId], folder.node.workspaceId == workspace?.workspaceId else { return nil }
+        guard catalogueState == .ready, own(folderId) != nil else { return nil }
         // Only what still lives here: an id filed under a folder it has since left is not listed in it.
-        return (catalogueChildren[folderId] ?? []).compactMap { opened[$0] }
+        return (catalogueChildren[folderId] ?? []).compactMap { own($0) }
             .filter { $0.node.trashedAt == nil && $0.node.parentId == folderId }.sorted(by: Opened.byName)
     }
 
@@ -207,7 +214,7 @@ extension Vault {
         var live: [String: Bool] = [:]
         func isLive(_ item: Opened) -> Bool {
             if let known = live[item.id] { return known }
-            let value = item.node.trashedAt == nil && (item.node.parentId.flatMap { opened[$0] }.map(isLive) ?? true)
+            let value = item.node.trashedAt == nil && (item.node.parentId.flatMap { own($0) }.map(isLive) ?? true)
             live[item.id] = value
             return value
         }
@@ -225,7 +232,7 @@ extension Vault {
     public func catalogueTrash() -> [(item: Opened, parentTrashed: Bool)]? {
         guard catalogueState == .ready, let ws = workspace?.workspaceId else { return nil }
         return opened.values.filter { $0.node.workspaceId == ws && $0.node.trashedAt != nil }.sorted(by: Opened.byTrashed).map { item in
-            (item, item.node.parentId.flatMap { opened[$0]?.node.trashedAt } != nil)
+            (item, item.node.parentId.flatMap { own($0)?.node.trashedAt } != nil)
         }
     }
 

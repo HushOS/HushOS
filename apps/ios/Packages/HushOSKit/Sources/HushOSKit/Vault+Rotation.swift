@@ -4,9 +4,11 @@ import HushOSCore
 /*
  * Subtree rotation, as the web does it after a share is revoked: every node
  * below the root gets a fresh key at the target epoch, parents first; its
- * metadata, versions, live shares (to keys the pins vouch for) and links are
- * sealed again under it. The server hands out the work in depth order and
- * applies each batch; a node whose parent is not ready yet comes back later.
+ * metadata, versions, and the shares and links the owner's ledger holds (shares
+ * only to keys a checked pin vouches for) are sealed again under it. Whatever
+ * else the server lists is left out, and the server revokes what was not
+ * re-sealed. The server hands out the work in depth order and applies each
+ * batch; a node whose parent is not ready yet comes back later.
  */
 struct RotationView: Codable, Sendable {
     let nodeId: String
@@ -32,6 +34,7 @@ struct RotationWorkNode: Decodable, Sendable {
         let id: String
         let hasPassword: Bool
         let secretEnvelope: String?
+        var kdfVersion: Int? = nil
     }
     let node: NodeView
     let depth: Int
@@ -81,6 +84,24 @@ public enum RotationError: Error, LocalizedError {
     public var errorDescription: String? { "The rotation could not finish. Try again." }
 }
 
+/* What a rotation did: how many nodes it re-sealed, and why any person's share was not sealed again (each once). */
+public struct RotationOutcome: Sendable {
+    public var rotated = 0
+    public var skipped: [String] = []
+}
+
+extension RotationWorkNode {
+    /* The shares to seal again: only those the ledger says the owner made on this node. */
+    func ledgerShares(_ ledger: SharingLedger) -> [Share] {
+        shares.filter { ledger.holdsShare(node: node.id, grantee: $0.granteeUserId) }
+    }
+
+    /* The links to seal again: only those the ledger says were made for this node. */
+    func ledgerLinks(_ ledger: SharingLedger) -> [Link] {
+        links.filter { ledger.holdsLink($0.id, node: node.id) }
+    }
+}
+
 extension DriveAPI {
     func startRotation(workspaceId: String, nodeId: String) async throws -> RotationView {
         try await performPublic(try mutationPublic("/nodes/\(nodeId)/rotation", body: ["workspaceId": workspaceId]), as: RotationStarted.self).rotation
@@ -99,45 +120,31 @@ extension DriveAPI {
 
 extension Vault {
     /*
-     * The keys a grantee's share is sealed to, by the pin: no pin or a changed
-     * X25519 key drops the share (it keeps its old envelope, which the rotation
-     * leaves unopenable); a served post-quantum key is used when the pin knows
-     * it, or when the pinned signing key signed it and the pin has none yet.
+     * Rotates the subtree under `item`. Shares the pins no longer vouch for are left out and
+     * named in the outcome, so the person sees who lost access, rather than sealing to X25519
+     * alone or to a key nobody checked.
      */
-    private func trustedKeys(for share: RotationWorkNode.Share, pins: [String: ContactPin]) -> (Data, Data?)? {
-        guard let pin = pins[share.granteeUserId], pin.encryptionPublicKey == share.grantee.encryptionPublicKey,
-              let publicKey = try? base64urlDecode(value: pin.encryptionPublicKey) else { return nil }
-        guard let kem = share.grantee.kem, let kemBytes = try? base64urlDecode(value: kem.publicKey) else {
-            return pin.kemPublicKeyHash == nil ? (publicKey, nil) : nil
-        }
-        let digest = keyDigest(publicKey: kemBytes)
-        if let known = pin.kemPublicKeyHash { return known == digest ? (publicKey, kemBytes) : nil }
-        // Only the pinned signing key may vouch: the words compared cover it, the served one could be anyone's.
-        let signed = kemBindingVerify(userId: share.granteeUserId, encryptionPublicKey: pin.encryptionPublicKey,
-                                      signingPublicKey: pin.signingPublicKey, kemPublicKey: kem.publicKey, signature: kem.signature)
-        return (publicKey, signed ? kemBytes : nil)
-    }
-
-    /* Rotates the subtree under `item`; returns how many nodes were re-sealed. */
-    public func rotate(_ item: Opened, progress: @Sendable (Int) -> Void = { _ in }) async throws -> Int {
+    public func rotate(_ item: Opened, progress: @Sendable (Int) -> Void = { _ in }) async throws -> RotationOutcome {
         let ws = item.node.workspaceId
         let rootId = item.id
         let started = try await api.startRotation(workspaceId: ws, nodeId: rootId)
         let target = started.targetEpoch
         // The root's chain must be open: its parent key is what the new root key wraps under.
         if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
-        // The identity and the pins are only needed to re-seal shares: a subtree with none never asks for them.
-        var sharing: (keys: IdentityKeys, pins: [String: ContactPin])?
-        var epochs: [String: UInt64] = opened.mapValues { $0.node.keyEpoch }
+        // The identity, the pins and the ledger are only needed for shares and links: a subtree with none never asks for them.
+        var sharing: (keys: IdentityKeys, pins: [String: ContactPin], ledger: SharingLedger)?
+        var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
-        var done = 0
+        var outcome = RotationOutcome()
+        var newDigests: [String: String] = [:]
         var cursor: String? = nil
         var idle = 0
         var touched: Set<String> = [rootId]
+        func ref(_ id: String) -> NodeRef { NodeRef(workspaceId: ws, nodeId: id) }
 
         func parentKey(_ parentId: String?, at epoch: UInt64) -> Data? {
             guard let parentId else { return workspaceKeyData() }
-            if epochs[parentId] == epoch, let key = nodeKeys[parentId] { return key }
+            if epochs[parentId] == epoch, let key = nodeKeys[ref(parentId)] { return key }
             if let prev = previous[parentId], prev.epoch == epoch { return prev.key }
             return nil
         }
@@ -152,19 +159,21 @@ extension Vault {
                 continue
             }
             let inBatch = Set(work.nodes.map(\.node.id))
-            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[parentId] == nil {
+            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil {
                 _ = try? await listChildren(of: parentId)
-                if let known = opened[parentId] { epochs[parentId] = known.node.keyEpoch }
+                if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
             }
             var batch: [[String: Any]] = []
             for entry in work.nodes {
                 let node = entry.node
+                // Work for another workspace is not this subtree's.
+                guard node.workspaceId.lowercased() == ws.lowercased() else { continue }
                 touched.insert(node.id)
                 let newParentEpoch = node.id == rootId ? node.parentKeyEpoch : target
                 guard let wrappedUnder = parentKey(node.parentId, at: node.parentKeyEpoch),
                       let wrapUnder = parentKey(node.parentId, at: newParentEpoch) else { continue }
                 let old: Data
-                if epochs[node.id] == node.keyEpoch, let cached = nodeKeys[node.id] {
+                if epochs[node.id] == node.keyEpoch, let cached = nodeKeys[ref(node.id)] {
                     old = cached
                 } else {
                     old = try nodeOpen(
@@ -181,7 +190,7 @@ extension Vault {
                     )
                     wire["keyEnvelope"] = base64urlEncode(bytes: envelope)
                     wire["rotated"] = NSNull()
-                    nodeKeys[node.id] = old
+                    nodeKeys[ref(node.id)] = old
                     epochs[node.id] = node.keyEpoch
                     batch.append(wire)
                     continue
@@ -201,22 +210,43 @@ extension Vault {
                     versions.append(["id": version.id, "contentKeyEnvelope": base64urlEncode(bytes: try versionReseal(ctx: ctx, suite: version.contentSuite, nodeKey: fresh, content: content))])
                 }
                 var shares: [[String: Any]] = []
-                if !entry.shares.isEmpty && sharing == nil {
-                    sharing = (try await identityKeys(), try await loadSettings().contacts)
+                if (!entry.shares.isEmpty || !entry.links.isEmpty) && sharing == nil {
+                    let settings = try await loadSettings()
+                    sharing = (try await identityKeys(), settings.contacts, settings.ledger)
                 }
-                for share in entry.shares {
-                    guard let (keys, pins) = sharing, let (publicKey, kem) = trustedKeys(for: share, pins: pins) else { continue }
+                for share in sharing.map({ entry.ledgerShares($0.ledger) }) ?? [] {
+                    guard let (keys, pins, _) = sharing else { continue }
+                    let sealing: (publicKey: Data, kem: Data, newDigest: String?)
+                    do {
+                        guard let pin = pins[share.granteeUserId] else { throw ContactError.unpinned }
+                        let known = newDigests[pin.userId].map { digest in var copy = pin; copy.kemPublicKeyHash = digest; return copy } ?? pin
+                        sealing = try known.sealKeys(encryptionPublicKey: share.grantee.encryptionPublicKey,
+                                                     kemPublicKey: share.grantee.kem?.publicKey, kemSignature: share.grantee.kem?.signature)
+                    } catch {
+                        let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                        if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }
+                        continue
+                    }
+                    if let digest = sealing.newDigest { newDigests[share.granteeUserId] = digest }
                     let ctx = ShareContext(workspaceId: ws, nodeId: node.id, keyEpoch: target, granteeUserId: share.granteeUserId, granterUserId: session.userId)
-                    let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: publicKey, granteeKemPublicKey: kem)
+                    let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
                     shares.append(["id": share.id, "shareEnvelope": base64urlEncode(bytes: sealed)])
                 }
                 var links: [[String: Any]] = []
                 var unsealable: [String] = []
-                for link in entry.links {
-                    guard let sealedSecret = link.secretEnvelope else { unsealable.append(link.id); continue }
+                for link in sharing.map({ entry.ledgerLinks($0.ledger) }) ?? [] {
+                    // A row that names an older derivation is ended; one that names none is tried, and its secret decides.
+                    guard let sealedSecret = link.secretEnvelope, link.kdfVersion.map({ $0 == Int(linkKdfVersion()) }) ?? true else {
+                        unsealable.append(link.id)
+                        continue
+                    }
                     let oldCtx = LinkContext(workspaceId: ws, nodeId: node.id, keyEpoch: node.keyEpoch, linkId: link.id)
                     let newCtx = LinkContext(workspaceId: ws, nodeId: node.id, keyEpoch: target, linkId: link.id)
-                    let owned = try linkSecretOpen(ctx: oldCtx, nodeKey: old, envelope: try base64urlDecode(value: sealedSecret))
+                    // A secret that no longer opens (an older derivation, a damaged row) is a link to end, not a rotation to fail.
+                    guard let owned = try? linkSecretOpen(ctx: oldCtx, nodeKey: old, envelope: try base64urlDecode(value: sealedSecret)) else {
+                        unsealable.append(link.id)
+                        continue
+                    }
                     // A password link sealed before the password key was kept cannot be re-sealed without the password.
                     if link.hasPassword && owned.fromPassword == nil { unsealable.append(link.id); continue }
                     let stretched = owned.fromPassword ?? Data(repeating: 0, count: 32)
@@ -230,7 +260,7 @@ extension Vault {
                 wire["rotated"] = ["metadataEnvelope": base64urlEncode(bytes: metadataEnvelope), "versions": versions, "shares": shares, "links": links, "unsealableLinks": unsealable]
                 // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
                 previous[node.id] = (node.keyEpoch, old)
-                nodeKeys[node.id] = fresh
+                nodeKeys[ref(node.id)] = fresh
                 epochs[node.id] = target
                 batch.append(wire)
             }
@@ -239,8 +269,8 @@ extension Vault {
                 let results = try await api.rotateNodes(workspaceId: ws, nodeId: rootId, nodes: batch)
                 applied = results.filter { $0.status == "ok" || $0.status == "already" }.count
             }
-            done += applied
-            progress(done)
+            outcome.rotated += applied
+            progress(outcome.rotated)
             idle = applied > 0 ? 0 : idle + 1
             if idle > 3 { throw RotationError.stuck }
             // Everything applied: continue past the batch; otherwise start over so parents come first.
@@ -249,8 +279,10 @@ extension Vault {
         // Envelopes changed in the subtree: those items are opened again from the server, under
         // their fresh keys. Everything else stays as it was, so lists outside it keep their rows.
         // The catalogue holds the old rows too; the next sync rebuilds it from the feed.
-        for id in touched { opened[id] = nil }
+        for id in touched { opened[ref(id)] = nil }
         catalogueState = .idle
-        return done
+        // Post-quantum keys first vouched for during the rotation join their pins, as a share would add them.
+        for (userId, digest) in newDigests { try? await rememberKem(digest, for: userId) }
+        return outcome
     }
 }

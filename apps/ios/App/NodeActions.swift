@@ -362,6 +362,20 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
+/*
+ * The system share sheet for a link, without its Copy: the link carries the key, and the
+ * general clipboard is readable by every app and goes to the person's other devices.
+ * Copy link is the app's own, kept on this device and gone after two minutes.
+ */
+@MainActor
+enum LinkShare {
+    static func present(_ url: URL) {
+        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        sheet.excludedActivityTypes = [.copyToPasteboard]
+        TextPrompt.topController()?.present(sheet, animated: true)
+    }
+}
+
 /* Tag colours: the presets, or the hex a person picked here or on the web. */
 enum TagColour {
     static func hex(_ color: Color) -> String {

@@ -83,6 +83,8 @@ public struct DocumentView: Codable, Sendable {
     public let version: Int
     public let envelope: String
     public let updatedAt: String
+    /* As on node rows: absent means 1, anything else is a newer client's. */
+    public var envelopeSuite: Int? = nil
 }
 
 extension DriveAPI {
@@ -106,17 +108,18 @@ extension Vault {
         let workspace = try await loadWorkspace()
         guard let key = workspaceKeyData() else { throw DriveAPIError.server(500, "Workspace not opened") }
         // Kept sealed in the mirror, so the registry reads without network too.
-        struct Cached: Codable { let envelope: String?; let version: Int }
+        struct Cached: Codable { let envelope: String?; let version: Int; var envelopeSuite: Int? = nil }
         let cacheKey = "tags:\(workspace.workspaceId)"
         let document: DocumentView?
         do {
             document = try await api.document(workspaceId: workspace.workspaceId, kind: Self.tagsKind)
-            if let data = try? JSONEncoder().encode(Cached(envelope: document?.envelope, version: document?.version ?? 0)) { mirror?.putDocument(cacheKey, data) }
+            if let data = try? JSONEncoder().encode(Cached(envelope: document?.envelope, version: document?.version ?? 0, envelopeSuite: document?.envelopeSuite)) { mirror?.putDocument(cacheKey, data) }
         } catch DriveAPIError.transport(let message) {
             guard let data = mirror?.document(cacheKey), let cached = try? JSONDecoder().decode(Cached.self, from: data) else { throw DriveAPIError.transport(message) }
-            document = cached.envelope.map { DocumentView(kind: Self.tagsKind, version: cached.version, envelope: $0, updatedAt: "") }
+            document = cached.envelope.map { DocumentView(kind: Self.tagsKind, version: cached.version, envelope: $0, updatedAt: "", envelopeSuite: cached.envelopeSuite) }
         }
         guard let document else { return (.empty, 0) }
+        if let suite = document.envelopeSuite, suite != NodeView.readableEnvelopeSuite { throw DriveAPIError.newerEnvelope }
         let json = try documentOpen(
             ctx: DocumentContext(workspaceId: workspace.workspaceId, kind: Self.tagsKind, version: UInt64(document.version)),
             workspaceKey: key, envelope: try base64urlDecode(value: document.envelope)

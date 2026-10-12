@@ -186,7 +186,8 @@ enum TransferSummary {
 /*
  * The Live Activity follows the queue, not the hand-over: it starts with the first
  * transfer, carries the same headline as the bar, and ends with the last file,
- * finished or not.
+ * finished or not. It never names a file or folder: it shows on the Lock Screen to
+ * whoever holds the phone, and iOS keeps its state outside the app.
  */
 @MainActor
 final class TransferLive {
@@ -206,12 +207,12 @@ final class TransferLive {
             let batch = rows.filter { $0.status != .failed }
             // The headline names the same set the line under it counts: "Keeping 2 files" with "1 of 2".
             title = TransferSummary.headline(rows, offline: offline, batch: batch.count)
-            // One file: its name (the headline already says "1 file"). Several: how far, then the current one.
-            var detail = batch.count == 1 ? first.name : "\(TransferSummary.count(batch)) · \(first.name)"
+            // How far, never which: one file needs no line under "Uploading 1 file", several count.
+            var detail = batch.count == 1 ? "" : TransferSummary.count(batch)
             if running.count == 1, first.folder, !offline {
-                // A kept folder: the island has room for its name, not the whole sentence, and counts its files.
+                // A kept folder: counted by its files, not named.
                 let files = BackgroundTransfers.shared.records.filter { first.queuedIds.contains($0.id) }
-                title = "Keeping “\(first.name)”"
+                title = "Keeping a folder"
                 detail = "On this phone · \(files.filter { $0.state == .done }.count) of \(max(files.count, 1)) \(files.count > 1 ? "files" : "file")"
             }
             if activity.running {

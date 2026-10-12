@@ -30,12 +30,15 @@ public enum AuthError: Error, LocalizedError, Sendable {
     case message(String)
     case wrongPassword
     case noSession
+    /* The server refused a write based on a version that is no longer current (409). */
+    case conflict(String)
 
     public var errorDescription: String? {
         switch self {
         case .message(let text): return text
         case .wrongPassword: return "That email and password don’t match. Check them and try again."
         case .noSession: return "Signed in, but the session was not returned."
+        case .conflict(let text): return text
         }
     }
 }

@@ -368,7 +368,7 @@ private struct LinkCard: View {
                 Menu {
                     Button("Password and end date", systemImage: "key") { options = true }
                     Button(qr ? "Hide QR code" : "Show as QR code", systemImage: "qrcode") { qr.toggle() }.disabled(url == nil)
-                    if let url { ShareLink(item: url) { Label("Send the link", systemImage: "square.and.arrow.up") } }
+                    if let url { Button("Send the link", systemImage: "square.and.arrow.up") { LinkShare.present(url) } }
                     Divider()
                     Button("Turn off link", systemImage: "minus.circle", role: .destructive) { confirmOff = true }.tint(Alpine.danger)
                 } label: {
@@ -450,6 +450,9 @@ struct LinkOptionsSheet: View {
 
     private static let expiries: [(value: String, label: String, days: Int?)] = [("", "Never", nil), ("7", "7 days", 7), ("30", "30 days", 30), ("365", "A year", 365)]
 
+    /* Whoever holds the link can guess its password offline: the core refuses fewer than 8 characters (counted as it counts them). */
+    private var shortPassword: Bool { !removePassword && !password.isEmpty && password.unicodeScalars.count < 8 }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -460,7 +463,8 @@ struct LinkOptionsSheet: View {
                 } header: {
                     Text("Password")
                 } footer: {
-                    Text("Whoever opens the link types it on their device. It never reaches us.")
+                    Text(shortPassword ? "At least 8 characters." : "At least 8 characters. Whoever opens the link types it on their device. It never reaches us.")
+                        .foregroundStyle(shortPassword ? Alpine.danger : Alpine.inkMuted)
                 }
                 Section("Ends") {
                     if let current = parseDate(link.expiresAt) {
@@ -479,7 +483,7 @@ struct LinkOptionsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || shortPassword) }
             }
             .onAppear { ends = link.expiresAt == nil ? "" : "keep" }
         }
@@ -705,7 +709,10 @@ struct CheckContactView: View {
                     .alpineRow()
                 }
                 Section {
-                    if found.changed {
+                    if found.recheck && !found.changed {
+                        Text("You added \(first) before HushOS checked both of their keys. Ask \(first) to open People you share with in HushOS and read you their twelve words. If they match these, it’s really them.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
+                    } else if found.changed {
                         Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
                     } else {
@@ -724,7 +731,7 @@ struct CheckContactView: View {
                 }
                 if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
                 Section {
-                    if found.pinned != nil && !found.changed {
+                    if found.pinned != nil && !found.changed && !found.recheck {
                         Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in people you share with").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle())
                     } else {
@@ -800,6 +807,7 @@ struct PeopleView: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var checking: ContactPin?
+    @State private var rechecking: ContactPin?
     @State private var removing: ContactPin?
     @State private var adding = false
 
@@ -817,7 +825,8 @@ struct PeopleView: View {
                     if let error { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
                     ForEach(pins) { pin in
                         Menu {
-                            Button("Check it’s them", systemImage: "checkmark.shield") { checking = pin }
+                            // A pin that vouches for nothing has no words worth reading back: look them up and compare afresh.
+                            Button("Check it’s them", systemImage: "checkmark.shield") { if pin.verified { checking = pin } else { rechecking = pin } }
                             Divider()
                             Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }.tint(Alpine.danger)
                         } label: {
@@ -828,7 +837,9 @@ struct PeopleView: View {
                                     Text(pin.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
                                 }
                                 Spacer(minLength: 0)
-                                if let added = parseDate(pin.pinnedAt) {
+                                if !pin.verified {
+                                    Text("Check their words again").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
+                                } else if let added = parseDate(pin.pinnedAt) {
                                     Text("Added \(changedLabel(added) ?? "")").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                                 }
                             }
@@ -866,6 +877,14 @@ struct PeopleView: View {
                 .environment(store)
             }
             .sheet(item: $checking) { pin in CheckItsThemSheet(pin: pin) }
+            .navigationDestination(item: $rechecking) { pin in
+                CheckContactView(email: pin.email, intro: "Check it’s them again before you share with them or open what they share.") { pin in
+                    rechecking = nil
+                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) checked")
+                    Task { await load() }
+                }
+                .environment(store)
+            }
             .alert(removing.map { "Remove \(firstName($0))?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
                 Button("Cancel", role: .cancel) { removing = nil }
                 Button("Remove", role: .destructive) {

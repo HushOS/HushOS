@@ -57,7 +57,7 @@ public enum Reports {
         return [
             "id": reportId, "workspaceId": item.node.workspaceId, "nodeId": item.id, "keyEpoch": item.node.keyEpoch,
             "category": category, "reason": reason, "via": via,
-            "reporterEmail": trimmedEmail.isEmpty ? NSNull() : trimmedEmail, "contentHash": NSNull(), "keys": keys,
+            "reporterEmail": trimmedEmail.isEmpty ? NSNull() : trimmedEmail, "keys": keys,
         ]
     }
 }
@@ -65,9 +65,11 @@ public enum Reports {
 extension PublicAPI {
     func openOperators() async throws -> [ReportOperator] {
         var request = URLRequest(url: URL(string: origin + "/api/drive/reports/operators")!)
+        // No session rides along: a report about a link is anonymous.
+        request.httpShouldHandleCookies = false
         request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
         request.setValue(origin, forHTTPHeaderField: "Origin")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DriveAPIError.server(0, "Could not load the operators.") }
         return try JSONDecoder().decode(OperatorsResponse.self, from: data).operators
     }
@@ -76,7 +78,7 @@ extension PublicAPI {
 extension Vault {
     /* Files a report on an item shared with this account; the session names the reporter. */
     public func report(_ item: Opened, category: String, reason: String, email: String?) async throws -> Bool {
-        guard let nodeKey = nodeKeys[item.id] else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let body = try await Reports.body(api: PublicAPI(origin: session.origin), item: item, nodeKey: nodeKey, category: category, reason: reason, email: email, via: ["share": true])
         return try await api.performPublic(try api.mutationPublic("/reports", body: body), as: ReportFiled.self).duplicate
     }

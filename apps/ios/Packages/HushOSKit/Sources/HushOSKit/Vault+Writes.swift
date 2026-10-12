@@ -13,7 +13,7 @@ extension Vault {
         let parent = try await resolve(parentId)
         // Shared folders belong to the granter's workspace; an editor writes there.
         let workspace = Target(workspaceId: parent.node.workspaceId)
-        guard let parentKey = nodeKey(parent.node.id) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
+        guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
         let id = newId()
         let key = try randomBytes(length: 32)
@@ -26,12 +26,12 @@ extension Vault {
             "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed),
         ]])
         guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
-        return adopt(node, nodeKey: key, metadata: metadata)
+        return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
     }
 
     public func rename(_ nodeId: String, to name: String) async throws -> Opened {
         let item = try await resolve(nodeId)
-        guard let key = nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified)
         let sealed = try metadataSeal(
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
@@ -41,11 +41,15 @@ extension Vault {
             nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
             keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed)
         )
-        return adopt(node, nodeKey: key, metadata: metadata)
+        return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
     }
 
     private func rewrap(_ item: Opened, under parent: Opened) throws -> String {
-        guard let key = nodeKey(item.id), let parentKey = nodeKey(parent.id) else { throw DriveAPIError.server(500, "Node not opened") }
+        // One drive only: the server moves within a workspace, and a key is wrapped under a parent of its own.
+        guard item.node.workspaceId.lowercased() == parent.node.workspaceId.lowercased() else {
+            throw DriveAPIError.server(400, "Items can only move within one drive.")
+        }
+        guard let key = nodeKey(of: item), let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Node not opened") }
         let ctx = NodeKeyContext(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch)
         return base64urlEncode(bytes: try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key))
     }
@@ -53,12 +57,12 @@ extension Vault {
     public func move(_ nodeId: String, to parentId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
         let parent = try await resolve(parentId)
-        guard let key = nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let node = try await api.move(
             nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
             parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try rewrap(item, under: parent)
         )
-        return adopt(node, nodeKey: key, metadata: item.metadata)
+        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
     }
 
     /*
@@ -71,7 +75,7 @@ extension Vault {
         let parent = try await resolve(parentId)
         _ = try await loadWorkspace()
         let workspace = Target(workspaceId: parent.node.workspaceId)
-        guard let parentKey = nodeKey(parent.id) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
+        guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let newName = try checkName(name: name ?? source.name)
         var done = 0
         if source.isFolder {
@@ -108,7 +112,7 @@ extension Vault {
             "contentKeyEnvelope": base64urlEncode(bytes: contentKeyEnvelope),
         ])
         progress(done + 1)
-        return adopt(node, nodeKey: key, metadata: metadata)
+        return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
     }
 
     public func trash(_ nodeId: String) async throws {
@@ -119,14 +123,14 @@ extension Vault {
 
     /* Back where it was, or under the root when its old folder is in the trash too. */
     public func restore(_ item: Opened, parentTrashed: Bool) async throws -> Opened {
-        guard let key = nodeKey(item.id) else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         var toRoot: (UInt64, String)? = nil
         if parentTrashed {
             let root = try await resolve(try rootId())
             toRoot = (root.node.keyEpoch, try rewrap(item, under: root))
         }
         let node = try await api.restore(nodeId: item.id, workspaceId: item.node.workspaceId, toRoot: toRoot)
-        return adopt(node, nodeKey: key, metadata: item.metadata)
+        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
     }
 
     public func purge(_ nodeId: String) async throws {
@@ -150,9 +154,9 @@ extension Vault {
 
     public func restoreVersion(_ version: VersionListView, of nodeId: String) async throws -> Opened {
         let item = try await resolve(nodeId)
-        guard let key = nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let node = try await api.restoreVersion(version.id, workspaceId: item.node.workspaceId)
-        return adopt(node, nodeKey: key, metadata: item.metadata)
+        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
     }
 
     /*
@@ -179,7 +183,9 @@ extension Vault {
 
     private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnailBytes: UInt32) async throws -> Begun {
         _ = try await loadWorkspace()
-        let workspace = Target(workspaceId: try await workspaceId(of: parentId))
+        // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
+        let workspace: Target
+        if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await resolve(parentId).node.workspaceId) }
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let plaintextSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
         let modified = ISO8601DateFormatter().string(from: (attributes[.modificationDate] as? Date) ?? Date())
@@ -194,7 +200,7 @@ extension Vault {
         let final: NodeMetadata
         if let replacing {
             nodeId = replacing.id
-            guard let key = self.nodeKey(nodeId) else { throw DriveAPIError.server(500, "Node not opened") }
+            guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
             nodeKey = key
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
@@ -202,7 +208,7 @@ extension Vault {
             final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified)
         } else {
             let parent = try await resolve(parentId)
-            guard let parentKey = self.nodeKey(parent.id) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
+            guard let parentKey = self.nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
             let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
             nodeId = newId()
             nodeKey = try randomBytes(length: 32)
@@ -261,17 +267,18 @@ extension Vault {
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard var node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
         if replacing {
-            var key = knownKey ?? self.nodeKey(nodeId)
-            if key == nil { _ = try await resolve(nodeId); key = self.nodeKey(nodeId) }
+            let ref = NodeRef(workspaceId: workspaceId, nodeId: nodeId)
+            var key = knownKey ?? nodeKeys[ref]
+            if key == nil { _ = try await resolve(nodeId); key = nodeKeys[ref] }
             guard let nodeKey = key else { throw DriveAPIError.server(500, "Node not opened") }
             let sealed = try metadataSeal(
                 ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
                 nodeKey: nodeKey, metadata: final
             )
             node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed))
-            return adopt(node, nodeKey: nodeKey, metadata: final)
+            return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
         }
-        if let knownKey { return adopt(node, nodeKey: knownKey, metadata: final) }
+        if let knownKey { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) }
         // Finished by another launch: the node key comes from the parent's, which the tree opens.
         _ = try await resolve(parentId)
         return try open(node)

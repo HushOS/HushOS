@@ -21,10 +21,12 @@ public struct AccountStore: Sendable {
     let forgetStores: @Sendable () -> Void
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
-     * lists of kept files, the last folder and recent searches (`Unbacked.state`), the node-to-parent index. */
-    static let accountFiles = ["offline", "transfers", "share-staging", "state", "files-parents.json"]
+     * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
+     * node-to-parent index. The settings marks in `local` stay: they belong to no account's data and
+     * are what catches a server handing an account older settings after it signs in again. */
+    static let accountFiles = ["offline", "transfers", "share-staging", "state", "local/files-parents.json"]
 
-    private var ownerFile: URL { root.appendingPathComponent("account-owner") }
+    private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 
     init(root: URL, temporary: URL, forgetStores: @escaping @Sendable () -> Void = {}) {
         self.root = root
@@ -70,7 +72,7 @@ public struct AccountStore: Sendable {
     }
 
     private func record(_ userId: String) {
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: ownerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Data(userId.utf8).write(to: ownerFile, options: .atomic)
     }
 
@@ -82,10 +84,10 @@ public struct AccountStore: Sendable {
             Offline.forgetAll()
             Places.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.
-            Mirror(url: group.appendingPathComponent("mirror.sqlite"))?.wipe()
+            Mirror(url: Unbacked.local.appendingPathComponent("mirror.sqlite"))?.wipe()
             // The remembered device opens this account's key; the next account makes its own.
             SharedKeychain.delete(SharedKeychain.deviceAccount)
-            // Recent searches (an earlier version kept them here) and the address the sign-in screen offers.
+            // What an earlier version kept in the defaults: recent searches and the address the sign-in screen offers.
             UserDefaults.standard.removeObject(forKey: "search.recent")
             UserDefaults.standard.removeObject(forKey: "lastEmail")
         }

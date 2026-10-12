@@ -25,9 +25,9 @@ final class AppModel {
     private(set) var user: SessionUser?
     private(set) var vault: Vault?
     var origin: String = SharedKeychain.config?.origin ?? AppModel.defaultOrigin
-    /* The last address signed in with, so a sign-in after the session ended starts filled. */
-    var lastEmail = UserDefaults.standard.string(forKey: "lastEmail") ?? "" {
-        didSet { UserDefaults.standard.set(lastEmail.isEmpty ? nil : lastEmail, forKey: "lastEmail") }
+    /* The last address signed in with, so a sign-in after the session ended starts filled; out of backups (the defaults are not). */
+    var lastEmail = LastEmail.load() ?? UserDefaults.standard.string(forKey: "lastEmail") ?? "" {
+        didSet { LastEmail.save(lastEmail) }
     }
     /* A link that opened the app; acted on once signed in (or right away if already). */
     var pendingLink: URL?

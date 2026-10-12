@@ -72,10 +72,13 @@ public actor Vault {
     public nonisolated let api: DriveAPI
     let session: SharedKeychain.Session
     private var accountKey: Data?
-    var workspace: WorkspaceView?
+    var workspace: WorkspaceView? {
+        didSet { nodeKeys.own = workspace?.workspaceId; opened.own = workspace?.workspaceId }
+    }
     private var workspaceKey: Data?
-    var nodeKeys: [String: Data] = [:]
-    var opened: [String: Opened] = [:]
+    /* By workspace and node (see NodeTable): a received share's key never answers for one of the account's own nodes. */
+    var nodeKeys = NodeTable<Data>()
+    var opened = NodeTable<Opened>()
     private var identity: IdentityKeys?
     var parents: [String: String]
     private let indexURL: URL?
@@ -97,7 +100,8 @@ public actor Vault {
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
         self.session = session
-        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
+        // In the group's `local` folder, which is out of backups however these files are rewritten.
+        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup).map { _ in Unbacked.local }
         indexURL = container?.appendingPathComponent("files-parents.json")
         mirror = container.flatMap { Mirror(url: $0.appendingPathComponent("mirror.sqlite")) }
         if let indexURL, let data = try? Data(contentsOf: indexURL),
@@ -245,29 +249,36 @@ public actor Vault {
     func parentKey(for node: NodeView) throws -> Data {
         let parentId = node.parentId ?? node.workspaceId
         if parentId == node.workspaceId {
-            guard let workspaceKey else { throw DriveAPIError.server(500, "Workspace not opened") }
+            // The workspace key is this account's own: it opens only its own top folder.
+            guard let workspaceKey, node.workspaceId.lowercased() == workspace?.workspaceId.lowercased() else {
+                throw DriveAPIError.server(500, "Workspace not opened")
+            }
             return workspaceKey
         }
-        guard let key = nodeKeys[parentId] else { throw DriveAPIError.server(500, "Open the containing folder first.") }
+        // The parent in the node's own workspace, exactly: never a same-id node of another.
+        guard let key = nodeKeys[NodeRef(workspaceId: node.workspaceId, nodeId: parentId)] else {
+            throw DriveAPIError.server(500, "Open the containing folder first.")
+        }
         return key
     }
 
     /* Opens one node under its parent's key (the workspace key at the root); parents first. */
     @discardableResult
     public func open(_ node: NodeView) throws -> Opened {
-        if let done = opened[node.id] { return done }
+        if let done = opened[node.ref] { return done }
+        try node.checkEnvelopeSuite()
         let ctx = NodeKeyContext(
             workspaceId: node.workspaceId, nodeId: node.id, parentId: node.parentId ?? node.workspaceId,
             parentKeyEpoch: node.parentKeyEpoch, keyEpoch: node.keyEpoch
         )
         let key = try nodeOpen(ctx: ctx, parentKey: try parentKey(for: node), keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
-        nodeKeys[node.id] = key
+        nodeKeys[node.ref] = key
         let metadata = try metadataOpen(
             ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion),
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
-        opened[node.id] = result
+        opened[node.ref] = result
         return result
     }
 
@@ -280,13 +291,23 @@ public actor Vault {
 
     public func item(_ id: String) -> Opened? { opened[id] }
     public func nodeKey(_ id: String) -> Data? { nodeKeys[id] }
+    /* The key of exactly this item, in its own workspace. */
+    func nodeKey(of item: Opened) -> Data? { nodeKeys[item.ref] }
 
-    /* A node the server just returned, opened with a key this process already holds. */
-    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata) -> Opened {
-        let previous = opened[node.id]?.node.parentId
-        nodeKeys[node.id] = key
+    /*
+     * A node the server just returned, opened with a key this process already holds, for a
+     * write into `workspaceId` (the parent's): a reply naming another workspace is refused,
+     * or a key made for one drive would be filed under the other.
+     */
+    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata, in workspaceId: String) throws -> Opened {
+        guard node.workspaceId.lowercased() == workspaceId.lowercased() else {
+            throw DriveAPIError.server(500, "HushOS answered for a different drive.")
+        }
+        try node.checkEnvelopeSuite()
+        let previous = opened[node.ref]?.node.parentId
+        nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
-        opened[node.id] = result
+        opened[node.ref] = result
         if let parent = node.parentId { rememberParent(node.id, parent: parent) }
         /*
          * A write the server answered (a move, a copy, a new folder) is filed in the catalogue
@@ -302,7 +323,7 @@ public actor Vault {
     }
 
     public func forget(_ id: String) {
-        opened[id] = nil
+        opened.remove(id: id)
     }
 
     /* Fetches a folder's listing, opening every key along the way; all pages. */
@@ -328,7 +349,7 @@ public actor Vault {
         // The catalogue answers first when it can, so a folder draws before the server is asked.
         if let fast = catalogueChildren(of: folderId) { return fast }
         let listing = try await listChildren(of: folderId)
-        return listing.children.compactMap { opened[$0.id] }.sorted(by: Opened.byName)
+        return listing.children.compactMap { opened[$0.ref] }.sorted(by: Opened.byName)
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
@@ -348,7 +369,7 @@ public actor Vault {
 
     /* The content key and sizes of a file's version (the current one by default). */
     public func openVersion(_ item: Opened, version: VersionListView? = nil) throws -> OpenedVersion {
-        guard let nodeKey = nodeKeys[item.node.id] else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let nodeKey = nodeKeys[item.ref] else { throw DriveAPIError.server(500, "Node not opened") }
         let id: String, objectId: String, envelope: String, suite: UInt32, nonce: String, rowSize: String?
         if let version {
             (id, objectId, envelope, suite, nonce, rowSize) = (version.id, version.objectId, version.contentKeyEnvelope, version.contentSuite, version.contentNonce, version.plaintextSize)
@@ -381,7 +402,7 @@ public actor Vault {
             onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
             progress: progress
         ) { index in
-            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, index: index))
+            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }

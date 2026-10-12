@@ -32,6 +32,16 @@ final class SceneDelegate: NSObject, UIWindowSceneDelegate {
         MainActor.assumeIsolated { QuickActions.shared.pending = QuickAction(rawValue: item.type) }
     }
 
+    /* The app switcher's snapshot is taken after this: the cover goes up first (PrivacyCover). */
+    func sceneWillResignActive(_ scene: UIScene) {
+        guard let scene = scene as? UIWindowScene else { return }
+        MainActor.assumeIsolated { PrivacyCover.show(in: scene) }
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        MainActor.assumeIsolated { PrivacyCover.hide() }
+    }
+
     func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem) async -> Bool {
         guard let action = QuickAction(rawValue: shortcutItem.type) else { return false }
         await MainActor.run { QuickActions.shared.pending = action }

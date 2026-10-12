@@ -1,7 +1,7 @@
 import Foundation
 import HushOSCore
 
-/* A person as `GET /api/auth/contacts/lookup` describes them. */
+/* A person as `POST /api/auth/contacts/lookup` describes them. */
 public struct Contact: Sendable, Equatable {
     public struct Kem: Sendable, Equatable {
         public let publicKey: String
@@ -57,14 +57,24 @@ public struct Lookup: Sendable {
     public let pinned: ContactPin?
     /* The served key differs from the pin: nothing is trusted until the person re-pins. */
     public let changed: Bool
+    /* Pinned, but the pin vouches for nothing (no current fingerprint over both keys): compare the words again. */
+    public var recheck: Bool = false
 }
 
-public enum ContactError: Error, LocalizedError {
+public enum ContactError: Error, LocalizedError, Equatable {
     case unpinned, changed, message(String)
+    /* A pin without a current fingerprint over both keys: made before the words covered the signing key, or edited. */
+    case recheck(String)
+    /* Never sealed to X25519 alone: no post-quantum key, a different one than pinned, or one their identity did not sign. */
+    case noKem(String), kemChanged(String), kemUnsigned(String)
     public var errorDescription: String? {
         switch self {
         case .unpinned: return "Add them to your contacts before sharing with them."
         case .changed: return "Their account changed since you added them. Check it’s them in People you share with before you share."
+        case .recheck(let name): return "Check \(name)’s words again in People you share with before you share with them."
+        case .noKem(let name): return "\(name) hasn’t set up post-quantum keys yet."
+        case .kemChanged(let name): return "\(name)’s post-quantum key has changed since you pinned it. Check with them before sharing."
+        case .kemUnsigned(let name): return "\(name)’s post-quantum key is not signed by their identity."
         case .message(let text): return text
         }
     }
@@ -72,9 +82,8 @@ public enum ContactError: Error, LocalizedError {
 
 extension Auth {
     static func lookupContact(email: String) async throws -> Contact {
-        var components = URLComponents(string: "/api/auth/contacts/lookup")!
-        components.queryItems = [URLQueryItem(name: "email", value: email)]
-        let reply = try await call(components.string ?? "/api/auth/contacts/lookup")
+        // In the body, not the query: an address in a URL ends up in logs along the way.
+        let reply = try await call("/api/auth/contacts/lookup", method: "POST", body: ["email": email])
         guard let json = reply["contact"] as? [String: Any], let userId = json["userId"] as? String,
               let encryption = json["encryptionPublicKey"] as? String, let signing = json["signingPublicKey"] as? String
         else { throw ContactError.message("No HushOS account uses that email.") }
@@ -117,32 +126,7 @@ extension DriveAPI {
     }
 }
 
-/* The settings document, opened: the pins by user id and the version the server holds. */
-struct Settings {
-    var contacts: [String: ContactPin]
-    var version: UInt64
-}
-
 extension Vault {
-    func loadSettings() async throws -> Settings {
-        let keys = try await identityKeys()
-        guard let envelope = try await Auth.settings() else { return Settings(contacts: [:], version: 0) }
-        let json = try settingsOpen(identityPrivateKey: keys.encryptionPrivateKey, userId: session.userId, envelope: envelope)
-        struct Document: Decodable { let contacts: [String: ContactPin] }
-        let document = try JSONDecoder().decode(Document.self, from: Data(json.utf8))
-        return Settings(contacts: document.contacts, version: envelope.settingsVersion)
-    }
-
-    private func saveSettings(_ settings: Settings) async throws {
-        let keys = try await identityKeys()
-        struct Document: Encodable { let version = 1; let contacts: [String: ContactPin] }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let json = String(decoding: try encoder.encode(Document(contacts: settings.contacts)), as: UTF8.self)
-        let sealed = try settingsSeal(identityPrivateKey: keys.encryptionPrivateKey, userId: session.userId, settingsVersion: settings.version + 1, json: json)
-        try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
-    }
-
     /* Everyone pinned, newest first. */
     public func contacts() async throws -> [ContactPin] {
         try await loadSettings().contacts.values.sorted { $0.pinnedAt > $1.pinnedAt }
@@ -164,75 +148,62 @@ extension Vault {
             if pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey { changed = true }
             if let hash = pinned.kemPublicKeyHash, contact.kem.map({ keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) }) != hash { changed = true }
         }
-        return Lookup(contact: contact, pinned: pinned, changed: changed)
+        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false)
     }
 
-    /* Trusts the keys shown now: what the person does after checking the fingerprint. */
+    /* Trusts the keys shown now: what the person does after checking the fingerprint. Re-pinning writes a current fingerprint. */
     public func pin(_ contact: Contact) async throws {
-        var settings = try await loadSettings()
         let hash = contact.kemSigned ? contact.kem.map { keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) } : nil
-        settings.contacts[contact.userId] = ContactPin(
+        let pin = ContactPin(
             userId: contact.userId, email: contact.email, name: contact.name, encryptionPublicKey: contact.encryptionPublicKey,
             signingPublicKey: contact.signingPublicKey, fingerprint: contact.fingerprint, pinnedAt: ISO8601DateFormatter().string(from: Date()), kemPublicKeyHash: hash
         )
-        do {
-            try await saveSettings(settings)
-        } catch {
-            // Changed on another device meanwhile: read again and retry once.
-            var latest = try await loadSettings()
-            latest.contacts[contact.userId] = settings.contacts[contact.userId]
-            try await saveSettings(latest)
-        }
+        try await updateSettings { $0.setPin(pin) }
     }
 
     public func unpin(_ pin: ContactPin) async throws {
-        var settings = try await loadSettings()
-        settings.contacts[pin.userId] = nil
-        try await saveSettings(settings)
+        try await updateSettings { $0.removePin(pin.userId) }
     }
 
     public func shares(of item: Opened) async throws -> [ShareView] {
         try await api.shares(of: item.id, workspaceId: item.node.workspaceId)
     }
 
+    /* Remembers the first post-quantum key a person's pinned signing key vouched for, so a different one later is refused. */
+    func rememberKem(_ digest: String, for userId: String) async throws {
+        try await updateSettings { settings in
+            guard var stored = settings.contacts[userId], stored.kemPublicKeyHash == nil else { return }
+            stored.kemPublicKeyHash = digest
+            settings.setPin(stored)
+        }
+    }
+
     /*
-     * Shares an item with a pinned contact: the served keys must match the pin
-     * (a first, signed post-quantum key is accepted and remembered), then the
-     * node key is sealed to them with this identity's private key.
+     * Shares an item with a pinned, checked contact: the served keys must match the pin and
+     * carry a post-quantum key the pin vouches for (see `ContactPin.sealKeys`), then the node
+     * key is sealed to them with this identity's private key, and the share joins the ledger.
      */
     public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> ShareView {
-        guard let nodeKey = nodeKeys[item.id] else { throw DriveAPIError.server(500, "Node not opened") }
+        guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+        guard pin.verified else { throw ContactError.recheck(pin.displayName) }
         let contact = try await Auth.lookupContact(email: pin.email)
-        guard contact.userId == pin.userId, contact.encryptionPublicKey == pin.encryptionPublicKey else { throw ContactError.changed }
-        var kemPublic: Data? = nil
-        // Only the pinned signing key may vouch for a KEM key: the words compared cover it, the served one could be anyone's.
-        if let kem = contact.kem, kemBindingVerify(userId: pin.userId, encryptionPublicKey: pin.encryptionPublicKey, signingPublicKey: pin.signingPublicKey, kemPublicKey: kem.publicKey, signature: kem.signature) {
-            let bytes = try base64urlDecode(value: kem.publicKey)
-            let hash = keyDigest(publicKey: bytes)
-            if let known = pin.kemPublicKeyHash {
-                guard known == hash else { throw ContactError.changed }
-            } else {
-                var settings = try await loadSettings()
-                if var stored = settings.contacts[pin.userId] {
-                    stored.kemPublicKeyHash = hash
-                    settings.contacts[pin.userId] = stored
-                    try await saveSettings(settings)
-                }
-            }
-            kemPublic = bytes
-        } else if pin.kemPublicKeyHash != nil {
-            throw ContactError.changed
-        }
+        guard contact.userId == pin.userId else { throw ContactError.changed }
+        let sealing = try pin.sealKeys(encryptionPublicKey: contact.encryptionPublicKey, kemPublicKey: contact.kem?.publicKey, kemSignature: contact.kem?.signature)
+        if let digest = sealing.newDigest { try await rememberKem(digest, for: pin.userId) }
         let keys = try await identityKeys()
         let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: pin.userId, granterUserId: session.userId)
-        let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: try base64urlDecode(value: pin.encryptionPublicKey), granteeKemPublicKey: kemPublic)
-        return try await api.createShare(nodeId: item.id, body: [
+        let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
+        let share = try await api.createShare(nodeId: item.id, body: [
             "workspaceId": item.node.workspaceId, "granteeUserId": pin.userId, "role": role, "keyEpoch": item.node.keyEpoch,
             "shareEnvelope": base64urlEncode(bytes: envelope),
         ])
+        try await updateSettings { $0.ledger.addShare(node: item.id, grantee: pin.userId) }
+        return share
     }
 
+    /* Out of the ledger first, so the rotation that follows never seals to them again. */
     public func revokeShare(_ share: ShareView, for item: Opened) async throws {
+        try await updateSettings { $0.ledger.removeShare(node: item.id, grantee: share.grantee.id) }
         try await api.revokeShare(share.id, workspaceId: item.node.workspaceId)
     }
 }
@@ -265,6 +236,7 @@ struct SharedByMeResponse: Codable, Sendable {
         let useCount: Int
         let lastUsedAt: String?
         let createdAt: String
+        var kdfVersion: Int? = nil
         let node: NodeView
     }
     let shares: [Share]
@@ -274,13 +246,13 @@ struct SharedByMeResponse: Codable, Sendable {
 extension Vault {
     /* Opens a node of this workspace by listing the folder it sits in, which opens the whole chain above. */
     func openAnywhere(_ node: NodeView) async -> Opened? {
-        if let done = opened[node.id] { return done }
+        if let done = opened[node.ref] { return done }
         if let parent = node.parentId {
             _ = try? await listChildren(of: parent)
         } else if let root = try? await rootId() {
             _ = try? await listChildren(of: root)
         }
-        return opened[node.id] ?? (try? open(node))
+        return opened[node.ref] ?? (try? open(node))
     }
 
     /* Everything this account shared out: to people, and by link. */
@@ -294,7 +266,7 @@ extension Vault {
         }
         for link in reply.links {
             let item = await openAnywhere(link.node)
-            let view = LinkView(id: link.id, keyEpoch: link.keyEpoch, secretEnvelope: link.secretEnvelope, hasPassword: link.hasPassword, expiresAt: link.expiresAt, useCount: link.useCount, lastUsedAt: link.lastUsedAt, createdAt: link.createdAt)
+            let view = LinkView(id: link.id, keyEpoch: link.keyEpoch, secretEnvelope: link.secretEnvelope, hasPassword: link.hasPassword, expiresAt: link.expiresAt, useCount: link.useCount, lastUsedAt: link.lastUsedAt, createdAt: link.createdAt, kdfVersion: link.kdfVersion)
             rows.append(SharedByMe(id: "link-" + link.id, item: item, node: link.node, share: nil, link: view))
         }
         return rows

@@ -100,21 +100,22 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /*
-     * Android's words. Finished: "3 files uploaded" naming them, or "“Lisbon” is on this phone";
-     * didn't: "1 upload didn’t finish" with the file and its reason. Mixed or several keeps use
-     * the transfers bar's own words.
+     * Android's headlines, without names: a notification shows on the Lock Screen to whoever
+     * holds the phone (with previews on), and the app opens on the list that names them.
+     * Finished: "3 files uploaded", "Kept on this phone"; didn't: "1 upload didn’t finish"
+     * with its reason. Mixed or several keeps use the transfers bar's own words.
      */
     static func words(_ ended: [Outcome]) -> (title: String, body: String?) {
         let failed = ended.filter { $0.reason != nil }
         if failed.count == 1, let only = failed.first, let reason = only.reason {
-            return (only.upload ? "1 upload didn’t finish" : "1 transfer didn’t finish", "“\(only.name)”: \(reason)")
+            return (only.upload ? "1 upload didn’t finish" : "1 transfer didn’t finish", reason)
         }
         if !failed.isEmpty {
-            return ("\(failed.count) \(failed.allSatisfy(\.upload) ? "uploads" : "transfers") didn’t finish", names(failed))
+            return ("\(failed.count) \(failed.allSatisfy(\.upload) ? "uploads" : "transfers") didn’t finish", "Open HushOS to see which.")
         }
-        if ended.allSatisfy(\.upload) { return ("\(ended.count) \(ended.count == 1 ? "file" : "files") uploaded", names(ended)) }
-        if ended.count == 1 { return ("“\(ended[0].name)” is on this phone", nil) }
-        return ("\(ended.count) transfers finished", names(ended))
+        if ended.allSatisfy(\.upload) { return ("\(ended.count) \(ended.count == 1 ? "file" : "files") uploaded", nil) }
+        if ended.count == 1 { return ("Kept on this phone", nil) }
+        return ("\(ended.count) transfers finished", nil)
     }
 
     /* Where a tap goes, as on Android. */
@@ -124,16 +125,6 @@ final class TransferNotices: NSObject, UNUserNotificationCenterDelegate {
         if ended.allSatisfy(\.upload), folders.count == 1, let folder = folders.first, let folder { return .folder(folder) }
         if ended.allSatisfy({ !$0.upload }) { return .phone }
         return .folder(nil)
-    }
-
-    /* “a”, “a” and “b”, or “a”, “b” and 3 more. */
-    private static func names(_ outcomes: [Outcome]) -> String {
-        let quoted = outcomes.map { "“\($0.name)”" }
-        switch quoted.count {
-        case 1: return quoted[0]
-        case 2: return "\(quoted[0]) and \(quoted[1])"
-        default: return "\(quoted[0]), \(quoted[1]) and \(quoted.count - 2) more"
-        }
     }
 
     private static func encode(_ target: Target) -> String {
