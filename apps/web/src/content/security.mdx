@@ -105,7 +105,7 @@ At signup the browser also generates an X25519 key pair for encryption, an Ed255
     ]}
 />
 
-The server refuses to store an ML-KEM public key without that signature. It is not folded into the fingerprint, so the fingerprint two people compare stays the X25519 one.
+The server refuses to store an ML-KEM public key without that signature. The fingerprint two people compare covers the X25519 key and that signing key, so the signing key a device checks the post-quantum key against is the one the two of you read out.
 
 Every workspace has its own 32-byte key, generated in your browser. It is random, not derived from your account key, so it can be granted to another person later without giving them anything of yours. What you hold is a **grant**: the workspace key wrapped under a key derived from your account key.
 
@@ -275,7 +275,7 @@ The seal is hybrid: an X25519 agreement between your identity key and theirs, an
     ]}
 />
 
-Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: the first key you use is recorded in your encrypted settings, and a later change is shown as a warning that you must accept, never applied silently. The fingerprint covers the X25519 key; the post-quantum key is vouched for by the contact’s signing key, checked on your device before it is used, and its digest joins the pin. A different post-quantum key served later is refused like any changed key, and one that goes missing is refused as a downgrade. Every path that seals to a contact goes through the pin, including the re-keying that follows a revocation.
+Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: a person’s keys are recorded in your encrypted settings when you add them after comparing words, and a later change is shown as a warning that you must accept, never applied silently. Nothing is pinned without that check: something shared with you by a person you have not added stays shut until you add them. The fingerprint covers the X25519 key and the signing key; the post-quantum key is vouched for by that signing key, checked on your device against the pinned one before it is used, and its digest joins the pin. Shares are only ever sealed hybrid: a person without a post-quantum key yet is not shared with until they have one. Every path that seals to a contact goes through the pin, and the re-keying that follows a revocation seals only to the shares and links your own encrypted record says you made, whatever the server lists. Your device also remembers the newest version of your settings it has seen and refuses an older copy, so the server cannot bring back a key you replaced.
 
 </Exact>
 

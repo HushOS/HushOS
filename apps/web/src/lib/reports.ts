@@ -7,9 +7,9 @@ import { openReader, readAll } from '@/lib/previews';
 
 /*
  * Reports, from both sides. A reporter's device seals the node key to every
- * operator and, for a file it can read in one go, digests the plaintext so the
- * report carries a hash an authority can match. An operator's queue is ordered
- * by the clock each category runs on.
+ * operator; nothing about the content leaves it in the clear. An operator's
+ * device works out a hash an authority can match when asked, and their queue is
+ * ordered by the clock each category runs on.
  */
 
 export const CATEGORIES: { value: ReportCategory; label: string }[] = [

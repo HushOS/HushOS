@@ -119,8 +119,10 @@ function ReportForm({
                 <DialogTitle>Report “{node.name}”</DialogTitle>
                 <DialogDescription>
                     Reporting lets the people who run this HushOS open{' '}
-                    {node.kind === 'folder' ? 'this folder and everything inside it' : 'this file'},
-                    so they can look. Whoever shared it isn’t told who reported it.
+                    {node.kind === 'folder'
+                        ? 'this folder, everything inside it, and anything added to it later'
+                        : 'this file and its earlier versions'}
+                    , so they can look. Whoever shared it isn’t told who reported it.
                 </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">
