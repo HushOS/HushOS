@@ -16,7 +16,7 @@ Content suite 3 is current: suite 2's layout (the thumbnail sealed into the obje
 - **Conflicted uploads** attach as described: the same node for an epoch race, a sibling conflict copy for a version race.
 - **Copy** within a workspace: for files by the server, for folders by the client walking the tree. A file's earlier version can be listed, downloaded, restored and discarded early. Each live version pays for the thumbnail it references as well as its object, so a copy that shares both is charged for both and refunded for both.
 - **The client header.** Every Drive request carries `HushOS-Client: name/version`; `DRIVE_CLIENT_MINIMUMS` sets the floor per client name, refused with 426.
-- **Contact pins**, ahead of sharing. A person looks another up by email, sees the fingerprint of the identity encryption and signing keys the server served, and pins it into a settings document sealed under a key derived from their own identity private key, so a root rotation or recovery never rewraps it. A later lookup that returns a different key is shown as a warning to accept, never applied.
+- **Contact pins**, ahead of sharing. A person looks another up by email, sees the fingerprint of the identity encryption and signing keys the server served, and pins it into a settings document, sealed since integrity-design.md under a random settings key wrapped under the account root (it was a key derived from the identity private key, which a succession would strand). A later lookup that returns a different key is shown as a warning to accept, never applied.
 - **Operators**: a `role` on the account, granted from the command line only, with a management overview that lists the audit's missing objects.
 - **Shares to accounts**: `drive_shares` rows with the node key sealed between identity keys; authorization moved into the walk on every node-addressed route (member, else the nearest live share's role, else 404; too low a role is 403); a grantee's listing cut at the share root; editors' uploads and epochs drawn in the owner's workspace; a move refused unless both ends lie in the same share; revocation live; and the recipient opening the envelope only with a pinned granter key (a share from someone not yet pinned stays shut until the recipient adds them and compares words; a served key that differs from the pin is refused).
 - **Links**: `drive_links` rows keyed by the hash of a path token the client mints and shows once; the node key sealed under BLAKE2b("hushos/drive/link/key/v2" || secret || argon2id(password, salt)) with the link's context, the derivation's version kept on the link so a later one can sit beside it, and a password of at least 8 characters, since whoever holds the URL can try passwords offline; viewer-only; expiry capped at a year; revocation; a use count; visitor routes under `/api/drive/links/:token/*` that require no session, are bounded per address and per token, and authorize exactly the subtree beneath the linked node. The page at `/s/<token>#<secret>` opens the key in the worker under no account. A signed-in visitor or a share's grantee can save a copy into their own Drive, which re-encrypts each file under their own keys rather than carrying the sharer's.
@@ -96,10 +96,10 @@ metadataEnvelope
   aad   = ["hushos/drive/node-meta", 1, workspaceId, nodeId, metadataVersion]
   body  = XChaCha20-Poly1305(UTF8(JSON metadata), nodeKey, nonce, aad)
 
-versionEnvelope (content suite 2)
+versionEnvelope (content suites 2 and 3; 3 is written, see integrity-design.md)
   key   = node key
   nonce = random(24)
-  aad   = ["hushos/drive/content-key", 2, workspaceId, nodeId, versionId, objectId]
+  aad   = ["hushos/drive/content-key", suite, workspaceId, nodeId, versionId, objectId]
   body  = XChaCha20-Poly1305(contentKey || u64be(plaintextSize) || u32be(thumbnailBytes),
                              nodeKey, nonce, aad)                       // 60 bytes; 84 with the nonce
 
@@ -165,7 +165,7 @@ Search runs on the device too, and its query stays there: the search page keeps 
 
 ## Content encryption
 
-Content suite 2, the current suite, encrypts a version as independent chunks rather than a libsodium secretstream. An interrupted upload resumes by re-encrypting only the missing chunks, a download can start at any chunk, and the version's thumbnail, when it has one, rides as a sealed trailer of the same object.
+Content suite 2, described here, encrypts a version as independent chunks rather than a libsodium secretstream; suite 3, the one written today, is the same layout padded to a Padmé bucket (see integrity-design.md, section 1), and a reader fetches every chunk of it, padding included, for a whole download or preview. An interrupted upload resumes by re-encrypting only the missing chunks, a download can start at any chunk, and the version's thumbnail, when it has one, rides as a sealed trailer of the same object.
 
 ```text
 contentKey   = random(32)
@@ -669,6 +669,8 @@ The granter seals to the grantee's identity keys, which the server serves, and t
 - Key transparency is a later layer on top of the same pin.
 
 ### Re-sealing older shares
+
+Today every re-seal is to suite 3 (integrity-design.md): the owner's device seals again any share still in suite 1 or 2, any share to a grantee whose pin followed a succession, and, after the owner replaced their own keys, every share in the ledger, finishing on a later open what an interrupted pass left. What follows is how suite 1 shares became suite 2 before that.
 
 An identity made before hybrid sharing has no KEM key. On its next unlock the device mints one (seed wrapped under the root beside the X25519 key, binding signed), stores it once through `POST /api/auth/identity/kem`, and from then on every share sealed to that person is suite 2. Shares sealed to them earlier stay suite 1 until the owner's device next opens Drive: it lists what it shares out, and for each suite 1 share whose grantee now serves a KEM key the pin accepts, re-seals the node key hybrid at the current epoch through `PUT /api/drive/shares/:id/envelope`. The repository accepts that only from the granter, only for a live share, and only at the node's current key epoch, so a rotation in flight is never raced.
 

@@ -1,7 +1,7 @@
 ---
 title: How HushOS protects your files
 heading: How HushOS protects your files.
-updated: 2026-09-15
+updated: 2026-10-13
 summary: How HushOS signs you in, makes and keeps your keys, locks your files, shares them, and handles reports, in plain words with the exact terms underneath so you can check each claim against the code.
 lede: What happens to a file from the moment you add it, in plain words. Each step keeps the exact terms underneath for anyone who wants to check them against the code. Where this page and the code disagree, the code is right and this page has a bug.
 ---
@@ -149,7 +149,7 @@ How remembered unlock and the account key rotations work, step by step, is in th
 
 The 24 words you save at sign-up lock their own copy of your account key. With the phrase and a link we email you, you can set a new password and your files stay as they were. Email alone can never get you back in. Resetting your password this way gives you a new phrase and signs you out everywhere else.
 
-In [Account](/app/account) you can also change your password, make a new recovery phrase, or reset your sharing keys (a new account key). Each one asks for your current password and signs you out of your other browsers.
+In [Account](/app/account) you can also change your password, make a new recovery phrase, or rotate your account key. Each one asks for your current password and signs you out of your other browsers. You can also replace your sharing keys, which the people you share with follow without comparing words again (see sharing below).
 
 <Exact>
 
@@ -182,8 +182,12 @@ During a reset the browser re-registers with OPAQUE under the new password and r
             'Creates new 24-word recovery credentials; preserves the password, master key, and identity keys',
         ],
         [
-            'Reset sharing keys',
-            'Generates a new master key and recovery phrase; rewraps the existing identity keys and every workspace grant, and preserves the password',
+            'Rotate account key',
+            'Generates a new master key and recovery phrase; rewraps the identity keys (current and earlier), the settings key and every workspace grant, and preserves the password',
+        ],
+        [
+            'Replace sharing keys',
+            'Generates new identity keys at the next key version, vouched for by a signature from the current signing key; keeps the earlier ones, still wrapped under the master key, to open what was sealed to them; seals every share again under the new keys',
         ],
     ]}
 />
@@ -196,7 +200,7 @@ Each action needs your current password through a fresh OPAQUE exchange, revokes
 
 <Step id="files" n={4} title={contents.files}>
 
-Your device locks each file, and its name, type and modified time, before any of it leaves. From a locked copy itself, our servers learn only roughly how large the file is. The locked pieces go straight from your device to storage; our app server never handles them. Thumbnails are made on your device and locked inside the file itself. Downloads come back the same way and are unlocked on your device, and previews fetch only the parts they need.
+Your device locks each file, and its name, type and modified time, before any of it leaves. Each file is padded before it is locked, so from a locked copy our servers learn only roughly how large the file is, to within a few percent. The locked pieces go straight from your device to storage; our app server never handles them. Thumbnails are made on your device and locked inside the file itself. Downloads come back the same way and are unlocked on your device, and previews fetch only the parts they need.
 
 <Exact>
 
@@ -242,6 +246,31 @@ An envelope moved to another folder, another version or another workspace fails 
     ]}
 />
 
+Every name and every version is also signed by the account that wrote it. Your device checks each signature against your own keys and the people whose words you compared, and marks anything it can’t tie to one of them as **Unverified**, saying who the server says wrote it. A key that only opens a folder, such as a link’s, can no longer plant a file or rename one unnoticed. Unverified items still open: it is a warning, not a lock.
+
+<Terms
+    title="Padding and signatures"
+    rows={[
+        [
+            'Padding',
+            'The file and its thumbnail are padded together to a Padmé bucket: at most 6.25% more up to 64 KiB, 3.125% up to 4 GiB, 1.5625% beyond. Padding is under the content key and counts towards storage',
+        ],
+        [
+            'Fetching',
+            'Downloads and whole-file previews fetch the padding too, so the store does not see where the file ends',
+        ],
+        [
+            'Signatures',
+            'Ed25519 by the writer’s identity key over the workspace, item, kind, metadata version and SHA-256 of the metadata envelope; and over the item, version, object, content suite and SHA-256 of the content-key envelope',
+        ],
+        [
+            'Checked',
+            'By the server against the writer’s current key before it stores a change, and again on your device against keys you trust',
+        ],
+        ['Not signed', 'Moves, trash and restore, which change no envelope; tags'],
+    ]}
+/>
+
 Independent chunks are what make ranged previews and resumed uploads plain arithmetic. A chunk is never re-encrypted under the same key and nonce with different bytes: a resumed upload proves the file is the same one, chunk digest by chunk digest, or starts over with fresh material.
 
 </Exact>
@@ -252,19 +281,28 @@ Independent chunks are what make ranged previews and resumed uploads plain arith
 
 Sharing a folder or file with another HushOS account locks a copy of its key for that one person, on your device, so only their devices can open it. The lock uses two methods together, one of them designed to resist future quantum computers, so a copy of our database taken today stays shut even if the older method is broken later.
 
-We hand out the keys people share to, so HushOS lets you check them. The first time you share with someone, their key is remembered, and you can both compare a short fingerprint. If their key ever changes, HushOS shows a warning and uses the new key only after you accept it.
+Every share is locked with a fresh key made for it alone and signed by the person sharing, so a key stolen later doesn’t open what was shared before, and nobody else can pass a share off as theirs.
+
+We hand out the keys people share to, so HushOS lets you check them. When you add someone, their keys are remembered after you both compare twelve words. If they replace their sharing keys in HushOS, the change is signed by their old keys: your device checks that and follows it, and tells you so you can compare words again. Any other change shows a warning, and the new key is used only after you accept it.
 
 <Exact>
 
-The seal is hybrid: an X25519 agreement between your identity key and theirs, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves. The recipient mounts the shared item as a root of its own under “Shared with me”.
+The seal is hybrid: an X25519 agreement between a fresh key made for this share and their identity key, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves. Your identity signing key signs the result, and their device checks that signature against the key it pinned for you before opening anything. The recipient mounts the shared item as a root of its own under “Shared with me”.
 
 <Terms
     rows={[
         [
             'Seal',
-            'X25519 agreement plus ML-KEM-768 encapsulation, HKDF-SHA-256 over both secrets, then XChaCha20-Poly1305 over the node key',
+            'X25519 agreement from a per-share ephemeral key plus ML-KEM-768 encapsulation, HKDF-SHA-256 over both secrets, then XChaCha20-Poly1305 over the node key',
         ],
-        ['Envelope', '1160 bytes: nonce, the 1088-byte ML-KEM ciphertext, and the sealed node key'],
+        [
+            'Envelope',
+            '1256 bytes: the ephemeral key, the 1088-byte ML-KEM ciphertext, nonce, the sealed node key, and the sharer’s Ed25519 signature',
+        ],
+        [
+            'Replacing keys',
+            'A new identity at the next key version, signed by the one it replaces; contacts check the chain from the keys they pinned and keep the earlier signing keys, so what was signed before still verifies',
+        ],
         ['Whose key', 'A contact key you pinned, with a fingerprint you can compare in person'],
         ['Roles', 'Viewer, or editor; an editor’s uploads land in your storage'],
         [
@@ -425,7 +463,10 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 - Replacing your recovery phrase stops the old one from resetting your password. A recovery kit you downloaded earlier still holds the old phrase and your account key as it was then, so it can still open that key offline. Password resets and a new recovery phrase keep the same account key; only replacing the account key makes a different one.
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
 - The server sees what’s listed above: your email, sizes, times and how your folders nest.
-- A share made before the other person had a post-quantum key uses X25519 alone until your device locks it again with both. A report to an operator without a post-quantum key uses X25519 alone.
+- A share made before the other person had a post-quantum key uses X25519 alone until your device locks it again with both.
+- Items written before HushOS signed changes show as Unverified until someone writes them again.
+- Replacing sharing keys with stolen keys would look like a real replacement to the people you share with. That is why HushOS tells them, and suggests comparing words again.
+- Signatures say who wrote an item, not that it is the newest version: the server could still serve an older, signed state of it. A report to an operator without a post-quantum key uses X25519 alone.
 
 </Section>
 
