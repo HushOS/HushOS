@@ -17,7 +17,13 @@ import {
     type IdentityKem,
 } from './identity';
 import { openSettings, sealSettings, type Settings, type SettingsEnvelope } from './contacts';
-import { openShareKey, sealShareKey } from './shares';
+import {
+    openShareKey,
+    sealShareKey,
+    type GranteeSecrets,
+    type GranterKeys,
+    type ShareContext,
+} from './shares';
 import {
     integrityOf,
     metadataStatement,
@@ -139,10 +145,11 @@ export type CryptoRequests = {
     settingsOpen: { userId: string; envelope: SettingsEnvelope };
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
     /*
-     * Shares. Seal wraps an open node key to a contact's identity key under the
-     * granter's own; open unwraps a share received, with the granter's public
-     * key the caller has checked against its pin, and keeps the node key so the
-     * subtree opens like any other.
+     * Shares. Seal wraps an open node key to a contact's identity keys in share
+     * suite 3 (a fresh X25519 key and ML-KEM), signed by the granter's identity;
+     * open unwraps a share received, with the granter's keys the caller has
+     * checked against its pin, and keeps the node key so the subtree opens like
+     * any other.
      */
     driveSealShare: {
         workspaceId: string;
@@ -150,17 +157,26 @@ export type CryptoRequests = {
         keyEpoch: number;
         granterUserId: string;
         granteeUserId: string;
+        /* The grantee's X25519 and KEM keys, both checked against their pin by the caller. */
         granteePublicKey: string;
-        /* The grantee's KEM key, checked against their pin by the caller; null seals suite 1. */
-        granteeKemPublicKey?: string | null;
+        granteeKemPublicKey: string;
     };
     driveOpenShare: {
         workspaceId: string;
         nodeId: string;
         keyEpoch: number;
         granterUserId: string;
-        granterPublicKey: string;
+        /* The granter's pinned X25519 key: what suites 1 and 2 open with. */
+        granterPublicKey: string | null;
+        /* The granter's pinned signing key: a suite 3 share opens only if it signed it. */
+        granterSigningPublicKey: string | null;
         granteeUserId: string;
+        /*
+         * Which of this account's identities the share was sealed to, when the
+         * caller knows; otherwise the current one is tried, then the earlier
+         * ones (see identityOpen's history).
+         */
+        granteeKeyVersion?: number | null;
         shareEnvelope: string;
         /* During the owner's rotation: the previous node key too, to reach children not yet rotated. */
         prevShareEnvelope?: string | null;
@@ -703,6 +719,46 @@ export function createCryptoSession() {
     async function signVersion(ctx: VersionStatement, envelope: Uint8Array) {
         return sign(await versionStatement(ctx, envelope));
     }
+    /*
+     * The identities a share sealed to this account may have been sealed to:
+     * the one named, or the current one and then the earlier ones, newest first.
+     */
+    function granteeIdentities(keyVersion?: number | null) {
+        if (!identityKey) throw new CryptoError('Open your identity first.');
+        const all = [
+            {
+                keyVersion: identityKey.keyVersion,
+                privateKey: identityKey.key,
+                kemSecretKey: identityKey.kem?.secretKey ?? null,
+            },
+        ];
+        if (keyVersion === undefined || keyVersion === null) return all;
+        const named = all.filter((identity) => identity.keyVersion === keyVersion);
+        if (named.length === 0)
+            throw new CryptoError('This share was sealed to keys this device does not hold.');
+        return named;
+    }
+    /*
+     * A share opened with the first of `candidates` it was sealed to. Under
+     * suite 3 the granter's signature is checked before any of them is tried.
+     */
+    async function openShareWithAny(
+        envelope: Uint8Array,
+        granter: GranterKeys,
+        candidates: GranteeSecrets[],
+        ctx: ShareContext,
+    ) {
+        let failure: unknown;
+        for (const grantee of candidates)
+            try {
+                return await openShareKey(envelope, granter, grantee, ctx);
+            } catch (error) {
+                // A bad signature fails for every candidate alike: say so at once.
+                if (error instanceof CryptoError && /not signed/.test(error.message)) throw error;
+                failure ??= error;
+            }
+        throw failure ?? new CryptoError('This share could not be opened.');
+    }
     type Upload = {
         workspaceId: string;
         contentKey: Uint8Array<ArrayBuffer>;
@@ -954,7 +1010,7 @@ export function createCryptoSession() {
             }
             const shares = [];
             for (const share of node.shares) {
-                if (!identityKey || !granterUserId || identityKey.userId !== granterUserId)
+                if (!granterUserId || identityKey.userId !== granterUserId)
                     throw new CryptoError('Open your identity first.');
                 shares.push({
                     id: share.id,
@@ -964,10 +1020,10 @@ export function createCryptoSession() {
                             {
                                 encryptionPublicKey: decode(share.granteePublicKey, 32),
                                 kemPublicKey: share.granteeKemPublicKey
-                                    ? decode(share.granteeKemPublicKey, 1184)
+                                    ? decode(share.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
                                     : null,
                             },
-                            identityKey.key,
+                            identityKey.signingKey,
                             {
                                 workspaceId,
                                 nodeId,
@@ -1361,10 +1417,10 @@ export function createCryptoSession() {
                     {
                         encryptionPublicKey: decode(message.input.granteePublicKey, 32),
                         kemPublicKey: message.input.granteeKemPublicKey
-                            ? decode(message.input.granteeKemPublicKey, 1184)
+                            ? decode(message.input.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
                             : null,
                     },
-                    identityKey.key,
+                    identityKey.signingKey,
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
                 return { shareEnvelope: encode(envelope) };
@@ -1377,22 +1433,27 @@ export function createCryptoSession() {
                     throw new CryptoError('Open your identity first.');
                 const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
-                const secrets = {
-                    privateKey: identityKey.key,
-                    kemSecretKey: identityKey.kem?.secretKey ?? null,
+                const granter = {
+                    encryptionPublicKey: message.input.granterPublicKey
+                        ? decode(message.input.granterPublicKey, 32)
+                        : null,
+                    signingPublicKey: message.input.granterSigningPublicKey
+                        ? decode(message.input.granterSigningPublicKey, 32)
+                        : null,
                 };
-                const key = await openShareKey(
+                const candidates = granteeIdentities(message.input.granteeKeyVersion);
+                const key = await openShareWithAny(
                     decode(message.input.shareEnvelope),
-                    decode(message.input.granterPublicKey, 32),
-                    secrets,
+                    granter,
+                    candidates,
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
                 rememberNodeKey(workspaceId, nodeId, key, keyEpoch);
                 if (message.input.prevShareEnvelope && message.input.prevKeyEpoch) {
-                    const previous = await openShareKey(
+                    const previous = await openShareWithAny(
                         decode(message.input.prevShareEnvelope),
-                        decode(message.input.granterPublicKey, 32),
-                        secrets,
+                        granter,
+                        candidates,
                         {
                             workspaceId,
                             nodeId,

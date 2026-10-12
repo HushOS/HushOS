@@ -22,6 +22,8 @@ import sodium from 'libsodium-wrappers';
 import { createIdentity } from '../src/identity';
 import { decode, encode, wrappingKey } from '../src/keys';
 import { sealShareKey, shareContext } from '../src/shares';
+import { hybridKey } from '../src/hybrid';
+import { kemEncapsulate } from '../src/pq';
 import {
     generateLinkSecret,
     generateLinkSalt,
@@ -246,10 +248,12 @@ const document = {
     ),
 };
 
-// The grantee's identity under the account key, and a node key shared to it by a granter, in both suites.
+// The grantee's identity under the account key, and a node key shared to it by a granter in every
+// suite: 3, the one sealed now, and 1 and 2, which are still opened.
 await sodium.ready;
 const identity = await createIdentity(accountKey, userId, 2);
 const granter = sodium.crypto_box_keypair();
+const granterSigning = sodium.crypto_sign_keypair();
 const shareCtx = {
     workspaceId: uuid(),
     nodeId: uuid(),
@@ -279,7 +283,28 @@ const share = {
             return new Uint8Array([...nonce, ...body]);
         })(),
     ),
-    hybrid: encode(await sealShareKey(sharedNodeKey, grantee, granter.privateKey, shareCtx)),
+    // Suite 2, the static pair key with ML-KEM beside it, as made before shares were signed.
+    hybrid: encode(
+        await (async () => {
+            const pair = sodium.crypto_box_beforenm(
+                grantee.encryptionPublicKey,
+                granter.privateKey,
+            ) as Uint8Array<ArrayBuffer>;
+            const { ciphertext, sharedSecret } = kemEncapsulate(grantee.kemPublicKey!);
+            const key = await hybridKey(
+                pair,
+                sharedSecret,
+                ciphertext,
+                'hushos/drive/share-key/v2',
+            );
+            const nonce = random(24);
+            const body = await encryptKey(sharedNodeKey, key, nonce, shareContext(shareCtx, 2));
+            return new Uint8Array([...nonce, ...ciphertext, ...body]);
+        })(),
+    ),
+    // Suite 3: an ephemeral key and ML-KEM, signed by the granter.
+    granterSigningPublicKey: encode(granterSigning.publicKey),
+    signed: encode(await sealShareKey(sharedNodeKey, grantee, granterSigning.privateKey, shareCtx)),
 };
 
 // A password link: what a visitor opens from the URL, and the owner's sealed copy of its secret.

@@ -107,7 +107,11 @@ sig            = Ed25519(granterSigningKey, utf8(signed))
 envelope       = eph.public (32) || kemCt (1088) || nonce (24) || body (48) || sig (64)   // 1256 bytes
 ```
 
-The grantee checks the signature against the granter's pinned signing key before decapsulating; a share whose signature does not verify does not open. Suite 3 is the only suite written; suites 1 and 2 still open. The server tells suites apart by length and stores `suite = 3`.
+`dh` is the raw X25519 output (libsodium `crypto_scalarmult`, not `crypto_box_beforenm`), refused when it is all zeros; `granteeX25519Public` in the salt is the grantee's identity key the share was sealed to, which the grantee recomputes from its own private key. The statement's ids are lowercase, as in section 2.
+
+The grantee checks the signature against the granter's pinned signing key before decapsulating; a share whose signature does not verify does not open. Suite 3 is the only suite written; suites 1 and 2 still open (with the granter's pinned X25519 key, as before). The server tells suites apart by length and stores `suite = 3`.
+
+A share row does not record which of the grantee's identities it was sealed to. After a succession (section 4) a grantee's device tries its current identity and then its earlier ones; the signature is checked once, before any of them.
 
 Reports keep their own suite (an ephemeral X25519 key and ML-KEM, sealed to operators without a reporter key).
 

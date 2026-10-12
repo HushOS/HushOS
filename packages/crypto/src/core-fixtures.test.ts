@@ -285,16 +285,15 @@ describe('records sealed by the Rust core', () => {
         const privateKey = await openIdentityEncryptionKey(root, web.account.userId, identity);
         const kem = await openIdentityKemKey(root, web.account.userId, identity);
         const grantee = { privateKey, kemSecretKey: kem!.secretKey };
-        expect(
-            await openShareKey(
-                decode(share.hybrid),
-                decode(share.granterPublicKey, 32),
-                grantee,
-                share.ctx,
-            ),
-        ).toEqual(decode(share.nodeKey, 32));
+        const granter = {
+            encryptionPublicKey: decode(share.granterPublicKey, 32),
+            signingPublicKey: null,
+        };
+        expect(await openShareKey(decode(share.hybrid), granter, grantee, share.ctx)).toEqual(
+            decode(share.nodeKey, 32),
+        );
         await expect(
-            openShareKey(decode(share.hybrid), decode(share.granterPublicKey, 32), grantee, {
+            openShareKey(decode(share.hybrid), granter, grantee, {
                 ...share.ctx,
                 keyEpoch: 10,
             }),

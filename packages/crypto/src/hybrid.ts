@@ -10,6 +10,16 @@ export async function hybridKey(
     kemCiphertext: Uint8Array,
     info: string,
 ) {
+    return hybridKeyWithSalt(pair, kemSecret, kemCiphertext.slice(), info);
+}
+
+/* The same derivation with a salt of the caller's choosing (share suite 3 salts with a digest). */
+export async function hybridKeyWithSalt(
+    pair: Uint8Array,
+    kemSecret: Uint8Array,
+    salt: Uint8Array<ArrayBuffer>,
+    info: string,
+) {
     const material = new Uint8Array(pair.length + kemSecret.length);
     material.set(pair);
     material.set(kemSecret, pair.length);
@@ -20,7 +30,7 @@ export async function hybridKey(
                 {
                     name: 'HKDF',
                     hash: 'SHA-256',
-                    salt: kemCiphertext.slice(),
+                    salt,
                     info: new TextEncoder().encode(info),
                 },
                 key,
