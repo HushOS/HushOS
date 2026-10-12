@@ -66,7 +66,7 @@ export function kitText(
         '',
         'WHEN THIS KIT STOPS WORKING',
         'Resetting your password with this phrase, making a new recovery phrase,',
-        'or resetting sharing keys in Account makes a new phrase. Save a new kit then.',
+        'or rotating the account key in Account makes a new phrase. Save a new kit then.',
         'Changing your password in Account keeps this phrase as it is.',
         '',
         'FOR RECOVERY TOOLS',

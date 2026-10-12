@@ -178,7 +178,7 @@ export function RecoveryPhrase({
                     {fresh && (
                         <AuthNote tone="info">
                             {reason === 'master-key'
-                                ? 'Your sharing keys are reset, and your old phrase no longer works. Save these 24 words instead.'
+                                ? 'Your account key is rotated, and your old phrase no longer works. Save these 24 words instead.'
                                 : 'Your old phrase no longer works. Save these 24 words before you leave this page.'}
                         </AuthNote>
                     )}

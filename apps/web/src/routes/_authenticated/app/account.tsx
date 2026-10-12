@@ -6,6 +6,7 @@ import {
     ChangePasswordDialog,
     DeleteAccountDialog,
     NewKeyDialog,
+    ReplaceSharingKeysDialog,
 } from '@/components/account-dialogs';
 import { CopyValue } from '@/components/copy-value';
 import { openDeviceDialog } from '@/components/device-control';
@@ -30,7 +31,8 @@ export const Route = createFileRoute('/_authenticated/app/account')({
 /*
  * Account: somewhere people come rarely and want to leave quickly. Name and
  * password, the recovery phrase, what this browser does, and, folded away,
- * the heavy things: resetting sharing keys, the account ID, deleting the
+ * the heavy things: replacing sharing keys, rotating the account key, the
+ * account ID, deleting the
  * account. Each of those asks once, in a dialog.
  */
 
@@ -43,7 +45,7 @@ const themes = [
 function AccountPage() {
     const { user } = Route.useRouteContext();
     const [dialog, setDialog] = useState<
-        'password' | 'recovery-key' | 'master-key' | 'delete' | null
+        'password' | 'recovery-key' | 'master-key' | 'identity' | 'delete' | null
     >(null);
     const [passwordChanged, setPasswordChanged] = useState(false);
     const [advanced, setAdvanced] = useState(false);
@@ -125,20 +127,37 @@ function AccountPage() {
                         <Setting
                             label="Sharing keys"
                             action={
-                                <Button variant="outline" onClick={() => setDialog('master-key')}>
-                                    Reset sharing keys
+                                <Button variant="outline" onClick={() => setDialog('identity')}>
+                                    Replace sharing keys
                                 </Button>
                             }
                             below={
                                 <p className="text-[13px] text-muted-foreground">
-                                    Only if you think someone saw your password or recovery phrase.
-                                    You get a new recovery phrase and your other devices are signed
-                                    out. Files, shares and links stay as they are.
+                                    New keys for sharing, signed by your current ones, so the people
+                                    you share with follow the change without comparing words again.
                                 </p>
                             }
                         >
                             <span className="text-muted-foreground">
-                                Used to share with people and links
+                                What people share with you is sealed to
+                            </span>
+                        </Setting>
+                        <Setting
+                            label="Account key"
+                            action={
+                                <Button variant="outline" onClick={() => setDialog('master-key')}>
+                                    Rotate account key
+                                </Button>
+                            }
+                            below={
+                                <p className="text-[13px] text-muted-foreground">
+                                    A new master key for your account. Your files, sharing keys and
+                                    links stay as they are.
+                                </p>
+                            }
+                        >
+                            <span className="text-muted-foreground">
+                                Locks your other keys, under your password and phrase
                             </span>
                         </Setting>
                         <Setting label="Account ID">
@@ -181,6 +200,11 @@ function AccountPage() {
                 user={user}
                 action="master-key"
                 open={dialog === 'master-key'}
+                onOpenChange={close}
+            />
+            <ReplaceSharingKeysDialog
+                userId={user.id}
+                open={dialog === 'identity'}
                 onOpenChange={close}
             />
             <DeleteAccountDialog open={dialog === 'delete'} onOpenChange={close} />

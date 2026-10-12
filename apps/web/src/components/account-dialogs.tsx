@@ -1,5 +1,6 @@
 import type { SessionUser } from '@hushos/auth/protocol';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useState, type ReactNode } from 'react';
 import { DialogField } from '@/components/settings';
@@ -12,17 +13,20 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
+import { succeedIdentity } from '@/lib/contacts';
+import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
 import { forgetDevice } from '@/lib/sign-out';
 
 /*
  * The account's heavy actions, each a dialog that asks once: change the
- * password, make a new recovery phrase, reset sharing keys (a new master key),
- * delete the account. They change what the password and phrase unlock, so
- * every one asks for the password; the server proves it with OPAQUE and it
- * never leaves this device.
+ * password, make a new recovery phrase, rotate the account key (a new master
+ * key), replace sharing keys (a new identity), delete the account. Those that
+ * change what the password and phrase unlock ask for the password; the server
+ * proves it with OPAQUE and it never leaves this device.
  */
 
 function Shell({
@@ -203,7 +207,106 @@ export function ChangePasswordDialog({
 }
 
 /*
- * A new recovery phrase, or a new master key (said as "reset sharing keys").
+ * New sharing keys: a new identity at the next key version, signed by the
+ * current one, so the people this account shares with follow the change
+ * without comparing words again; then everything it shares is sealed again,
+ * to the same people, under the new keys. The account key, password and
+ * recovery phrase stay as they are, so no password is asked for.
+ */
+export function ReplaceSharingKeysDialog({
+    userId,
+    open,
+    onOpenChange,
+}: {
+    userId: string;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+}) {
+    const queryClient = useQueryClient();
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    async function submit() {
+        setPending(true);
+        setError('');
+        try {
+            await queryClient.fetchQuery(driveOpenQueryOptions(userId));
+            await succeedIdentity(queryClient, userId);
+            let resealed = 0;
+            let failed = false;
+            try {
+                ({ resealed } = await driveClient.upgradeShares({ all: true }));
+            } catch {
+                failed = true;
+            }
+            cue('success');
+            toast.add({
+                type: failed ? 'warning' : 'success',
+                title: 'Sharing keys replaced',
+                description: failed
+                    ? 'Some shares weren’t sealed again yet. HushOS tries again the next time you open your files.'
+                    : resealed
+                      ? `${resealed} ${resealed === 1 ? 'share' : 'shares'} sealed again to your new keys. Your twelve words changed too.`
+                      : 'Your twelve words changed too.',
+            });
+            onOpenChange(false);
+        } catch (cause) {
+            cue('error');
+            setError(driveError(cause));
+        } finally {
+            setPending(false);
+        }
+    }
+    return (
+        <Shell
+            open={open}
+            onOpenChange={(value) => {
+                if (!value) setError('');
+                onOpenChange(value);
+            }}
+            pending={pending}
+            title="Replace sharing keys?"
+            onSubmit={() => void submit()}
+            footer={
+                <>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => onOpenChange(false)}
+                    >
+                        Cancel
+                    </Button>
+                    <Button type="submit" disabled={pending}>
+                        {pending ? 'Replacing…' : 'Replace sharing keys'}
+                    </Button>
+                </>
+            }
+        >
+            <div className="flex flex-col gap-2 text-[15px]">
+                <p>
+                    Use this if you think your sharing keys were exposed, for example on a device
+                    someone else used while it was unlocked.
+                </p>
+                <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
+                    <li>
+                        Your current keys sign the new ones, so the people you share with follow the
+                        change without comparing words again.
+                    </li>
+                    <li>Everything you share is sealed again to the new keys.</li>
+                    <li>Your twelve words change. Your password and recovery phrase don’t.</li>
+                </ul>
+            </div>
+            {error && (
+                <p role="alert" className="text-[13px] text-destructive">
+                    {error}
+                </p>
+            )}
+        </Shell>
+    );
+}
+
+/*
+ * A new recovery phrase, or a new master key (said as "rotate account key").
  * Both end on the page that shows the new 24 words and waits until they are saved.
  */
 export function NewKeyDialog({
@@ -263,7 +366,7 @@ export function NewKeyDialog({
                 onOpenChange(value);
             }}
             pending={pending}
-            title={keys ? 'Reset sharing keys?' : 'Make a new recovery phrase?'}
+            title={keys ? 'Rotate account key?' : 'Make a new recovery phrase?'}
             description={
                 keys
                     ? undefined
@@ -283,10 +386,10 @@ export function NewKeyDialog({
                     <Button type="submit" disabled={pending}>
                         {pending
                             ? keys
-                                ? 'Resetting…'
+                                ? 'Rotating…'
                                 : 'Making…'
                             : keys
-                              ? 'Reset sharing keys'
+                              ? 'Rotate account key'
                               : 'Make a new phrase'}
                     </Button>
                 </>
@@ -294,11 +397,14 @@ export function NewKeyDialog({
         >
             {keys && (
                 <div className="flex flex-col gap-2 text-[15px]">
-                    <p>Use this if you think someone saw your password or recovery phrase.</p>
+                    <p>
+                        A new master key for your account. Use this if you think someone saw your
+                        password or recovery phrase.
+                    </p>
                     <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-muted-foreground">
                         <li>You get a new recovery phrase. The old one stops working.</li>
                         <li>Your other devices are signed out.</li>
-                        <li>Your files, shares and links stay as they are.</li>
+                        <li>Your files, sharing keys and links stay as they are.</li>
                     </ul>
                 </div>
             )}

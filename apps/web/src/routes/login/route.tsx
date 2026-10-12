@@ -202,7 +202,7 @@ const notices = {
     },
     'master-key': {
         tone: 'info',
-        title: 'Sharing keys reset',
+        title: 'Account key rotated',
         text: 'Sign in to save your new recovery phrase.',
     },
     'recovery-key': {
