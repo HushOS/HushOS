@@ -270,7 +270,7 @@ class LinkVault(origin: String, url: String) {
         val v = openVersion(item)
         var url = api.linkVersionUrl(token, v.versionId)
         // Resumable like the drive's own downloads: a dropped chunk is fetched again, a `.part` is continued.
-        Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(), progress = progress,
+        Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(), progress = progress, fileSize = v.content.plaintextSize.toLong(),
             onExpired = { url = api.linkVersionUrl(token, v.versionId) },
         ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }

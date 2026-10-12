@@ -62,3 +62,26 @@ class ResumableTest {
         assertEquals(1, refreshed)
     }
 }
+
+/*
+ * A suite 3 object is padded: a 10-byte file in 4-byte chunks may be stored as five chunks, the last two
+ * empty. The bar follows the file's own bytes, so it is full when the file is, never past it, and the
+ * padding at the end neither moves it nor holds it short of full.
+ */
+class PaddedProgressTest {
+    @Test
+    fun `progress follows the file's bytes and padding chunks leave it full`() {
+        val seen = ArrayList<Float>()
+        val out = File(Files.createTempDirectory("padded").toFile(), "f.bin")
+        val plain = ByteArray(10) { it.toByte() }
+        Resumable.download(out, 5uL, 4L, sleep = {}, progress = { seen.add(it) }, fileSize = 10L) { index ->
+            val start = (index.toLong() * 4).toInt()
+            if (start >= plain.size) ByteArray(0) else plain.copyOfRange(start, minOf(plain.size, start + 4))
+        }
+        assertArrayEquals(plain, out.readBytes())
+        assertEquals(listOf(0.4f, 0.8f, 1f, 1f, 1f), seen)
+        // An empty file is done only when its one (padding) chunk is.
+        assertEquals(0f, Resumable.fraction(0uL, 1uL, 4L, 0L))
+        assertEquals(1f, Resumable.fraction(1uL, 1uL, 4L, 0L))
+    }
+}

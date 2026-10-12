@@ -921,7 +921,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         val v = openVersion(item, version)
         var url = api.versionUrl(v.versionId, item.node.workspaceId)
         Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
-            online = { Resumable.online(context) }, progress = progress,
+            online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
             onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
         ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }
@@ -1187,7 +1187,7 @@ class Vault(private val context: Context, val api: DriveApi) {
                         api.putPart(urls[partNumber] ?: throw ApiError(500, "No URL for part $partNumber"), sealed)
                     }
                     etags.put(JSONObject().put("partNumber", partNumber).put("etag", etag))
-                    progress((index + 1uL).toFloat() / layout.chunkCount.toFloat())
+                    progress(Resumable.fraction(index + 1uL, layout.chunkCount, layout.chunkBytes.toLong(), size.toLong()))
                 }
             }
         } catch (error: Exception) {
