@@ -1,6 +1,7 @@
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import { TextSwap } from '@/components/motion';
 import { Input } from '@/components/ui/input';
+import { SECRET_FIELD } from '@/components/password-input';
 
 export function messagesOf(errors: unknown[]) {
     return errors
@@ -74,6 +75,8 @@ export function AuthInput({
                     aria-invalid={invalid}
                     aria-describedby={describedBy}
                     {...props}
+                    // Shown as text, a password would go to the browser's cloud spellcheck.
+                    {...(secret ? SECRET_FIELD : {})}
                 />
                 {secret && (
                     <button

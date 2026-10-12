@@ -124,12 +124,9 @@ function readRange(source, start, end) {
     });
 }
 
-function escapeHtml(text) {
-    return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
 function playerPage(source) {
-    const title = escapeHtml(source.name);
+    // Not the file's name: a page title can surface in the system's media controls.
+    const title = source.kind === 'audio' ? 'Audio' : 'Video';
     const src = `/hushos-download/media/${encodeURIComponent(source.id)}`;
     const element =
         source.kind === 'audio'
@@ -220,7 +217,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
     const match = url.pathname.match(/^\/hushos-download\/file\/([^/]+)$/);
-    if (!match) return;
+    // Anything else in this scope (an older worker's URL, carrying a file name) is answered
+    // here, never passed on to the network where the server would see it.
+    if (!match) {
+        if (url.origin === self.location.origin && url.pathname.startsWith('/hushos-download/'))
+            event.respondWith(
+                new Response('This download has expired. Start it again.', { status: 410 }),
+            );
+        return;
+    }
     const id = decodeURIComponent(match[1]);
     const entry = downloads.get(id);
     if (!entry) {

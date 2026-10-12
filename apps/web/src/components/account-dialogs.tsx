@@ -15,6 +15,7 @@ import {
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
+import { forgetDevice } from '@/lib/sign-out';
 
 /*
  * The account's heavy actions, each a dialog that asks once: change the
@@ -341,6 +342,8 @@ export function DeleteAccountDialog({
         setError('');
         try {
             await authClient.deleteAccount(password);
+            // The account is gone; what Drive kept of it on this device goes too.
+            await forgetDevice();
             router.options.context.queryClient.clear();
             await router.invalidate();
             await router.navigate({ to: '/account-deleted', replace: true });

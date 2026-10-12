@@ -63,6 +63,7 @@ import { downloadNodes } from '@/lib/downloads';
 import { rotateAfterRevoke } from '@/lib/rotation';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
+import { copySecret } from '@/lib/clipboard';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/shared')({
     validateSearch: (search: Record<string, unknown>): { view?: 'by-me' } =>
@@ -448,7 +449,7 @@ function ByMe() {
                 throw new Error(
                     'This link was made before links could be shown again. Make a new one.',
                 );
-            await navigator.clipboard.writeText(url);
+            await copySecret(url);
             cue('success', { volume: 0.4 });
             toast.add({ type: 'success', title: 'Link copied' });
         } catch (cause) {

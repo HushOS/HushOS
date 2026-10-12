@@ -1,5 +1,5 @@
 import { DriveApiError, type DriveApi, type LinkApi, type ReportApi } from '@hushos/drive/api';
-import { apiClient } from '@/lib/api-client';
+import { anonymousApiClient, apiClient } from '@/lib/api-client';
 
 const api = () => apiClient().drive;
 
@@ -236,22 +236,24 @@ export const driveApi: DriveApi = {
     report: (input) => unwrapDrive(api().reports.post(input)),
 };
 
+/* A link's visitor routes take no session, and are sent none. */
+const linkRoutes = () => anonymousApiClient().drive;
 export const linkApi: LinkApi = {
-    open: (token) => unwrapDrive(api().links({ id: token }).open.get()),
+    open: (token) => unwrapDrive(linkRoutes().links({ id: token }).open.get()),
     children: (token, parentId, after) =>
         unwrapDrive(
-            api()
+            linkRoutes()
                 .links({ id: token })
                 .nodes({ nodeId: parentId })
                 .children.get({ query: after ? { after } : {} }),
         ),
     downloadUrl: (token, versionId) =>
-        unwrapDrive(api().links({ id: token }).versions({ versionId }).url.get()),
+        unwrapDrive(linkRoutes().links({ id: token }).versions({ versionId }).url.get()),
     downloadUrls: (token, versionIds) =>
-        unwrapDrive(api().links({ id: token }).versions.urls.post({ versionIds })),
+        unwrapDrive(linkRoutes().links({ id: token }).versions.urls.post({ versionIds })),
     thumbnailUrls: (token, versionIds) =>
         unwrapDrive(
-            api()
+            linkRoutes()
                 .links({ id: token })
                 .thumbnails.get({ query: { versions: versionIds.join(',') } }),
         ),

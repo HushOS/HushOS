@@ -67,6 +67,7 @@ import {
 import { currentNode, rotateAfterRevoke } from '@/lib/rotation';
 import { sessionQueryOptions } from '@/lib/session';
 import { cue } from '@/lib/sounds';
+import { copySecret } from '@/lib/clipboard';
 
 const ROLES: { value: ShareRole; label: string }[] = [
     { value: 'viewer', label: 'Can view' },
@@ -706,7 +707,7 @@ function LinkCard({
     async function copy() {
         setBusy(true);
         try {
-            await navigator.clipboard.writeText(await address());
+            await copySecret(await address());
             setCopied(true);
             setTimeout(() => setCopied(false), 1800);
             cue('success', { volume: 0.4 });

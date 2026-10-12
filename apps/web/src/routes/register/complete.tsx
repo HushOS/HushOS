@@ -13,6 +13,7 @@ import { authClient } from '@/lib/auth-client';
 import { authError, newPasswordValue } from '@/lib/form';
 import { forgetSession } from '@/lib/session';
 import { cue } from '@/lib/sounds';
+import { signOut as signOutOfBrowser } from '@/lib/sign-out';
 
 const signupFields = z
     .object({
@@ -53,7 +54,7 @@ function SignOutFirst({ user, onSignedOut }: { user: SessionUser; onSignedOut: (
         setPending(true);
         setError('');
         try {
-            await authClient.logout();
+            await signOutOfBrowser();
             forgetSession(router.options.context.queryClient, false);
             onSignedOut();
         } catch {

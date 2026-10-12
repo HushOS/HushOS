@@ -17,6 +17,7 @@ import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
+import { LINK_PASSWORD_MIN_LENGTH } from '@hushos/drive/protocol';
 
 /*
  * A link anyone can open, as its owner sees it: one line saying how it stands,
@@ -113,8 +114,17 @@ function LinkOptionsForm({
     ];
 
     async function save() {
-        setSaving(true);
         setError('');
+        // Whoever holds the URL can try passwords offline, so a short one is refused before sealing.
+        if (
+            !removePassword &&
+            password.trim() &&
+            Array.from(password).length < LINK_PASSWORD_MIN_LENGTH
+        ) {
+            setError(`Use at least ${LINK_PASSWORD_MIN_LENGTH} characters.`);
+            return;
+        }
+        setSaving(true);
         try {
             await driveClient.updateLink(node, link, {
                 password: removePassword ? null : password.trim() ? password : undefined,
@@ -164,7 +174,9 @@ function LinkOptionsForm({
                     className="text-[15px]"
                 />
                 <p className="text-[13px] text-muted-foreground">
-                    Whoever opens the link types it on their device. It never reaches us.
+                    At least {LINK_PASSWORD_MIN_LENGTH} characters. Whoever opens the link types it
+                    on their device; it never reaches us. Anyone with the link can try passwords on
+                    their own computer, so make it one nobody would guess.
                 </p>
                 {link.hasPassword && (
                     <label

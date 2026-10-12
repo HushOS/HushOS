@@ -1,6 +1,7 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/components/ui/toast';
 import { cue } from '@/lib/sounds';
+import { copySecret } from '@/lib/clipboard';
 
 /*
  * A value you can click to copy: underlined like a link, with a tooltip that
@@ -10,19 +11,27 @@ export function CopyValue({
     value,
     label,
     wrap = false,
+    secret = false,
     className = '',
 }: {
     value: string;
     label: string;
     /* Break a long value (a link) across lines instead of clipping it. */
     wrap?: boolean;
+    /* A key: cleared from the clipboard again, and never repeated in the toast. */
+    secret?: boolean;
     className?: string;
 }) {
     async function copy() {
         try {
-            await navigator.clipboard.writeText(value);
+            if (secret) await copySecret(value);
+            else await navigator.clipboard.writeText(value);
             cue('success', { volume: 0.4 });
-            toast.add({ type: 'success', title: `${label} copied`, description: value });
+            toast.add({
+                type: 'success',
+                title: `${label} copied`,
+                description: secret ? 'Cleared from the clipboard in two minutes.' : value,
+            });
         } catch {
             cue('error');
             toast.add({

@@ -4,6 +4,17 @@ import { TextSwap } from '@/components/motion';
 import { Input } from '@/components/ui/input';
 
 /*
+ * What every field holding a secret carries, shown or not: no spellcheck (which
+ * in Chrome and Edge can send the text to Google or Microsoft), no autocorrect,
+ * no autocapitalization.
+ */
+export const SECRET_FIELD = {
+    spellCheck: false,
+    autoCorrect: 'off',
+    autoCapitalize: 'none',
+} as const;
+
+/*
  * A password field with Show beside it, as on sign-in, so what was typed can be
  * checked before it is used. `wrapperClassName` sizes the field in its row.
  */
@@ -17,6 +28,8 @@ export function PasswordInput({
         <div className={cn('relative', wrapperClassName)}>
             <Input
                 {...props}
+                // Shown as text, a password would go to the browser's cloud spellcheck.
+                {...SECRET_FIELD}
                 type={shown ? 'text' : 'password'}
                 className={cn('pr-16', className)}
             />

@@ -106,13 +106,29 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /* A technical fact, read character by character and often copied: mono, and selectable. */
-function Technical({ label, value, copy }: { label: string; value: string; copy?: boolean }) {
+function Technical({
+    label,
+    value,
+    copy,
+    secret,
+}: {
+    label: string;
+    value: string;
+    copy?: boolean;
+    secret?: boolean;
+}) {
     return (
         <div className="border-b border-rule py-2 last:border-b-0">
             <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
             <dd className="mt-1.5 min-w-0 font-mono text-[11px] leading-relaxed wrap-anywhere select-text">
                 {copy ? (
-                    <CopyValue value={value} label={label} wrap className="text-[11px]" />
+                    <CopyValue
+                        value={value}
+                        label={label}
+                        wrap
+                        secret={secret}
+                        className="text-[11px]"
+                    />
                 ) : (
                     value
                 )}
@@ -265,10 +281,11 @@ function OwnCopy({ node }: { node: DriveNode }) {
                         label={node.kind === 'folder' ? 'Folder key' : 'File key'}
                         value={keys.nodeKey}
                         copy
+                        secret
                     />
                     {keys.content && (
                         <>
-                            <Technical label="Content key" value={keys.content.key} copy />
+                            <Technical label="Content key" value={keys.content.key} copy secret />
                             <Technical label="Content nonce" value={keys.content.nonce} copy />
                         </>
                     )}

@@ -2,6 +2,7 @@ import { cn } from 'cn';
 import { CircleCheckIcon } from 'lucide-react';
 import { useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { Input } from '@/components/ui/input';
+import { SECRET_FIELD } from '@/components/password-input';
 
 /*
  * The pieces Account and Plan and storage are built from: a group with its
@@ -139,6 +140,8 @@ export function DialogField({
                     aria-describedby={describedBy || undefined}
                     className={cn('text-[15px]', secret && 'pr-16', className)}
                     {...props}
+                    // Shown as text, a password would go to the browser's cloud spellcheck.
+                    {...(secret ? SECRET_FIELD : {})}
                 />
                 {secret && (
                     <button

@@ -18,6 +18,7 @@ import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { checkQuestions, kitText } from '@/lib/recovery-kit';
 import { cue } from '@/lib/sounds';
+import { copySecret } from '@/lib/clipboard';
 
 export type RecoveryReason = 'master-key' | 'recovery-key';
 
@@ -122,7 +123,7 @@ export function RecoveryPhrase({
         if (!backup) return;
         setError('');
         try {
-            await navigator.clipboard.writeText(backup.phrase);
+            await copySecret(backup.phrase);
             cue('success', { volume: 0.4 });
             setCopied(true);
         } catch {
