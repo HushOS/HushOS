@@ -441,12 +441,15 @@ async function lockReport(tx: Tx, reportId: string) {
 /*
  * Deletes what lets anyone open a released report, and what it kept about
  * people: the anonymous reporter's address and email and the uploader's email.
+ * Its evidence requests go too, and the worker purges the evidence copy.
  * The audit trail stays, and so does the snapshot in `drive_report_items`: the
  * evidence purge needs its object ids to find the copies it deletes, and the
  * envelopes in it open nothing without an operator key.
  */
 async function release(tx: Tx, reportId: string, now: Date) {
     await tx.delete(driveReportKeys).where(eq(driveReportKeys.reportId, reportId));
+    // Pending ones would be answered with URLs to a copy the purge is about to delete.
+    await tx.delete(driveReportRequests).where(eq(driveReportRequests.reportId, reportId));
     const [report] = await tx
         .update(driveReports)
         .set({
@@ -604,12 +607,20 @@ export async function isObjectHeld(objectId: string) {
     return Boolean(row);
 }
 
-/* Reports whose evidence is not copied yet, oldest first: new ones, and ones a run failed on, which are tried again. */
+/*
+ * Reports whose evidence is not copied yet, oldest first: new ones, and ones a
+ * run failed on, which are tried again. A released report is never copied.
+ */
 export async function listReportsAwaitingEvidence(limit = 20) {
     return db
         .select({ id: driveReports.id, evidenceStatus: driveReports.evidenceStatus })
         .from(driveReports)
-        .where(inArray(driveReports.evidenceStatus, ['pending', 'failed']))
+        .where(
+            and(
+                inArray(driveReports.evidenceStatus, ['pending', 'failed']),
+                isNull(driveReports.releasedAt),
+            ),
+        )
         .orderBy(asc(driveReports.createdAt))
         .limit(limit);
 }
@@ -646,16 +657,19 @@ export async function setEvidenceStatus(reportId: string, status: EvidenceStatus
         .where(eq(driveReports.id, reportId));
 }
 
-/* Dismissed without a hold: the copy has no reason to exist and goes. */
+/*
+ * Released, however it closed: the copy has no reason to exist and goes. A
+ * copy that failed partway, or was cut short by the release, may have left some
+ * objects behind, so anything not yet purged or skipped is listed.
+ */
 export async function listReportsForEvidencePurge(limit = 20) {
     return db
         .select({ id: driveReports.id })
         .from(driveReports)
         .where(
             and(
-                eq(driveReports.status, 'dismissed'),
-                isNull(driveReports.heldAt),
-                eq(driveReports.evidenceStatus, 'copied'),
+                isNotNull(driveReports.releasedAt),
+                inArray(driveReports.evidenceStatus, ['pending', 'copied', 'failed']),
             ),
         )
         .orderBy(asc(driveReports.updatedAt))
@@ -694,10 +708,15 @@ export type EvidenceRequestRow = typeof driveReportRequests.$inferSelect;
 export async function createEvidenceRequest(reportId: string, requestedBy: string) {
     return db.transaction(async (tx) => {
         const [report] = await tx
-            .select({ id: driveReports.id, evidenceStatus: driveReports.evidenceStatus })
+            .select({
+                evidenceStatus: driveReports.evidenceStatus,
+                releasedAt: driveReports.releasedAt,
+            })
             .from(driveReports)
-            .where(eq(driveReports.id, reportId));
+            .where(eq(driveReports.id, reportId))
+            .for('update');
         if (!report) return { status: 'not-found' as const };
+        if (isReleased(report)) return { status: 'released' as const };
         if (report.evidenceStatus !== 'copied')
             return { status: 'no-evidence' as const, evidenceStatus: report.evidenceStatus };
         const [request] = await tx
@@ -713,23 +732,31 @@ export async function createEvidenceRequest(reportId: string, requestedBy: strin
     });
 }
 
+/* A request of a report that is not released; a release deletes them, this only closes the gap. */
 export async function getEvidenceRequest(reportId: string, requestId: string) {
     const [row] = await db
-        .select()
+        .select({ request: driveReportRequests })
         .from(driveReportRequests)
+        .innerJoin(driveReports, eq(driveReports.id, driveReportRequests.reportId))
         .where(
-            and(eq(driveReportRequests.id, requestId), eq(driveReportRequests.reportId, reportId)),
+            and(
+                eq(driveReportRequests.id, requestId),
+                eq(driveReportRequests.reportId, reportId),
+                isNull(driveReports.releasedAt),
+            ),
         );
-    return row ?? null;
+    return row?.request ?? null;
 }
 
 export async function listPendingEvidenceRequests(limit = 20) {
-    return db
-        .select()
+    const rows = await db
+        .select({ request: driveReportRequests })
         .from(driveReportRequests)
-        .where(eq(driveReportRequests.status, 'pending'))
+        .innerJoin(driveReports, eq(driveReports.id, driveReportRequests.reportId))
+        .where(and(eq(driveReportRequests.status, 'pending'), isNull(driveReports.releasedAt)))
         .orderBy(asc(driveReportRequests.createdAt))
         .limit(limit);
+    return rows.map((row) => row.request);
 }
 
 export async function answerEvidenceRequest(
@@ -748,7 +775,12 @@ export async function answerEvidenceRequest(
             answeredAt: new Date(),
         })
         .where(
-            and(eq(driveReportRequests.id, requestId), eq(driveReportRequests.status, 'pending')),
+            and(
+                eq(driveReportRequests.id, requestId),
+                eq(driveReportRequests.status, 'pending'),
+                // Released while the worker was presigning: the answer is dropped, not served.
+                sql`not exists (select 1 from ${driveReports} r where r.id = ${driveReportRequests.reportId} and r.released_at is not null)`,
+            ),
         )
         .returning();
     return row ?? null;

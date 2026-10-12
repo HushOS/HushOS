@@ -756,7 +756,7 @@ function Actions({ report }: { report: ReportView }) {
                             Moves the item to the owner’s trash where they cannot restore it, and
                             revokes every share and link on it. The owner can still delete it
                             forever; a hold keeps the bytes regardless. Without a hold, every
-                            operator’s key to it is deleted as it closes.
+                            operator’s key to it and the evidence copy are deleted as it closes.
                         </p>
                     )}
                     {(action === 'dismiss' || action === 'remove') && (

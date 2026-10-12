@@ -5,7 +5,13 @@ import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers
 import { db } from './client';
 import * as drive from './drive';
 import * as reports from './reports';
-import { accountIdentities, driveObjectDeletions, users, workspaceKeys } from './schema';
+import {
+    accountIdentities,
+    driveObjectDeletions,
+    driveReports,
+    users,
+    workspaceKeys,
+} from './schema';
 
 /*
  * A report freezes what was reported, holds its bytes for as long as it is
@@ -382,6 +388,47 @@ describe('holds', () => {
         expect(await reports.listReportsForEvidencePurge()).toEqual([]);
         expect(await reports.countReports()).toEqual({ open: 0, held: 0, total: 1 });
     });
+
+    test('any release purges the copy, however it closed, and a released report is never copied', async () => {
+        const removed = await report(await file(rootId, rootEpoch));
+        const partial = await report(await folder(rootId, rootEpoch));
+        const uncopied = await report(await file(rootId, rootEpoch));
+        const held = await report(await file(rootId, rootEpoch));
+        if (
+            removed.status !== 'ok' ||
+            partial.status !== 'ok' ||
+            uncopied.status !== 'ok' ||
+            held.status !== 'ok'
+        )
+            throw new Error('not filed');
+        await reports.setEvidenceStatus(removed.report.id, 'copied');
+        await reports.setEvidenceStatus(partial.report.id, 'failed');
+        await reports.setEvidenceStatus(held.report.id, 'copied');
+        await reports.resolveReport(removed.report.id, operator.userId, {
+            status: 'removed',
+            hold: false,
+        });
+        await reports.setReportHold(partial.report.id, operator.userId, true);
+        await reports.resolveReport(partial.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: true,
+        });
+        await reports.setReportHold(partial.report.id, operator.userId, false);
+        await reports.resolveReport(uncopied.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        await reports.resolveReport(held.report.id, operator.userId, {
+            status: 'removed',
+            hold: true,
+        });
+
+        expect((await reports.listReportsForEvidencePurge()).map((r) => r.id).sort()).toEqual(
+            [removed.report.id, partial.report.id, uncopied.report.id].sort(),
+        );
+        // Released before its copy was made: there is nothing to keep it for.
+        expect(await reports.listReportsAwaitingEvidence()).toEqual([]);
+    });
 });
 
 describe('removal', () => {
@@ -500,6 +547,65 @@ describe('evidence requests', () => {
             'evidence-requested',
         );
         expect(await reports.deleteStaleEvidenceRequests()).toBe(0);
+    });
+
+    test('a release deletes the report’s requests, and nothing asks for, answers or serves evidence after it', async () => {
+        const doc = await file(rootId, rootEpoch);
+        const made = await report(doc);
+        if (made.status !== 'ok') throw new Error(made.status);
+        await reports.markReportItemCopied(made.report.id, doc.id);
+        await reports.setEvidenceStatus(made.report.id, 'copied');
+        const answered = await reports.createEvidenceRequest(made.report.id, operator.userId);
+        const pending = await reports.createEvidenceRequest(made.report.id, operator.userId);
+        if (answered.status !== 'ok' || pending.status !== 'ok') throw new Error('not requested');
+        await reports.answerEvidenceRequest(answered.request.id, {
+            status: 'ready',
+            urls: { [doc.currentVersionId!]: 'https://evidence.example/x' },
+            urlExpiresAt: new Date(Date.now() + 900_000),
+        });
+        // The worker listed the pending one just before the release.
+        const listed = await reports.listPendingEvidenceRequests();
+        expect(listed.map((r) => r.id)).toEqual([pending.request.id]);
+
+        await reports.resolveReport(made.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        expect(
+            await reports.answerEvidenceRequest(pending.request.id, {
+                status: 'ready',
+                urls: { [doc.currentVersionId!]: 'https://evidence.example/late' },
+                urlExpiresAt: new Date(Date.now() + 900_000),
+            }),
+        ).toBeNull();
+        expect(await reports.listPendingEvidenceRequests()).toEqual([]);
+        expect(await reports.getEvidenceRequest(made.report.id, answered.request.id)).toBeNull();
+        expect(await reports.getEvidenceRequest(made.report.id, pending.request.id)).toBeNull();
+        expect(await reports.createEvidenceRequest(made.report.id, operator.userId)).toEqual({
+            status: 'released',
+        });
+    });
+
+    test('a request of a released report that survived the release is neither listed, answered nor served', async () => {
+        const doc = await file(rootId, rootEpoch);
+        const made = await report(doc);
+        if (made.status !== 'ok') throw new Error(made.status);
+        await reports.setEvidenceStatus(made.report.id, 'copied');
+        const created = await reports.createEvidenceRequest(made.report.id, operator.userId);
+        if (created.status !== 'ok') throw new Error(created.status);
+        // As if written by a build from before releases deleted requests.
+        await db
+            .update(driveReports)
+            .set({ status: 'dismissed', releasedAt: new Date() })
+            .where(eq(driveReports.id, made.report.id));
+        expect(await reports.listPendingEvidenceRequests()).toEqual([]);
+        expect(
+            await reports.answerEvidenceRequest(created.request.id, {
+                status: 'failed',
+                error: 'late',
+            }),
+        ).toBeNull();
+        expect(await reports.getEvidenceRequest(made.report.id, created.request.id)).toBeNull();
     });
 });
 

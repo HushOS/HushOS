@@ -2006,13 +2006,15 @@ export async function requestEvidence(operatorUserId: string, reportId: string) 
     switch (result.status) {
         case 'not-found':
             throw reportGone();
+        case 'released':
+            throw reportReleased();
         case 'no-evidence':
             throw new DriveError(
                 'conflict',
                 result.evidenceStatus === 'skipped'
                     ? 'No evidence store is configured on this instance, so there is no copy to fetch.'
                     : result.evidenceStatus === 'purged'
-                      ? 'The evidence copy was deleted when this report was dismissed without a hold.'
+                      ? 'The evidence copy was deleted when this report was released.'
                       : 'The evidence copy is not complete yet. Try again in a few minutes.',
                 409,
             );
@@ -2021,6 +2023,8 @@ export async function requestEvidence(operatorUserId: string, reportId: string) 
     }
 }
 export async function getEvidenceRequest(reportId: string, requestId: string) {
+    // A release deletes its requests; the URLs of one answered before it are not served either.
+    await loadHeldReport(reportId);
     const row = await reportsRepository.getEvidenceRequest(reportId, requestId);
     if (!row) throw notFound();
     return { request: evidenceRequestView(row) };
