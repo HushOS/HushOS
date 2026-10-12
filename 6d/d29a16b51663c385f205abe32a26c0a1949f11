@@ -1,0 +1,30 @@
+packages/db/src/admin.test.ts
+  s_75dbe24a0bc379::t_2a096dd69ca562 136-304
+packages/db/drizzle/20261012133230_admin_storage/migration.sql
+  s_75dbe24a0bc379::t_2d4c80c5216ab1 1-4
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_945a98cb0ca16c 14
+packages/db/src/schema/storage.ts
+  s_75dbe24a0bc379::t_2d4c80c5216ab1 36-38,52-53,60
+packages/db/src/admin.ts
+  s_75dbe24a0bc379::t_945a98cb0ca16c 1,3,120-121,170-171,202,208-209,212,214,282-369
+packages/db/drizzle/20261012133230_admin_storage/snapshot.json
+  s_75dbe24a0bc379::t_2d4c80c5216ab1 1,7895
+  s_75dbe24a0bc379::t_2a096dd69ca562 2-7894,7896-7898
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6dd29a16b51663c385f205abe32a26c0a1949f11",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
