@@ -1,0 +1,32 @@
+apps/web/src/lib/api.server.ts
+  s_75dbe24a0bc379::t_035badacf98f6a 1695-1738
+apps/web/src/routes/_authenticated/app/admin/accounts/$accountId.tsx
+  s_75dbe24a0bc379::t_359b367ea24eba 742
+  s_75dbe24a0bc379::t_3f12cceb09e40e 17,19-25,178-203,210-215,223-250,253-258,260,266-282,284-364,367-377,379-403,405-432,438-552,557-562,674-691,735-737,755,809,817
+  s_75dbe24a0bc379::t_0d826d125fae40 4,46,746-748,750,757-768,770-808,810-816,818-822
+  s_75dbe24a0bc379::t_7d6fb87926bc12 204-209,251-252,259,261-265,365-366,378,404,433-437,751-753
+  s_75dbe24a0bc379::t_3d354c6ba87c7d 216-222,283
+docs/self-hosting.md
+  s_75dbe24a0bc379::t_359b367ea24eba 604-605
+apps/web/src/lib/admin.ts
+  s_75dbe24a0bc379::t_035badacf98f6a 50-60,62
+  s_75dbe24a0bc379::t_2a096dd69ca562 61
+packages/auth/src/server.ts
+  s_75dbe24a0bc379::t_dca3e784ddd051 710-767
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "67eb29fe433ff7e13c36311faa6c14ee470602a3",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
