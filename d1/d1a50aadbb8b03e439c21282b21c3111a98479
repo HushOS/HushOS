@@ -1,0 +1,37 @@
+apps/web/src/lib/api.server.ts
+  s_75dbe24a0bc379::t_7183e18d49fedb 318-323,521,574-577,583-584
+packages/auth/src/api.ts
+  s_75dbe24a0bc379::t_58d834e8cfd394 74-91,111-115,118,122-123
+packages/auth/src/server.ts
+  s_75dbe24a0bc379::t_182981530cdd02 640-653,656-659,663,669,673-686,689-695,706,715-716,1361,1367-1368,1370-1377,1429-1430,1456
+packages/db/drizzle/20261012175419_settings_key/migration.sql
+  s_75dbe24a0bc379::t_8aba0db7d2792e 1-11
+packages/db/drizzle/20261012175419_settings_key/snapshot.json
+  s_75dbe24a0bc379::t_c64a524f650780 1-8927
+packages/db/src/auth.settings.test.ts
+  s_75dbe24a0bc379::t_0f5ef41ef9e817 81-128
+packages/db/src/auth.test.ts
+  s_75dbe24a0bc379::t_610ed902548424 755-839
+packages/db/src/auth.ts
+  s_75dbe24a0bc379::t_41135c120c4513 19,765-772,820-821,943-951,971-975,1189,1206-1207,1211,1221-1223,1229,1237,1248-1272
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_f66ce6cd36296d 14
+packages/db/src/schema/auth.ts
+  s_75dbe24a0bc379::t_ff97f547af7049 349-354,371-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d1d1a50aadbb8b03e439c21282b21c3111a98479",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
