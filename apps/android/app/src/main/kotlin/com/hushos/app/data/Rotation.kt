@@ -101,6 +101,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     val skipped = LinkedHashSet<String>()
     val firstKems = HashMap<String, String>()
     val epochs = HashMap<String, ULong>().apply { nodes.rowsIn(ws).forEach { put(it.id, it.node.keyEpoch) } }
+    val seals = ShareSeals.of(context)
     val previous = HashMap<String, Pair<ULong, ByteArray>>()
     var done = 0
     var cursor: String? = null
@@ -133,6 +134,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             }
         }
         val batch = JSONArray()
+        // What each node's re-sealed shares were sealed with, recorded once the server took that node.
+        val sealedIn = HashMap<String, Map<String, ShareSeals.Seal>>()
         for (entry in work.nodes) {
             val node = entry.node
             val newParentEpoch = if (node.id == rootId) node.parentKeyEpoch else target
@@ -178,10 +181,14 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             skipped.addAll(plan.skipped)
             firstKems.putAll(plan.firstKems)
             val shares = JSONArray()
+            val sealedHere = HashMap<String, ShareSeals.Seal>()
             for (share in plan.shares) {
                 val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
                 shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
+                val served = entry.shares.firstOrNull { it.optString("id") == share.id }?.optJSONObject("grantee")?.let { ServedIdentity.from(it) }
+                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, served?.keyVersion)
             }
+            sealedIn[node.id] = sealedHere
             val links = JSONArray()
             val unsealable = JSONArray()
             for (link in plan.links) {
@@ -214,8 +221,9 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         if (batch.length() > 0) {
             val outcomes = api.rotateNodes(ws, rootId, batch)
             // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
-            if ("bad-signature" in outcomes) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
-            applied = outcomes.count { it == "ok" || it == "already" }
+            if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
+            applied = outcomes.count { it.second == "ok" || it.second == "already" }
+            for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
         }
         done += applied
         progress(done)

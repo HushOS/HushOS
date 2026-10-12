@@ -273,8 +273,9 @@ class DriveApi(val session: Shared.Session) : RootApi {
             )
         }
 
-    fun rotateNodes(workspaceId: String, nodeId: String, nodes: JSONArray): List<String> =
-        send("/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.getString("status") }
+    /* Each node's outcome, by id. */
+    fun rotateNodes(workspaceId: String, nodeId: String, nodes: JSONArray): List<Pair<String, String>> =
+        send("/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.optString("id") to it.getString("status") }
 
     fun shares(nodeId: String, workspaceId: String): List<OwnedShare> =
         get("/nodes/$nodeId/shares" + q("workspaceId" to workspaceId)).getJSONArray("shares").objects().map(OwnedShare::from)

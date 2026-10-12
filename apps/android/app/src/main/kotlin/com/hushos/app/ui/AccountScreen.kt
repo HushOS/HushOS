@@ -123,7 +123,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
         Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }) { page = Page.MAIN }; return }
         Page.RESET -> { ResetKeysScreen(model) { page = Page.ADVANCED }; return }
-        Page.REPLACE -> { ReplaceKeysScreen(model) { page = Page.ADVANCED }; return }
+        Page.REPLACE -> { ReplaceKeysScreen(model, state) { page = Page.ADVANCED }; return }
         Page.MAIN -> {}
     }
     val scroll = androidx.compose.material3.TopAppBarDefaults.enterAlwaysScrollBehavior()
@@ -605,7 +605,8 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
     if (selfHosting) { SelfHostingScreen(model, state, signedIn = true) { selfHosting = false }; return }
     AccountPage("Advanced", onBack) {
         AccountRow("Rotate account key", "A new master key for your account. Your files, sharing keys and links stay as they are.", Icons.Outlined.Sync, onClick = onReset)
-        AccountRow("Replace sharing keys", "New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", Icons.Outlined.Key, onClick = onReplace)
+        AccountRow("Replace sharing keys", state.resealing?.let { (done, total) -> "Sealing your shares again · $done of $total" }
+            ?: "New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", Icons.Outlined.Key, onClick = onReplace)
         Subheader("About this account")
         state.user?.id?.let { id ->
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable {
@@ -692,7 +693,7 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
  * Nothing about the password, the phrase or the files changes, so no password is asked.
  */
 @Composable
-private fun ReplaceKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
+private fun ReplaceKeysScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     val alpine = Alpine.colors
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -702,13 +703,19 @@ private fun ReplaceKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
             for (line in listOf("Your twelve words change. People who checked them see that you replaced your keys.", "What you shared is sealed again under the new keys.", "Your password, recovery phrase and files stay as they are."))
                 Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger) }
-            Button(enabled = !pending, onClick = {
+            Button(enabled = !pending && state.resealing == null, onClick = {
                 pending = true; error = null
                 model.replaceSharingKeys { failure ->
                     pending = false
                     if (failure == null) onBack() else error = failure
                 }
-            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Replacing…" else "Replace keys") }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text(when {
+                    pending && state.resealing != null -> "Sealing shares again… ${state.resealing.first} of ${state.resealing.second}"
+                    pending -> "Replacing…"
+                    else -> "Replace keys"
+                })
+            }
         }
     }
 }

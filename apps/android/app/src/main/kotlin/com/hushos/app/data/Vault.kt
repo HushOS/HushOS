@@ -127,7 +127,7 @@ data class OpenedVersion(val content: Content, val versionId: String) {
  * their parents. A node-to-parent index persists so a document id the system
  * asks about cold is found by listing the folder it was last seen in.
  */
-class Vault(private val context: Context, val api: DriveApi) {
+class Vault(internal val context: Context, val api: DriveApi) {
     private var accountKey: ByteArray? = null
     private var workspace: WorkspaceView? = null
     private var workspaceKey: ByteArray? = null
@@ -490,6 +490,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(checked.encryptionPublicKey), kem.publicKey)
         val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
+        ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
         updateSettings { it.addShare(item.id, current.userId) }
         return share
     }
@@ -514,6 +515,8 @@ class Vault(private val context: Context, val api: DriveApi) {
         val current = Auth.identity(context)
         val succession = identitySucceed(userId, unlockAccount(), current)
         Auth.succeedIdentity(context, succession)
+        // From here the shares wait to be sealed again: a pass cut short is finished on the next Drive open, never by minting again.
+        ShareSeals.of(context).pending = succession.identity.keyVersion
         identity = null
         history = null
         val keys = identityKeys()
@@ -525,15 +528,19 @@ class Vault(private val context: Context, val api: DriveApi) {
             resealLedgerShares(progress)
         } catch (error: Exception) {
             if (error is NotAuthenticated) throw error
-            RotationResult(0, listOf("Your shares weren’t sealed again under the new keys yet; they still open with the old ones."))
+            RotationResult(0, listOf("Your shares weren’t sealed again under the new keys yet. They’re tried again the next time you open HushOS."))
         }
     }
 
     /*
-     * Seals every share in the ledger again with this account's current identity, in suite 3: only what the ledger
-     * holds, only to pins that vouch for the keys served now (following a checked succession), never to X25519 alone.
+     * The re-seal pass: every share in the ledger that needs it (see needsReseal) is sealed again with this account's
+     * current identity, in suite 3, only to pins that vouch for the keys served now (following a checked succession
+     * first), never to X25519 alone. It finishes a key replacement that failed or was cut short, upgrades older
+     * suites, and follows grantees who replaced their keys. What it sealed is recorded (ShareSeals); a pass with no
+     * failures clears the waiting replacement and is not run again for a day.
      */
     internal fun resealLedgerShares(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
+        val seals = ShareSeals.of(context)
         val settings = loadSettings()
         val ledger = settings.ledger
         val pins = HashMap(settings.contacts)
@@ -553,10 +560,11 @@ class Vault(private val context: Context, val api: DriveApi) {
                 val nodeKey = nodes.key(item) ?: continue
                 val rows = api.shares(item.id, item.node.workspaceId).filter { it.granteeId in people }
                 val wire = rows.mapNotNull { share ->
-                    // Someone no longer pinned, or not found now, keeps the envelope they have: it still opens once they follow these keys.
+                    // Someone no longer pinned, or not found now, keeps the envelope they have.
                     val pin = pins[share.granteeId] ?: return@mapNotNull null
                     val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email) }.getOrNull() }
                     val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
+                    if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, grantee.keyVersion)) return@mapNotNull null
                     if (!pin.matches(grantee.served)) followPin(pin, grantee.served)?.let { pins[share.granteeId] = it }
                     JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", JSONObject()
                         .put("encryptionPublicKey", grantee.encryptionPublicKey).put("signingPublicKey", grantee.signingPublicKey)
@@ -568,9 +576,13 @@ class Vault(private val context: Context, val api: DriveApi) {
                 for (share in plan.shares) {
                     val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, share.granteeUserId, api.session.userId)
                     api.resealShare(share.id, item.node.workspaceId, item.node.keyEpoch, base64urlEncode(shareSeal(ctx, nodeKey, keys, share.publicKey, share.kemPublicKey)))
+                    // Sealed to the pinned keys, which are the ones served at this version.
+                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, served[share.granteeUserId]?.keyVersion)))
                     done++
                 }
             } catch (error: Unreachable) {
+                throw error
+            } catch (error: NotAuthenticated) {
                 throw error
             } catch (error: Exception) {
                 android.util.Log.w("HushOSShares", "sealing the shares of $nodeId again failed: ${error.javaClass.name}")
@@ -579,9 +591,16 @@ class Vault(private val context: Context, val api: DriveApi) {
                 progress(index + 1, todo.size)
             }
         }
-        if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your new keys. They still open for now; try again later.")
+        if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
+        else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
         if (firstKems.isNotEmpty()) runCatching { updateSettings { s -> firstKems.forEach { (user, hash) -> s.rememberKem(user, hash) } } }
         return RotationResult(done, skipped.toList())
+    }
+
+    /* Whether the re-seal pass should run now: a key replacement is waiting to finish, or the last full pass is a day old. */
+    fun resealDue(now: Long = System.currentTimeMillis()): Boolean {
+        val seals = ShareSeals.of(context)
+        return seals.pending != null || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
     }
 
     /* Rotates the subtree under `item` after a revoke; returns how many nodes were re-sealed and who was left out, and why. */

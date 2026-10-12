@@ -137,6 +137,8 @@ data class DriveState(
     val recentSearches: List<String> = emptyList(),
     /* The signing keys this account trusts (its own, and checked contacts'); null until loaded, when no row is marked. */
     val trust: com.hushos.app.data.Trust? = null,
+    /* Shares being sealed again (after a key replacement, or for a grantee's new keys): nodes done of how many. */
+    val resealing: Pair<Int, Int>? = null,
 ) {
     /* Every item this session has opened, for search across folders. */
     val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
@@ -466,6 +468,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         redraw(state.value.folders.keys)
         // The build took in every change since the last run, so every kept file is checked against it.
         refreshKept(Offline.entries(context).map { it.id }.toSet())
+        resealIfDue()
+    }
+
+    /*
+     * Finishes what a key replacement left (or a grantee's new keys need): quietly, once the drive is open, at most
+     * daily unless a replacement is waiting. Progress shows in Advanced; only people left out or a failure are said.
+     */
+    private fun resealIfDue() = viewModelScope.launch {
+        if (state.value.resealing != null || quietly { it.resealDue() } != true) return@launch
+        val result = quietly { vault -> vault.resealLedgerShares { done, total -> _state.update { it.copy(resealing = done to total) } } }
+        _state.update { it.copy(resealing = null) }
+        if (result != null && result.skipped.isNotEmpty()) notify("Some shares weren’t sealed again. " + result.skipped.joinToString(" "))
     }
 
     /* Pulls what changed since the cursor and redraws the lists it touched. */
@@ -997,7 +1011,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun replaceSharingKeys(done: (String?) -> Unit) = viewModelScope.launch {
         var reason: String? = null
-        val result = io({ reason = it }) { it.replaceSharingKeys() }
+        val result = io({ reason = it }) { vault -> vault.replaceSharingKeys { d, total -> _state.update { it.copy(resealing = d to total) } } }
+        _state.update { it.copy(resealing = null) }
         if (result == null) { done(reason ?: com.hushos.app.data.Problems.SERVER); return@launch }
         refreshTrust()
         refreshShares()
