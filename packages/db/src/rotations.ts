@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
+    LINK_KDF_VERSION,
     activeRotation,
     nextChangeSeq,
     selectNodes,
@@ -364,6 +365,7 @@ export async function rotateNodes(input: {
                         linkEnvelope: link.linkEnvelope,
                         secretEnvelope: link.secretEnvelope,
                         keyEpoch: input.targetEpoch,
+                        kdfVersion: LINK_KDF_VERSION,
                     })
                     .where(and(eq(driveLinks.id, link.id), eq(driveLinks.nodeId, item.id)));
             if (rotated.unsealableLinks.length)

@@ -203,6 +203,7 @@ async function raiseHeightBounds(tx: Tx, ancestors: Ancestor[], leafHeight: numb
 
 const nodeColumns = {
     id: driveNodes.id,
+    envelopeSuite: driveNodes.envelopeSuite,
     workspaceId: driveNodes.workspaceId,
     parentId: driveNodes.parentId,
     kind: driveNodes.kind,
@@ -2775,6 +2776,7 @@ const linkColumns = {
     keyEpoch: driveLinks.keyEpoch,
     secretEnvelope: driveLinks.secretEnvelope,
     hasPassword: driveLinks.hasPassword,
+    kdfVersion: driveLinks.kdfVersion,
     expiresAt: driveLinks.expiresAt,
     useCount: driveLinks.useCount,
     lastUsedAt: driveLinks.lastUsedAt,
@@ -2849,6 +2851,8 @@ export async function updateLink(input: {
             .update(driveLinks)
             .set({
                 ...input.seal,
+                // A fresh seal is made with the derivation every client uses now.
+                ...(input.seal ? { kdfVersion: LINK_KDF_VERSION } : {}),
                 ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
             })
             .where(eq(driveLinks.id, link.id))
@@ -3095,13 +3099,26 @@ export async function listShareChanges(input: {
  * client saw is the precondition; 0 means it saw none and expects to create
  * the row. A stale write returns the current row so the client can merge.
  */
-export type DocumentRow = { kind: string; version: number; envelope: Buffer; updatedAt: Date };
+/*
+ * How every client derives a link key today (@hushos/crypto/links): what a link
+ * sealed again, by a password change or a rotation, is recorded as.
+ */
+export const LINK_KDF_VERSION = 2;
+
+export type DocumentRow = {
+    kind: string;
+    version: number;
+    envelope: Buffer;
+    envelopeSuite: number;
+    updatedAt: Date;
+};
 export async function getWorkspaceDocument(workspaceId: string, kind: string) {
     const [row] = await db
         .select({
             kind: workspaceDocuments.kind,
             version: workspaceDocuments.version,
             envelope: workspaceDocuments.envelope,
+            envelopeSuite: workspaceDocuments.envelopeSuite,
             updatedAt: workspaceDocuments.updatedAt,
         })
         .from(workspaceDocuments)
@@ -3121,6 +3138,7 @@ export async function putWorkspaceDocument(input: {
             kind: workspaceDocuments.kind,
             version: workspaceDocuments.version,
             envelope: workspaceDocuments.envelope,
+            envelopeSuite: workspaceDocuments.envelopeSuite,
             updatedAt: workspaceDocuments.updatedAt,
         };
         if (input.version === 0) {

@@ -46,6 +46,8 @@ export const driveNodes = pgTable(
         prevParentKeyEpoch: integer('prev_parent_key_epoch'), // ... under the previous parent key
         metadataVersion: integer('metadata_version').notNull().default(1),
         metadataEnvelope: bytea('metadata_envelope'), // null once purged
+        // How the key and metadata envelopes are sealed; readers refuse a suite they do not know.
+        envelopeSuite: smallint('envelope_suite').notNull().default(1),
         currentVersionId: uuid('current_version_id').references(
             (): AnyPgColumn => fileVersions.id,
             { onDelete: 'set null' },
@@ -347,6 +349,8 @@ export const driveLinks = pgTable(
         // The secret and token sealed under the node key: the owner's way to show the link again or change it.
         secretEnvelope: bytea('secret_envelope'),
         hasPassword: boolean('has_password').notNull().default(false),
+        // How the link key is derived (see @hushos/crypto/links): 1 before the labelled derivation.
+        kdfVersion: smallint('kdf_version').notNull().default(2),
         expiresAt: timestamp('expires_at', { withTimezone: true }),
         useCount: integer('use_count').notNull().default(0),
         lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
@@ -633,6 +637,7 @@ export const workspaceDocuments = pgTable(
         kind: text().notNull(),
         version: integer().notNull(),
         envelope: bytea().notNull(),
+        envelopeSuite: smallint('envelope_suite').notNull().default(1),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [

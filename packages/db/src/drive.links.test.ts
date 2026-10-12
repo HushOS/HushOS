@@ -258,6 +258,33 @@ describe('updating a link', () => {
     });
 });
 
+describe('the derivation a link records', () => {
+    test('a new link is the current one; an older link moves to it only when sealed again', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const made = await link(project, 'token-v');
+        if (made.status !== 'ok') throw new Error(made.status);
+        expect(made.link.kdfVersion).toBe(drive.LINK_KDF_VERSION);
+        // A link from before the labelled derivation, as the migration left it.
+        await db.update(driveLinks).set({ kdfVersion: 1 }).where(eq(driveLinks.id, made.link.id));
+        const expiryOnly = await drive.updateLink({
+            workspaceId: owner.workspaceId,
+            linkId: made.link.id,
+            keyEpoch: project.keyEpoch,
+            expiresAt: null,
+        });
+        if (expiryOnly.status !== 'ok') throw new Error(expiryOnly.status);
+        expect(expiryOnly.link.kdfVersion).toBe(1);
+        const resealed = await drive.updateLink({
+            workspaceId: owner.workspaceId,
+            linkId: made.link.id,
+            keyEpoch: project.keyEpoch,
+            seal: { linkEnvelope: randomBytes(72), linkSalt: randomBytes(16), hasPassword: false },
+        });
+        if (resealed.status !== 'ok') throw new Error(resealed.status);
+        expect(resealed.link.kdfVersion).toBe(drive.LINK_KDF_VERSION);
+    });
+});
+
 describe('links and the trash', () => {
     test('the owner’s listing hides a link while its node is in the trash; delete forever revokes it', async () => {
         const doc = await file(rootId, rootEpoch);
