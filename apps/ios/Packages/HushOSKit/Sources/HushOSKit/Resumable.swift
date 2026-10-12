@@ -12,6 +12,28 @@ import Network
  * A download keeps its `.part` file between tries and between launches: the
  * next attempt continues from the last whole chunk rather than from zero.
  */
+/*
+ * Transfer progress in the file's own bytes. Under content suite 3 the object runs past the
+ * file into padding, up to whole chunks of it: counting chunks would jump ahead (or stall) on
+ * chunks that carry little or none of the file, so each counts for the file bytes it holds.
+ */
+public enum FileProgress {
+    /* `pieces`: chunk index to how much of it has moved (1 when whole). */
+    public static func fraction(size: UInt64, pieces: [UInt64: Double]) -> Double {
+        guard size > 0 else { return min(1, pieces.values.max() ?? 0) }
+        let moved = pieces.reduce(0.0) { sum, piece in sum + Double(chunkLength(plaintextSize: size, index: piece.key)) * min(1, max(0, piece.value)) }
+        return min(1, moved / Double(size))
+    }
+
+    /* Chunks `0 ..< done` whole, in order. */
+    public static func fraction(size: UInt64, through done: UInt64) -> Double {
+        guard size > 0 else { return done > 0 ? 1 : 0 }
+        var moved: UInt64 = 0
+        for index in 0 ..< done { moved += chunkLength(plaintextSize: size, index: index) }
+        return min(1, Double(moved) / Double(size))
+    }
+}
+
 public enum Resumable {
     public static let maxAttempts = 8
     static let offlineLimit: Double = 600
@@ -75,6 +97,8 @@ public enum Resumable {
         to destination: URL,
         count: UInt64,
         chunkBytes: UInt64,
+        /* The file's real size, when known: progress then counts its bytes, not chunks of padding. */
+        size: UInt64? = nil,
         online: () -> Bool = { Resumable.online },
         sleep: (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
         onExpired: () async throws -> Void = {},
@@ -98,7 +122,7 @@ public enum Resumable {
                 let chunk = index
                 let plaintext = try await run(online: online, sleep: sleep, onExpired: onExpired) { try await fetch(chunk) }
                 try handle.write(contentsOf: plaintext)
-                progress(Double(index + 1) / Double(count))
+                progress(size.map { FileProgress.fraction(size: $0, through: index + 1) } ?? Double(index + 1) / Double(count))
                 index += 1
             }
             try handle.close()

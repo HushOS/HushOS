@@ -52,13 +52,22 @@ public struct Opened: Sendable, Identifiable, Hashable {
         )
         return opened?.plaintextSize
     }
-    public var hasThumbnail: Bool { !isFolder && node.currentVersion?.contentSuite == 2 }
+    /* Suites 2 and 3 carry the thumbnail as a trailer of the object; suite 1 never had one. */
+    public var hasThumbnail: Bool { !isFolder && (node.currentVersion?.contentSuite ?? 0) >= 2 }
 }
 
 public struct OpenedVersion: Sendable {
     public let content: Content
     public let versionId: String
-    public var layout: ContentLayout { contentLayout(plaintextSize: content.plaintextSize, thumbnailBytes: content.thumbnailBytes) }
+    /* The object's layout by its own suite: under 3 the chunks run past the file into the padding. */
+    public var layout: ContentLayout {
+        get throws { try contentLayout(suite: content.suite, plaintextSize: content.plaintextSize, thumbnailBytes: content.thumbnailBytes) }
+    }
+
+    /* The bytes to fetch for chunk `index`; the last runs to the end of the object, padding and trailer included. */
+    public func range(_ index: UInt64) throws -> ByteRange {
+        try chunkRange(suite: content.suite, plaintextSize: content.plaintextSize, thumbnailBytes: content.thumbnailBytes, index: index)
+    }
 }
 
 /*
@@ -79,7 +88,17 @@ public actor Vault {
     /* By workspace and node (see NodeTable): a received share's key never answers for one of the account's own nodes. */
     var nodeKeys = NodeTable<Data>()
     var opened = NodeTable<Opened>()
-    private var identity: IdentityKeys?
+    /* The identity in use, and the earlier ones (newest first) that shares sealed before a succession still need; see Vault+Identity. */
+    var identity: IdentityKeys?
+    var earlierIdentities: [IdentityKeys]?
+    /* When the identity in use was last compared with the one the server serves (see signingSeed). */
+    var identityCheckedAt: Date?
+    /* The settings key, opened under the account key (see Settings). */
+    var settingsKey: Data?
+    /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity). */
+    var trustedSigners: TrustedSigners?
+    /* Succession chains already found not to hold, by person and served keys: not asked for again this process. */
+    var refusedSuccessions: Set<String> = []
     var parents: [String: String]
     private let indexURL: URL?
     /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue). */
@@ -143,7 +162,7 @@ public actor Vault {
         saveIndex()
     }
 
-    private func unlockAccount() throws -> Data {
+    func unlockAccount() throws -> Data {
         if let accountKey { return accountKey }
         guard let device = try SharedKeychain.device?.open() else { throw DriveAPIError.notAuthenticated }
         let key = try deviceRestore(bundle: device.bundle, deviceKey: device.key)
@@ -202,9 +221,11 @@ public actor Vault {
             ctx: MetadataContext(workspaceId: view.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
             metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil)
         )
+        let signature = try await signMetadata(workspaceId: view.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
         let made = try await api.createRoot(workspaceId: view.workspaceId, root: [
             "id": id, "keyEpoch": epochs.from, "parentKeyEpoch": parentKeyEpoch,
             "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed),
+            "metadataSignature": signature,
         ])
         return WorkspaceView(workspaceId: view.workspaceId, changeSeq: view.changeSeq, grant: view.grant, root: made.root)
     }
@@ -230,7 +251,16 @@ public actor Vault {
         let envelope = try await Auth.identity()
         let keys = try identityOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
         identity = keys
+        identityCheckedAt = Date()
         return keys
+    }
+
+    /* Tests: an identity already opened, without the account key from this device's keychain. */
+    func adopt(identity keys: IdentityKeys, earlier: [IdentityKeys] = []) {
+        identity = keys
+        identityCheckedAt = Date()
+        earlierIdentities = earlier
+        trustedSigners = nil
     }
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
@@ -397,12 +427,15 @@ public actor Vault {
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`
         // an earlier try left is continued from its last whole chunk; it moves into place whole.
+        // Every chunk, the padding's too, so the fetches never tell the store where the file ends;
+        // the core hands back only the file's bytes (none for a chunk of padding alone).
+        let layout = try opened.layout
         try await Resumable.download(
-            to: destination, count: opened.layout.chunkCount, chunkBytes: opened.layout.chunkBytes,
+            to: destination, count: layout.chunkCount, chunkBytes: layout.chunkBytes, size: opened.content.plaintextSize,
             onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
             progress: progress
         ) { index in
-            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index))
+            let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }

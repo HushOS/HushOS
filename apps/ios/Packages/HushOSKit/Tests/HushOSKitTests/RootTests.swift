@@ -18,9 +18,19 @@ struct RootTests {
         return WorkspaceView(workspaceId: workspace, changeSeq: 7, grant: grant, root: root)
     }
 
-    func vault(_ server: RootServer) -> Vault {
+    /* The writer's identity: the server refuses a root its signing key did not sign. */
+    let identity: IdentityKeys
+
+    init() throws {
+        let root = try randomBytes(length: 32)
+        identity = try identityOpen(userId: session.userId, accountKey: root, envelope: try identityCreate(userId: session.userId, accountKey: root, keyVersion: 1))
+    }
+
+    func vault(_ server: RootServer) async -> Vault {
         RootServer.current = server
-        return Vault(api: DriveAPI(session: session, configuration: RootServer.configuration), session: session)
+        let vault = Vault(api: DriveAPI(session: session, configuration: RootServer.configuration), session: session)
+        await vault.adopt(identity: identity)
+        return vault
     }
 
     func node(_ id: String, keyEpoch: UInt64, parentKeyEpoch: UInt64, keyEnvelope: String = "", metadataEnvelope: String = "") -> NodeView {
@@ -31,7 +41,7 @@ struct RootTests {
 
     @Test func noRootAllocatesOneEpochAndCreatesItOnceUnderTheWorkspaceKey() async throws {
         let server = RootServer(epoch: 41)
-        let vault = vault(server)
+        let vault = await vault(server)
         let key = try randomBytes(length: 32)
         await vault.adopt(workspace: view(root: nil), key: key)
         let made = try await vault.ensureRoot(view(root: nil))
@@ -54,11 +64,20 @@ struct RootTests {
         let metadata = try metadataOpen(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: nodeKey,
                                         envelope: try base64urlDecode(value: try #require(sent["metadataEnvelope"] as? String)))
         #expect(metadata.name == "Drive")
+
+        // Signed by the writer over the folder's first metadata version, as the server checks before storing it.
+        let statement = MetadataStatement(workspaceId: workspace, nodeId: id, kind: .folder, metadataVersion: 1)
+        let envelope = try base64urlDecode(value: try #require(sent["metadataEnvelope"] as? String))
+        let signature = try base64urlDecode(value: try #require(sent["metadataSignature"] as? String))
+        #expect(metadataVerify(signingPublicKey: try base64urlDecode(value: identity.signingPublicKey), statement: statement, metadataEnvelope: envelope, signature: signature))
+        // Not a file's name, and not another account's.
+        #expect(!metadataVerify(signingPublicKey: try base64urlDecode(value: identity.signingPublicKey),
+                                statement: MetadataStatement(workspaceId: workspace, nodeId: id, kind: .file, metadataVersion: 1), metadataEnvelope: envelope, signature: signature))
     }
 
     @Test func aWorkspaceWithARootCreatesNothing() async throws {
         let server = RootServer(epoch: 5)
-        let vault = vault(server)
+        let vault = await vault(server)
         await vault.adopt(workspace: view(root: nil), key: try randomBytes(length: 32))
         let existing = node(UUID().uuidString.lowercased(), keyEpoch: 2, parentKeyEpoch: 3)
         let opened = try await vault.ensureRoot(view(root: existing))
@@ -70,7 +89,7 @@ struct RootTests {
     @Test func whenAnotherDeviceWonTheRaceItsRootIsAdopted() async throws {
         let winner = UUID().uuidString.lowercased()
         let server = RootServer(epoch: 9, winner: node(winner, keyEpoch: 8, parentKeyEpoch: 3))
-        let vault = vault(server)
+        let vault = await vault(server)
         await vault.adopt(workspace: view(root: nil), key: try randomBytes(length: 32))
         let made = try await vault.ensureRoot(view(root: nil))
         #expect(server.created.count == 1)

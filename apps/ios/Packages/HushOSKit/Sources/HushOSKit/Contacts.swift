@@ -10,6 +10,8 @@ public struct Contact: Sendable, Equatable {
     public let userId: String
     public let name: String
     public let email: String
+    /* Raised by each succession; absent from an older server. */
+    public var keyVersion: UInt64? = nil
     public let encryptionPublicKey: String
     public let signingPublicKey: String
     public let kem: Kem?
@@ -30,6 +32,12 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
     public let fingerprint: String
     public let pinnedAt: String
     public var kemPublicKeyHash: String?
+    /* The identity key version the pin is at, so a later change is followed along the succession chain from here; absent on older pins. */
+    public var keyVersion: UInt64? = nil
+    /* Signing keys this person used before, vouched for by a succession chain the pin followed: what they signed then is still theirs. */
+    public var previousSigningKeys: [String]? = nil
+    /* When the pin last followed a succession rather than a words check: People says so until the words are compared again. */
+    public var keysReplacedAt: String? = nil
     public var id: String { userId }
 }
 
@@ -59,6 +67,8 @@ public struct Lookup: Sendable {
     public let changed: Bool
     /* Pinned, but the pin vouches for nothing (no current fingerprint over both keys): compare the words again. */
     public var recheck: Bool = false
+    /* The pin just followed their succession to the keys served now: said quietly, with comparing the words again offered. */
+    public var followed: Bool = false
 }
 
 public enum ContactError: Error, LocalizedError, Equatable {
@@ -91,23 +101,41 @@ extension Auth {
         let signed = kem.map { kemBindingVerify(userId: userId, encryptionPublicKey: encryption, signingPublicKey: signing, kemPublicKey: $0.publicKey, signature: $0.signature) } ?? false
         return Contact(
             userId: userId, name: json["name"] as? String ?? "", email: json["email"] as? String ?? email,
+            keyVersion: (json["keyVersion"] as? NSNumber)?.uint64Value,
             encryptionPublicKey: encryption, signingPublicKey: signing, kem: kem,
             fingerprint: try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: encryption), signingPublicKey: try base64urlDecode(value: signing)),
             kemSigned: signed
         )
     }
 
-    static func settings() async throws -> SettingsEnvelope? {
+    /* The settings envelope and the settings key beside it (each nil until the account has one). */
+    static func settings() async throws -> (envelope: SettingsEnvelope?, key: SettingsKeyEnvelope?) {
         let reply = try await call("/api/auth/settings")
-        guard let json = reply["settings"] as? [String: Any] else { return nil }
-        return SettingsEnvelope(
-            version: UInt32((json["version"] as? NSNumber)?.intValue ?? 0), settingsVersion: (json["settingsVersion"] as? NSNumber)?.uint64Value ?? 0,
-            nonce: json["nonce"] as? String ?? "", ciphertext: json["ciphertext"] as? String ?? ""
-        )
+        let envelope = (reply["settings"] as? [String: Any]).map { json in
+            SettingsEnvelope(
+                version: UInt32((json["version"] as? NSNumber)?.intValue ?? 0), settingsVersion: (json["settingsVersion"] as? NSNumber)?.uint64Value ?? 0,
+                nonce: json["nonce"] as? String ?? "", ciphertext: json["ciphertext"] as? String ?? ""
+            )
+        }
+        let key = (reply["settingsKey"] as? [String: Any]).map { settingsKeyEnvelope(from: $0) }
+        return (envelope, key)
     }
 
+    static func settingsKeyEnvelope(from json: [String: Any]) -> SettingsKeyEnvelope {
+        SettingsKeyEnvelope(nonce: json["nonce"] as? String ?? "", ciphertext: json["ciphertext"] as? String ?? "")
+    }
+
+    static func json(_ key: SettingsKeyEnvelope) -> [String: Any] { ["nonce": key.nonce, "ciphertext": key.ciphertext] }
+
     static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope) async throws {
-        _ = try await call("/api/auth/settings", method: "PUT", body: ["expectedVersion": expectedVersion, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext])
+        _ = try await call("/api/auth/settings", method: "PUT", body: [
+            "expectedVersion": expectedVersion, "version": envelope.version, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext,
+        ])
+    }
+
+    /* Stored once; 409 (`AuthError.conflict`) when another device stored one first. */
+    static func putSettingsKey(_ key: SettingsKeyEnvelope) async throws {
+        _ = try await call("/api/auth/settings-key", method: "PUT", body: json(key))
     }
 }
 
@@ -141,24 +169,41 @@ extension Vault {
     /* A person by email, with what the pin says about them. */
     public func lookup(email: String) async throws -> Lookup {
         let contact = try await Auth.lookupContact(email: email)
-        let pinned = try await loadSettings().contacts[contact.userId]
+        var pinned = try await loadSettings().contacts[contact.userId]
+        // Keys replaced by a succession the pinned keys signed: the pin moves with them.
+        var followed = false
+        if let pin = pinned {
+            let next = await follow(pin, served: contact.served)
+            followed = next != pin
+            pinned = next
+        }
         var changed = false
         if let pinned {
             // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
             if pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey { changed = true }
             if let hash = pinned.kemPublicKeyHash, contact.kem.map({ keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) }) != hash { changed = true }
         }
-        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false)
+        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false, followed: followed)
     }
 
     /* Trusts the keys shown now: what the person does after checking the fingerprint. Re-pinning writes a current fingerprint. */
     public func pin(_ contact: Contact) async throws {
         let hash = contact.kemSigned ? contact.kem.map { keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) } : nil
-        let pin = ContactPin(
+        var pin = ContactPin(
             userId: contact.userId, email: contact.email, name: contact.name, encryptionPublicKey: contact.encryptionPublicKey,
             signingPublicKey: contact.signingPublicKey, fingerprint: contact.fingerprint, pinnedAt: ISO8601DateFormatter().string(from: Date()), kemPublicKeyHash: hash
         )
-        try await updateSettings { $0.setPin(pin) }
+        pin.keyVersion = contact.keyVersion
+        try await updateSettings { settings in
+            // The same keys checked again keep what a succession chain vouched for; brand-new keys start afresh.
+            if let stored = settings.contacts[contact.userId], stored.signingPublicKey == pin.signingPublicKey,
+               stored.encryptionPublicKey == pin.encryptionPublicKey {
+                pin.previousSigningKeys = stored.previousSigningKeys
+                pin.keysReplacedAt = stored.keysReplacedAt
+            }
+            settings.setPin(pin)
+        }
+        ReplacedKeysSeen.acknowledge(pin)
     }
 
     public func unpin(_ pin: ContactPin) async throws {
@@ -188,11 +233,12 @@ extension Vault {
         guard pin.verified else { throw ContactError.recheck(pin.displayName) }
         let contact = try await Auth.lookupContact(email: pin.email)
         guard contact.userId == pin.userId else { throw ContactError.changed }
+        let pin = await follow(pin, served: contact.served)
         let sealing = try pin.sealKeys(encryptionPublicKey: contact.encryptionPublicKey, kemPublicKey: contact.kem?.publicKey, kemSignature: contact.kem?.signature)
         if let digest = sealing.newDigest { try await rememberKem(digest, for: pin.userId) }
         let keys = try await identityKeys()
         let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: pin.userId, granterUserId: session.userId)
-        let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
+        let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
         let share = try await api.createShare(nodeId: item.id, body: [
             "workspaceId": item.node.workspaceId, "granteeUserId": pin.userId, "role": role, "keyEpoch": item.node.keyEpoch,
             "shareEnvelope": base64urlEncode(bytes: envelope),
@@ -226,6 +272,8 @@ struct SharedByMeResponse: Codable, Sendable {
         let suite: Int?
         let grantee: ShareView.Grantee
         let node: NodeView
+        /* The grantee's identity as served now: what a re-seal is checked against the pin with. */
+        var granteeIdentity: ServedIdentity? = nil
     }
     struct Link: Codable, Sendable {
         let id: String

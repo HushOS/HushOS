@@ -67,7 +67,7 @@ extension PublicAPI {
         var request = URLRequest(url: URL(string: origin + "/api/drive/reports/operators")!)
         // No session rides along: a report about a link is anonymous.
         request.httpShouldHandleCookies = false
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.setValue(origin, forHTTPHeaderField: "Origin")
         let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw DriveAPIError.server(0, "Could not load the operators.") }

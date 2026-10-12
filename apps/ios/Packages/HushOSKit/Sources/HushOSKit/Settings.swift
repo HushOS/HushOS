@@ -53,6 +53,10 @@ struct Settings {
     var document: [String: Any]
     /* The version the server holds; 0 when there is no document yet. */
     var version: UInt64
+    /* How the stored envelope is sealed: 2 under the settings key, 1 under the identity (read, never written). */
+    var envelopeVersion: UInt32 = 2
+    /* The settings key as the server keeps it, when the account has one. */
+    var keyEnvelope: SettingsKeyEnvelope?
 
     init(json: String, version: UInt64) throws {
         guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
@@ -62,9 +66,10 @@ struct Settings {
         self.version = version
     }
 
-    init(version: UInt64 = 0) {
+    init(version: UInt64 = 0, keyEnvelope: SettingsKeyEnvelope? = nil) {
         document = ["version": 1, "contacts": [String: Any]()]
         self.version = version
+        self.keyEnvelope = keyEnvelope
     }
 
     private var rawContacts: [String: Any] { document["contacts"] as? [String: Any] ?? [:] }
@@ -91,6 +96,9 @@ struct Settings {
         raw["fingerprint"] = pin.fingerprint
         raw["pinnedAt"] = pin.pinnedAt
         raw["kemPublicKeyHash"] = pin.kemPublicKeyHash ?? NSNull()
+        raw["keyVersion"] = pin.keyVersion.map { NSNumber(value: $0) } ?? NSNull()
+        raw["previousSigningKeys"] = pin.previousSigningKeys
+        raw["keysReplacedAt"] = pin.keysReplacedAt
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }
@@ -225,23 +233,69 @@ extension Vault {
         }
     }
 
-    /* The settings document, opened and checked against the highest version this device has seen. */
+    /* The settings key out of the envelope the server keeps beside the settings, under the account key; kept for the process. */
+    private func openSettingsKey(_ envelope: SettingsKeyEnvelope) throws -> Data {
+        if let settingsKey { return settingsKey }
+        let key = try settingsKeyOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
+        settingsKey = key
+        return key
+    }
+
+    /*
+     * The settings key to seal under: the stored one, or a new one stored once. Two devices
+     * making one at the same moment: the server keeps the first, and the second opens that.
+     */
+    private func ensureSettingsKey(_ stored: SettingsKeyEnvelope?) async throws -> Data {
+        if let stored { return try openSettingsKey(stored) }
+        let made = try settingsKeyCreate(userId: session.userId, accountKey: try unlockAccount())
+        do {
+            try await Auth.putSettingsKey(made.envelope)
+            settingsKey = made.key
+            return made.key
+        } catch AuthError.conflict {
+            guard let raced = try await Auth.settings().key else { throw AuthError.message("Your settings key couldn’t be read. Try again.") }
+            return try openSettingsKey(raced)
+        }
+    }
+
+    /*
+     * The settings document, opened and checked against the highest version this device has
+     * seen: version 2 under the settings key, version 1 (read once, saved again as 2) under a
+     * key off the identity, the current one or, after a succession, an earlier one.
+     */
     func loadSettings() async throws -> Settings {
-        let keys = try await identityKeys()
         let marks = SettingsMarks.shared
         let key = try await marksKey
-        let envelope = try await Auth.settings()
-        try marks.check(key, served: envelope?.settingsVersion)
-        guard let envelope else { return Settings() }
-        let json = try settingsOpen(identityPrivateKey: keys.encryptionPrivateKey, userId: session.userId, envelope: envelope)
-        let settings = try Settings(json: json, version: envelope.settingsVersion)
+        let reply = try await Auth.settings()
+        try marks.check(key, served: reply.envelope?.settingsVersion)
+        guard let envelope = reply.envelope else { return Settings(keyEnvelope: reply.key) }
+        let json: String
+        if envelope.version == 2 {
+            guard let stored = reply.key else { throw ContactError.message("Your settings key is missing. Try again later.") }
+            json = try settingsOpen(userId: session.userId, settingsKey: try openSettingsKey(stored), identityPrivateKey: nil, envelope: envelope)
+        } else {
+            var opened: String?
+            var failure: Error?
+            for identity in try await allIdentities() {
+                do {
+                    opened = try settingsOpen(userId: session.userId, settingsKey: nil, identityPrivateKey: identity.encryptionPrivateKey, envelope: envelope)
+                    break
+                } catch { failure = failure ?? error }
+            }
+            guard let opened else { throw failure ?? ContactError.message("Unsupported settings document.") }
+            json = opened
+        }
+        var settings = try Settings(json: json, version: envelope.settingsVersion)
+        settings.envelopeVersion = envelope.version
+        settings.keyEnvelope = reply.key
         marks.record(key, version: envelope.settingsVersion)
         return settings
     }
 
     /*
-     * Reads, changes and writes the document one version up. Another device writing meanwhile
-     * makes the server refuse the stale base: read again and apply the change again.
+     * Reads, changes and writes the document one version up, always as version 2 under the
+     * settings key (made and stored first if the account has none). Another device writing
+     * meanwhile makes the server refuse the stale base: read again and apply the change again.
      */
     @discardableResult
     func updateSettings(_ change: (inout Settings) throws -> Void) async throws -> Settings {
@@ -249,18 +303,26 @@ extension Vault {
         while true {
             var settings = try await loadSettings()
             try change(&settings)
-            let keys = try await identityKeys()
-            let sealed = try settingsSeal(identityPrivateKey: keys.encryptionPrivateKey, userId: session.userId,
-                                          settingsVersion: settings.version + 1, json: try settings.json())
+            let settingsKey = try await ensureSettingsKey(settings.keyEnvelope)
+            let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
                 try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
                 SettingsMarks.shared.record(try await marksKey, version: settings.version + 1)
                 settings.version += 1
+                settings.envelopeVersion = sealed.version
+                trustedSigners = nil
                 return settings
             } catch AuthError.conflict where attempt < 2 {
                 attempt += 1
             }
         }
+    }
+
+    /* Settings still sealed under the identity (version 1) are sealed again under the settings key, which outlives an identity. */
+    func ensureSettingsKeyed() async throws {
+        let settings = try await loadSettings()
+        if settings.version == 0 || settings.envelopeVersion == 2 { return }
+        try await updateSettings { _ in }
     }
 
     /* What this account shared, by its own record. */

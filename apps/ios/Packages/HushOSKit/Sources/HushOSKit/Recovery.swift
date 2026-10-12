@@ -204,7 +204,7 @@ extension Auth {
         request.httpMethod = method
         request.httpShouldHandleCookies = false
         request.setValue(origin, forHTTPHeaderField: "Origin")
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         if let enrollment { request.setValue("\(enrollmentCookie(origin))=\(enrollment)", forHTTPHeaderField: "Cookie") }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

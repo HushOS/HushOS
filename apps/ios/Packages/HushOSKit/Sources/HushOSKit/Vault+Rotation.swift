@@ -24,6 +24,9 @@ struct RotationWorkNode: Decodable, Sendable {
         let contentKeyEnvelope: String
         let contentSuite: UInt32
         let plaintextSize: String?
+        /* Who signed the envelope being replaced. */
+        var signer: Signer? = nil
+        var signature: String? = nil
     }
     struct Share: Decodable, Sendable {
         let id: String
@@ -54,11 +57,13 @@ struct RotationWorkNode: Decodable, Sendable {
     }
 }
 
-public struct ServedIdentity: Decodable, Sendable {
-    public struct Kem: Decodable, Sendable {
+public struct ServedIdentity: Codable, Sendable {
+    public struct Kem: Codable, Sendable {
         public let publicKey: String
         public let signature: String
     }
+    /* Raised by each succession; absent from an older server. */
+    public var keyVersion: UInt64? = nil
     public let encryptionPublicKey: String
     public let signingPublicKey: String
     public let kem: Kem?
@@ -133,6 +138,8 @@ extension Vault {
         if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
         // The identity, the pins and the ledger are only needed for shares and links: a subtree with none never asks for them.
         var sharing: (keys: IdentityKeys, pins: [String: ContactPin], ledger: SharingLedger)?
+        // Pins already followed along a grantee's succession chain in this rotation.
+        var followed: Set<String> = []
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
         var outcome = RotationOutcome()
@@ -203,11 +210,17 @@ extension Vault {
                 let metaCtx = MetadataContext(workspaceId: ws, nodeId: node.id, metadataVersion: node.metadataVersion)
                 let metadata = try metadataOpen(ctx: metaCtx, nodeKey: old, envelope: try base64urlDecode(value: node.metadataEnvelope))
                 let metadataEnvelope = try metadataSeal(ctx: metaCtx, nodeKey: fresh, metadata: metadata)
+                // Re-sealed here, so signed here: by the account running the rotation, over the unchanged metadata version.
+                let metadataSignature = try await signMetadata(workspaceId: ws, nodeId: node.id, kind: node.isFolder ? .folder : .file,
+                                                               version: node.metadataVersion, envelope: metadataEnvelope)
                 var versions: [[String: Any]] = []
                 for version in entry.versions {
                     let ctx = VersionContext(workspaceId: ws, nodeId: node.id, versionId: version.id, objectId: version.objectId)
                     let content = try versionOpen(ctx: ctx, suite: version.contentSuite, nodeKey: old, envelope: try base64urlDecode(value: version.contentKeyEnvelope), rowSize: version.plaintextSize.flatMap { UInt64($0) })
-                    versions.append(["id": version.id, "contentKeyEnvelope": base64urlEncode(bytes: try versionReseal(ctx: ctx, suite: version.contentSuite, nodeKey: fresh, content: content))])
+                    let resealed = try versionReseal(ctx: ctx, suite: version.contentSuite, nodeKey: fresh, content: content)
+                    let signature = try await signVersion(workspaceId: ws, nodeId: node.id, versionId: version.id, objectId: version.objectId,
+                                                          suite: version.contentSuite, envelope: resealed)
+                    versions.append(["id": version.id, "contentKeyEnvelope": base64urlEncode(bytes: resealed), "signature": signature])
                 }
                 var shares: [[String: Any]] = []
                 if (!entry.shares.isEmpty || !entry.links.isEmpty) && sharing == nil {
@@ -215,6 +228,12 @@ extension Vault {
                     sharing = (try await identityKeys(), settings.contacts, settings.ledger)
                 }
                 for share in sharing.map({ entry.ledgerShares($0.ledger) }) ?? [] {
+                    // A grantee who replaced their keys by a succession their pinned keys signed: the pin follows, once.
+                    if var current = sharing, let pin = current.pins[share.granteeUserId], !followed.contains(pin.userId) {
+                        followed.insert(pin.userId)
+                        current.pins[pin.userId] = await follow(pin, served: share.grantee.served)
+                        sharing = current
+                    }
                     guard let (keys, pins, _) = sharing else { continue }
                     let sealing: (publicKey: Data, kem: Data, newDigest: String?)
                     do {
@@ -229,7 +248,7 @@ extension Vault {
                     }
                     if let digest = sealing.newDigest { newDigests[share.granteeUserId] = digest }
                     let ctx = ShareContext(workspaceId: ws, nodeId: node.id, keyEpoch: target, granteeUserId: share.granteeUserId, granterUserId: session.userId)
-                    let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granterPrivateKey: keys.encryptionPrivateKey, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
+                    let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
                     shares.append(["id": share.id, "shareEnvelope": base64urlEncode(bytes: sealed)])
                 }
                 var links: [[String: Any]] = []
@@ -257,7 +276,8 @@ extension Vault {
                     ])
                 }
                 wire["keyEnvelope"] = base64urlEncode(bytes: envelope)
-                wire["rotated"] = ["metadataEnvelope": base64urlEncode(bytes: metadataEnvelope), "versions": versions, "shares": shares, "links": links, "unsealableLinks": unsealable]
+                wire["rotated"] = ["metadataEnvelope": base64urlEncode(bytes: metadataEnvelope), "metadataSignature": metadataSignature,
+                                   "versions": versions, "shares": shares, "links": links, "unsealableLinks": unsealable]
                 // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
                 previous[node.id] = (node.keyEpoch, old)
                 nodeKeys[ref(node.id)] = fresh

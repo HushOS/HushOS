@@ -47,7 +47,7 @@ extension Auth {
         let cookieName = session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"
         request.setValue("\(cookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -224,7 +224,7 @@ extension Auth {
     }
 
     /*
-     * Rotates the master key, as the web's "Rotate keys" does: a fresh account
+     * Rotates the master key, as the web's "Rotate account key" does: a fresh account
      * key replaces the old one under the same password, the identity and every
      * workspace grant are sealed again under it, and a new recovery phrase is
      * minted. Files and shares do not change; the server ends every session,
@@ -252,9 +252,17 @@ extension Auth {
         let sealed = try accountSeal(userId: userId, exportKey: registered.exportKey, accountKey: newRoot, keyVersion: keyVersion, credentialVersion: old.credentialVersion + 1)
         let oldRecovery = recoveryEnvelope(from: recoveryJson)
         let recovery = try recoveryCreate(userId: userId, accountKey: newRoot, recoveryVersion: oldRecovery.recoveryVersion + 1, keyVersion: keyVersion)
-        let identity = try identityRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: identityEnvelope(from: identityJson), keyVersion: keyVersion)
+        // Each identity keeps its own key version: contacts' pins and the succession chain name it.
+        let identity = try identityRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: identityEnvelope(from: identityJson))
+        // The earlier identities and the settings key go to the new root too, or what they open dies with the old one.
+        let history = try (challenge["identityHistory"] as? [[String: Any]] ?? []).map {
+            try identityRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: identityEnvelope(from: $0))
+        }
+        let settingsKey = try (challenge["settingsKey"] as? [String: Any]).map {
+            try settingsKeyRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, envelope: settingsKeyEnvelope(from: $0))
+        }
         let workspaces = try workspacesJson.map { try workspaceGrantRewrap(userId: userId, oldRoot: oldRoot, newRoot: newRoot, grant: grant(from: $0), keyVersion: keyVersion) }
-        _ = try await call("/api/auth/security/finish", method: "POST", body: [
+        var body: [String: Any] = [
             "action": "master-key", "attemptToken": attemptToken, "finishLoginRequest": finish.request,
             "registrationRecord": registered.record,
             "envelope": [
@@ -263,8 +271,11 @@ extension Auth {
             ],
             "recovery": json(recovery.envelope),
             "identity": json(identity),
+            "identityHistory": history.map { json($0) },
             "workspaces": workspaces.map { json($0) },
-        ])
+        ]
+        if let settingsKey { body["settingsKey"] = json(settingsKey) }
+        _ = try await call("/api/auth/security/finish", method: "POST", body: body)
         let memory = try deviceRemember(userId: userId, accountKey: newRoot, keyVersion: sealed.keyVersion, credentialVersion: sealed.credentialVersion, deviceKeyId: UUID().uuidString.lowercased())
         try SharedKeychain.write(SharedKeychain.deviceAccount, SharedKeychain.Device(memory: memory))
         return recovery.phrase
