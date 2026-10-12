@@ -97,9 +97,12 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
     await expect(dialog(visitor)).toHaveCount(0);
 
     await row(visitor, 'payload.bin').locator('button').first().click(grip);
+    // No preview for a .bin: its notice carries a Download of its own beside the header's,
+    // and appears a moment after the dialog. Wait for it, then take the header's.
+    await expect(dialog(visitor).getByText('This kind of file has no preview yet.')).toBeVisible();
     const [download] = await Promise.all([
         visitor.waitForEvent('download'),
-        dialog(visitor).getByRole('button', { name: 'Download', exact: true }).click(),
+        dialog(visitor).getByRole('button', { name: 'Download', exact: true }).first().click(),
     ]);
     expect(sha256(readFileSync((await download.path())!))).toBe(samples.hashes.binary);
     await visitor.keyboard.press('Escape');
