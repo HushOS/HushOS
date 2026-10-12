@@ -1,0 +1,50 @@
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_ced579798b77cd 14
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_75dbe24a0bc379::t_affe3f37e61249 626,655-657
+  s_75dbe24a0bc379::t_e5fe71e13ada3f 111-112
+  s_75dbe24a0bc379::t_080894dce5aa15 579
+packages/db/src/drive.ts
+  s_75dbe24a0bc379::t_acefd664876079 662-665
+  s_75dbe24a0bc379::t_7056243a55b22e 666-691
+packages/db/src/drive.reports.test.ts
+  s_75dbe24a0bc379::t_2052bf1aaa7581 317-327,562-564,580-586,588-625,629-652,656-664,668-691,693,695,697,699-700,702-705
+  s_75dbe24a0bc379::t_efe2a134d2d183 692,694,696,698,701,706
+  s_75dbe24a0bc379::t_cf2ae2572892f3 329-331
+  s_75dbe24a0bc379::t_74bc57120aba55 626-628,653-655,665-667
+packages/drive/src/api.ts
+  s_75dbe24a0bc379::t_4b8d8eb1eaa748 481-482
+packages/db/drizzle/20261012132409_report_release/snapshot.json
+  s_75dbe24a0bc379::t_33867daa3c3cda 1,7856
+  s_75dbe24a0bc379::t_e5fe71e13ada3f 2-7855,7857-7859
+packages/db/drizzle/20261012132409_report_release/migration.sql
+  s_75dbe24a0bc379::t_33867daa3c3cda 1
+  s_75dbe24a0bc379::t_632e5adc46978a 2-5
+packages/db/src/schema/drive.ts
+  s_75dbe24a0bc379::t_7e4d5983904945 406-407
+  s_75dbe24a0bc379::t_254244b4107582 433-435
+  s_75dbe24a0bc379::t_504aee44d1348c 432
+packages/db/src/reports.ts
+  s_75dbe24a0bc379::t_5badd9e1dc77b0 319,412-416,418-428,431-438,441-448,450,452-462,470-471,476,479,481-482,500,514,530,533-537,539,542,548,552,555-564,571
+  s_75dbe24a0bc379::t_8165ac483d6998 3,429-430,472-475,483-497
+packages/drive/src/server.ts
+  s_75dbe24a0bc379::t_4b8d8eb1eaa748 1675,1901-1903,2071,2073-2074,2080-2085,2091-2094
+  s_75dbe24a0bc379::t_36b9eb386ae58f 1911-1912
+  s_75dbe24a0bc379::t_8165ac483d6998 2065
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b049366bd9d1d601f3012bc1fb6ffd5967d0f27c",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
