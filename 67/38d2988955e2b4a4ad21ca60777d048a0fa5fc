@@ -1,0 +1,20 @@
+crates/hushos-core/src/signatures.rs
+  s_75dbe24a0bc379::t_91a0c91dc3a9ee 126-130,348-353
+  s_75dbe24a0bc379::t_5d5c32b7e8c26c 1-125,131-347,354-358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6738d2988955e2b4a4ad21ca60777d048a0fa5fc",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
