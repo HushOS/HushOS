@@ -222,12 +222,15 @@ export async function registerAccount(
 ) {
     // A test that arrived at sign-up with a code in the URL stays on that page.
     if (!options.viaCurrentPage) await page.goto('/register', { waitUntil: 'networkidle' });
-    const emailField = page.getByRole('textbox', { name: /email/i });
+    // Scoped to the sign-up card: arriving from sign-in, the URL changes while that page,
+    // with its own Email field, is still on screen, and a fill there is lost.
+    const signUp = page.getByRole('region', { name: 'Create your account' });
+    const emailField = signUp.getByRole('textbox', { name: /email/i });
     await hydrated(emailField);
     await emailField.fill(email);
     await expect(emailField).toHaveValue(email);
-    await check(page.getByRole('checkbox'));
-    await page.locator('form button[type=submit]').click();
+    await check(signUp.getByRole('checkbox'));
+    await signUp.locator('form button[type=submit]').click();
     await page.waitForURL(/\/register\/check-email/);
     // The URL changes before the router's transition commits; leaving during it
     // (WebKit reports the commit late) reads as one navigation interrupting another,
