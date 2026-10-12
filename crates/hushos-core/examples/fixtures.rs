@@ -172,8 +172,7 @@ fn main() {
     let report = json!({
         "ctx": { "workspaceId": report_ctx.workspace_id, "nodeId": report_ctx.node_id, "keyEpoch": report_ctx.key_epoch, "reportId": report_ctx.report_id, "operatorUserId": report_ctx.operator_user_id },
         "nodeKey": e(&node_key),
-        "hybrid": e(&report_seal_key(report_ctx.clone(), node_key.clone(), operator.clone()).unwrap()),
-        "classic": e(&report_seal_key(report_ctx, node_key.clone(), OperatorKeys { kem: None, ..operator }).unwrap()),
+        "hybrid": e(&report_seal_key(report_ctx, node_key.clone(), operator.clone()).unwrap()),
     });
     // A node key shared to the web's identity from a granter minted here, in both suites; and its settings resealed.
     let granter_secret = random_bytes(32).unwrap();
@@ -188,7 +187,6 @@ fn main() {
         "ctx": { "workspaceId": share_ctx.workspace_id, "nodeId": share_ctx.node_id, "keyEpoch": share_ctx.key_epoch, "granteeUserId": share_ctx.grantee_user_id, "granterUserId": share_ctx.granter_user_id },
         "nodeKey": e(&node_key),
         "granterPublicKey": e(&granter_public),
-        "classic": e(&share_seal(share_ctx.clone(), node_key.clone(), granter_secret.clone(), grantee_public.clone(), None).unwrap()),
         "hybrid": e(&share_seal(share_ctx, node_key.clone(), granter_secret, grantee_public, Some(grantee_kem)).unwrap()),
     });
     let web_settings = &web["settings"];

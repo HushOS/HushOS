@@ -9,10 +9,12 @@ use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::identity::{kem_decapsulate, kem_encapsulate, IdentityKeys, KEM_CIPHERTEXT_BYTES, KEM_SEED_BYTES};
 use hkdf::Hkdf;
+use salsa20::cipher::consts::U10;
+use salsa20::hsalsa;
 use serde_json::json;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 const SHARE_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES;
 const HYBRID_SHARE_ENVELOPE_BYTES: usize = NONCE_BYTES + KEM_CIPHERTEXT_BYTES + KEY_BYTES + TAG_BYTES;
@@ -41,43 +43,6 @@ fn share_context(ctx: &ShareContext, suite: u32) -> Vec<u8> {
     ])
 }
 
-/* HSalsa20 as libsodium's crypto_core_hsalsa20: the Salsa20 core over sigma, the key and a 16-byte input, 20 rounds. */
-fn hsalsa20(key: &[u8; 32], input: &[u8; 16]) -> [u8; 32] {
-    let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().expect("4 bytes"));
-    let mut x = [0u32; 16];
-    let sigma = [0x6170_7865u32, 0x3320_646e, 0x7962_2d32, 0x6b20_6574];
-    x[0] = sigma[0];
-    x[5] = sigma[1];
-    x[10] = sigma[2];
-    x[15] = sigma[3];
-    for i in 0..4 {
-        x[1 + i] = word(&key[4 * i..4 * i + 4]);
-        x[11 + i] = word(&key[16 + 4 * i..20 + 4 * i]);
-        x[6 + i] = word(&input[4 * i..4 * i + 4]);
-    }
-    let qr = |x: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize| {
-        x[b] ^= x[a].wrapping_add(x[d]).rotate_left(7);
-        x[c] ^= x[b].wrapping_add(x[a]).rotate_left(9);
-        x[d] ^= x[c].wrapping_add(x[b]).rotate_left(13);
-        x[a] ^= x[d].wrapping_add(x[c]).rotate_left(18);
-    };
-    for _ in 0..10 {
-        qr(&mut x, 0, 4, 8, 12);
-        qr(&mut x, 5, 9, 13, 1);
-        qr(&mut x, 10, 14, 2, 6);
-        qr(&mut x, 15, 3, 7, 11);
-        qr(&mut x, 0, 1, 2, 3);
-        qr(&mut x, 5, 6, 7, 4);
-        qr(&mut x, 10, 11, 8, 9);
-        qr(&mut x, 15, 12, 13, 14);
-    }
-    let mut out = [0u8; 32];
-    for (slot, index) in [0usize, 5, 10, 15, 6, 7, 8, 9].iter().enumerate() {
-        out[4 * slot..4 * slot + 4].copy_from_slice(&x[*index].to_le_bytes());
-    }
-    out
-}
-
 /* libsodium's crypto_box_beforenm: X25519, then HSalsa20 with a zero nonce. */
 pub(crate) fn pair_key(their_public: &[u8], my_private: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("identity public key", their_public, 32).map_err(|_| input("Invalid identity key."))?;
@@ -88,7 +53,11 @@ pub(crate) fn pair_key(their_public: &[u8], my_private: &[u8]) -> CoreResult<Zer
     if !shared.was_contributory() {
         return Err(input("Invalid identity key."));
     }
-    Ok(Zeroizing::new(hsalsa20(shared.as_bytes(), &[0u8; 16])))
+    // HSalsa20 (20 rounds, ten double rounds) as libsodium's crypto_core_hsalsa20.
+    let mut key = hsalsa::<U10>(shared.as_bytes().into(), &[0u8; 16].into());
+    let out = Zeroizing::new(key.into());
+    key.as_mut_slice().zeroize();
+    Ok(out)
 }
 
 fn hybrid_key(
@@ -106,16 +75,15 @@ fn hybrid_key(
     Ok(key)
 }
 
-/// Seals a node key to a grantee, as the granter: suite 2 (hybrid) when the
-/// grantee's ML-KEM key is given, suite 1 otherwise. The caller pins the
-/// grantee's keys first; sealing to an unchecked key is sealing to a stranger.
+/// Seals a node key to a grantee, as the granter: suite 2 (hybrid), always.
+/// Without the grantee's ML-KEM key nothing is sealed; suite 1 envelopes made
+/// before still open. The caller pins the grantee's keys first; sealing to an
+/// unchecked key is sealing to a stranger.
 ///
 /// ```
 /// # let (node_key, granter_private, grantee_public) = (vec![0u8; 32], vec![1u8; 32], vec![2u8; 32]);
 /// # let ctx = hushos_core::ShareContext { workspace_id: "w".into(), node_id: "n".into(), key_epoch: 1, grantee_user_id: "a".into(), granter_user_id: "b".into() };
-/// let envelope = hushos_core::share_seal(ctx, node_key, granter_private, grantee_public, None)?;
-/// assert_eq!(envelope.len(), 72);
-/// # Ok::<(), hushos_core::CoreError>(())
+/// assert!(hushos_core::share_seal(ctx, node_key, granter_private, grantee_public, None).is_err());
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn share_seal(
@@ -130,7 +98,9 @@ pub fn share_seal(
     let nonce = random(NONCE_BYTES);
     let mut out = nonce.clone();
     match grantee_kem_public_key {
-        None => out.extend(seal_with_nonce(pair.as_slice(), &nonce, &node_key, &share_context(&ctx, 1))?),
+        // Hybrid only: suite 1 is still opened, never made. A share sealed to X25519 alone is a
+        // harvest-now, decrypt-later target, and withholding the KEM key is all it would take.
+        None => return Err(input("This person has no post-quantum key yet, so nothing was shared.")),
         Some(public) => {
             let (ciphertext, secret) = kem_encapsulate(&public)?;
             let body_key = hybrid_key(pair.as_slice(), secret.as_slice(), &ciphertext)?;
@@ -226,12 +196,11 @@ mod tests {
         let grantee_public = crate::bytes::decode("k", &envelope.encryption_public_key, Some(32)).unwrap();
         let node_key = random(32);
 
-        let classic = seal(&node_key, &grantee_public, None, &granter_secret, &ctx());
-        assert_eq!(classic.len(), SHARE_ENVELOPE_BYTES);
-        assert_eq!(
-            share_open(classic.clone(), granter_public.clone(), grantee.clone(), ctx()).unwrap(),
-            node_key
-        );
+        // Nothing is sealed to X25519 alone any more.
+        assert!(matches!(
+            share_seal(ctx(), node_key.clone(), granter_secret.to_vec(), grantee_public.clone(), None),
+            Err(CoreError::Input(_))
+        ));
 
         let hybrid = seal(
             &node_key,
@@ -253,7 +222,10 @@ mod tests {
             share_open(hybrid.clone(), granter_public.clone(), grantee.clone(), other_epoch),
             Err(CoreError::Sealed(_))
         ));
-        assert!(matches!(share_open(classic, random(32), grantee.clone(), ctx()), Err(CoreError::Sealed(_))));
+        assert!(matches!(
+            share_open(hybrid.clone(), random(32), grantee.clone(), ctx()),
+            Err(CoreError::Sealed(_))
+        ));
         let mut damaged = hybrid.clone();
         damaged[NONCE_BYTES + 5] ^= 1;
         assert!(matches!(

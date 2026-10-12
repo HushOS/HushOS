@@ -17,6 +17,7 @@ use opaque_ke::{
     CredentialResponse, Identifiers, RegistrationResponse,
 };
 use std::fmt;
+use unicode_normalization::UnicodeNormalization as _;
 use zeroize::Zeroizing;
 
 const SERVER_IDENTIFIER: &[u8] = b"hushos/opaque/profile/1";
@@ -151,6 +152,13 @@ impl fmt::Debug for RegistrationFinish {
     }
 }
 
+/* Every password goes into OPAQUE in Unicode NFC, as the web does, so the same
+ * characters typed through different input methods open the same account. */
+fn normalized(password: String) -> Zeroizing<String> {
+    let password = Zeroizing::new(password);
+    Zeroizing::new(password.nfc().collect())
+}
+
 /// Step one of a login: blind the password. Send `request` to
 /// `POST /api/auth/login/start` and keep `state` for [`opaque_finish_login`].
 ///
@@ -167,7 +175,7 @@ impl fmt::Debug for RegistrationFinish {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn opaque_start_login(password: String) -> CoreResult<LoginStart> {
-    let password = Zeroizing::new(password);
+    let password = normalized(password);
     let start = ClientLogin::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client login"))?;
     Ok(LoginStart { state: start.state.serialize().to_vec(), request: encode(&start.message.serialize()) })
@@ -181,7 +189,7 @@ pub fn opaque_finish_login(
     state: Vec<u8>,
     login_response: String,
 ) -> CoreResult<Option<LoginFinish>> {
-    let (password, state) = (Zeroizing::new(password), Zeroizing::new(state));
+    let (password, state) = (normalized(password), Zeroizing::new(state));
     let response = decode("loginResponse", &login_response, None)?;
     let state =
         ClientLogin::<Suite>::deserialize(&state).map_err(protocol("deserialize clientLoginState"))?;
@@ -203,7 +211,7 @@ pub fn opaque_finish_login(
 /// Step one of a registration; send `request` as `registrationRequest`.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn opaque_start_registration(password: String) -> CoreResult<RegistrationStart> {
-    let password = Zeroizing::new(password);
+    let password = normalized(password);
     let start = ClientRegistration::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client registration"))?;
     Ok(RegistrationStart {
@@ -221,7 +229,7 @@ pub fn opaque_finish_registration(
     state: Vec<u8>,
     registration_response: String,
 ) -> CoreResult<RegistrationFinish> {
-    let (password, state) = (Zeroizing::new(password), Zeroizing::new(state));
+    let (password, state) = (normalized(password), Zeroizing::new(state));
     let response = decode("registrationResponse", &registration_response, None)?;
     let state = ClientRegistration::<Suite>::deserialize(&state)
         .map_err(protocol("deserialize clientRegistrationState"))?;
@@ -340,6 +348,16 @@ mod tests {
         let mut server = Server::new();
         server.register("correct horse battery staple");
         assert!(server.login("correct horse battery stable").is_none());
+    }
+
+    #[test]
+    fn a_password_typed_composed_opens_an_account_registered_decomposed() {
+        // "café" as e + combining acute, then as the single é: one password after NFC, as on the web.
+        let mut server = Server::new();
+        let registered = server.register("cafe\u{301} au lait, please");
+        let (login, _) = server.login("caf\u{e9} au lait, please").expect("NFC makes them one password");
+        assert_eq!(login.export_key, registered.export_key);
+        assert!(server.login("cafe au lait, please").is_none(), "a different letter is a different password");
     }
 
     #[test]

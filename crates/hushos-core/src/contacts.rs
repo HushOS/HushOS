@@ -9,6 +9,7 @@ use crate::error::{input, CoreError, CoreResult};
 use hkdf::Hkdf;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
+use zeroize::Zeroizing;
 
 const SETTINGS_MAX_BYTES: usize = 64 * 1024;
 
@@ -57,14 +58,28 @@ pub fn key_digest(public_key: Vec<u8>) -> String {
     Sha256::digest(&public_key).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn settings_key(identity_private_key: &[u8]) -> CoreResult<[u8; KEY_BYTES]> {
+fn settings_key(identity_private_key: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("identity private key", identity_private_key, 32)
         .map_err(|_| input("Invalid identity key."))?;
-    let mut key = [0u8; KEY_BYTES];
+    let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&[0u8; 32]), identity_private_key)
-        .expand(b"hushos/settings/v1", &mut key)
+        .expand(b"hushos/settings/v1", key.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     Ok(key)
+}
+
+/// Settings are padded with trailing spaces (which JSON ignores) to 1 KiB
+/// steps before sealing, as the web pads them, so the envelope's length says
+/// little about how many people are pinned or what the ledger holds; the
+/// server refuses an envelope that is not.
+pub const SETTINGS_PAD_STEP: usize = 1024;
+
+fn padded_settings(json: &str) -> Zeroizing<Vec<u8>> {
+    let target = json.len().div_ceil(SETTINGS_PAD_STEP).max(1) * SETTINGS_PAD_STEP;
+    let mut out = Zeroizing::new(Vec::with_capacity(target));
+    out.extend_from_slice(json.as_bytes());
+    out.resize(target.min(SETTINGS_MAX_BYTES).max(json.len()), b' ');
+    out
 }
 
 fn settings_context(user_id: &str, settings_version: u64) -> Vec<u8> {
@@ -103,8 +118,12 @@ pub fn settings_seal(
     }
     let key = settings_key(&identity_private_key)?;
     let nonce = random(NONCE_BYTES);
-    let sealed =
-        seal_with_nonce(&key, &nonce, json.as_bytes(), &settings_context(&user_id, settings_version))?;
+    let sealed = seal_with_nonce(
+        key.as_slice(),
+        &nonce,
+        &padded_settings(&json),
+        &settings_context(&user_id, settings_version),
+    )?;
     Ok(SettingsEnvelope { version: 1, settings_version, nonce: encode(&nonce), ciphertext: encode(&sealed) })
 }
 
@@ -120,13 +139,14 @@ pub fn settings_open(
     }
     let key = settings_key(&identity_private_key)?;
     let plaintext = open_with_nonce(
-        &key,
+        key.as_slice(),
         &decode("nonce", &envelope.nonce, Some(NONCE_BYTES))?,
         &decode("ciphertext", &envelope.ciphertext, None)?,
         &settings_context(&user_id, envelope.settings_version),
     )?;
-    let text = String::from_utf8(plaintext)
+    let mut text = String::from_utf8(plaintext)
         .map_err(|_| CoreError::Sealed("Unsupported settings document.".into()))?;
+    text.truncate(text.trim_end_matches(' ').len());
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .map_err(|_| CoreError::Sealed("Unsupported settings document.".into()))?;
     if parsed["version"] != json!(1) || !parsed["contacts"].is_object() {
@@ -138,6 +158,7 @@ pub fn settings_open(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bytes::TAG_BYTES;
 
     #[test]
     fn the_fingerprint_is_the_web_layout_and_changes_with_either_key() {
@@ -166,6 +187,26 @@ mod tests {
         bumped.settings_version = 3;
         assert!(matches!(settings_open(key.clone(), "u".into(), bumped), Err(CoreError::Sealed(_))));
         assert_eq!(settings_open(key, "U".into(), sealed).unwrap(), r#"{"version":1,"contacts":{"x":{}}}"#);
+    }
+
+    #[test]
+    fn settings_are_padded_to_whole_kibibytes_and_open_without_the_padding() {
+        let key = random(32);
+        let small = r#"{"version":1,"contacts":{}}"#;
+        let mut larger = String::from(r#"{"version":1,"contacts":{},"note":""#);
+        larger.push_str(&"x".repeat(1500));
+        larger.push_str(r#""}"#);
+        for json in [small, larger.as_str()] {
+            let sealed = settings_seal(key.clone(), "u".into(), 1, json.into()).unwrap();
+            let body = decode("ciphertext", &sealed.ciphertext, None).unwrap().len() - TAG_BYTES;
+            assert_eq!(body % SETTINGS_PAD_STEP, 0, "{body} bytes is not a whole step");
+            assert_eq!(settings_open(key.clone(), "u".into(), sealed).unwrap(), json);
+        }
+        // Two documents of different sizes in the same step are the same length on the wire.
+        let a = settings_seal(key.clone(), "u".into(), 1, small.into()).unwrap();
+        let b =
+            settings_seal(key, "u".into(), 1, r#"{"version":1,"contacts":{"someone":{}}}"#.into()).unwrap();
+        assert_eq!(a.ciphertext.len(), b.ciphertext.len());
     }
 
     #[test]

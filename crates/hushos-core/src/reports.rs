@@ -11,11 +11,15 @@ use crate::envelope::{context, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::identity::{kem_encapsulate, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES};
 use crate::shares::pair_key;
-use blake2::digest::consts::{U24, U32};
+#[cfg(test)]
+use blake2::digest::consts::U24;
+use blake2::digest::consts::U32;
 use blake2::{Blake2b, Digest as _};
+#[cfg(test)]
 use crypto_secretbox::aead::{AeadInPlace as _, KeyInit as _};
+#[cfg(test)]
 use crypto_secretbox::XSalsa20Poly1305;
-use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use hkdf::Hkdf;
 use serde_json::json;
 use sha2::Sha256;
@@ -23,6 +27,8 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 const REPORT_KEY_INFO: &[u8] = b"hushos/drive/report-key/v2";
+/* Suite 1, a libsodium sealed box: still opened by the web's operator page, no longer made. */
+#[cfg(test)]
 const SEALED_BOX_BYTES: usize = 32 + 16 + KEY_BYTES + 32; // 112
 const HYBRID_BYTES: usize = 32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES + KEY_BYTES + 32 + 16; // 1224
 
@@ -100,34 +106,22 @@ pub fn kem_binding_verify(
             json!(encryption_public_key),
             json!(kem_public_key),
         ]);
-        Ok(key.verify(&message, &Signature::from_bytes(&signature)).is_ok())
+        Ok(key.verify_strict(&message, &Signature::from_bytes(&signature)).is_ok())
     };
     check().unwrap_or(false)
 }
 
-/* libsodium's crypto_box_seal: an ephemeral X25519 key, the nonce BLAKE2b-24 over both public keys, XSalsa20-Poly1305 with the tag first. */
-fn sealed_box(recipient_public: &[u8], plaintext: &[u8]) -> CoreResult<Vec<u8>> {
-    let ephemeral = Zeroizing::new(<[u8; 32]>::try_from(random(32)).expect("32 bytes"));
-    let ephemeral_public = PublicKey::from(&StaticSecret::from(*ephemeral));
-    let key = pair_key(recipient_public, ephemeral.as_slice())?;
-    let mut nonce_input = Vec::with_capacity(64);
-    nonce_input.extend_from_slice(ephemeral_public.as_bytes());
-    nonce_input.extend_from_slice(recipient_public);
-    let nonce: [u8; 24] = Blake2b::<U24>::digest(&nonce_input).into();
-    let mut body = plaintext.to_vec();
-    let tag = XSalsa20Poly1305::new((&*key).into())
-        .encrypt_in_place_detached((&nonce).into(), b"", &mut body)
-        .map_err(|_| CoreError::Sealed("encryption failed".into()))?;
-    let mut out = Vec::with_capacity(SEALED_BOX_BYTES);
-    out.extend_from_slice(ephemeral_public.as_bytes());
-    out.extend_from_slice(&tag);
-    out.extend_from_slice(&body);
-    Ok(out)
+/* A hybrid envelope's associated data: the report's context and the ephemeral key it carries. */
+fn hybrid_report_data(ctx: &ReportContext, ephemeral_public: &[u8]) -> Vec<u8> {
+    let mut data = report_context(ctx, 2);
+    data.extend_from_slice(ephemeral_public);
+    data
 }
 
-/// Seals the node key to one operator for a report: 112 bytes for an operator
-/// without a KEM key, 1224 with one. Refuses a KEM key whose binding does not
-/// verify, so a swapped key on the wire cannot redirect the report.
+/// Seals the node key to one operator for a report: 1224 bytes, hybrid. Refuses
+/// an operator without a KEM key, since a classical seal is a harvest-now,
+/// decrypt-later target, and a KEM key whose binding does not verify, so a
+/// swapped key on the wire cannot redirect the report.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: OperatorKeys) -> CoreResult<Vec<u8>> {
     expect_len("node key", &node_key, KEY_BYTES)?;
@@ -150,15 +144,15 @@ pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: Operator
             Some(decode("operator kem publicKey", &kem.public_key, Some(KEM_PUBLIC_KEY_BYTES))?)
         }
     };
-    let suite = if kem.is_some() { 2 } else { 1 };
+    // Hybrid only: a classical seal of a node key is a harvest-now, decrypt-later target.
+    let Some(kem_public) = kem else {
+        return Err(input(
+            "An operator has no post-quantum key yet, so nothing was sealed. Ask them to sign in once.",
+        ));
+    };
     let mut plaintext = Zeroizing::new(Vec::with_capacity(KEY_BYTES + 32));
     plaintext.extend_from_slice(&node_key);
-    plaintext.extend_from_slice(&digest(&report_context(&ctx, suite)));
-    let Some(kem_public) = kem else {
-        let sealed = sealed_box(&operator_public, &plaintext)?;
-        debug_assert_eq!(sealed.len(), SEALED_BOX_BYTES);
-        return Ok(sealed);
-    };
+    plaintext.extend_from_slice(&digest(&report_context(&ctx, 2)));
     let ephemeral = Zeroizing::new(<[u8; 32]>::try_from(random(32)).expect("32 bytes"));
     let ephemeral_public = PublicKey::from(&StaticSecret::from(*ephemeral));
     let pair = pair_key(&operator_public, ephemeral.as_slice())?;
@@ -171,7 +165,12 @@ pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: Operator
         .expand(REPORT_KEY_INFO, body_key.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let nonce = random(NONCE_BYTES);
-    let body = seal_with_nonce(body_key.as_slice(), &nonce, &plaintext, &report_context(&ctx, 2))?;
+    let body = seal_with_nonce(
+        body_key.as_slice(),
+        &nonce,
+        &plaintext,
+        &hybrid_report_data(&ctx, ephemeral_public.as_bytes()),
+    )?;
     let mut out = Vec::with_capacity(HYBRID_BYTES);
     out.extend_from_slice(ephemeral_public.as_bytes());
     out.extend_from_slice(&ciphertext);
@@ -228,7 +227,7 @@ pub(crate) mod tests {
                     &key,
                     nonce,
                     &envelope[32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES..],
-                    &report_context(ctx, 2),
+                    &hybrid_report_data(ctx, &envelope[..32]),
                 )?,
                 2,
             )
@@ -280,22 +279,27 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn both_suites_open_for_the_operator_and_bind_the_report() {
+    fn a_hybrid_seal_opens_for_the_operator_binds_the_report_and_refuses_classical() {
         let node_key = random(32);
-        for with_kem in [false, true] {
-            let (keys, secret, public, kem_seed) = operator(with_kem);
-            let sealed = report_seal_key(ctx(), node_key.clone(), keys).unwrap();
-            assert_eq!(sealed.len(), if with_kem { HYBRID_BYTES } else { SEALED_BOX_BYTES });
-            assert_eq!(open(&sealed, &public, &secret, Some(&kem_seed), &ctx()).unwrap(), node_key);
-            let mut other = ctx();
-            other.report_id = "Other".into();
-            assert!(
-                open(&sealed, &public, &secret, Some(&kem_seed), &other).is_err(),
-                "the digest binds the report"
-            );
-            let stranger: [u8; 32] = random(32).try_into().unwrap();
-            assert!(open(&sealed, &public, &stranger, Some(&kem_seed), &ctx()).is_err());
-        }
+        let (keys, secret, public, kem_seed) = operator(true);
+        let sealed = report_seal_key(ctx(), node_key.clone(), keys).unwrap();
+        assert_eq!(sealed.len(), HYBRID_BYTES);
+        assert_eq!(open(&sealed, &public, &secret, Some(&kem_seed), &ctx()).unwrap(), node_key);
+        let mut other = ctx();
+        other.report_id = "Other".into();
+        assert!(
+            open(&sealed, &public, &secret, Some(&kem_seed), &other).is_err(),
+            "the digest binds the report"
+        );
+        let stranger: [u8; 32] = random(32).try_into().unwrap();
+        assert!(open(&sealed, &public, &stranger, Some(&kem_seed), &ctx()).is_err());
+        // X25519 ignores the top bit, so this is the same DH; the associated data must still refuse it.
+        let mut recoded = sealed.clone();
+        recoded[31] ^= 0x80;
+        assert!(open(&recoded, &public, &secret, Some(&kem_seed), &ctx()).is_err());
+        // No KEM key: nothing is sealed rather than a classical envelope.
+        let (classical, ..) = operator(false);
+        assert!(matches!(report_seal_key(ctx(), node_key, classical), Err(CoreError::Input(_))));
     }
 
     #[test]

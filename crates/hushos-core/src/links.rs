@@ -23,6 +23,28 @@ pub(crate) const LINK_SALT_BYTES: usize = 16;
 const LINK_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES; // 72
 const SECRET_ENVELOPE_BYTES: usize =
     NONCE_BYTES + LINK_SECRET_BYTES + LINK_TOKEN_BYTES + KEY_BYTES + TAG_BYTES; // 136
+/// How a link's key is made, as the link's row records it: 2 is argon2id, then
+/// BLAKE2b-256 over a label, the secret and that. Any other version is refused.
+pub const LINK_KDF_VERSION: u32 = 2;
+const LINK_KEY_LABEL: &[u8] = b"hushos/drive/link/key/v2";
+/// Whoever holds the URL can guess a link's password offline, so a short one is refused.
+pub const LINK_PASSWORD_MIN_LENGTH: usize = 8;
+
+/// The version every client reads today, for checking a served link before opening it.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn link_kdf_version() -> u32 {
+    LINK_KDF_VERSION
+}
+
+fn check_link_password(password: &Option<String>) -> CoreResult<()> {
+    match password {
+        Some(p) if p.chars().count() < LINK_PASSWORD_MIN_LENGTH => {
+            Err(input(format!("A link password needs at least {LINK_PASSWORD_MIN_LENGTH} characters.")))
+        }
+        _ => Ok(()),
+    }
+}
+
 const SECRET_ENVELOPE_LEGACY_BYTES: usize = NONCE_BYTES + LINK_SECRET_BYTES + LINK_TOKEN_BYTES + TAG_BYTES; // 104
 
 /// What binds a link to its node and epoch.
@@ -38,7 +60,7 @@ pub struct LinkContext {
 fn link_context(ctx: &LinkContext, purpose: &str) -> Vec<u8> {
     context(&[
         json!(purpose),
-        json!(1),
+        json!(LINK_KDF_VERSION),
         json!(ctx.workspace_id.to_lowercase()),
         json!(ctx.node_id.to_lowercase()),
         json!(ctx.key_epoch),
@@ -71,12 +93,13 @@ pub fn link_password_key(password: Option<String>, salt: Vec<u8>) -> CoreResult<
     Ok(out)
 }
 
-/* The link key: BLAKE2b-256 over the secret and the stretched password key. */
+/* The link key: BLAKE2b-256 over a label, the secret and the stretched password key. */
 fn link_key(secret: &[u8], from_password: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("link secret", secret, LINK_SECRET_BYTES).map_err(|_| input("Invalid link secret."))?;
     expect_len("link password key", from_password, KEY_BYTES)
         .map_err(|_| input("Invalid link password key."))?;
     let mut hasher = Blake2b::<U32>::new();
+    hasher.update(LINK_KEY_LABEL);
     hasher.update(secret);
     hasher.update(from_password);
     Ok(Zeroizing::new(hasher.finalize().into()))
@@ -239,9 +262,7 @@ impl fmt::Debug for CreatedLink {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn link_create(ctx: LinkContext, node_key: Vec<u8>, password: Option<String>) -> CoreResult<CreatedLink> {
-    if password.as_deref().is_some_and(str::is_empty) {
-        return Err(input("A link password cannot be empty."));
-    }
+    check_link_password(&password)?;
     let secret = Zeroizing::new(random(LINK_SECRET_BYTES));
     let token = Zeroizing::new(random(LINK_TOKEN_BYTES));
     let salt = random(LINK_SALT_BYTES);
@@ -269,9 +290,7 @@ pub fn link_reseal(
     secret_envelope: Vec<u8>,
     password: Option<String>,
 ) -> CoreResult<CreatedLink> {
-    if password.as_deref().is_some_and(str::is_empty) {
-        return Err(input("A link password cannot be empty."));
-    }
+    check_link_password(&password)?;
     let owned = link_secret_open(ctx.clone(), node_key.clone(), secret_envelope)?;
     let salt = random(LINK_SALT_BYTES);
     let has_password = password.is_some();
@@ -355,11 +374,11 @@ mod tests {
     fn contexts_lowercase_the_ids_and_name_the_purpose() {
         assert_eq!(
             link_context(&ctx(), "hushos/drive/link"),
-            br#"["hushos/drive/link",1,"ws","node",3,"link"]"#
+            br#"["hushos/drive/link",2,"ws","node",3,"link"]"#
         );
         assert_eq!(
             link_context(&ctx(), "hushos/drive/link-secret"),
-            br#"["hushos/drive/link-secret",1,"ws","node",3,"link"]"#
+            br#"["hushos/drive/link-secret",2,"ws","node",3,"link"]"#
         );
     }
 

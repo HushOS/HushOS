@@ -30,10 +30,12 @@ digest = "0.10"
 thiserror = "2"
 uniffi = { version = "0.32", optional = true, default-features = false }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
-ml-kem = "0.3"
+ml-kem = { version = "0.3", features = ["zeroize"] }
 crypto_secretbox = "0.1"
+salsa20 = "0.10"
 ed25519-dalek = "3"
 zeroize = "1"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 rand = "0.8"

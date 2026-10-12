@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn a_reset_is_signed_over_the_webs_message_with_the_phrases_key() {
-        use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
+        use ed25519_dalek::{Signature, VerifyingKey};
         let account_key = random(32);
         let current = recovery_create("User-1".into(), account_key.clone(), 1, 1).unwrap();
         let next = recovery_create("user-1".into(), account_key, 2, 1).unwrap();
@@ -369,7 +369,7 @@ mod tests {
         )
         .unwrap();
         let bytes: [u8; 64] = decode("signature", &signature, Some(64)).unwrap().try_into().unwrap();
-        assert!(public.verify(&message, &Signature::from_bytes(&bytes)).is_ok());
+        assert!(public.verify_strict(&message, &Signature::from_bytes(&bytes)).is_ok());
         // Another account's phrase is refused rather than signing with the wrong key.
         let other = recovery_create("user-2".into(), random(32), 1, 1).unwrap();
         assert!(recovery_reset_sign(

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
 use std::fmt;
+use zeroize::Zeroizing;
 
 const KEY_ENVELOPE_BYTES: usize = NONCE_BYTES + KEY_BYTES + TAG_BYTES; // 72
 const VERSION_RECORD_BYTES: usize = KEY_BYTES + 8 + 4;
@@ -72,9 +73,9 @@ pub fn workspace_open(user_id: String, account_key: Vec<u8>, grant: WorkspaceGra
     let salt = decode("wrappingSalt", &grant.wrapping_salt, Some(32))?;
     let nonce = decode("wrappingNonce", &grant.wrapping_nonce, Some(NONCE_BYTES))?;
     let ciphertext = decode("encryptedKey", &grant.encrypted_key, Some(KEY_BYTES + TAG_BYTES))?;
-    let mut wrap = [0u8; KEY_BYTES];
+    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&salt), &account_key)
-        .expand(b"hushos/workspace/grant-wrap/v1", &mut wrap)
+        .expand(b"hushos/workspace/grant-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let aad = context(&[
         json!("hushos/workspace/grant"),
@@ -84,7 +85,7 @@ pub fn workspace_open(user_id: String, account_key: Vec<u8>, grant: WorkspaceGra
         json!(grant.key_version),
         json!(grant.workspace_key_version),
     ]);
-    let key = open_with_nonce(&wrap, &nonce, &ciphertext, &aad)?;
+    let key = open_with_nonce(wrap.as_slice(), &nonce, &ciphertext, &aad)?;
     expect_len("workspace key", &key, KEY_BYTES)
         .map_err(|_| CoreError::Sealed("Invalid workspace key.".into()))?;
     Ok(key)
@@ -107,13 +108,13 @@ pub fn workspace_grant_rewrap(
     grant: WorkspaceGrant,
     key_version: u64,
 ) -> CoreResult<WorkspaceGrant> {
-    let workspace_key = workspace_open(user_id.clone(), old_root, grant.clone())?;
+    let workspace_key = Zeroizing::new(workspace_open(user_id.clone(), old_root, grant.clone())?);
     expect_len("new account key", &new_root, KEY_BYTES)?;
     let salt = random(32);
     let nonce = random(NONCE_BYTES);
-    let mut wrap = [0u8; KEY_BYTES];
+    let mut wrap = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&salt), &new_root)
-        .expand(b"hushos/workspace/grant-wrap/v1", &mut wrap)
+        .expand(b"hushos/workspace/grant-wrap/v1", wrap.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     let aad = context(&[
         json!("hushos/workspace/grant"),
@@ -130,7 +131,7 @@ pub fn workspace_grant_rewrap(
         workspace_key_version: grant.workspace_key_version,
         wrapping_salt: encode(&salt),
         wrapping_nonce: encode(&nonce),
-        encrypted_key: encode(&seal_with_nonce(&wrap, &nonce, &workspace_key, &aad)?),
+        encrypted_key: encode(&seal_with_nonce(wrap.as_slice(), &nonce, &workspace_key, &aad)?),
     })
 }
 
@@ -452,7 +453,7 @@ pub fn version_open(
         }
         CONTENT_SUITE => {
             expect_len("envelope", &envelope, VERSION_ENVELOPE_BYTES)?;
-            let record = open(&node_key, &envelope, &aad)?;
+            let record = Zeroizing::new(open(&node_key, &envelope, &aad)?);
             if record.len() != VERSION_RECORD_BYTES {
                 return Err(CoreError::Sealed("Invalid version envelope.".into()));
             }
@@ -494,7 +495,7 @@ pub fn version_seal(
     if plaintext_size > MAX_SAFE_INTEGER {
         return Err(input("This file is too large."));
     }
-    let mut record = Vec::with_capacity(VERSION_RECORD_BYTES);
+    let mut record = Zeroizing::new(Vec::with_capacity(VERSION_RECORD_BYTES));
     record.extend_from_slice(&content_key);
     record.extend_from_slice(&plaintext_size.to_be_bytes());
     record.extend_from_slice(&thumbnail_bytes.to_be_bytes());
@@ -597,18 +598,26 @@ pub fn chunk_length(plaintext_size: u64, index: u64) -> u64 {
     chunk_plaintext_len(plaintext_size, index)
 }
 
-/// Where chunk `index` sits in the object: the bytes to ask for with an HTTP
-/// range and hand to [`chunk_decrypt`].
+/// The bytes to fetch for chunk `index`, to hand to [`chunk_decrypt`]. The
+/// last chunk runs on to the end of the object, thumbnail trailer and all: a
+/// range that stopped where the trailer begins would hand the store the
+/// trailer's length and so the file's exact size.
 ///
 /// ```
 /// use hushos_core::{chunk_range, ByteRange};
 /// let chunk = 8 * 1024 * 1024;
-/// assert_eq!(chunk_range(chunk + 10, 0), ByteRange { start: 0, end: chunk + 16 - 1 });
-/// assert_eq!(chunk_range(chunk + 10, 1), ByteRange { start: chunk + 16, end: chunk + 16 + 10 + 16 - 1 });
+/// assert_eq!(chunk_range(chunk + 10, 0, 0), ByteRange { start: 0, end: chunk + 16 - 1 });
+/// assert_eq!(chunk_range(chunk + 10, 0, 1), ByteRange { start: chunk + 16, end: chunk + 16 + 10 + 16 - 1 });
+/// // With a 2000-byte thumbnail the last chunk's range ends where the object does.
+/// assert_eq!(chunk_range(chunk + 10, 2000, 1).end, chunk + 16 + 10 + 16 + 2000 + 16 - 1);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn chunk_range(plaintext_size: u64, index: u64) -> ByteRange {
+pub fn chunk_range(plaintext_size: u64, thumbnail_bytes: u32, index: u64) -> ByteRange {
     let start = index * (CHUNK_BYTES + TAG_BYTES as u64);
+    let layout = content_layout(plaintext_size, thumbnail_bytes);
+    if index + 1 == layout.chunk_count {
+        return ByteRange { start, end: layout.ciphertext_size - 1 };
+    }
     ByteRange { start, end: start + chunk_plaintext_len(plaintext_size, index) + TAG_BYTES as u64 - 1 }
 }
 
@@ -717,15 +726,23 @@ pub fn chunk_decrypt(content: Content, index: u64, ciphertext: Vec<u8>) -> CoreR
     if index >= layout.chunk_count {
         return Err(input("chunk index is past the end"));
     }
-    if ciphertext.len() as u64 != chunk_plaintext_len(content.plaintext_size, index) + TAG_BYTES as u64 {
+    // The last chunk may come with the trailer behind it (see chunk_range); every other must be exact.
+    let length = (chunk_plaintext_len(content.plaintext_size, index) + TAG_BYTES as u64) as usize;
+    let last = index + 1 == layout.chunk_count;
+    if if last { ciphertext.len() < length } else { ciphertext.len() != length } {
         return Err(CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()));
     }
     let nonce = chunk_nonce(&content, index)?;
-    open_with_nonce(&content.key, &nonce, &ciphertext, &chunk_context(&content, index, layout.chunk_count))
-        .map_err(|_| CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()))
+    open_with_nonce(
+        &content.key,
+        &nonce,
+        &ciphertext[..length],
+        &chunk_context(&content, index, layout.chunk_count),
+    )
+    .map_err(|_| CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()))
 }
 
-fn thumbnail_key(content: &Content) -> CoreResult<[u8; KEY_BYTES]> {
+fn thumbnail_key(content: &Content) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     if content.suite != CONTENT_SUITE {
         return Err(input("Only content suite 2 carries a thumbnail."));
     }
@@ -753,7 +770,7 @@ pub fn thumbnail_encrypt(content: Content, thumbnail: Vec<u8>) -> CoreResult<Vec
     }
     let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
     let nonce = chunk_nonce(&content, layout.chunk_count)?;
-    seal_with_nonce(&thumbnail_key(&content)?, &nonce, &thumbnail, &thumbnail_context(&content))
+    seal_with_nonce(thumbnail_key(&content)?.as_slice(), &nonce, &thumbnail, &thumbnail_context(&content))
 }
 
 /// The thumbnail opened; `fetched` is the bytes of `thumbnail_range`, whose
@@ -770,7 +787,7 @@ pub fn thumbnail_decrypt(content: Content, fetched: Vec<u8>) -> CoreResult<Vec<u
     let ciphertext = &fetched[fetched.len() - trailer..];
     let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
     let nonce = chunk_nonce(&content, layout.chunk_count)?;
-    open_with_nonce(&thumbnail_key(&content)?, &nonce, ciphertext, &thumbnail_context(&content))
+    open_with_nonce(thumbnail_key(&content)?.as_slice(), &nonce, ciphertext, &thumbnail_context(&content))
         .map_err(|_| CoreError::Sealed("This thumbnail could not be decrypted.".into()))
 }
 
@@ -796,7 +813,7 @@ pub fn hash_blake2b(data: Vec<u8>, out_len: u32) -> CoreResult<Vec<u8>> {
     Ok(out)
 }
 
-fn derive_subkey(master: &[u8], subkey_id: u64, ctx: &str) -> CoreResult<[u8; KEY_BYTES]> {
+fn derive_subkey(master: &[u8], subkey_id: u64, ctx: &str) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     expect_len("key", master, KEY_BYTES)?;
     if ctx.len() != 8 {
         return Err(input("kdf context must be 8 bytes"));
@@ -807,7 +824,7 @@ fn derive_subkey(master: &[u8], subkey_id: u64, ctx: &str) -> CoreResult<[u8; KE
     personal[..8].copy_from_slice(ctx.as_bytes());
     let mac = Blake2bMac::<U32>::new_with_salt_and_personal(master, &salt, &personal)
         .map_err(|_| input("kdf failed"))?;
-    Ok(mac.finalize().into_bytes().into())
+    Ok(Zeroizing::new(mac.finalize().into_bytes().into()))
 }
 
 /// libsodium's `crypto_kdf_derive_from_key`: BLAKE2b keyed by the master,
@@ -1093,8 +1110,20 @@ mod tests {
         let content = content(0, 0);
         let sealed = chunk_encrypt(content.clone(), 0, vec![]).unwrap();
         assert_eq!(sealed.len(), TAG_BYTES);
-        assert_eq!(chunk_range(0, 0), ByteRange { start: 0, end: 15 });
+        assert_eq!(chunk_range(0, 0, 0), ByteRange { start: 0, end: 15 });
         assert_eq!(chunk_decrypt(content, 0, sealed).unwrap(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn the_last_chunk_opens_from_a_range_that_runs_on_through_the_trailer() {
+        let content = content(100, 2000);
+        let sealed = chunk_encrypt(content.clone(), 0, vec![3; 100]).unwrap();
+        // What chunk_range asks for: the chunk and the trailer behind it, to the object's end.
+        assert_eq!(chunk_range(100, 2000, 0), ByteRange { start: 0, end: 116 + 2016 - 1 });
+        let mut fetched = sealed.clone();
+        fetched.extend_from_slice(&[0u8; 2016]);
+        assert_eq!(chunk_decrypt(content.clone(), 0, fetched).unwrap(), vec![3; 100]);
+        assert!(matches!(chunk_decrypt(content, 0, sealed[1..].to_vec()), Err(CoreError::Sealed(_))));
     }
 
     #[test]

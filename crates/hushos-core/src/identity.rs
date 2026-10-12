@@ -15,7 +15,7 @@ use serde_json::json;
 use sha2::Sha256;
 use std::fmt;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 pub(crate) const KEM_SEED_BYTES: usize = 64;
 pub(crate) const KEM_PUBLIC_KEY_BYTES: usize = 1184;
@@ -108,17 +108,24 @@ pub(crate) fn kem_encapsulate(public_key: &[u8]) -> CoreResult<(Vec<u8>, Zeroizi
         .map_err(|_| input("Invalid identity key."))?;
     let key = ml_kem_768::EncapsulationKey::new(&Array::try_from(public_key).map_err(|_| input("kem key"))?)
         .map_err(|_| input("Invalid identity key."))?;
-    let m: ml_kem::B32 = Array::try_from(crate::bytes::random(32).as_slice()).expect("32 bytes");
-    let (ciphertext, shared) = key.encapsulate_deterministic(&m);
-    Ok((ciphertext.to_vec(), Zeroizing::new(shared.into())))
+    // The encapsulation randomness decides the shared secret, so it is wiped like one.
+    let random = Zeroizing::new(crate::bytes::random(32));
+    let mut m: ml_kem::B32 = Array::try_from(random.as_slice()).expect("32 bytes");
+    let (ciphertext, mut shared) = key.encapsulate_deterministic(&m);
+    m.as_mut_slice().zeroize();
+    let secret = Zeroizing::new(shared.into());
+    shared.as_mut_slice().zeroize();
+    Ok((ciphertext.to_vec(), secret))
 }
 
 pub(crate) fn kem_decapsulate(seed: &[u8], ciphertext: &[u8]) -> CoreResult<Zeroizing<[u8; 32]>> {
     expect_len("kem ciphertext", ciphertext, KEM_CIPHERTEXT_BYTES)?;
     let key = decapsulation_key(seed)?;
     let ct: ml_kem_768::Ciphertext = Array::try_from(ciphertext).map_err(|_| input("kem ciphertext"))?;
-    let shared = key.decapsulate(&ct);
-    Ok(Zeroizing::new(shared.into()))
+    let mut shared = key.decapsulate(&ct);
+    let secret = Zeroizing::new(shared.into());
+    shared.as_mut_slice().zeroize();
+    Ok(secret)
 }
 
 /// Opens the identity's private keys under the account key and checks each
