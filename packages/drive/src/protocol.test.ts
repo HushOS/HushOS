@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { checkClient, compareVersions, parseClientHeader, parseMinimums } from './protocol';
+import {
+    SHARE_SUITE,
+    checkClient,
+    compareVersions,
+    parseClientHeader,
+    parseMinimums,
+    shareEnvelopeSuite,
+} from './protocol';
 
 describe('client header', () => {
     test('parses name/version and refuses anything else', () => {
@@ -30,5 +37,16 @@ describe('client header', () => {
         expect(checkClient('sync/0.0.1', minimums)).toMatchObject({ ok: true });
         expect(checkClient(undefined, minimums)).toMatchObject({ status: 400 });
         expect(checkClient('garbage', new Map())).toMatchObject({ status: 400 });
+    });
+});
+
+describe('share envelopes', () => {
+    test('the suite is told by length, and only suite 3 is the one written', () => {
+        expect(shareEnvelopeSuite(72)).toBe(1);
+        expect(shareEnvelopeSuite(1160)).toBe(2);
+        expect(shareEnvelopeSuite(1256)).toBe(3);
+        expect(SHARE_SUITE).toBe(3);
+        for (const length of [0, 71, 73, 1159, 1161, 1255, 1257])
+            expect(shareEnvelopeSuite(length)).toBeNull();
     });
 });

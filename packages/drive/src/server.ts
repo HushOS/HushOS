@@ -30,6 +30,9 @@ import {
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
     MAX_PART_URLS_PER_REQUEST,
+    SHARE_ENVELOPE_BYTES,
+    SHARE_SUITE,
+    shareEnvelopeSuite,
     THUMBNAIL_BATCH,
     THUMBNAIL_MAX_BYTES,
     VERSION_ENVELOPE_BYTES,
@@ -43,6 +46,7 @@ import {
     UPLOAD_TTL_HOURS,
     type Capabilities,
     type DriveErrorCode,
+    type ShareSuite,
 } from './protocol';
 
 /*
@@ -199,11 +203,16 @@ export function decodeEnvelope(value: string, exact?: number, max?: number) {
 const keyEnvelope = (value: string) => decodeEnvelope(value, KEY_ENVELOPE_BYTES);
 /* An Ed25519 signature: 64 bytes, checked against the writer's key in the repository. */
 const signature = (value: string) => decodeEnvelope(value, 64);
-/* A share envelope of either suite: 72 bytes under X25519 alone, 1160 hybrid. */
+/*
+ * A share envelope as written now: suite 3, signed by the granter. An older
+ * suite is a client that has not updated, told so with 409; anything else is
+ * not a share envelope at all.
+ */
 function shareEnvelope(value: string) {
-    const bytes = decodeEnvelope(value, undefined, 1160);
-    if (bytes.length !== 72 && bytes.length !== 1160)
-        throw new DriveError('invalid', 'Invalid envelope.');
+    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES[SHARE_SUITE]);
+    const suite = shareEnvelopeSuite(bytes.length);
+    if (suite === null) throw new DriveError('invalid', 'Invalid envelope.');
+    if (suite !== SHARE_SUITE) throw new DriveError('unsupported', 'Update HushOS to share.', 409);
     return bytes;
 }
 /* A version envelope for an upload of the current suite: the key sealed with the sizes. */
@@ -738,7 +747,8 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
-        suite: (row.suite === 1 ? 1 : 2) as 1 | 2,
+        // Told apart by length in the query: 1, 2 (hybrid) or 3 (signed).
+        suite: row.suite as ShareSuite,
         grantee: row.grantee,
     };
 }
@@ -827,6 +837,7 @@ export async function listSharedByMe(userId: string) {
             ...shareView(row),
             node: nodeView(row.node),
             granteeIdentity: {
+                keyVersion: row.granteeIdentity.keyVersion,
                 encryptionPublicKey: b64(row.granteeIdentity.encryptionPublicKey),
                 signingPublicKey: b64(row.granteeIdentity.signingPublicKey),
                 kem:
@@ -861,6 +872,8 @@ export async function listSharedWithMe(userId: string) {
                 name: row.granter.name,
                 email: row.granter.email,
                 encryptionPublicKey: b64(row.granter.encryptionPublicKey),
+                signingPublicKey: b64(row.granter.signingPublicKey),
+                keyVersion: row.granter.keyVersion,
             },
             node: nodeView(row.node),
         })),
@@ -1815,6 +1828,7 @@ const reportGone = () => new DriveError('not-found', 'This report does not exist
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: {
     userId: string;
+    keyVersion: number;
     encryptionPublicKey: Buffer;
     signingPublicKey: Buffer;
     kemPublicKey: Buffer | null;
@@ -1822,6 +1836,7 @@ function servedOperator(o: {
 }) {
     return {
         userId: o.userId,
+        keyVersion: o.keyVersion,
         encryptionPublicKey: b64(o.encryptionPublicKey),
         signingPublicKey: b64(o.signingPublicKey),
         kem:
@@ -2208,6 +2223,7 @@ function rotationWorkView(row: RotationWorkRow) {
             id: share.id,
             granteeUserId: share.granteeUserId,
             grantee: {
+                keyVersion: share.granteeKeyVersion,
                 encryptionPublicKey: b64(share.granteePublicKey),
                 signingPublicKey: b64(share.granteeSigningPublicKey),
                 kem:

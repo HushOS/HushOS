@@ -2741,6 +2741,9 @@ export async function authorizeUpload(userId: string, workspaceId: string, uploa
     return row ? authorize(userId, workspaceId, row.nodeId) : null;
 }
 
+/* A share's suite, told apart by length: 72 bytes is 1, 1160 is 2 (hybrid), 1256 is 3 (signed). */
+const shareSuite = sql<number>`case octet_length(${driveShares.shareEnvelope}) when 72 then 1 when 1160 then 2 else 3 end`;
+
 export type CreateShare = {
     workspaceId: string;
     nodeId: string;
@@ -2805,8 +2808,7 @@ export async function listNodeShares(workspaceId: string, nodeId: string) {
             role: driveShares.role,
             keyEpoch: driveShares.keyEpoch,
             createdAt: driveShares.createdAt,
-            /* 1 for X25519 alone (72 bytes), 2 for the hybrid envelope (1160). */
-            suite: sql<number>`case when octet_length(${driveShares.shareEnvelope}) = 72 then 1 else 2 end`,
+            suite: shareSuite,
             grantee: { id: users.id, name: users.name, email: users.email },
         })
         .from(driveShares)
@@ -2845,6 +2847,10 @@ export async function listSharesForGrantee(userId: string) {
                     name: users.name,
                     email: users.email,
                     encryptionPublicKey: accountIdentities.encryptionPublicKey,
+                    // A suite 3 share is signed by the granter: the grantee checks it against
+                    // the pin, and after a succession asks for the chain from the pinned version.
+                    signingPublicKey: accountIdentities.signingPublicKey,
+                    keyVersion: accountIdentities.keyVersion,
                 },
             })
             .from(driveShares)
@@ -2893,7 +2899,7 @@ export async function listSharesByGranter(userId: string) {
                 role: driveShares.role,
                 keyEpoch: driveShares.keyEpoch,
                 createdAt: driveShares.createdAt,
-                suite: sql<number>`case when octet_length(${driveShares.shareEnvelope}) = 72 then 1 else 2 end`,
+                suite: shareSuite,
                 grantee: { id: users.id, name: users.name, email: users.email },
                 // The grantee's served identity, for the owner to check against the pin
                 // and re-seal a suite 1 share to a KEM key that appeared since.
@@ -2902,6 +2908,7 @@ export async function listSharesByGranter(userId: string) {
                     signingPublicKey: accountIdentities.signingPublicKey,
                     kemPublicKey: accountIdentities.kemPublicKey,
                     kemSignature: accountIdentities.kemSignature,
+                    keyVersion: accountIdentities.keyVersion,
                 },
             })
             .from(driveShares)

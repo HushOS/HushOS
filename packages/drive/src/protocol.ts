@@ -37,6 +37,21 @@ export const SHARE_URL_TTL_SECONDS = 15 * 60;
 export const LISTING_PAGE_SIZE = 500;
 export const MAX_PART_URLS_PER_REQUEST = 64;
 export const MAX_FOLDER_BATCH = 64;
+
+/*
+ * Share envelopes, told apart by length: suite 1 (X25519 between the two
+ * identities), suite 2 (hybrid with ML-KEM-768), suite 3 (an ephemeral X25519
+ * key, ML-KEM-768 and the granter's signature). Only suite 3 is written now;
+ * the older ones are served as they were stored.
+ */
+export const SHARE_ENVELOPE_BYTES = { 1: 72, 2: 1160, 3: 1256 } as const;
+export const SHARE_SUITE = 3;
+export type ShareSuite = keyof typeof SHARE_ENVELOPE_BYTES;
+export function shareEnvelopeSuite(length: number): ShareSuite | null {
+    for (const suite of [1, 2, 3] as const)
+        if (SHARE_ENVELOPE_BYTES[suite] === length) return suite;
+    return null;
+}
 export const THUMBNAIL_BATCH = 100;
 
 /* The name a client shows for the root; never stored, the root's metadata names it. */

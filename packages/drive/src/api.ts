@@ -234,12 +234,17 @@ export type ShareView = {
     role: ShareRole;
     keyEpoch: number;
     createdAt: string;
-    /* 1: sealed under X25519 alone; 2: hybrid, with ML-KEM-768 beside it. */
-    suite: 1 | 2;
+    /*
+     * 1: sealed under X25519 alone; 2: hybrid, with ML-KEM-768 beside it; 3: an
+     * ephemeral X25519 key and ML-KEM-768, signed by the granter. Only 3 is written.
+     */
+    suite: 1 | 2 | 3;
     grantee: { id: string; name: string; email: string };
 };
 /* The grantee's identity as the server serves it, for the owner to check against a pin. */
 export type ServedIdentity = {
+    /* The identity's version: a succession raises it, and a contact asks for the chain from a pin's. */
+    keyVersion: number;
     encryptionPublicKey: string;
     signingPublicKey: string;
     kem: { publicKey: string; signature: string } | null;
@@ -256,7 +261,15 @@ export type SharedWithMeView = {
     createdAt: string;
     /* The owner's workspace sequence as of this listing: where the share's feed starts. */
     changeSeq: number;
-    granter: { id: string; name: string; email: string; encryptionPublicKey: string };
+    /* The granter's current identity: the signing key a suite 3 share is checked against. */
+    granter: {
+        id: string;
+        name: string;
+        email: string;
+        encryptionPublicKey: string;
+        signingPublicKey: string;
+        keyVersion: number;
+    };
     node: NodeView;
 };
 
@@ -420,7 +433,7 @@ export interface DriveApi {
         input: { granteeUserId: string; role: ShareRole; keyEpoch: number; shareEnvelope: string },
     ): Promise<{ share: ShareView }>;
     nodeShares(workspaceId: string, nodeId: string): Promise<{ shares: ShareView[] }>;
-    /* Replaces a live share's envelope at the current epoch: how a suite 1 share becomes hybrid. */
+    /* Replaces a live share's envelope at the current epoch with a suite 3 one; 409 for any other suite. */
     resealShare(
         workspaceId: string,
         shareId: string,

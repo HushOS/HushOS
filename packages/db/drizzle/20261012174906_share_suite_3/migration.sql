@@ -1,0 +1,1 @@
+ALTER TABLE "drive_shares" DROP CONSTRAINT "drive_shares_envelopes_valid", ADD CONSTRAINT "drive_shares_envelopes_valid" CHECK ("key_epoch" >= 1 and octet_length("share_envelope") in (72, 1160, 1256) and ("prev_share_envelope" is null) = ("prev_key_epoch" is null) and ("prev_share_envelope" is null or octet_length("prev_share_envelope") in (72, 1160, 1256)));

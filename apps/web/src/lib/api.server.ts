@@ -178,16 +178,21 @@ const uuidSchema = t.String({
 const epochSchema = t.Integer({ minimum: 1, maximum: 2147483646 });
 // 72 bytes of nonce || wrapped key is 96 Base64url characters; metadata is bounded by its column.
 const keyEnvelopeSchema = t.String({ minLength: 96, maxLength: 96, pattern: '^[A-Za-z0-9_-]+$' });
-/* A share envelope: 72 bytes under X25519 alone, 1160 with the ML-KEM ciphertext beside it. */
 const MAX_REPORT_OPERATORS = 500;
 /* A report key envelope: 112 bytes sealed under X25519 alone, or 1224 hybrid. */
 const reportEnvelopeSchema = t.Union([
     t.String({ minLength: 150, maxLength: 150, pattern: '^[A-Za-z0-9_-]+$' }),
     t.String({ minLength: 1632, maxLength: 1632, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
+/*
+ * A share envelope of any suite by length (72, 1160 or 1256 bytes), so a client
+ * still sealing an older suite hears 409 "Update HushOS to share" from the domain
+ * rather than a bare 400.
+ */
 const shareEnvelopeSchema = t.Union([
     keyEnvelopeSchema,
     t.String({ minLength: 1547, maxLength: 1547, pattern: '^[A-Za-z0-9_-]+$' }),
+    t.String({ minLength: 1675, maxLength: 1675, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
 /* A version envelope of suites 2 and 3 (84 bytes): the content key sealed with the sizes. */
 const versionEnvelopeSchema = t.String({

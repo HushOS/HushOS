@@ -66,6 +66,7 @@ export async function listOperators() {
             signingPublicKey: accountIdentities.signingPublicKey,
             kemPublicKey: accountIdentities.kemPublicKey,
             kemSignature: accountIdentities.kemSignature,
+            keyVersion: accountIdentities.keyVersion,
         })
         .from(users)
         .innerJoin(accountIdentities, eq(accountIdentities.userId, users.id))

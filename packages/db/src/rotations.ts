@@ -117,6 +117,7 @@ export type RotationWorkNode = NodeRow & {
         granteeSigningPublicKey: Buffer;
         granteeKemPublicKey: Buffer | null;
         granteeKemSignature: Buffer | null;
+        granteeKeyVersion: number;
     }[];
     links: { id: string; hasPassword: boolean; secretEnvelope: Buffer | null }[];
 };
@@ -187,6 +188,7 @@ export async function listRotationWork(input: {
                       granteeSigningPublicKey: accountIdentities.signingPublicKey,
                       granteeKemPublicKey: accountIdentities.kemPublicKey,
                       granteeKemSignature: accountIdentities.kemSignature,
+                      granteeKeyVersion: accountIdentities.keyVersion,
                   })
                   .from(driveShares)
                   .innerJoin(
@@ -233,6 +235,7 @@ export async function listRotationWork(input: {
                             granteeSigningPublicKey: s.granteeSigningPublicKey,
                             granteeKemPublicKey: s.granteeKemPublicKey,
                             granteeKemSignature: s.granteeKemSignature,
+                            granteeKeyVersion: s.granteeKeyVersion,
                         })),
                     links: links
                         .filter((l) => l.nodeId === row.id)
