@@ -337,12 +337,14 @@ extension Vault {
         guard !item.isFolder, let current = item.node.currentVersion else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         let opened = try openVersion(item)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
+        // Every chunk, padding included: the background session's fetches say no more about the size than the object does.
+        let layout = try opened.layout
         var ranges: [Int: [UInt64]] = [:]
-        for index in 0 ..< opened.layout.chunkCount {
-            let range = chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index)
+        for index in 0 ..< layout.chunkCount {
+            let range = try opened.range(index)
             ranges[Int(index)] = [range.start, range.end]
         }
-        return KeepPlan(nodeId: item.id, versionId: current.id, name: item.name, chunkCount: Int(opened.layout.chunkCount), ranges: ranges, url: url.url)
+        return KeepPlan(nodeId: item.id, versionId: current.id, name: item.name, chunkCount: Int(layout.chunkCount), ranges: ranges, url: url.url)
     }
 
     /* A fresh address when the plan's expired. */

@@ -1,6 +1,22 @@
 import Foundation
 
 /* The Drive API's views, as the server returns them (packages/drive/src/api.ts). */
+
+/* Who the server says wrote a record: for display only; the signature is what a reader checks. */
+public struct Signer: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let id: String
+    public let name: String
+    public let email: String
+
+    public init(id: String, name: String, email: String) {
+        self.id = id
+        self.name = name
+        self.email = email
+    }
+
+    public var displayName: String { name.isEmpty ? email : name }
+}
+
 public struct VersionView: Codable, Sendable, Equatable, Hashable {
     public let id: String
     public let objectId: String
@@ -12,6 +28,9 @@ public struct VersionView: Codable, Sendable, Equatable, Hashable {
     public let plaintextSize: String?
     public let ciphertextSize: String?
     public let readyAt: String?
+    /* The account that sealed the content-key envelope and its signature (base64url); null before signatures, and on link routes. */
+    public var signer: Signer? = nil
+    public var signature: String? = nil
 }
 
 public struct NodeView: Codable, Sendable, Equatable, Hashable {
@@ -32,6 +51,9 @@ public struct NodeView: Codable, Sendable, Equatable, Hashable {
     public let updatedAt: String?
     /* How the row's envelopes are sealed; absent (from an older server) means 1. */
     public var envelopeSuite: Int? = nil
+    /* The account that wrote the metadata envelope and its signature; null before signatures (signer null on link routes). */
+    public var metadataSigner: Signer? = nil
+    public var metadataSignature: String? = nil
 
     public var isFolder: Bool { kind == "folder" }
 }
@@ -156,6 +178,8 @@ public struct VersionListView: Codable, Sendable, Identifiable, Hashable {
     public let current: Bool
     public let supersededAt: String?
     public let createdAt: String
+    public var signer: Signer? = nil
+    public var signature: String? = nil
 }
 
 public struct VersionsResponse: Codable, Sendable { public let versions: [VersionListView] }
@@ -178,6 +202,9 @@ public struct SharedWithMeView: Codable, Sendable, Identifiable {
         public let name: String
         public let email: String
         public let encryptionPublicKey: String
+        /* The granter's current identity: the signing key a suite 3 share is checked against, and its version for the succession chain. */
+        public var signingPublicKey: String? = nil
+        public var keyVersion: UInt64? = nil
     }
     public let id: String
     public let workspaceId: String

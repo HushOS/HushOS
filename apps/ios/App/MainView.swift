@@ -166,7 +166,7 @@ struct MainView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
             }
         }
-        // A new vault (a sign-in again after Change password or Reset sharing keys ended the old session)
+        // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
         .task(id: model.vault.map(ObjectIdentifier.init)) {
             guard let vault = model.vault else { return }

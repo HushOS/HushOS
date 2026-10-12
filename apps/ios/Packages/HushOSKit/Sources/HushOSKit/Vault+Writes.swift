@@ -21,9 +21,10 @@ extension Vault {
         let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
         let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil)
         let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+        let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
         let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
             "id": id, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
-            "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed),
+            "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
         ]])
         guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
         return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
@@ -37,9 +38,11 @@ extension Vault {
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
             nodeKey: key, metadata: metadata
         )
+        let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
+                                               version: item.node.metadataVersion + 1, envelope: sealed)
         let node = try await api.rename(
             nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
-            keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed)
+            keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
         )
         return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
     }
@@ -104,12 +107,18 @@ extension Vault {
             suite: version.contentSuite, nodeKey: key,
             content: ContentKey(key: opened.content.key, plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes)
         )
+        // Signed where they land: the copy's node and version, over the source's object and its suite.
+        let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope)
+        let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
+                                                     suite: version.contentSuite, envelope: contentKeyEnvelope)
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
             "node": ["id": id, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
-                     "keyEnvelope": base64urlEncode(bytes: keyEnvelope), "metadataEnvelope": base64urlEncode(bytes: metadataEnvelope)],
+                     "keyEnvelope": base64urlEncode(bytes: keyEnvelope), "metadataEnvelope": base64urlEncode(bytes: metadataEnvelope),
+                     "metadataSignature": metadataSignature],
             "versionId": versionId,
             "contentKeyEnvelope": base64urlEncode(bytes: contentKeyEnvelope),
+            "versionSignature": versionSignature,
         ])
         progress(done + 1)
         return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
@@ -218,22 +227,28 @@ extension Vault {
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)
             nodeInput = ["existing": false, "id": nodeId, "parentId": parent.id, "keyEpoch": epochs.from,
                          "parentKeyEpoch": parent.node.keyEpoch, "keyEnvelope": base64urlEncode(bytes: wrapped),
-                         "metadataEnvelope": base64urlEncode(bytes: sealed)]
+                         "metadataEnvelope": base64urlEncode(bytes: sealed),
+                         "metadataSignature": try await signMetadata(workspaceId: workspace.workspaceId, nodeId: nodeId, kind: .file, version: 1, envelope: sealed)]
         }
 
         let version = try versionSeal(
             ctx: VersionContext(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId),
             nodeKey: nodeKey, contentKey: contentKey, plaintextSize: plaintextSize, thumbnailBytes: thumbnailBytes
         )
+        // Suite 3: the object is padded to a Padmé bucket, so its size says the file's only to within a few percent.
+        let suite = HushOSCore.contentSuite()
         let content = Content(
-            workspaceId: workspace.workspaceId, objectId: objectId, suite: 2, key: contentKey, nonce: contentNonce,
+            workspaceId: workspace.workspaceId, objectId: objectId, suite: suite, key: contentKey, nonce: contentNonce,
             plaintextSize: plaintextSize, thumbnailBytes: thumbnailBytes
         )
-        let layout = version.layout
+        let layout = try contentLayout(suite: suite, plaintextSize: plaintextSize, thumbnailBytes: thumbnailBytes)
+        let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId,
+                                                     suite: suite, envelope: version.envelope)
         let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: [
             "node": nodeInput, "versionId": versionId, "objectId": objectId,
-            "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "contentNonce": base64urlEncode(bytes: contentNonce),
-            "contentSuite": 2, "chunkCount": Int(layout.chunkCount), "ciphertextSize": String(layout.ciphertextSize),
+            "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "versionSignature": versionSignature,
+            "contentNonce": base64urlEncode(bytes: contentNonce),
+            "contentSuite": Int(suite), "chunkCount": Int(layout.chunkCount), "ciphertextSize": String(layout.ciphertextSize),
         ])
         var urls: [Int: PartUrl] = [:]
         for part in begun.parts { urls[part.partNumber] = part }
@@ -275,7 +290,9 @@ extension Vault {
                 ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
                 nodeKey: nodeKey, metadata: final
             )
-            node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed))
+            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed)
+            node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
+                                        metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
             return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
         }
         if let knownKey { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) }
@@ -316,7 +333,7 @@ extension Vault {
                     try await api.putPart(partURL, data: sealed)
                 }
                 etags[partNumber] = etag
-                progress(Double(index + 1) / Double(begun.chunkCount))
+                progress(FileProgress.fraction(size: begun.plaintextSize, through: index + 1))
             }
         } catch {
             await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)

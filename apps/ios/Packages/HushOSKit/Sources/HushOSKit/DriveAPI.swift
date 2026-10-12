@@ -31,6 +31,12 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
  * turns their envelopes into keys and names.
  */
 public final class DriveAPI: Sendable {
+    /*
+     * `HushOS-Client` on every request: the Drive protocol this build speaks (packages/drive's
+     * DRIVE_PROTOCOL_VERSION). 3: padded objects (content suite 3) and signed writes.
+     */
+    public static let clientHeader = "ios/3"
+
     public let session: SharedKeychain.Session
     private let http: URLSession
 
@@ -53,7 +59,7 @@ public final class DriveAPI: Sendable {
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
         request.setValue("\(cookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
         request.timeoutInterval = 30
         return request
@@ -174,9 +180,11 @@ public final class DriveAPI: Sendable {
         try await perform(try mutation("/folders", body: ["workspaceId": workspaceId, "folders": folders]), as: FoldersResponse.self).nodes
     }
 
-    public func rename(nodeId: String, workspaceId: String, metadataVersion: UInt64, keyEpoch: UInt64, metadataEnvelope: String) async throws -> NodeView {
+    /* `metadataSignature` is over `metadataVersion + 1`, the version the server stores. */
+    public func rename(nodeId: String, workspaceId: String, metadataVersion: UInt64, keyEpoch: UInt64, metadataEnvelope: String, metadataSignature: String) async throws -> NodeView {
         try await perform(try mutation("/nodes/\(nodeId)/metadata", body: [
             "workspaceId": workspaceId, "metadataVersion": metadataVersion, "keyEpoch": keyEpoch, "metadataEnvelope": metadataEnvelope,
+            "metadataSignature": metadataSignature,
         ]), as: NodeResponse.self).node
     }
 

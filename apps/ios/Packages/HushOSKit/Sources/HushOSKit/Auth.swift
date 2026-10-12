@@ -62,7 +62,7 @@ public enum Auth {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(origin, forHTTPHeaderField: "Origin")
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         if let cookie { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 30
@@ -155,7 +155,7 @@ public enum Auth {
         let cookieName = session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"
         request.setValue("\(cookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.timeoutInterval = 20
         let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }

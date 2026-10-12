@@ -19,6 +19,7 @@ extension OnFakeDrive {
         FakeDrive.current = server
         let vault = Vault(api: DriveAPI(session: server.session, configuration: FakeDrive.configuration), session: server.session)
         await vault.adopt(workspace: WorkspaceView(workspaceId: server.workspace, changeSeq: nil, grant: nil, root: server.nodes[server.root]), key: server.workspaceKey)
+        await vault.adopt(identity: server.identity)
 
         // What Files had on screen: the root, the shared folder A and the untouched folder B.
         _ = try await vault.listChildren(of: server.root)
@@ -29,6 +30,16 @@ extension OnFakeDrive {
 
         let rotated = try await vault.rotate(try #require(await vault.item(server.a))).rotated
         #expect(rotated == 2)
+
+        // The server took every re-sealed node only because its signature held (it answers bad-signature otherwise),
+        // and a reader who trusts the writer's key sees them as verified; to anyone else the writer is unknown.
+        var me = TrustedSigners()
+        me.trust(server.session.userId, key: server.identity.signingPublicKey)
+        #expect(me.provenance(of: try #require(server.nodes[server.a])) == nil)
+        #expect(me.provenance(of: try #require(server.nodes[server.f])) == nil)
+        #expect(TrustedSigners().provenance(of: try #require(server.nodes[server.f])) == .unknownSigner(server.writer))
+        // Untouched nodes were written before signatures here, and say so.
+        #expect(me.provenance(of: try #require(server.nodes[server.b])) == .unsigned)
 
         // The server now holds A and F at the new epoch; nothing outside the subtree changed.
         #expect(server.nodes[server.a]?.keyEpoch == 2)
@@ -84,6 +95,9 @@ final class FakeDrive: @unchecked Sendable {
     let session = SharedKeychain.Session(origin: "https://drive.test", token: "token", userId: UUID().uuidString.lowercased())
     let workspace = UUID().uuidString.lowercased()
     let workspaceKey: Data
+    /* The account running the rotation: its signing key is what the server checks every re-sealed record against. */
+    let identity: IdentityKeys
+    var writer: Signer { Signer(id: session.userId, name: "Owner", email: "owner@example.com") }
     let root = UUID().uuidString.lowercased()
     let a = UUID().uuidString.lowercased()
     let b = UUID().uuidString.lowercased()
@@ -96,6 +110,8 @@ final class FakeDrive: @unchecked Sendable {
 
     init() throws {
         workspaceKey = try randomBytes(length: 32)
+        let accountKey = try randomBytes(length: 32)
+        identity = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: try identityCreate(userId: session.userId, accountKey: accountKey, keyVersion: 1))
         var keys: [String: Data] = [:]
         // Parents first, so each key wraps under its parent's.
         for (id, parent, kind, name) in [(root, nil, "folder", "Files"), (a, root, "folder", "A"), (b, root, "folder", "B"), (f, a, "file", "f.txt"), (g, b, "file", "g.txt")] as [(String, String?, String, String)] {
@@ -168,6 +184,18 @@ final class FakeDrive: @unchecked Sendable {
             for wire in sent {
                 guard let nodeId = wire["id"] as? String, let old = nodes[nodeId] else { continue }
                 let rotated = wire["rotated"] as? [String: Any]
+                // As the server does: a re-sealed metadata envelope is stored only under its writer's valid signature.
+                var signature: String?
+                if let rotated {
+                    let envelope = try base64urlDecode(value: rotated["metadataEnvelope"] as? String ?? "")
+                    signature = rotated["metadataSignature"] as? String
+                    let statement = MetadataStatement(workspaceId: old.workspaceId, nodeId: old.id, kind: old.isFolder ? .folder : .file, metadataVersion: old.metadataVersion)
+                    guard let signature, metadataVerify(signingPublicKey: try base64urlDecode(value: identity.signingPublicKey), statement: statement,
+                                                        metadataEnvelope: envelope, signature: try base64urlDecode(value: signature)) else {
+                        results.append(["id": nodeId, "status": "bad-signature"])
+                        continue
+                    }
+                }
                 nodes[nodeId] = NodeView(
                     id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind,
                     keyEpoch: rotated == nil ? old.keyEpoch : target, parentKeyEpoch: (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value ?? old.parentKeyEpoch,
@@ -175,6 +203,13 @@ final class FakeDrive: @unchecked Sendable {
                     metadataEnvelope: rotated?["metadataEnvelope"] as? String ?? old.metadataEnvelope,
                     currentVersion: nil, trashedAt: nil, changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil
                 )
+                if let signature {
+                    nodes[nodeId]?.metadataSigner = writer
+                    nodes[nodeId]?.metadataSignature = signature
+                } else {
+                    nodes[nodeId]?.metadataSigner = old.metadataSigner
+                    nodes[nodeId]?.metadataSignature = old.metadataSignature
+                }
                 results.append(["id": nodeId, "status": "ok"])
             }
             return (200, ["results": results])

@@ -41,6 +41,8 @@ struct NodeRow: View {
                 }
             }
             Spacer(minLength: 0)
+            // Who wrote it can't be tied to anyone checked: a small mark that explains itself on a tap.
+            if let provenance = store.provenance(of: item) { UnverifiedMark(provenance: provenance) }
             if working {
                 ProgressView().controlSize(.small)
             } else if let fraction = store.opening[item.id] {
@@ -205,6 +207,8 @@ struct NodeTile: View {
     private var line: Text {
         let muted = Alpine.inkMuted
         var parts: [Text] = []
+        // The tile has no room for a button of its own; its Info explains the mark.
+        if let provenance = store.provenance(of: item) { parts.append(UnverifiedText.text(provenance)) }
         if let access = store.accessLine(for: item) {
             parts.append(AccessText.line(access.link ?? access.text, link: access.link != nil))
         }

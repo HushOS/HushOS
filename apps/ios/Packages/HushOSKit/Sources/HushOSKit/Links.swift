@@ -79,7 +79,7 @@ public final class PublicAPI: Sendable {
         guard let url = components.url else { throw DriveAPIError.server(500, "Bad API path") }
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
-        request.setValue("ios/2", forHTTPHeaderField: "HushOS-Client")
+        request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.setValue(origin, forHTTPHeaderField: "Origin")
         request.timeoutInterval = 30
         return request
@@ -295,12 +295,13 @@ public actor LinkVault {
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`
         // an earlier try left is continued from its last whole chunk; it moves into place whole.
+        let layout = try opened.layout
         try await Resumable.download(
-            to: destination, count: opened.layout.chunkCount, chunkBytes: opened.layout.chunkBytes,
+            to: destination, count: layout.chunkCount, chunkBytes: layout.chunkBytes, size: opened.content.plaintextSize,
             onExpired: { if let fresh = URL(string: (try await api.linkVersionURL(token: token, versionId: opened.versionId)).url) { objectURL = fresh } },
             progress: progress
         ) { index in
-            let ciphertext = try await api.range(objectURL, chunkRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes, index: index))
+            let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }
@@ -311,7 +312,7 @@ public actor LinkVault {
         guard opened.content.thumbnailBytes > 0 else { return nil }
         let urls = try await api.linkThumbnails(token: token, versionIds: [version.id])
         guard let entry = urls.urls.first, let url = URL(string: entry.url) else { return nil }
-        let ciphertext = try await api.range(url, thumbnailRange(plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes))
+        let ciphertext = try await api.range(url, try thumbnailRange(suite: opened.content.suite, plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes))
         return try thumbnailDecrypt(content: opened.content, fetched: ciphertext)
     }
 
