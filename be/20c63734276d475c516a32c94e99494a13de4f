@@ -1,0 +1,29 @@
+packages/drive/src/jobs.ts
+  s_75dbe24a0bc379::t_e31eee81c98a51 291-292,359-360
+  s_75dbe24a0bc379::t_94f309c24c96a1 295-297
+  s_75dbe24a0bc379::t_f2de6440b9298f 293-294
+packages/db/src/drive.reports.test.ts
+  s_75dbe24a0bc379::t_ec1d9efe05ca84 8-14,391-431,551-609
+packages/db/src/reports.ts
+  s_75dbe24a0bc379::t_e31eee81c98a51 444,451-452,610-613,618-623,660-664,671-672,711-714,716-717,719,735,738,740,742-746,748,752-753,755-756,759,778-783
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_75dbe24a0bc379::t_e31eee81c98a51 759
+packages/drive/src/server.ts
+  s_75dbe24a0bc379::t_e31eee81c98a51 2009-2010,2017,2026-2027
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be20c63734276d475c516a32c94e99494a13de4f",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
