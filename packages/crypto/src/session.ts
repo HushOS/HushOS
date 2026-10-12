@@ -42,6 +42,9 @@ import {
     CHUNK_SIZE,
     CONTENT_SUITE,
     chunkCount,
+    chunkPlaintextLength,
+    contentLength,
+    fileBytesOf,
     chunkDigest,
     chunkRange,
     ciphertextSize,
@@ -615,6 +618,8 @@ export function createCryptoSession() {
         contentKey: Uint8Array<ArrayBuffer>;
         contentNonce: Uint8Array<ArrayBuffer>;
         plaintextSize: number;
+        /* The file and, under suite 3, its padding: what the chunks cover. */
+        contentLength: number;
         chunkCount: number;
         thumbnailBytes: number;
         /* The sealed trailer, appended to the last chunk when it is encrypted. */
@@ -632,6 +637,7 @@ export function createCryptoSession() {
         plaintextSize: number;
         /* The trailer's length: the last chunk's range runs on through it (see chunkRange). */
         thumbnailBytes: number;
+        contentLength: number;
         chunkCount: number;
         controllers: Map<number, AbortController>;
     };
@@ -689,12 +695,15 @@ export function createCryptoSession() {
             suite,
         };
     }
+    /* Chunk `index` of the upload: the file's bytes, then zeros where suite 3 pads past its end. */
     async function readChunk(upload: Upload, file: Blob, index: number) {
         if (file.size !== upload.plaintextSize)
             throw new CryptoError('The file changed since the upload started.');
         const start = index * CHUNK_SIZE;
-        const end = Math.min(upload.plaintextSize, start + CHUNK_SIZE);
-        return new Uint8Array(await file.slice(start, end).arrayBuffer());
+        const chunk = new Uint8Array(chunkPlaintextLength(upload.contentLength, index));
+        const end = Math.min(upload.plaintextSize, start + chunk.length);
+        if (end > start) chunk.set(new Uint8Array(await file.slice(start, end).arrayBuffer()));
+        return chunk;
     }
     function forgetDriveKeys() {
         forgetIdentity();
@@ -1693,6 +1702,7 @@ export function createCryptoSession() {
                     ? ((await encryptThumbnail(webp, contentKey, contentNonce, {
                           workspaceId,
                           objectId,
+                          suite: CONTENT_SUITE,
                           plaintextSize,
                       })) as Uint8Array<ArrayBuffer>)
                     : null;
@@ -1703,12 +1713,14 @@ export function createCryptoSession() {
                     node.key,
                     { workspaceId, nodeId, versionId, objectId, suite: CONTENT_SUITE },
                 );
+                const length = contentLength(CONTENT_SUITE, plaintextSize, thumbnailBytes);
                 uploads.set(objectId, {
                     workspaceId,
                     contentKey,
                     contentNonce,
                     plaintextSize,
-                    chunkCount: chunkCount(plaintextSize),
+                    contentLength: length,
+                    chunkCount: chunkCount(length),
                     thumbnailBytes,
                     thumbnail,
                     requests: new Map(),
@@ -1717,8 +1729,8 @@ export function createCryptoSession() {
                 return {
                     contentNonce: encode(contentNonce),
                     contentKeyEnvelope: encode(envelope),
-                    chunkCount: chunkCount(plaintextSize),
-                    ciphertextSize: ciphertextSize(plaintextSize, thumbnailBytes),
+                    chunkCount: chunkCount(length),
+                    ciphertextSize: ciphertextSize(CONTENT_SUITE, plaintextSize, thumbnailBytes),
                     thumbnail: thumbnail ? thumbnail.slice() : null,
                 };
             }
@@ -1730,7 +1742,11 @@ export function createCryptoSession() {
                 try {
                     if (opened.thumbnailBytes < 1)
                         throw new CryptoError('This file has no thumbnail.');
-                    const range = thumbnailRange(opened.plaintextSize, opened.thumbnailBytes);
+                    const range = thumbnailRange(
+                        opened.suite,
+                        opened.plaintextSize,
+                        opened.thumbnailBytes,
+                    );
                     const response = await fetch(url, {
                         headers: { Range: `bytes=${range.start}-${range.end}` },
                         cache: 'no-store',
@@ -1747,6 +1763,7 @@ export function createCryptoSession() {
                         {
                             workspaceId,
                             objectId: version.objectId,
+                            suite: opened.suite,
                             plaintextSize: opened.plaintextSize,
                             thumbnailBytes: opened.thumbnailBytes,
                         },
@@ -1892,20 +1909,26 @@ export function createCryptoSession() {
                     message.input.contentNonce,
                     16,
                 ) as Uint8Array<ArrayBuffer>;
+                const length = contentLength(CONTENT_SUITE, plaintextSize, opened.thumbnailBytes);
                 uploads.set(objectId, {
                     workspaceId,
                     contentKey: opened.contentKey,
                     contentNonce,
                     plaintextSize,
-                    chunkCount: chunkCount(plaintextSize),
+                    contentLength: length,
+                    chunkCount: chunkCount(length),
                     thumbnailBytes: opened.thumbnailBytes,
                     thumbnail,
                     requests: new Map(),
                     encrypted: new Map(),
                 });
                 return {
-                    chunkCount: chunkCount(plaintextSize),
-                    ciphertextSize: ciphertextSize(plaintextSize, opened.thumbnailBytes),
+                    chunkCount: chunkCount(length),
+                    ciphertextSize: ciphertextSize(
+                        CONTENT_SUITE,
+                        plaintextSize,
+                        opened.thumbnailBytes,
+                    ),
                 };
             }
             case 'driveUploadDigest': {
@@ -1931,6 +1954,7 @@ export function createCryptoSession() {
                         index,
                         chunkCount: upload.chunkCount,
                         plaintextSize: upload.plaintextSize,
+                        contentLength: upload.contentLength,
                     }),
                     chunkDigest(plaintext, upload.contentKey),
                 ]);
@@ -2040,6 +2064,11 @@ export function createCryptoSession() {
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 closeDownload(version.objectId);
                 const opened = await openVersionUnder(node.key, workspaceId, nodeId, version);
+                const length = contentLength(
+                    opened.suite,
+                    opened.plaintextSize,
+                    opened.thumbnailBytes,
+                );
                 downloads.set(version.objectId, {
                     workspaceId,
                     suite: opened.suite,
@@ -2047,11 +2076,14 @@ export function createCryptoSession() {
                     contentNonce: decode(message.input.contentNonce, 16) as Uint8Array<ArrayBuffer>,
                     plaintextSize: opened.plaintextSize,
                     thumbnailBytes: opened.thumbnailBytes,
-                    chunkCount: chunkCount(opened.plaintextSize),
+                    contentLength: length,
+                    chunkCount: chunkCount(length),
                     controllers: new Map(),
                 });
+                // Every chunk, padding included: a reader that stopped at the file's last chunk
+                // would show the store where the file ends. Chunks past it come back empty.
                 return {
-                    chunkCount: chunkCount(opened.plaintextSize),
+                    chunkCount: chunkCount(length),
                     plaintextSize: opened.plaintextSize,
                     thumbnailBytes: opened.thumbnailBytes,
                 };
@@ -2061,7 +2093,12 @@ export function createCryptoSession() {
                 const download = downloads.get(objectId);
                 if (!download)
                     throw new CryptoError('This download is no longer open. Start it again.');
-                const range = chunkRange(download.plaintextSize, download.thumbnailBytes, index);
+                const range = chunkRange(
+                    download.suite,
+                    download.plaintextSize,
+                    download.thumbnailBytes,
+                    index,
+                );
                 const controller = new AbortController();
                 download.controllers.set(index, controller);
                 try {
@@ -2136,9 +2173,10 @@ export function createCryptoSession() {
                             index,
                             chunkCount: download.chunkCount,
                             plaintextSize: download.plaintextSize,
+                            contentLength: download.contentLength,
                         },
                     );
-                    return { ok: true, plaintext, index };
+                    return { ok: true, plaintext: fileBytesOf(plaintext, download.plaintextSize, index), index };
                 } finally {
                     download.controllers.delete(index);
                 }
