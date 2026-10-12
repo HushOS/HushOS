@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql, sum, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import {
     driveObjectDeletions,
@@ -115,6 +117,8 @@ const lastSeenOf = sql<Date | null>`(select max(${sessions.lastSeenAt}) from ${s
 
 export const ADMIN_PAGE = 50;
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 export async function listAccounts(input: {
     role?: 'admin' | 'member';
     query?: string;
@@ -163,6 +167,8 @@ export async function listAccounts(input: {
     return { total: total?.total ?? 0, accounts: rows };
 }
 
+const granter = alias(users, 'granter');
+
 export async function getAccount(userId: string) {
     const [account] = await db
         .select({
@@ -193,15 +199,19 @@ export async function getAccount(userId: string) {
     const grants = account.workspaceId
         ? await db
               .select({
+                  id: storageEntitlements.id,
                   source: storageEntitlements.source,
                   quotaBytes: storageEntitlements.quotaBytes,
                   startsAt: storageEntitlements.startsAt,
                   expiresAt: storageEntitlements.expiresAt,
                   revokedAt: storageEntitlements.revokedAt,
+                  grantedByEmail: granter.email,
+                  note: storageEntitlements.note,
               })
               .from(storageEntitlements)
+              .leftJoin(granter, eq(granter.id, storageEntitlements.grantedBy))
               .where(eq(storageEntitlements.workspaceId, account.workspaceId))
-              .orderBy(desc(storageEntitlements.startsAt))
+              .orderBy(desc(storageEntitlements.startsAt), asc(storageEntitlements.id))
         : [];
     const [activeSessions] = await db
         .select({ total: count() })
@@ -268,4 +278,92 @@ export async function listWorkspaces(input: { sort?: 'stored' | 'created'; offse
         .limit(ADMIN_PAGE)
         .offset(Math.max(0, input.offset ?? 0));
     return { total: total?.total ?? 0, workspaces: rows };
+}
+
+/*
+ * Storage an operator adds to an account by hand: an entitlement like a plan's
+ * or an invite bonus's, from `admin`, naming who granted it. It counts at once
+ * and stops counting when it expires or is revoked. Revoking touches only these;
+ * a plan's or a referral's entitlement is its own system's to end.
+ */
+export const ADMIN_STORAGE_MAX_BYTES = 100n * 1024n ** 4n; // 100 TiB
+export const ADMIN_STORAGE_NOTE_MAX = 500;
+
+/* A workspace's allowance as the quota checks see it, inside a transaction. */
+async function quotaIn(tx: Tx, workspaceId: string) {
+    const [row] = await tx
+        .select({ quotaBytes: quotaOf })
+        .from(workspaceStorage)
+        .where(eq(workspaceStorage.workspaceId, workspaceId));
+    return row?.quotaBytes ?? null;
+}
+
+export async function grantAdminStorage(input: {
+    workspaceId: string;
+    quotaBytes: bigint;
+    expiresAt: Date | null;
+    actorUserId: string;
+    note?: string | null;
+}) {
+    if (input.quotaBytes <= 0n || input.quotaBytes > ADMIN_STORAGE_MAX_BYTES)
+        return { status: 'invalid-amount' as const };
+    if (input.expiresAt && !(input.expiresAt.getTime() > Date.now()))
+        return { status: 'invalid-expiry' as const };
+    const note = input.note?.trim() || null;
+    if (note && note.length > ADMIN_STORAGE_NOTE_MAX) return { status: 'invalid-note' as const };
+    return db.transaction(async (tx) => {
+        // The same lock an upload's quota check takes, so the two see each other whole.
+        const [storage] = await tx
+            .select({ workspaceId: workspaceStorage.workspaceId })
+            .from(workspaceStorage)
+            .where(eq(workspaceStorage.workspaceId, input.workspaceId))
+            .for('update');
+        if (!storage) return { status: 'not-found' as const };
+        const [entitlement] = await tx
+            .insert(storageEntitlements)
+            .values({
+                workspaceId: input.workspaceId,
+                source: 'admin',
+                sourceReference: `admin:${randomUUID()}`,
+                quotaBytes: input.quotaBytes,
+                expiresAt: input.expiresAt,
+                grantedBy: input.actorUserId,
+                note,
+            })
+            .returning({ id: storageEntitlements.id });
+        return {
+            status: 'ok' as const,
+            entitlementId: entitlement!.id,
+            quotaBytes: (await quotaIn(tx, input.workspaceId))!,
+        };
+    });
+}
+
+export async function revokeAdminStorage(entitlementId: string, workspaceId: string) {
+    return db.transaction(async (tx) => {
+        const [storage] = await tx
+            .select({ workspaceId: workspaceStorage.workspaceId })
+            .from(workspaceStorage)
+            .where(eq(workspaceStorage.workspaceId, workspaceId))
+            .for('update');
+        if (!storage) return { status: 'not-found' as const };
+        const [entitlement] = await tx
+            .select({ revokedAt: storageEntitlements.revokedAt })
+            .from(storageEntitlements)
+            .where(
+                and(
+                    eq(storageEntitlements.id, entitlementId),
+                    eq(storageEntitlements.workspaceId, workspaceId),
+                    eq(storageEntitlements.source, 'admin'),
+                ),
+            );
+        if (!entitlement) return { status: 'not-found' as const };
+        // Revoking twice keeps the first time.
+        if (!entitlement.revokedAt)
+            await tx
+                .update(storageEntitlements)
+                .set({ revokedAt: new Date() })
+                .where(eq(storageEntitlements.id, entitlementId));
+        return { status: 'ok' as const, quotaBytes: (await quotaIn(tx, workspaceId))! };
+    });
 }
