@@ -92,7 +92,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     // Account recovery, signed in or out: its own screens until the new phrase, which is saved signed in.
     model.recovery?.let { flow ->
         if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { RecoverScreen(model, state); return }
-        if (state.gate == Gate.SIGNED_IN) { PhraseScreen(model, fresh = flow.newPhrase) { model.leaveRecovery() }; return }
+        if (state.gate == Gate.SIGNED_IN) { PhraseScreen(model, fresh = true) { model.leaveRecovery() }; return }
     }
     when (state.gate) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }

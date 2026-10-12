@@ -113,14 +113,22 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /*
+     * Only content:// URIs, which the sending app grants: a file:// one (or any other scheme) would have
+     * this app read a path with its own permissions, its private files included, and upload them. For
+     * the same reason not this app's own providers (its decrypted copies), which it can always read.
+     */
     private fun streams(intent: Intent): List<Uri> = when (intent.action) {
         Intent.ACTION_SEND -> listOfNotNull(androidx.core.content.IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
         Intent.ACTION_SEND_MULTIPLE -> androidx.core.content.IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
         else -> emptyList()
-    }.ifEmpty {
+    }.filter(::isContent).ifEmpty {
         // Some apps attach the files only as clip data.
-        intent.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } }.orEmpty()
+        intent.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } }.orEmpty().filter(::isContent)
     }
+
+    private fun isContent(uri: Uri) = uri.scheme.equals(android.content.ContentResolver.SCHEME_CONTENT, ignoreCase = true) &&
+        uri.authority?.startsWith(context.packageName + ".") != true
 
     private fun describe(uri: Uri): Item {
         var name: String? = null

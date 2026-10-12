@@ -16,6 +16,8 @@ object Problems {
         return when {
             error is Unreachable || error is java.io.IOException -> Problem("You’re offline", OFFLINE)
             error is NotAuthenticated -> Problem("You’ve been signed out", "Sign in again to carry on.")
+            // Refusals carry their own sentence (a later format, an old link, older settings): said as written.
+            error is Refused -> Problem(error.title, raw ?: SERVER)
             error is NotFound -> Problem("It’s no longer here", "It was moved, deleted, or isn’t shared with you any more.", raw)
             error is ApiError -> when {
                 error.status == 404 || error.status == 410 -> Problem("It’s no longer here", "It was moved, deleted, or isn’t shared with you any more.", raw)

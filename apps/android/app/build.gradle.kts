@@ -131,6 +131,8 @@ dependencies {
     testImplementation(libs.junit)
     // JVM tests open real envelopes: JNA's desktop jar loads the core built for this machine.
     testImplementation(libs.jna)
+    // android.jar's org.json is stubs that throw on the JVM; settings tests edit real JSON.
+    testImplementation(libs.org.json)
 }
 
 /*

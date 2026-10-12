@@ -141,6 +141,7 @@ object TransferNotices {
         val hidden = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle(if (failed) "Transfers didn’t finish" else "Transfers finished")
+            .setLocalOnly(true)
             .build()
         val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
@@ -151,6 +152,8 @@ object TransferNotices {
             .setAutoCancel(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(hidden)
+            // File names stay on this phone: never bridged to a watch or another device.
+            .setLocalOnly(true)
         // Retry where it can work: the failures still on the record whose reason a retry can fix.
         val retryable = FailedTransfers.of(context).all().filter { it.id in ended.map(Outcome::id) && canRetry(it) }.map { it.id }
         if (retryable.isNotEmpty()) {

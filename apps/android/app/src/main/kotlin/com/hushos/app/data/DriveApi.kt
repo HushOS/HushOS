@@ -33,6 +33,8 @@ data class NodeView(
     val trashedAt: String?, val createdAt: String?, val updatedAt: String?, val changeSeq: Int? = null,
     /* The row as the server sent it, for the mirror to keep byte for byte. */
     val rawJson: String = "",
+    /* How its key and metadata are sealed; rows from before servers said so are suite 1. */
+    val envelopeSuite: Int = ENVELOPE_SUITE,
 ) {
     val isFolder get() = kind == "folder"
 
@@ -47,6 +49,7 @@ data class NodeView(
             json.optString("createdAt").takeIf { it.isNotEmpty() }, json.optString("updatedAt").takeIf { it.isNotEmpty() },
             if (json.isNull("changeSeq")) null else json.optInt("changeSeq"),
             json.toString(),
+            if (json.isNull("envelopeSuite")) ENVELOPE_SUITE else json.getInt("envelopeSuite"),
         )
     }
 }
@@ -178,9 +181,12 @@ class DriveApi(val session: Shared.Session) : RootApi {
             }, it.optBoolean("resync"), it.getInt("nextCursor"), it.getBoolean("hasMore"))
         }
 
-    /* A workspace document: its envelope and version, or null when none was written yet. */
+    /* A workspace document: its envelope and version, or null when none was written yet; a later suite is refused. */
     fun document(workspaceId: String, kind: String): Pair<String, Int>? =
-        get("/workspaces/$workspaceId/documents/$kind").optJSONObject("document")?.let { it.getString("envelope") to it.getInt("version") }
+        get("/workspaces/$workspaceId/documents/$kind").optJSONObject("document")?.let {
+            checkSuite(if (it.isNull("envelopeSuite")) ENVELOPE_SUITE else it.getInt("envelopeSuite"))
+            it.getString("envelope") to it.getInt("version")
+        }
 
     fun putDocument(workspaceId: String, kind: String, version: Int, envelope: String) {
         send("/workspaces/$workspaceId/documents/$kind", JSONObject().put("version", version).put("envelope", envelope), "PUT")

@@ -167,7 +167,8 @@ object TransferQueue {
     /*
      * The ongoing notification Android requires while a job runs: the up arrow for uploads,
      * the down arrow for keeping a file on this phone, and a tap that opens the transfers sheet.
-     * No Cancel here: cancelling asks first, in the app.
+     * No Cancel here: cancelling asks first, in the app. The title names the file, so the lock
+     * screen gets a version without it, and nothing is bridged to a watch or another device.
      */
     internal fun foreground(context: Context, id: Int, title: String, fraction: Float, keeping: Boolean = false, detail: String? = null): ForegroundInfo {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -178,14 +179,24 @@ object TransferQueue {
             android.content.Intent(context, com.hushos.app.MainActivity::class.java).setAction(OPEN_TRANSFERS).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val icon = if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload
+        val public = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(icon)
+            .setContentTitle(if (keeping) "Keeping files on this phone" else "Uploading")
+            .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
+            .setLocalOnly(true)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload)
+            .setSmallIcon(icon)
             .setContentTitle(title)
             .setContentText(detail ?: if (fraction > 0f) "${(fraction * 100).toInt()}%" else null)
             .setContentIntent(open)
             .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
             .setOngoing(true)
             .setSilent(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(public)
+            .setLocalOnly(true)
             .build()
         return ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }

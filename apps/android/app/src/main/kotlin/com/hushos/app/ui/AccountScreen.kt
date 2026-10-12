@@ -120,7 +120,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         Page.TRASH -> { TrashScreen(model, state) { page = Page.MAIN; model.refreshStorage() }; return }
         Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
         Page.PASSWORD -> { PasswordScreen(model) { page = Page.MAIN }; return }
-        Page.PHRASE -> { PhraseScreen(model, fresh = null) { page = Page.MAIN }; return }
+        Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
         Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }) { page = Page.MAIN }; return }
         Page.RESET -> { ResetKeysScreen(model) { page = Page.ADVANCED }; return }
         Page.MAIN -> {}
@@ -433,10 +433,10 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
  * The recovery phrase on a page of its own, so 24 words fit: Save the kit (the
  * web's kit file, through the share sheet), Copy, and, while the phrase isn't
  * confirmed as saved, the web's check: say it's saved, then pick three words back.
- * `fresh` is a phrase just made (after Reset sharing keys): no way out but "I’ve saved it".
+ * `fresh`: the phrase was just made (Reset sharing keys, recovery), read back from the account here; no way out but "I’ve saved it".
  */
 @Composable
-fun PhraseScreen(model: DriveViewModel, fresh: String?, onDone: () -> Unit) {
+fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -459,10 +459,10 @@ fun PhraseScreen(model: DriveViewModel, fresh: String?, onDone: () -> Unit) {
         }
         return
     }
-    AccountPage(if (fresh != null) "Your new recovery phrase" else "Recovery phrase", onBack = if (fresh != null) null else onDone) {
+    AccountPage(if (fresh) "Your new recovery phrase" else "Recovery phrase", onBack = if (fresh) null else onDone) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
             Text(
-                if (fresh != null) "Your old phrase and any printed kit no longer work. Save these 24 words instead."
+                if (fresh) "Your old phrase and any printed kit no longer work. Save these 24 words instead."
                 else "These 24 words get you back in if you forget your password. Keep them somewhere private and offline.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
             )
@@ -477,18 +477,18 @@ fun PhraseScreen(model: DriveViewModel, fresh: String?, onDone: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                         Button(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
                         OutlinedButton(onClick = {
-                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip("Recovery phrase", current.phrase))
+                            SensitiveClipboard.copy(context, "Recovery phrase", current.phrase)
                             model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
                         }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
                     }
                     Text("Keep it somewhere private and offline. Anyone with these words and your email can get into your account.",
                         style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
-                    if (fresh != null || !current.confirmed) {
+                    if (fresh || !current.confirmed) {
                         Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked = saved, onCheckedChange = null)
                             Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
                         }
-                        Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (fresh != null) "I’ve saved it" else "Check three words") }
+                        Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (fresh) "I’ve saved it" else "Check three words") }
                     }
                 }
             }
@@ -661,10 +661,12 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     var password by remember { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var phrase by rememberSaveable { mutableStateOf<String?>(null) }
-    phrase?.let { made ->
+    // Only whether the keys were reset is saved state: the phrase is read again from the account when the page shows,
+    // so it never lands in the saved-instance bundle (which the system writes to disk).
+    var reset by rememberSaveable { mutableStateOf(false) }
+    if (reset) {
         BackHandler {}
-        PhraseScreen(model, fresh = made) { phrase = null; onBack() }
+        PhraseScreen(model, fresh = true) { reset = false; onBack() }
         return
     }
     AccountPage("Reset sharing keys", onBack = if (pending) null else onBack) {
@@ -676,7 +678,7 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
             Text("Enter your password to confirm.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
             Button(enabled = !pending && password.isNotEmpty(), onClick = {
                 pending = true
-                model.rotateKeys(password) { made, failure -> pending = false; if (made != null) phrase = made else error = failure }
+                model.rotateKeys(password) { made, failure -> pending = false; if (made) reset = true else error = failure }
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Resetting…" else "Reset") }
         }
     }

@@ -33,6 +33,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press the icon: Upload files, Upload photos, New folder, Search. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!--
+            Every link from outside lands here first: a task of its own that never shows in Recents
+            and keeps no history, so a share link's key or a recovery token never becomes the root
+            intent of a task the system remembers. It hands the link to MainActivity in memory.
+        -->
+        <activity
+            android:name=".LinkActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
             <!-- hushos://s/<token>#<secret>, hushos://app/drive?folder=<id>, hushos://node/<id>: the same places as the web links. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -62,10 +80,6 @@
                 <!-- The emailed recovery link: recovery carries on in the app. -->
                 <data android:path="/recover/complete" />
             </intent-filter>
-            <!-- Long-press the icon: Upload files, Upload photos, New folder, Search. -->
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
         </activity>
 
         <!--

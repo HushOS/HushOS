@@ -21,7 +21,8 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
     }
 }
 
-class AuthFailure(message: String) : Exception(message)
+/* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
+class AuthFailure(message: String, val status: Int = 0) : Exception(message)
 
 data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long)
 data class BillingSummary(val enabled: Boolean, val planName: String?, val periodEnd: String?, val cancelAtPeriodEnd: Boolean)
@@ -194,7 +195,7 @@ object Auth {
         }
         val parsed = runCatching { JSONObject(text) }.getOrDefault(JSONObject())
         if (status == 401) throw NotAuthenticated()
-        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")))
+        if (status !in 200..299) throw AuthFailure(Problems.signIn(status, parsed.optString("message")), status)
         return parsed
     }
 
@@ -233,9 +234,9 @@ object Auth {
         .put("workspaceKeyVersion", grant.workspaceKeyVersion.toLong()).put("wrappingSalt", grant.wrappingSalt)
         .put("wrappingNonce", grant.wrappingNonce).put("encryptedKey", grant.encryptedKey)
 
-    /* A person by email, with their identity's public keys. */
+    /* A person by email, with their identity's public keys. The address goes in the body, never the URL a log keeps. */
     fun lookupContact(context: Context, email: String): Contact {
-        val json = call(context, "/api/auth/contacts/lookup?email=" + java.net.URLEncoder.encode(email, "UTF-8")).optJSONObject("contact")
+        val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email)).optJSONObject("contact")
             ?: throw AuthFailure("No HushOS account uses that email.")
         val kem = json.optJSONObject("kem")
         return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), json.getString("encryptionPublicKey"),
@@ -245,9 +246,10 @@ object Auth {
     fun settings(context: Context): com.hushos.core.SettingsEnvelope? =
         call(context, "/api/auth/settings").optJSONObject("settings")?.let(::settingsEnvelope)
 
-    fun putSettings(context: Context, expectedVersion: ULong, envelope: com.hushos.core.SettingsEnvelope) {
+    /* Saves the envelope over `expectedVersion`; returns the version the server now holds. */
+    fun putSettings(context: Context, expectedVersion: ULong, envelope: com.hushos.core.SettingsEnvelope): ULong =
         call(context, "/api/auth/settings", JSONObject().put("expectedVersion", expectedVersion.toLong()).put("nonce", envelope.nonce).put("ciphertext", envelope.ciphertext), "PUT")
-    }
+            .optLong("settingsVersion", envelope.settingsVersion.toLong()).toULong()
 
     /* The recovery key envelope the server keeps. */
     fun recoveryKey(context: Context): com.hushos.core.RecoveryEnvelope =

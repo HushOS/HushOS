@@ -35,7 +35,6 @@ import com.hushos.core.LinkContext
 import com.hushos.core.linkCreate
 import com.hushos.core.linkSecretOpen
 import com.hushos.core.linkUrl
-import com.hushos.core.base64urlEncode
 import com.hushos.core.recoveryPhrase
 import com.hushos.core.settingsOpen
 import com.hushos.core.settingsSeal
@@ -129,9 +128,9 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
     internal val syncLock = Any()
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
-    internal val nodeKeys = ConcurrentHashMap<String, ByteArray>()
+    /* Node keys and rows by (workspace, node): a share's keys never answer for this account's own nodes (NodeCache). */
+    internal val nodes = NodeCache { workspace?.workspaceId }
     private var identity: IdentityKeys? = null
-    internal val opened = ConcurrentHashMap<String, Opened>()
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
@@ -195,15 +194,13 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun workspaceKey(): ByteArray { loadWorkspace(); return workspaceKey ?: throw ApiError(500, "Workspace not opened") }
     val workspaceId: String get() = loadWorkspace().workspaceId
 
-    fun nodeKey(id: String): ByteArray? = nodeKeys[id]
-
     /* Whether `folder` is `ancestor` itself or lies below it, as far as the tree has been opened. */
     fun descends(folder: String, ancestor: String): Boolean {
         var cursor: String? = folder
         var steps = 0
         while (cursor != null && steps < 256) {
             if (cursor == ancestor) return true
-            cursor = parents[cursor] ?: opened[cursor]?.node?.parentId
+            cursor = parents[cursor] ?: nodes.find(cursor)?.node?.parentId
             steps++
         }
         return false
@@ -215,9 +212,9 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* The links the owner made for this item. */
     fun links(item: Opened): List<LinkView> = api.links(item.id, item.node.workspaceId)
 
-    /* Mints a link for an item this account holds the key of; returns it with the URL to hand out. */
+    /* Mints a link for an item this account holds the key of; returns it with the URL to hand out. Recorded in the ledger once the server took it. */
     fun createLink(item: Opened, password: String?, expiresAt: Instant?): Pair<LinkView, String> {
-        val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val ctx = LinkContext(item.node.workspaceId, item.id, item.node.keyEpoch, UUID.randomUUID().toString())
         val created = linkCreate(ctx, nodeKey, password)
         val body = JSONObject().put("workspaceId", item.node.workspaceId).put("linkId", ctx.linkId).put("token", created.token)
@@ -225,18 +222,24 @@ class Vault(private val context: Context, val api: DriveApi) {
             .put("secretEnvelope", created.secretEnvelope).put("hasPassword", created.hasPassword)
             .put("expiresAt", expiresAt?.toString() ?: JSONObject.NULL)
         val link = api.createLink(item.id, body)
+        updateSettings { it.addLink(ctx.linkId, item.id) }
         return link to linkUrl(api.session.origin, created.token, created.secret)
     }
 
-    /* The URL of an existing link, from the owner's sealed copy of its secret; null for one made before it was kept. */
+    /* The URL of an existing link, from the owner's sealed copy of its secret; null for one made before it was kept. A link of an older derivation is refused. */
     fun linkUrlOf(link: LinkView, item: Opened): String? {
-        val nodeKey = nodeKeys[item.id] ?: return null
+        LinkKdf.check(link.kdfVersion)
+        val nodeKey = nodes.key(item) ?: return null
         val sealed = link.secretEnvelope ?: return null
         val owned = linkSecretOpen(LinkContext(item.node.workspaceId, item.id, link.keyEpoch, link.id), nodeKey, base64urlDecode(sealed))
         return linkUrl(api.session.origin, base64urlEncode(owned.token), base64urlEncode(owned.secret))
     }
 
-    fun revokeLink(link: LinkView, item: Opened) = api.revokeLink(link.id, item.node.workspaceId)
+    /* Out of the ledger first (saved before the server hears of it), so no rotation ever seals it again. */
+    fun revokeLink(link: LinkView, item: Opened) {
+        updateSettings { it.removeLink(link.id) }
+        api.revokeLink(link.id, item.node.workspaceId)
+    }
 
     /*
      * Changes a link's password (`password`: null keeps it, "" removes it) and or its
@@ -246,7 +249,8 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun updateLink(link: LinkView, item: Opened, password: String?, expiresAt: java.util.Optional<Instant>?): LinkView {
         val body = JSONObject().put("workspaceId", item.node.workspaceId).put("keyEpoch", link.keyEpoch.toLong())
         if (password != null) {
-            val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+            LinkKdf.check(link.kdfVersion)
+            val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
             val sealed = link.secretEnvelope ?: throw ApiError(409, "This link can’t be changed. Turn it off and make a new one.")
             val made = linkReseal(LinkContext(item.node.workspaceId, item.id, link.keyEpoch, link.id), nodeKey, base64urlDecode(sealed), password.ifEmpty { null })
             body.put("seal", JSONObject().put("linkEnvelope", made.linkEnvelope).put("linkSalt", made.linkSalt)
@@ -261,29 +265,49 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* Files a report on an item shared with this account; the session names the reporter. */
     fun report(item: Opened, category: String, reason: String, email: String?): Boolean {
-        val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val operators = PublicApi(api.session.origin).operators()
         return api.fileReport(Reports.body(operators, item, nodeKey, category, reason, email, JSONObject().put("share", true)))
     }
 
     // Contacts and shares to people
 
+    /* This device's mark for the account and identity signed in now (see SettingsMark). */
+    private fun settingsMarkKey(): String = SettingsMark.key(api.session.userId, identityKeys().encryptionPublicKey)
+
+    /* The settings as the server holds them, refused when older than this device has seen (or gone after it saw some). */
     fun loadSettings(): Settings {
         val keys = identityKeys()
-        val envelope = Auth.settings(context) ?: return Settings(HashMap(), 0uL)
-        val json = JSONObject(settingsOpen(keys.encryptionPrivateKey, api.session.userId, envelope))
-        val contacts = HashMap<String, ContactPin>()
-        val entries = json.getJSONObject("contacts")
-        for (key in entries.keys()) contacts[key] = ContactPin.from(entries.getJSONObject(key))
-        return Settings(contacts, envelope.settingsVersion)
+        val mark = SettingsMark.of(context)
+        val markKey = settingsMarkKey()
+        val envelope = Auth.settings(context)
+        mark.check(markKey, envelope?.settingsVersion)
+        if (envelope == null) return Settings.empty()
+        val settings = Settings.parse(settingsOpen(keys.encryptionPrivateKey, api.session.userId, envelope), envelope.settingsVersion)
+        mark.record(markKey, envelope.settingsVersion)
+        return settings
     }
 
-    private fun saveSettings(settings: Settings) {
+    /*
+     * Compare-and-set: read, change, seal one version up, save over the version read. Another device
+     * saving in between is a 409: read again and apply the change again, up to three tries. The JSON
+     * is edited in place, so fields this app doesn't know (the web's, a later client's) survive.
+     */
+    internal fun updateSettings(change: (Settings) -> Unit): Settings {
         val keys = identityKeys()
-        val contacts = JSONObject()
-        for ((id, pin) in settings.contacts) contacts.put(id, pin.toJson())
-        val json = JSONObject().put("version", 1).put("contacts", contacts).toString()
-        Auth.putSettings(context, settings.version, settingsSeal(keys.encryptionPrivateKey, api.session.userId, settings.version + 1uL, json))
+        var attempt = 0
+        while (true) {
+            val settings = loadSettings()
+            change(settings)
+            val next = settings.version + 1uL
+            try {
+                val saved = Auth.putSettings(context, settings.version, settingsSeal(keys.encryptionPrivateKey, api.session.userId, next, settings.text()))
+                SettingsMark.of(context).record(settingsMarkKey(), maxOf(saved, next))
+                return Settings(settings.json, saved)
+            } catch (error: AuthFailure) {
+                if (error.status != 409 || ++attempt >= 3) throw error
+            }
+        }
     }
 
     /* Everyone pinned, newest first. */
@@ -299,70 +323,61 @@ class Vault(private val context: Context, val api: DriveApi) {
         var changed = false
         if (pinned != null) {
             // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
-            if (pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey) changed = true
+            // A pin from before signing keys were kept has none to differ: it is checked again, not called changed.
+            if (pinned.encryptionPublicKey != contact.encryptionPublicKey) changed = true
+            if (pinned.signingPublicKey.isNotEmpty() && pinned.signingPublicKey != contact.signingPublicKey) changed = true
             if (pinned.kemPublicKeyHash != null && pinned.kemPublicKeyHash != contact.kemHash) changed = true
         }
-        return Lookup(contact, pinned, changed)
+        return Lookup(contact, pinned, changed, recheck = pinned != null && !pinned.verified)
     }
 
-    /* Trusts the keys shown now: what the person does after checking the fingerprint. */
+    /* Trusts the keys shown now: what the person does after checking the words. A fresh fingerprint and signing key replace an old pin's. */
     fun pin(contact: Contact) {
         val pin = ContactPin(contact.userId, contact.email, contact.name, contact.encryptionPublicKey, contact.signingPublicKey,
             contact.fingerprint, Instant.now().toString(), if (contact.kemSigned) contact.kemHash else null)
-        val settings = loadSettings()
-        settings.contacts[contact.userId] = pin
-        runCatching { saveSettings(settings) }.onFailure {
-            // Changed on another device meanwhile: read again and retry once.
-            val latest = loadSettings()
-            latest.contacts[contact.userId] = pin
-            saveSettings(latest)
-        }
+        updateSettings { it.pin(pin) }
     }
 
     fun unpin(pin: ContactPin) {
-        val settings = loadSettings()
-        settings.contacts.remove(pin.userId)
-        saveSettings(settings)
+        updateSettings { it.unpin(pin.userId) }
     }
 
     fun shares(item: Opened): List<OwnedShare> = api.shares(item.id, item.node.workspaceId)
 
     /*
-     * Shares an item with a pinned contact: the served keys must match the pin
-     * (a first, signed post-quantum key is accepted and remembered), then the
-     * node key is sealed to them with this identity's private key.
+     * Shares an item with a pinned contact: the pin must vouch for their keys (words checked against
+     * both), the served X25519 key must be the pinned one, and the post-quantum key must be the one
+     * remembered or, the first time, signed by the pinned identity. Only then is the node key sealed
+     * to them (always hybrid, never X25519 alone), and the share goes in the ledger once the server took it.
      */
     fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
-        val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
-        val contact = Auth.lookupContact(context, pin.email)
-        if (contact.userId != pin.userId || contact.encryptionPublicKey != pin.encryptionPublicKey) throw ContactChanged()
-        var kemPublic: ByteArray? = null
-        if (contact.kemPublicKey != null && contact.kemSignedFor(pin)) {
-            val hash = contact.kemHash
-            if (pin.kemPublicKeyHash != null) {
-                if (pin.kemPublicKeyHash != hash) throw ContactChanged()
-            } else {
-                val settings = loadSettings()
-                settings.contacts[pin.userId]?.let { settings.contacts[pin.userId] = it.copy(kemPublicKeyHash = hash); saveSettings(settings) }
-            }
-            kemPublic = base64urlDecode(contact.kemPublicKey)
-        } else if (pin.kemPublicKeyHash != null) throw ContactChanged()
+        val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
+        // The pin as the settings hold it now, not as the sheet last read it.
+        val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in People you share with before you share with them.")
+        if (!current.verified) throw SharingRefused("Check ${current.displayName}’s words again in People you share with before you share with them.")
+        val contact = Auth.lookupContact(context, current.email)
+        if (contact.userId != current.userId || contact.encryptionPublicKey != current.encryptionPublicKey) throw ContactChanged()
+        val kem = granteeKem(current, contact.kemPublicKey, contact.kemSignature)
+        kem.firstHash?.let { hash -> updateSettings { it.rememberKem(current.userId, hash) } }
         val keys = identityKeys()
-        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, pin.userId, api.session.userId)
-        val envelope = shareSeal(ctx, nodeKey, keys.encryptionPrivateKey, base64urlDecode(pin.encryptionPublicKey), kemPublic)
-        return api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", pin.userId).put("role", role)
+        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, current.userId, api.session.userId)
+        val envelope = shareSeal(ctx, nodeKey, keys.encryptionPrivateKey, base64urlDecode(current.encryptionPublicKey), kem.publicKey)
+        val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
+        updateSettings { it.addShare(item.id, current.userId) }
+        return share
     }
 
-    fun revokeShare(share: OwnedShare, item: Opened) = api.revokeShare(share.id, item.node.workspaceId)
+    /* Out of the ledger first (saved before the revoke and the rotation after it), so no rotation seals to them again. */
+    fun revokeShare(share: OwnedShare, item: Opened) {
+        updateSettings { it.removeShare(item.id, share.granteeId) }
+        api.revokeShare(share.id, item.node.workspaceId)
+    }
 
-    /* Rotates the subtree under `item` after a revoke; returns how many nodes were re-sealed. */
-    fun rotate(item: Opened, progress: (Int) -> Unit = {}): Int = rotateSubtree(item, progress)
+    /* Rotates the subtree under `item` after a revoke; returns how many nodes were re-sealed and who was left out, and why. */
+    fun rotate(item: Opened, progress: (Int) -> Unit = {}): RotationResult = rotateSubtree(item, progress)
 
-    internal fun openedNodes(): Map<String, Opened> = HashMap(opened)
     internal fun workspaceKeyBytes(): ByteArray? = workspaceKey
-    internal fun rememberKey(id: String, key: ByteArray) { nodeKeys[id] = key }
-    internal fun forgetAll() { opened.clear() }
 
     /*
      * A copy into another workspace (a shared folder): the server keeps objects
@@ -389,9 +404,9 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* Opens a node of this workspace by listing the folder it sits in, which opens the whole chain above. */
     private fun openAnywhere(node: NodeView): Opened? {
-        opened[node.id]?.let { return it }
+        nodes.row(node.workspaceId, node.id)?.let { return it }
         runCatching { listChildren(node.parentId ?: rootId) }
-        return opened[node.id] ?: runCatching { open(node) }.getOrNull()
+        return nodes.row(node.workspaceId, node.id) ?: runCatching { open(node) }.getOrNull()
     }
 
     /* Everything this account shared out: to people, and by link. */
@@ -424,9 +439,8 @@ class Vault(private val context: Context, val api: DriveApi) {
      */
     fun openKeptFolder(id: String, shareRoot: String?): Opened? {
         if (shareRoot == null) return resolve(id)
-        val mounts = mountShares()
-        if (mounts.none { it.share.node.id == shareRoot }) return null
-        opened[id]?.let { return it }
+        val mount = mountShares().firstOrNull { it.share.node.id == shareRoot } ?: return null
+        nodes.row(mount.share.workspaceId, id)?.let { return it }
         val pending = ArrayDeque(listOf(shareRoot))
         var steps = 0
         while (pending.isNotEmpty() && steps++ < 2_000) {
@@ -529,7 +543,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             // wrongly dropped comes down again, while one of a purged file would stay readable here for good.
             val mine = (entry.workspaceId ?: own) == own
             // Only this drive's answers are proof: a share's folder asked for under this account's workspace is a 404 too.
-            val item = opened[entry.id] ?: if (!mine) null else try {
+            val item = nodes.row(entry.workspaceId ?: own, entry.id) ?: if (!mine) null else try {
                 resolve(entry.id)
             } catch (error: NotFound) {
                 Offline.forget(context, entry.id)
@@ -558,64 +572,83 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun recoveryPhrase(): String = recoveryPhrase(api.session.userId, unlockAccount(), Auth.recoveryKey(context))
 
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
-    private fun workspaceOf(nodeId: String): String = opened[nodeId]?.node?.workspaceId ?: workspaceId
+    private fun workspaceOf(nodeId: String): String = nodes.find(nodeId)?.node?.workspaceId ?: workspaceId
 
-    /* A share as received, with its root opened under the key the granter sealed to this identity; `trust` when the granter's key kept it shut. */
-    data class ShareMount(val share: ShareView, val root: Opened?, val error: String?, val trust: GranterTrust? = null)
+    /*
+     * A share as received, with its root opened under the key the granter sealed to this identity; `trust` when
+     * the granter's key kept it shut, `explained` when `error` is a sentence for people (a refused share, a later format).
+     */
+    data class ShareMount(val share: ShareView, val root: Opened?, val error: String?, val trust: GranterTrust? = null, val explained: Boolean = false)
 
     fun mountShares(): List<ShareMount> {
         val shares = api.sharedWithMe()
         if (shares.isEmpty()) return emptyList()
+        val own = workspaceId
         val keys = identityKeys()
         val pins = loadSettings().contacts
         return shares.map { share ->
             runCatching {
+                // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
+                checkShare(share, own)
+                checkSuite(share.node.envelopeSuite)
                 val granter = granterKey(share.granterId, share.granterName.ifEmpty { share.granterEmail }, share.granterPublicKey, pins)
                 val key = shareOpen(base64urlDecode(share.shareEnvelope), granter, keys,
                     ShareContext(share.workspaceId, share.node.id, share.keyEpoch, api.session.userId, share.granterId))
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
-                ShareMount(share, adopt(share.node, key, metadata), null)
-            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust) }
+                // Kept under the granter's workspace only (NodeCache.adoptShare). The root's parent is the granter's and
+                // opens nothing here: it stays out of the parents index, which a share naming one of this drive's ids would rewrite.
+                ShareMount(share, nodes.adoptShare(share, own, openedRow(share.node, metadata, key), key), null)
+            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused) }
         }
     }
-    fun item(id: String): Opened? = opened[id]
+    fun item(id: String): Opened? = nodes.find(id)
 
     /* A folder's name for "Was in …": the top folder is Files, as the tab calls it. */
     fun folderName(id: String?): String? {
-        val folder = opened[id ?: return null] ?: return null
+        val folder = nodes.find(id ?: return null) ?: return null
         return if (folder.node.parentId == null) "Files" else folder.name
     }
 
+    /* The key a node is wrapped under: its parent's in the same workspace, or this account's workspace key for its own root only. */
     private fun parentKeyFor(node: NodeView): ByteArray {
         val parentId = node.parentId ?: node.workspaceId
-        if (parentId == node.workspaceId) return workspaceKey ?: throw ApiError(500, "Workspace not opened")
-        return nodeKeys[parentId] ?: throw ApiError(500, "Open the containing folder first.")
+        if (parentId == node.workspaceId) {
+            if (node.workspaceId != workspace?.workspaceId) throw ApiError(500, "This folder isn’t in your drive.")
+            return workspaceKey ?: throw ApiError(500, "Workspace not opened")
+        }
+        return nodes.key(node.workspaceId, parentId) ?: throw ApiError(500, "Open the containing folder first.")
     }
 
     @Synchronized
     fun open(node: NodeView): Opened {
-        opened[node.id]?.let { return it }
+        checkSuite(node.envelopeSuite)
+        nodes.row(node.workspaceId, node.id)?.let { return it }
         val ctx = NodeKeyContext(node.workspaceId, node.id, node.parentId ?: node.workspaceId, node.parentKeyEpoch, node.keyEpoch)
         val key = nodeOpen(ctx, parentKeyFor(node), base64urlDecode(node.keyEnvelope))
-        nodeKeys[node.id] = key
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
         val result = openedRow(node, metadata, key)
-        opened[node.id] = result
+        nodes.put(result, key)
         node.parentId?.let { parents[node.id] = it }
         return result
     }
 
-    /* The current version's size from its sealed envelope (a local decrypt, no network); null when it can't be read. */
+    /* A node whose key this device made or already held (a write), kept under its own workspace. */
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
-        nodeKeys[node.id] = key
+        checkSuite(node.envelopeSuite)
         val result = openedRow(node, metadata, key)
-        opened[node.id] = result
+        nodes.put(result, key)
         node.parentId?.let { rememberParent(node.id, it) }
         return result
     }
 
-    fun forget(id: String) {
-        opened.remove(id)
+    /* What a write answered with, kept only when it is the node written, in the workspace written to. */
+    private fun adoptWritten(node: NodeView, key: ByteArray, metadata: NodeMetadata, workspaceId: String, nodeId: String): Opened {
+        checkWritten(node, workspaceId, nodeId)
+        return adopt(node, key, metadata)
+    }
+
+    fun forget(workspaceId: String, id: String) {
+        nodes.forget(workspaceId, id)
     }
 
     /* Every page of a folder, every key along the way opened; parents first, folders before files. */
@@ -627,11 +660,16 @@ class Vault(private val context: Context, val api: DriveApi) {
         val children = ArrayList<Opened>()
         do {
             val page = api.children(folderId, ws, after)
+            // Rows are opened only in the workspace asked about; one claiming another is not this folder's.
+            if (page.folder.workspaceId != ws || page.folder.id != folderId) throw ApiError(502, "HushOS answered with a different folder.")
             // Above a share's root the keys are the granter's; those ancestors stay closed.
-            page.ancestors.forEach { runCatching { open(it) } }
+            page.ancestors.filter { it.workspaceId == ws }.forEach { runCatching { open(it) } }
             open(page.folder)
             for (child in page.children) {
-                children.add(open(child))
+                if (child.workspaceId != ws) continue
+                // A row in a later format stays out of the list; anything else wrong with one fails the folder, as before.
+                val row = try { open(child) } catch (error: NewerFormat) { continue }
+                children.add(row)
                 parents[child.id] = folderId
             }
             after = page.nextCursor
@@ -641,14 +679,14 @@ class Vault(private val context: Context, val api: DriveApi) {
     }
 
     fun resolve(id: String): Opened {
-        opened[id]?.let { return it }
+        nodes.find(id)?.let { return it }
         if (id == rootId) listChildren(id) else parents[id]?.let { listChildren(it) }
             ?: throw ApiError(500, "This item has not been seen yet; open its folder first.")
-        return opened[id] ?: throw NotFound("This item no longer exists.")
+        return nodes.find(id) ?: throw NotFound("This item no longer exists.")
     }
 
     fun openVersion(item: Opened, version: VersionListView? = null): OpenedVersion {
-        val key = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val current = item.node.currentVersion
         val id = version?.id ?: current?.id ?: throw NotFound("This file has no content yet.")
         val objectId = version?.objectId ?: current!!.objectId
@@ -669,7 +707,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
             online = { Resumable.online(context) }, progress = progress,
             onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
-        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, index))) }
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }
 
     fun thumbnail(id: String): ByteArray? {
@@ -695,7 +733,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             val page = api.trashListing(ws, after)
             for (entry in page.items) {
                 entry.ancestors.forEach { runCatching { open(it) } }
-                forget(entry.node.id)
+                forget(entry.node.workspaceId, entry.node.id)
                 runCatching { open(entry.node) }.onSuccess { result.add(TrashItem(it, entry.parentTrashed, folderName(entry.node.parentId))) }
             }
             after = page.nextCursor
@@ -718,7 +756,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         val items = ArrayList<Opened>()
         for (node in latest.values) {
             node.parentId?.let { rememberParent(node.id, it) }
-            forget(node.id)
+            forget(node.workspaceId, node.id)
             runCatching { resolve(node.id) }.onSuccess { items.add(it) }
         }
         return items.sortedWith(byRecent).take(limit)
@@ -730,9 +768,9 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     fun createFolder(parentId: String, name: String): Opened {
         // Shared folders belong to the granter's workspace; an editor writes there.
-        val ws = workspaceOf(parentId)
         val parent = resolve(parentId)
-        val parentKey = nodeKeys[parent.id] ?: throw ApiError(500, "Open the containing folder first.")
+        val ws = parent.node.workspaceId
+        val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val id = UUID.randomUUID().toString()
         val key = randomBytes(32u)
@@ -741,38 +779,40 @@ class Vault(private val context: Context, val api: DriveApi) {
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
         val node = api.createFolder(ws, JSONObject().put("id", id).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
             .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed)))
-        return adopt(node, key, metadata)
+        return adoptWritten(node, key, metadata, ws, id)
     }
 
     fun rename(id: String, name: String): Opened {
         val item = resolve(id)
-        val key = nodeKeys[id] ?: throw ApiError(500, "Node not opened")
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val metadata = item.metadata.copy(name = name)
         val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, item.node.metadataVersion + 1uL), key, metadata)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed))
-        return adopt(node, key, metadata)
+        return adoptWritten(node, key, metadata, item.node.workspaceId, id)
     }
 
+    /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
     private fun rewrap(item: Opened, parent: Opened): String {
-        val key = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
-        val parentKey = nodeKeys[parent.id] ?: throw ApiError(500, "Open the containing folder first.")
+        if (parent.node.workspaceId != item.node.workspaceId) throw ApiError(400, "Move it within one drive.")
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
+        val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         return base64urlEncode(nodeWrap(NodeKeyContext(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch), parentKey, key))
     }
 
     fun move(id: String, parentId: String): Opened {
         val item = resolve(id)
         val parent = resolve(parentId)
-        val key = nodeKeys[id] ?: throw ApiError(500, "Node not opened")
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, rewrap(item, parent))
-        return adopt(node, key, item.metadata)
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id)
     }
 
     /* A copy under `parentId`: the server keeps the object; the envelopes are resealed here under a fresh node key. Folders go node by node. */
     fun copy(id: String, parentId: String, name: String? = null): Opened {
         val source = resolve(id)
         val parent = resolve(parentId)
-        val ws = workspaceOf(parentId)
-        val parentKey = nodeKeys[parent.id] ?: throw ApiError(500, "Open the containing folder first.")
+        val ws = parent.node.workspaceId
+        val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val newName = checkName(name ?: source.name)
         if (source.isFolder) {
             val made = createFolder(parent.id, newName)
@@ -796,34 +836,35 @@ class Vault(private val context: Context, val api: DriveApi) {
             .put("node", JSONObject().put("id", newId).put("parentId", parent.id).put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEpoch", epoch.toLong())
                 .put("keyEnvelope", base64urlEncode(keyEnvelope)).put("metadataEnvelope", base64urlEncode(metadataEnvelope)))
             .put("versionId", versionId).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope)))
-        return adopt(node, key, metadata)
+        return adoptWritten(node, key, metadata, ws, newId)
     }
 
     fun trash(id: String) {
         val item = resolve(id)
         api.trash(id, item.node.workspaceId)
-        forget(id)
+        forget(item.node.workspaceId, id)
     }
 
     fun restore(entry: TrashItem): Opened {
-        val item = opened[entry.item.id] ?: open(entry.item.node)
-        val key = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val toRoot = if (entry.parentTrashed) resolve(rootId).let { root -> root.node.keyEpoch to rewrap(item, root) } else null
         val node = api.restore(item.id, item.node.workspaceId, toRoot)
-        return adopt(node, key, item.metadata)
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id)
     }
 
     fun purge(id: String) {
-        api.purge(id, workspaceId)
-        forget(id)
+        val ws = workspaceId
+        api.purge(id, ws)
+        forget(ws, id)
     }
 
     fun emptyTrash(): EmptyTrashResult = api.emptyTrash(workspaceId)
 
     fun restoreVersion(version: VersionListView, id: String): Opened {
         val item = resolve(id)
-        val key = nodeKeys[id] ?: throw ApiError(500, "Node not opened")
-        return adopt(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata)
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
+        return adoptWritten(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata, item.node.workspaceId, id)
     }
 
     /* A JPEG for the lists, the grid and the picker, 512px on the long edge as the web makes one at upload; null when not an image or too big. */
@@ -856,7 +897,8 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* A file's bytes as a new node under `parentId`, or a new version of `replacing`; a thumbnail rides after the last chunk. */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, progress: (Float) -> Unit = {}): Opened {
-        val ws = workspaceOf(parentId)
+        // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
+        val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         val size = file.length().toULong()
         val modified = Instant.ofEpochMilli(file.lastModified()).toString()
         val versionId = UUID.randomUUID().toString()
@@ -870,13 +912,14 @@ class Vault(private val context: Context, val api: DriveApi) {
         val metadata: NodeMetadata
         if (replacing != null) {
             nodeId = replacing.id
-            nodeKey = nodeKeys[nodeId] ?: throw ApiError(500, "Node not opened")
+            nodeKey = nodes.key(replacing) ?: throw ApiError(500, "Node not opened")
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
                 .put("expectedVersionId", replacing.node.currentVersion?.id ?: JSONObject.NULL)
             metadata = replacing.metadata
         } else {
             val parent = resolve(parentId)
-            val parentKey = nodeKeys[parent.id] ?: throw ApiError(500, "Open the containing folder first.")
+            if (parent.node.workspaceId != ws) throw ApiError(400, "Upload it within one drive.")
+            val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
             val epoch = api.allocateEpoch(ws)
             nodeId = UUID.randomUUID().toString()
             nodeKey = randomBytes(32u)
@@ -923,6 +966,7 @@ class Vault(private val context: Context, val api: DriveApi) {
             throw error
         }
         var node = api.completeUpload(begun.uploadId, ws, etags) ?: throw ApiError(500, "Upload completed without a node")
+        checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
@@ -930,6 +974,6 @@ class Vault(private val context: Context, val api: DriveApi) {
             val sealed = metadataSeal(MetadataContext(ws, nodeId, node.metadataVersion + 1uL), nodeKey, final)
             node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed))
         }
-        return adopt(node, nodeKey, final)
+        return adoptWritten(node, nodeKey, final, ws, nodeId)
     }
 }

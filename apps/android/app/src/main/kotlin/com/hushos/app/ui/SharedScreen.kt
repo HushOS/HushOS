@@ -1,6 +1,5 @@
 package com.hushos.app.ui
 
-import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -95,7 +94,8 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     // The shared folder open, saved by id so it comes back after a rotation or a restart.
     var openedId by rememberSaveable { mutableStateOf<String?>(null) }
     val opened = openedId?.let { id -> state.shares?.firstNotNullOfOrNull { it.root?.takeIf { root -> root.id == id } } ?: model.item(id) }
-    var linkText by rememberSaveable { mutableStateOf("") }
+    // A pasted link carries its key: memory only, never the saved-state bundle the system writes to disk.
+    var linkText by remember { mutableStateOf("") }
     var people by remember { mutableStateOf(false) }
     var byMe by rememberSaveable { mutableStateOf(false) }
     var mine by remember { mutableStateOf<List<SharedByMe>?>(null) }
@@ -252,7 +252,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                     scope.launch {
                         val url = model.linkUrl(link.link, row.item)
                         if (url != null) {
-                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip("HushOS link", url))
+                            SensitiveClipboard.copy(context, "HushOS link", url)
                             model.notify("Link copied. Anyone with it can view “${row.name}”.")
                         } else model.notify("This link was made before links could be shown again. Turn it off and make a new one.")
                     }
@@ -316,7 +316,8 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
     val trust = mount.trust
     if (root == null && trust != null) {
         // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
-        val unverified = trust is GranterTrust.Unverified
+        // A pin that vouches for nothing waits for a words check, like someone not added yet.
+        val unverified = trust is GranterTrust.Unverified || trust is GranterTrust.Recheck
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onPeople).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).background(if (unverified) alpine.tint else alpine.dangerSoft, CircleShape), contentAlignment = Alignment.Center) {
                 Icon(if (unverified) Icons.Outlined.Group else Icons.Outlined.WarningAmber, null, tint = if (unverified) alpine.inkMuted else alpine.danger, modifier = Modifier.size(20.dp))
@@ -334,7 +335,7 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
             Box(Modifier.size(36.dp).background(alpine.dangerSoft, CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.WarningAmber, null, tint = alpine.danger, modifier = Modifier.size(20.dp)) }
             Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
                 Text("Shared by $from", style = MaterialTheme.typography.bodyLarge)
-                Text("Couldn’t open this. Ask $from to share it again.", style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
+                Text(mount.error?.takeIf { mount.explained } ?: "Couldn’t open this. Ask $from to share it again.", style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
             }
         }
         return

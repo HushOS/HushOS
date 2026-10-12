@@ -60,10 +60,11 @@ private fun parentsFirst(rows: List<NodeView>, known: (String) -> Boolean = { fa
     return ordered to orphans
 }
 
-/* Opens rows into the catalogue (parents first) and files them under their parents. */
-private fun Vault.file(rows: List<NodeView>) {
+/* Opens rows into the catalogue (parents first) and files them under their parents. Only this workspace's rows: the feed is its own. */
+private fun Vault.file(rows: List<NodeView>, workspaceId: String) {
     for (row in rows) {
-        forget(row.id)
+        if (row.workspaceId != workspaceId) continue
+        forget(workspaceId, row.id)
         runCatching { open(row) }.onSuccess {
             row.parentId?.let { parent ->
                 rememberParent(row.id, parent)
@@ -95,7 +96,7 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
             parentsFirst(mirror.rows(workspaceId)).let { ordered = it.first }
         }
         catalogueChildren.clear()
-        file(ordered)
+        file(ordered, workspaceId)
         catalogueState = CatalogueState.READY
         pulled
     } catch (error: Exception) {
@@ -120,15 +121,15 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
         when (change.kind) {
             "node" -> {
                 val node = change.node ?: continue
-                opened[node.id]?.node?.parentId?.let { old -> if (old != node.parentId) catalogueChildren[old]?.remove(node.id) }
+                nodes.row(workspaceId, node.id)?.node?.parentId?.let { old -> if (old != node.parentId) catalogueChildren[old]?.remove(node.id) }
                 rows.add(node)
                 touched.add(node.id)
                 node.parentId?.let { touched.add(it) }
             }
             "tombstone" -> {
                 val id = change.nodeId ?: continue
-                (opened[id]?.node?.parentId ?: parents[id])?.let { catalogueChildren[it]?.remove(id); touched.add(it) }
-                forget(id)
+                (nodes.row(workspaceId, id)?.node?.parentId ?: parents[id])?.let { catalogueChildren[it]?.remove(id); touched.add(it) }
+                forget(workspaceId, id)
                 touched.add(id)
             }
         }
@@ -140,13 +141,13 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
     while (queue.isNotEmpty()) {
         val id = queue.removeFirst()
         for (child in catalogueChildren[id].orEmpty()) if (child !in changedIds) {
-            opened[child]?.let { below.add(it.node) }
+            nodes.row(workspaceId, child)?.let { below.add(it.node) }
             queue.add(child)
         }
     }
     val batch = (rows + below).map { it.id }.toSet()
-    val (ordered, orphans) = parentsFirst(rows + below) { id -> id !in batch && opened.containsKey(id) }
-    file(ordered)
+    val (ordered, orphans) = parentsFirst(rows + below) { id -> id !in batch && nodes.row(workspaceId, id) != null }
+    file(ordered, workspaceId)
     if (orphans.isNotEmpty()) {
         // A row under a folder this device never saw: the next build fills the gap.
         android.util.Log.w("HushOSSync", "sync: ${orphans.size} rows without an open parent")
@@ -158,9 +159,10 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
 /* This folder's children from the catalogue, or null when the catalogue cannot answer for it. */
 fun Vault.catalogueChildren(folderId: String): List<Opened>? {
     if (catalogueState != CatalogueState.READY) return null
-    val folder = opened[folderId] ?: return null
-    if (folder.node.workspaceId != workspaceId) return null
-    return catalogueChildren[folderId].orEmpty().mapNotNull { opened[it] }.filter { it.node.trashedAt == null }
+    val ws = workspaceId
+    // Only this workspace's own folder: an id-only lookup could have found a share's node by the same id.
+    nodes.row(ws, folderId) ?: return null
+    return catalogueChildren[folderId].orEmpty().mapNotNull { nodes.row(ws, it) }.filter { it.node.trashedAt == null }
         .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 }
 
@@ -174,10 +176,10 @@ fun Vault.catalogueAll(): List<Opened> {
     val ws = workspaceId
     val live = HashMap<String, Boolean>()
     fun isLive(item: Opened): Boolean = live[item.id] ?: run {
-        val parent = item.node.parentId?.let { opened[it] }
+        val parent = item.node.parentId?.let { nodes.row(ws, it) }
         (item.node.trashedAt == null && (parent == null || isLive(parent))).also { live[item.id] = it }
     }
-    return opened.values.filter { it.node.workspaceId == ws && isLive(it) }
+    return nodes.rowsIn(ws).filter { isLive(it) }
 }
 
 fun Vault.catalogueRecents(limit: Int): List<Opened>? {
@@ -190,7 +192,7 @@ fun Vault.catalogueRecents(limit: Int): List<Opened>? {
 fun Vault.catalogueTrash(): List<TrashItem>? {
     if (catalogueState != CatalogueState.READY) return null
     val ws = workspaceId
-    return opened.values.filter { it.node.workspaceId == ws && it.node.trashedAt != null }
+    return nodes.rowsIn(ws).filter { it.node.trashedAt != null }
         .sortedWith(compareByDescending<Opened> { it.node.trashedAt }.thenBy { it.id })
-        .map { item -> TrashItem(item, item.node.parentId?.let { opened[it]?.node?.trashedAt } != null, folderName(item.node.parentId)) }
+        .map { item -> TrashItem(item, item.node.parentId?.let { nodes.row(ws, it)?.node?.trashedAt } != null, folderName(item.node.parentId)) }
 }

@@ -1,6 +1,7 @@
 package com.hushos.app.data
 
 import com.hushos.core.base64urlEncode
+import com.hushos.core.identityFingerprint
 import org.junit.Assert.assertArrayEquals
 import org.junit.Test
 
@@ -11,9 +12,11 @@ import org.junit.Test
 class GranterTrustTest {
     private val pinnedKey = base64urlEncode(ByteArray(32) { 1 })
     private val serverKey = base64urlEncode(ByteArray(32) { 2 })
+    private val signingKey = ByteArray(32) { 3 }
+    /* Checked: its fingerprint is the current one over both pinned keys (an unchecked pin is SharingTrustTest's). */
     private val pins = mapOf(
-        "user-ana" to ContactPin("user-ana", "ana@example.com", "Ana Lima", pinnedKey, base64urlEncode(ByteArray(32) { 3 }), "",
-            "2026-10-01T00:00:00Z", null),
+        "user-ana" to ContactPin("user-ana", "ana@example.com", "Ana Lima", pinnedKey, base64urlEncode(signingKey),
+            identityFingerprint(ByteArray(32) { 1 }, signingKey), "2026-10-01T00:00:00Z", null),
     )
 
     @Test(expected = GranterTrust.Unverified::class)

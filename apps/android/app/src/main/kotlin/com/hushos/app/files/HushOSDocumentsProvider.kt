@@ -226,13 +226,17 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         }
     }
 
+    /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor = guarded {
         val vault = requireVault()
         val id = nodeId(documentId, vault)
         val bytes = vault.thumbnail(id) ?: throw FileNotFoundException("no thumbnail")
-        val file = File(context!!.cacheDir, "thumbnails/$id").also { it.parentFile?.mkdirs() }
-        file.writeBytes(bytes)
-        AssetFileDescriptor(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), 0, AssetFileDescriptor.UNKNOWN_LENGTH)
+        val (read, write) = ParcelFileDescriptor.createReliablePipe()
+        // At most 64 KiB, about a pipe's buffer: written on its own thread so a slow reader never holds the binder thread.
+        Thread {
+            ParcelFileDescriptor.AutoCloseOutputStream(write).use { out -> runCatching { out.write(bytes) }.onFailure { write.closeWithError(it.javaClass.name) } }
+        }.start()
+        AssetFileDescriptor(read, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
     }
 
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String = guarded {

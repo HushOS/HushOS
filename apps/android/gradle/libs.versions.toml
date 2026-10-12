@@ -19,6 +19,7 @@ documentfile = "1.1.0"
 zxing = "3.5.3"
 camerax = "1.5.0"
 browser = "1.9.0"
+orgJson = "20250517"
 
 [libraries]
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
@@ -37,6 +38,7 @@ androidx-compose-material-icons = { group = "androidx.compose.material", name = 
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }

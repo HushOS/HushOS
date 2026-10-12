@@ -895,10 +895,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun revokeLink(link: LinkView, item: Opened): Boolean {
         io { it.revokeLink(link, item); true } ?: return false
         // Awaited, as after stopping a share: anything sealed next must use the item's new keys.
-        // Re-securing what was shared happens quietly (it isn't a transfer); only a failure is said.
+        // Re-securing what was shared happens quietly (it isn't a transfer); only a failure, or someone left out, is said.
         var reason: String? = null
-        val ok = io({ reason = it }) { vault -> vault.rotate(item); true } ?: false
-        if (!ok) notify("Access stopped, but re-securing “${item.name}” didn’t finish. ${reason ?: "Check your connection."}")
+        val result = io({ reason = it }) { vault -> vault.rotate(item) }
+        if (result == null) notify("Access stopped, but re-securing “${item.name}” didn’t finish. ${reason ?: "Check your connection."}")
+        else sayLeftOut(item, result)
         // The lists keep showing what they had while keys change underneath; then every folder on show is
         // read again from the feed. (Clearing them left a folder with nobody to reload it: an endless skeleton.)
         afterRotation()
@@ -917,14 +918,22 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean {
         val revoked = io { it.revokeShare(share, item); true } ?: return false
-        // Re-securing what was shared happens quietly (it isn't a transfer); only a failure is said.
+        // Re-securing what was shared happens quietly (it isn't a transfer); only a failure, or someone left out, is said.
         var reason: String? = null
-        val ok = io({ reason = it }) { vault -> vault.rotate(item); true } ?: false
-        if (!ok) notify("Access stopped, but re-securing “${item.name}” didn’t finish. ${reason ?: "Check your connection."}")
+        val result = io({ reason = it }) { vault -> vault.rotate(item) }
+        val ok = result != null
+        if (result == null) notify("Access stopped, but re-securing “${item.name}” didn’t finish. ${reason ?: "Check your connection."}")
+        else sayLeftOut(item, result)
         // The lists keep showing what they had while keys change underneath; then every folder on show is
         // read again from the feed. (Clearing them left a folder with nobody to reload it: an endless skeleton.)
         afterRotation()
         return revoked && ok
+    }
+
+    /* People a rotation could not seal to again (an unchecked pin, a missing or changed post-quantum key): said, never dropped quietly. */
+    private fun sayLeftOut(item: Opened, result: com.hushos.app.data.RotationResult) {
+        if (result.skipped.isEmpty()) return
+        notifyUntilRead("Re-secured “${item.name}”, but some people lost access. " + result.skipped.joinToString(" "))
     }
 
     /* After keys rotated: the feed carries the re-sealed rows; every folder on show is listed again from them. */
@@ -936,12 +945,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /* A master-key rotation ends every session too; the app signs in again and hands back the new phrase. */
-    fun rotateKeys(password: String, done: (String?, String?) -> Unit) = viewModelScope.launch {
+    /*
+     * Resets the keys; `done(true, null)` once the new phrase exists. The phrase itself is not handed to the
+     * screen: it reads it again from the account (recoveryKit) so it never sits in saved state.
+     */
+    fun rotateKeys(password: String, done: (Boolean, String?) -> Unit) = viewModelScope.launch {
         val email = state.value.user?.email ?: return@launch
         val origin = state.value.origin
-        val result = withContext(Dispatchers.IO) { runCatching { val phrase = Auth.rotateKeys(context, password); phrase to Auth.signIn(context, origin, email, password) } }
-        result.onSuccess { (phrase, user) -> signedIn(user); done(phrase, null) }.onFailure { failure ->
-            if (failure is NotAuthenticated) sessionLost() else done(null, failure.message ?: com.hushos.app.data.Problems.SERVER)
+        val result = withContext(Dispatchers.IO) { runCatching { Auth.rotateKeys(context, password); Auth.signIn(context, origin, email, password) } }
+        result.onSuccess { user -> signedIn(user); done(true, null) }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(false, failure.message ?: com.hushos.app.data.Problems.SERVER)
         }
     }
 

@@ -13,6 +13,7 @@ import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
 import com.hushos.core.chunkDecrypt
 import com.hushos.core.chunkRange
+import com.hushos.core.linkKdfVersion
 import com.hushos.core.linkOpen
 import com.hushos.core.linkParse
 import com.hushos.core.metadataOpen
@@ -32,14 +33,38 @@ import java.util.UUID
 data class LinkView(
     val id: String, val keyEpoch: ULong, val secretEnvelope: String?, val hasPassword: Boolean,
     val expiresAt: String?, val useCount: Int, val lastUsedAt: String?, val createdAt: String,
+    /* How the link's key is derived; null when the server didn't say, which counts as older than any this app reads. */
+    val kdfVersion: Int? = null,
 ) {
+    /* Whether this app can show, open or reseal it: only a link made with the derivation the core speaks now. */
+    val current: Boolean get() = LinkKdf.current(kdfVersion)
+
     companion object {
         fun from(json: JSONObject) = LinkView(
             json.getString("id"), json.getLong("keyEpoch").toULong(),
             if (json.isNull("secretEnvelope")) null else json.getString("secretEnvelope"), json.getBoolean("hasPassword"),
             if (json.isNull("expiresAt")) null else json.getString("expiresAt"), json.optInt("useCount"),
             if (json.isNull("lastUsedAt")) null else json.getString("lastUsedAt"), json.getString("createdAt"),
+            if (json.isNull("kdfVersion")) null else json.getInt("kdfVersion"),
         )
+    }
+}
+
+class OldLink : Refused("Ask for a new link", "This link was made by an older version of HushOS. Ask for a new link.")
+
+/*
+ * A link's key derivation, as the server records it. A link made with an older one (argon2id
+ * settings since raised, or a password shorter than links now take) is neither opened, shown
+ * nor sealed again here: the owner turns it off and makes a new one.
+ */
+object LinkKdf {
+    /* At least this many characters in a link password; the core refuses shorter ones too. */
+    const val MIN_PASSWORD = 8
+
+    fun current(kdfVersion: Int?, supported: Int = linkKdfVersion().toInt()) = kdfVersion == supported
+
+    fun check(kdfVersion: Int?, supported: Int = linkKdfVersion().toInt()) {
+        if (!current(kdfVersion, supported)) throw OldLink()
     }
 }
 
@@ -47,6 +72,7 @@ data class LinkView(
 data class OpenedLink(
     val id: String, val workspaceId: String, val keyEpoch: ULong, val hasPassword: Boolean,
     val linkSalt: String, val linkEnvelope: String, val expiresAt: String?, val node: NodeView,
+    val kdfVersion: Int? = null,
 )
 
 /* An operator as `GET /api/drive/reports/operators` lists them. */
@@ -81,13 +107,17 @@ object Reports {
         val trimmed = email?.trim().orEmpty()
         return JSONObject().put("id", reportId).put("workspaceId", item.node.workspaceId).put("nodeId", item.id)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("category", category).put("reason", reason).put("via", via)
-            .put("reporterEmail", if (trimmed.isEmpty()) JSONObject.NULL else trimmed).put("contentHash", JSONObject.NULL).put("keys", keys)
+            .put("reporterEmail", if (trimmed.isEmpty()) JSONObject.NULL else trimmed).put("keys", keys)
     }
 }
 
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
-/* The routes that need no session: what a visitor with a link, or anyone filing a report, talks to. */
+/*
+ * The routes that need no session: what a visitor with a link, or anyone filing a report on a link,
+ * talks to. No Cookie header is set here, and the app installs no CookieHandler, so nothing of a
+ * signed-in session rides along: a visitor stays anonymous even on a phone that is signed in.
+ */
 class PublicApi(val origin: String) {
     private fun open(path: String, method: String): HttpURLConnection {
         val connection = URL("$origin/api/drive$path").openConnection() as HttpURLConnection
@@ -131,7 +161,7 @@ class PublicApi(val origin: String) {
         val link = it.getJSONObject("link")
         OpenedLink(link.getString("id"), link.getString("workspaceId"), link.getLong("keyEpoch").toULong(), link.getBoolean("hasPassword"),
             link.getString("linkSalt"), link.getString("linkEnvelope"), if (link.isNull("expiresAt")) null else link.getString("expiresAt"),
-            NodeView.from(it.getJSONObject("node")))
+            NodeView.from(it.getJSONObject("node")), if (link.isNull("kdfVersion")) null else link.getInt("kdfVersion"))
     }
 
     fun linkChildren(token: String, nodeId: String, after: String?): Listing =
@@ -166,15 +196,16 @@ class PublicApi(val origin: String) {
 /*
  * A visitor's view through one link: the root opened with the fragment secret
  * (and the password when the link has one), every node below it under the
- * usual node keys, and content by the link's own download routes.
+ * usual node keys, and content by the link's own download routes. Its keys stay
+ * in its own maps, keyed by workspace and node like the Vault's, and never reach
+ * the signed-in account's Vault.
  */
 class LinkVault(origin: String, url: String) {
     val api = PublicApi(origin)
     val token: String
     private val secret: String
     private var link: OpenedLink? = null
-    private val nodeKeys = HashMap<String, ByteArray>()
-    private val opened = HashMap<String, Opened>()
+    private val nodes = NodeCache { link?.workspaceId }
 
     init {
         val parts = linkParse(url)
@@ -182,7 +213,13 @@ class LinkVault(origin: String, url: String) {
         secret = parts.secret
     }
 
-    private fun load(): OpenedLink = link ?: api.openLink(token).also { link = it }
+    /* A link made with an older key derivation is refused before anything is derived from it. */
+    private fun load(): OpenedLink = link ?: api.openLink(token).also {
+        LinkKdf.check(it.kdfVersion)
+        checkSuite(it.node.envelopeSuite)
+        if (it.node.workspaceId != it.workspaceId) throw ApiError(502, "This link does not match its item.")
+        link = it
+    }
 
     fun needsPassword(): Boolean = load().hasPassword
 
@@ -193,18 +230,20 @@ class LinkVault(origin: String, url: String) {
         val key = linkOpen(ctx, base64urlDecode(fetched.linkEnvelope), base64urlDecode(secret), password, base64urlDecode(fetched.linkSalt))
         val node = fetched.node
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
-        nodeKeys[node.id] = key
-        return openedRow(node, metadata, key).also { opened[node.id] = it }
+        return openedRow(node, metadata, key).also { nodes.put(it, key) }
     }
 
     private fun open(node: NodeView): Opened {
-        opened[node.id]?.let { return it }
+        checkSuite(node.envelopeSuite)
+        // Everything below the root is in the link's workspace; a row naming another is not this link's.
+        val ws = load().workspaceId
+        if (node.workspaceId != ws) throw ApiError(500, "This item is outside the link.")
+        nodes.row(ws, node.id)?.let { return it }
         val parentId = node.parentId ?: throw ApiError(500, "This item is outside the link.")
-        val parentKey = nodeKeys[parentId] ?: throw ApiError(500, "This item is outside the link.")
+        val parentKey = nodes.key(ws, parentId) ?: throw ApiError(500, "This item is outside the link.")
         val key = nodeOpen(NodeKeyContext(node.workspaceId, node.id, parentId, node.parentKeyEpoch, node.keyEpoch), parentKey, base64urlDecode(node.keyEnvelope))
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
-        nodeKeys[node.id] = key
-        return openedRow(node, metadata, key).also { opened[node.id] = it }
+        return openedRow(node, metadata, key).also { nodes.put(it, key) }
     }
 
     fun children(folderId: String): List<Opened> {
@@ -212,14 +251,15 @@ class LinkVault(origin: String, url: String) {
         val all = ArrayList<Opened>()
         do {
             val page = api.linkChildren(token, folderId, after)
-            page.children.forEach { all.add(open(it)) }
+            // A row in a later format stays out of the list; anything else wrong with one fails the folder, as before.
+            page.children.forEach { child -> runCatching { open(child) }.onSuccess { all.add(it) }.onFailure { if (it !is NewerFormat) throw it } }
             after = page.nextCursor
         } while (after != null)
         return all.sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
 
     private fun openVersion(item: Opened): OpenedVersion {
-        val key = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val current = item.node.currentVersion ?: throw NotFound("This file has no content yet.")
         val v = versionOpen(VersionContext(item.node.workspaceId, item.id, current.id, current.objectId), current.contentSuite, key,
             base64urlDecode(current.contentKeyEnvelope), current.plaintextSize?.toULongOrNull())
@@ -232,7 +272,7 @@ class LinkVault(origin: String, url: String) {
         // Resumable like the drive's own downloads: a dropped chunk is fetched again, a `.part` is continued.
         Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(), progress = progress,
             onExpired = { url = api.linkVersionUrl(token, v.versionId) },
-        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, index))) }
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }
 
     fun thumbnail(item: Opened): ByteArray? {
@@ -245,7 +285,7 @@ class LinkVault(origin: String, url: String) {
 
     /* Files a report on the linked item, sealing its key to every operator; anonymous. */
     fun report(item: Opened, category: String, reason: String, email: String?): Boolean {
-        val nodeKey = nodeKeys[item.id] ?: throw ApiError(500, "Node not opened")
+        val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val body = Reports.body(api.operators(), item, nodeKey, category, reason, email, JSONObject().put("link", token))
         return api.post("/reports", body).optBoolean("duplicate")
     }

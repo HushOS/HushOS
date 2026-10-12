@@ -1,6 +1,5 @@
 package com.hushos.app.ui
 
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -95,9 +94,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hushos.app.data.ContactPin
 import com.hushos.app.data.Fingerprint
+import com.hushos.app.data.LinkKdf
 import com.hushos.app.data.LinkVault
 import com.hushos.app.data.LinkView
 import com.hushos.app.data.Lookup
+import com.hushos.app.data.OldLink
 import com.hushos.app.data.Opened
 import com.hushos.app.data.OwnedShare
 import com.hushos.app.data.Reports
@@ -115,9 +116,8 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 import java.util.Optional
 
-private fun copyToClipboard(context: Context, label: String, text: String) {
-    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(sensitiveClip(label, text))
-}
+/* A link carries its key: copied as sensitive, and gone from the clipboard after two minutes (SensitiveClipboard). */
+private fun copyToClipboard(context: Context, label: String, text: String) = SensitiveClipboard.copy(context, label, text)
 
 private fun firstName(name: String, email: String = "") = name.trim().split(Regex("\\s+")).firstOrNull { it.isNotEmpty() } ?: email.substringBefore('@')
 
@@ -204,7 +204,10 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
                 )
                 // Contacts as you type; someone new by their full email, checked before they are added.
                 if (typed.isNotEmpty() || pins.isEmpty()) Column(Modifier.padding(top = AlpineSpace.S1)) {
-                    for (pin in matches.take(5)) PersonRow(pin.name.ifEmpty { pin.email }, pin.email, pin.userId) { chosen = pin; query = "" }
+                    // A pin that vouches for nothing goes to the words check first: sharing to it is refused until then.
+                    for (pin in matches.take(5)) PersonRow(pin.name.ifEmpty { pin.email }, if (pin.verified) pin.email else "${pin.email} · Check their words again", pin.userId) {
+                        if (pin.verified) { chosen = pin; query = "" } else checking = pin.email
+                    }
                     if (isEmail && !known) SheetRow("Add “$typed”", Icons.Outlined.PersonAdd) { checking = typed }
                     if (matches.isEmpty() && !(isEmail && !known)) Text(
                         when {
@@ -477,14 +480,18 @@ private fun LinkCard(model: DriveViewModel, item: Opened, link: LinkView, url: S
                     DropdownMenuItem(text = { Text("Show as QR code") }, leadingIcon = { Icon(Icons.Outlined.QrCode2, null) }, enabled = url != null, onClick = { menu = false; qr = true })
                     DropdownMenuItem(text = { Text("Send link") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Send, null) }, enabled = url != null, onClick = {
                         menu = false
-                        context.startActivity(shareChooser(context, Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url), item.name))
+                        // Best effort: the clip marks the link sensitive for a share sheet that copies it, and a copy of it
+                        // left on the clipboard is cleared like our own. What the receiving app does with it is its own.
+                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url).apply { clipData = sensitiveClip("HushOS link", url!!) }
+                        SensitiveClipboard.watch(context, url!!)
+                        context.startActivity(shareChooser(context, send, item.name))
                     })
                     HorizontalDivider(color = alpine.divider)
                     DropdownMenuItem(text = { Text("Turn off link", color = alpine.danger) }, leadingIcon = { Icon(Icons.Outlined.LinkOff, null, tint = alpine.danger) }, onClick = { menu = false; confirmOff = true })
                 }
             }
         }
-        if (url == null) Text("This link was made before links could be shown again. Turn it off and make a new one.",
+        if (url == null) Text(if (!link.current) OldLink().message!! else "This link was made before links could be shown again. Turn it off and make a new one.",
             style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2))
         Button(
             enabled = url != null && !busy,
@@ -533,7 +540,9 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
         link.expiresAt?.let { longDate(it) }?.let { add("keep" to it) }
         add("never" to "Never"); add("7" to "7 days"); add("30" to "30 days"); add("365" to "A year")
     }
-    val passwordReady = !withPassword || password.isNotEmpty() || link.hasPassword
+    // A new password needs eight characters (the core refuses fewer); empty keeps the current one.
+    val tooShort = withPassword && password.isNotEmpty() && password.length < LinkKdf.MIN_PASSWORD
+    val passwordReady = !withPassword || (password.isNotEmpty() && !tooShort) || (password.isEmpty() && link.hasPassword)
     Sheet(onDismissRequest = dismiss, full = true) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S6, end = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
@@ -569,6 +578,7 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
             // The eye, as on sign-in: a link password is typed once and never shown again, so seeing it matters.
             if (withPassword) PasswordField(
                 password, { password = it }, "Link password",
+                hint = "At least 8 characters",
                 placeholder = if (link.hasPassword) "Keep the current password" else null,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6),
             )
@@ -645,8 +655,11 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
             Text("Check it’s $first", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
             Text(contact.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Text(
-                if (lookup.changed) "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
-                else "Ask $first to read you the twelve words HushOS shows for their account, on a call or in person. If they match these, it’s really them.",
+                when {
+                    lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
+                    lookup.recheck -> "You added $first before HushOS checked both of their keys. Ask them to read you the twelve words HushOS shows for their account. If they match these, it’s really them."
+                    else -> "Ask $first to read you the twelve words HushOS shows for their account, on a call or in person. If they match these, it’s really them."
+                },
                 style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
             )
             WordGrid(Fingerprint.words(contact.fingerprint, Fingerprint.wordlist(context)))
@@ -747,7 +760,9 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
             }
             for (pin in list.orEmpty()) {
                 val checked = runCatching { whenText(Instant.parse(pin.pinnedAt).toEpochMilli()) }.getOrNull()
-                PersonRow(pin.name.ifEmpty { pin.email }, listOfNotNull(pin.email, checked?.let { "Checked $it" }).joinToString(" · "), pin.userId) { open = pin }
+                // A pin that vouches for nothing (from before both keys were checked) says so: sharing and their shares wait for a new check.
+                val detail = if (pin.verified) listOfNotNull(pin.email, checked?.let { "Checked $it" }).joinToString(" · ") else "${pin.email} · Check their words again"
+                PersonRow(pin.name.ifEmpty { pin.email }, detail, pin.userId) { if (pin.verified) open = pin else checking = pin.email to pin }
             }
             own?.let { fingerprint ->
                 Subheader("Your twelve words")
@@ -877,6 +892,8 @@ internal enum class LinkTrouble(val title: String, val body: String) {
     GONE("This link no longer works", "Whoever shared it turned it off, or it reached its end date. Ask them for a new link."),
     INCOMPLETE("This link is incomplete", "The end of the link is missing, usually because it was cut off while copying. Paste the whole link."),
     FAILED("This link couldn’t be opened", "Check your connection and try again. If it keeps happening, ask for a new link."),
+    OLD("This link can’t be opened", "This link was made by an older version of HushOS. Ask for a new link."),
+    NEWER("Update HushOS", "This item was made by a newer version of HushOS. Update the app to open it."),
 }
 
 /*
@@ -904,6 +921,8 @@ internal class LinkSession(val url: String, private val origin: String, private 
     private val listing = HashSet<String>()
 
     private fun troubleOf(error: Throwable) = when (error) {
+        is com.hushos.app.data.OldLink -> LinkTrouble.OLD
+        is com.hushos.app.data.NewerFormat -> LinkTrouble.NEWER
         is com.hushos.app.data.Unreachable -> LinkTrouble.FAILED
         is com.hushos.app.data.NotFound -> LinkTrouble.GONE
         is com.hushos.app.data.ApiError -> if (error.status == 404 || error.status == 410) LinkTrouble.GONE else LinkTrouble.FAILED
@@ -928,7 +947,7 @@ internal class LinkSession(val url: String, private val origin: String, private 
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { v.open(if (needsPassword) password else null) } }
                 .onSuccess { root = it; needsPassword = false; wrong = false; trouble = null; if (it.isFolder) list(it) }
-                .onFailure { if (needsPassword && it !is com.hushos.app.data.Unreachable) wrong = true else trouble = troubleOf(it) }
+                .onFailure { if (needsPassword && it !is com.hushos.app.data.Unreachable && it !is com.hushos.app.data.Refused) wrong = true else trouble = troubleOf(it) }
         }
     }
 
