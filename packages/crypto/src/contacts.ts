@@ -16,6 +16,7 @@ import { decode, encode } from './keys';
  */
 
 export const SETTINGS_MAX_BYTES = 64 * 1024;
+export const SETTINGS_PAD_STEP = 1024;
 
 export { fingerprint } from './fingerprint';
 
@@ -46,6 +47,13 @@ export type ContactPin = {
 export type Settings = {
     version: 1;
     contacts: Record<string, ContactPin>;
+    /*
+     * The owner's own record of what they shared: per node, the people it was
+     * shared with; per link, its node. Only what is here is ever sealed again on
+     * rotation or upgrade (see SharingLedger in @hushos/drive/client). Every
+     * client keeps fields it does not know when it saves.
+     */
+    sharing?: { shares: Record<string, string[]>; links: Record<string, string> };
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 1, contacts: {} };
@@ -81,8 +89,18 @@ export async function sealSettings(
 ): Promise<SettingsEnvelope> {
     if (!Number.isSafeInteger(settingsVersion) || settingsVersion < 1)
         throw new CryptoError('Invalid settings version.');
-    const plaintext = new TextEncoder().encode(JSON.stringify(settings));
-    if (plaintext.length > SETTINGS_MAX_BYTES) throw new CryptoError('Settings are too large.');
+    const json = new TextEncoder().encode(JSON.stringify(settings));
+    if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError('Settings are too large.');
+    // Padded to 1 KiB steps with spaces JSON ignores, as the native core pads them, so the
+    // length says little about how many people are pinned; the server refuses unpadded ones.
+    const plaintext = new Uint8Array(
+        Math.min(
+            Math.max(1, Math.ceil(json.length / SETTINGS_PAD_STEP)) * SETTINGS_PAD_STEP,
+            SETTINGS_MAX_BYTES,
+        ),
+    ).fill(0x20);
+    plaintext.set(json);
+    json.fill(0);
     const key = await settingsKey(identityPrivateKey);
     const nonce = crypto.getRandomValues(new Uint8Array(24));
     try {

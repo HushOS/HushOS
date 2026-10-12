@@ -98,6 +98,19 @@ function pairKey(theirPublicKey: Uint8Array, myPrivateKey: Uint8Array) {
     }
 }
 
+/*
+ * A hybrid envelope's associated data: the report's context and the ephemeral
+ * X25519 key the envelope carries, so another encoding of that key (one the
+ * same DH output would answer to) cannot pass for the same envelope.
+ */
+function hybridReportData(ctx: ReportContext, ephemeralPublicKey: Uint8Array) {
+    const context = reportContext(ctx, 2);
+    const out = new Uint8Array(context.length + 32);
+    out.set(context);
+    out.set(ephemeralPublicKey, context.length);
+    return out;
+}
+
 export async function sealReportKey(
     nodeKey: Uint8Array,
     operator: OperatorKeys,
@@ -106,34 +119,30 @@ export async function sealReportKey(
     await sodium.ready;
     if (nodeKey.length !== REPORT_KEY_BYTES) throw new CryptoError('Invalid node key.');
     if (operator.encryptionPublicKey.length !== 32) throw new CryptoError('Invalid operator key.');
-    const suite: ReportSuite = operator.kemPublicKey ? 2 : 1;
+    // Hybrid only: a classical seal of a node key is a harvest-now, decrypt-later target.
+    if (!operator.kemPublicKey)
+        throw new CryptoError(
+            'An operator has no post-quantum key yet, so nothing was sealed. Ask them to sign in once.',
+        );
+    const suite: ReportSuite = 2;
     const plaintext = new Uint8Array(REPORT_KEY_BYTES + 32);
     plaintext.set(nodeKey);
     plaintext.set(await contextDigest(ctx, suite), REPORT_KEY_BYTES);
     try {
-        if (suite === 1) {
-            try {
-                return new Uint8Array(
-                    sodium.crypto_box_seal(plaintext, operator.encryptionPublicKey),
-                );
-            } catch {
-                throw new CryptoError('Invalid operator key.');
-            }
-        }
-        if (operator.kemPublicKey!.length !== KEM_PUBLIC_KEY_BYTES)
+        if (operator.kemPublicKey.length !== KEM_PUBLIC_KEY_BYTES)
             throw new CryptoError('Invalid operator key.');
         const ephemeral = sodium.crypto_box_keypair();
         const pair = pairKey(operator.encryptionPublicKey, ephemeral.privateKey);
         ephemeral.privateKey.fill(0);
         try {
-            const { ciphertext, sharedSecret } = kemEncapsulate(operator.kemPublicKey!);
+            const { ciphertext, sharedSecret } = kemEncapsulate(operator.kemPublicKey);
             const key = await hybridKey(pair, sharedSecret, ciphertext, REPORT_KEY_INFO);
             sharedSecret.fill(0);
             try {
                 const nonce = sodium.randombytes_buf(24);
                 const body = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
                     plaintext,
-                    reportContext(ctx, 2),
+                    hybridReportData(ctx, ephemeral.publicKey),
                     null,
                     nonce,
                     key,
@@ -190,7 +199,7 @@ export async function openReportKey(
                 plaintext = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
                     null,
                     body,
-                    reportContext(ctx, 2),
+                    hybridReportData(ctx, envelope.subarray(0, 32)),
                     nonce,
                     key,
                 );

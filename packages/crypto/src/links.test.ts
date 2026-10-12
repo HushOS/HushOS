@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+    checkLinkPassword,
     generateLinkSalt,
     generateLinkSecret,
     openLinkKey,
@@ -85,12 +86,19 @@ describe("the owner's copy of the secret", () => {
         ).rejects.toThrow();
         // Re-sealing the link with a password keeps the same secret: the old URL opens with the password.
         const salt = generateLinkSalt();
-        const resealed = await sealLinkKey(nodeKey, opened.secret, 'later', salt, ctx);
+        const resealed = await sealLinkKey(nodeKey, opened.secret, 'later on, please', salt, ctx);
         expect(
-            Buffer.from(await openLinkKey(resealed, secret, 'later', salt, ctx)).equals(
+            Buffer.from(await openLinkKey(resealed, secret, 'later on, please', salt, ctx)).equals(
                 Buffer.from(nodeKey),
             ),
         ).toBe(true);
         await expect(openLinkKey(resealed, secret, null, salt, ctx)).rejects.toThrow();
+        // Whoever holds the URL can guess offline, so a short password is refused, counted in characters.
+        await expect(sealLinkKey(nodeKey, secret, 'seven77', salt, ctx)).rejects.toThrow(
+            /at least 8/,
+        );
+        expect(() => checkLinkPassword('ééééééé')).toThrow();
+        expect(() => checkLinkPassword('éééééééé')).not.toThrow();
+        expect(() => checkLinkPassword(null)).not.toThrow();
     }, 60_000);
 });

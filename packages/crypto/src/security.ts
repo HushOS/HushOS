@@ -1,5 +1,5 @@
 import { CryptoError } from './errors';
-import { checkPassword } from './password';
+import { checkPassword, normalizePassword } from './password';
 import { client, ready } from '@serenity-kit/opaque';
 import { decryptKey, encryptKey } from './aead';
 import { checkProfile, decode, encode, wrappingKey } from './keys';
@@ -57,12 +57,13 @@ export function createSecurityChange() {
     }) {
         reset();
         await ready;
+        const current = normalizePassword(input.password);
         const nextPassword =
-            input.action === 'password' ? checkPassword(input.newPassword) : input.password;
-        const login = client.startLogin({ password: input.password });
+            input.action === 'password' ? checkPassword(input.newPassword) : current;
+        const login = client.startLogin({ password: current });
         const registration = client.startRegistration({ password: nextPassword });
         pending = {
-            password: input.password,
+            password: current,
             nextPassword,
             action: input.action,
             loginState: login.clientLoginState,

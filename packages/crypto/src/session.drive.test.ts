@@ -12,6 +12,7 @@ import {
     thumbnailRange,
 } from './drive';
 import { decode, encode } from './keys';
+import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
 
 /*
  * The worker side of Drive: keys are opened parent-first and stay in the session,
@@ -725,6 +726,76 @@ describe('workspace documents in the session', () => {
         session.reset();
         await expect(
             call('driveOpenDocument', { workspaceId: WS, kind: 'tags', version: 1, envelope }),
+        ).rejects.toThrow();
+    });
+});
+
+describe('keys from links, shares and reports', () => {
+    const OTHER_WS = '33333333-3333-4333-8333-333333333333';
+    const LINK = '44444444-4444-4444-8444-444444444444';
+
+    /* A link the server made for a node id of its choosing, under a key it knows. */
+    async function plantedLink(workspaceId: string, nodeId: string) {
+        const planted = crypto.getRandomValues(new Uint8Array(32));
+        const secret = generateLinkSecret();
+        const salt = generateLinkSalt();
+        const linkEnvelope = await sealLinkKey(planted, secret, null, salt, {
+            workspaceId,
+            nodeId,
+            keyEpoch: 1,
+            linkId: LINK,
+        });
+        return {
+            planted,
+            input: {
+                workspaceId,
+                nodeId,
+                keyEpoch: 1,
+                linkId: LINK,
+                secret: encode(secret),
+                password: null,
+                salt: encode(salt),
+                linkEnvelope: encode(linkEnvelope),
+            },
+        };
+    }
+
+    test('never replace the key of a folder of the person’s own, whatever workspace they name', async () => {
+        const { call, grant } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Mine') },
+            ],
+        });
+        const exported = async () =>
+            (
+                (await call('driveExportKeys', { workspaceId: WS, nodeId: A, version: null })) as {
+                    nodeKey: string;
+                }
+            ).nodeKey;
+        const before = await exported();
+
+        // Naming the person's own workspace is refused outright.
+        const own = await plantedLink(WS, A);
+        await expect(call('driveOpenLink', own.input)).rejects.toThrow(/folder of your own/);
+        // Naming another workspace opens, but only in that workspace's pool: the folder of
+        // their own keeps its key, and a child made under it is wrapped under the real one.
+        const elsewhere = await plantedLink(OTHER_WS, A);
+        await call('driveOpenLink', elsewhere.input);
+        expect(await exported()).toBe(before);
+        expect(before).not.toBe(encode(own.planted));
+        const child = (await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [{ id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('new') }],
+        })) as { nodes: { keyEnvelope: string }[] };
+        const ctx = { workspaceId: WS, nodeId: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2 };
+        await expect(
+            openNodeKey(decode(child.nodes[0]!.keyEnvelope, 72), decode(before), ctx),
+        ).resolves.toHaveLength(32);
+        await expect(
+            openNodeKey(decode(child.nodes[0]!.keyEnvelope, 72), elsewhere.planted, ctx),
         ).rejects.toThrow();
     });
 });

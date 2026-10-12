@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { createDeviceKey, rememberAccountKey } from './device';
 import { createIdentity } from './identity';
-import { HYBRID_SHARE_ENVELOPE_BYTES, openShareKey, sealShareKey } from './shares';
+import sodium from 'libsodium-wrappers';
+import { encryptKey } from './aead';
+import {
+    HYBRID_SHARE_ENVELOPE_BYTES,
+    openShareKey,
+    sealShareKey,
+    shareContext,
+    type ShareContext,
+} from './shares';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode } from './keys';
@@ -19,6 +27,23 @@ const ids = ['a', 'b', 'c', 'd', 'e'].map(
 );
 const [ROOT, SHARED, CHILD, OWNER, GUEST] = ids as [string, string, string, string, string];
 const meta = (name: string) => ({ name, mime: null, size: null, modified: null });
+
+/*
+ * A suite 1 envelope as clients made them before shares went hybrid only: no
+ * client seals one now, but one already on the server must still open.
+ */
+async function legacyEnvelope(
+    nodeKey: Uint8Array,
+    granteePublicKey: Uint8Array,
+    granterPrivateKey: Uint8Array,
+    ctx: ShareContext,
+) {
+    await sodium.ready;
+    const pair = sodium.crypto_box_beforenm(granteePublicKey, granterPrivateKey);
+    const nonce = crypto.getRandomValues(new Uint8Array(24));
+    const body = await encryptKey(nodeKey, pair, nonce, shareContext(ctx, 1));
+    return new Uint8Array([...nonce, ...body]);
+}
 
 async function person(userId: string) {
     const root = crypto.getRandomValues(new Uint8Array(32));
@@ -80,7 +105,11 @@ describe('share envelopes', () => {
             privateKey: who.privateKey,
             kemSecretKey: null,
         });
-        const envelope = await sealShareKey(nodeKey, legacy(guest), owner.privateKey, ctx);
+        // Nothing is sealed to X25519 alone any more; one already on the server still opens.
+        await expect(sealShareKey(nodeKey, legacy(guest), owner.privateKey, ctx)).rejects.toThrow(
+            /no post-quantum key/,
+        );
+        const envelope = await legacyEnvelope(nodeKey, publicKey(guest), owner.privateKey, ctx);
         expect(envelope).toHaveLength(72);
         const opened = await openShareKey(envelope, publicKey(owner), secrets(guest), ctx);
         expect(Buffer.from(opened).equals(Buffer.from(nodeKey))).toBe(true);
@@ -157,9 +186,9 @@ describe('share envelopes', () => {
         tampered[24 + KEM_CIPHERTEXT_BYTES - 1]! ^= 1;
         await expect(openShareKey(tampered, ownerPublic, both, ctx)).rejects.toThrow();
         // The same context under the other suite does not open it either.
-        const asLegacy = await sealShareKey(
+        const asLegacy = await legacyEnvelope(
             nodeKey,
-            { ...guestKeys, kemPublicKey: null },
+            guestKeys.encryptionPublicKey,
             owner.privateKey,
             ctx,
         );

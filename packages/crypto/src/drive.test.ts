@@ -138,10 +138,17 @@ describe('content suite 1 framing', () => {
         expect(ciphertextSize(CHUNK_SIZE + 1)).toBe(CHUNK_SIZE + 1 + 2 * CHUNK_TAG_BYTES);
         expect(chunkCiphertextLength(CHUNK_SIZE + 1, 0)).toBe(CHUNK_SIZE + 16);
         expect(chunkCiphertextLength(CHUNK_SIZE + 1, 1)).toBe(17);
-        expect(chunkRange(CHUNK_SIZE + 1, 1)).toEqual({
+        expect(chunkRange(CHUNK_SIZE + 1, 0, 1)).toEqual({
             start: CHUNK_SIZE + 16,
             end: CHUNK_SIZE + 16 + 16,
         });
+        // With a thumbnail the last chunk's range runs to the object's end, never stopping at the
+        // trailer's start (which would say the file's exact size); earlier chunks are unchanged.
+        expect(chunkRange(CHUNK_SIZE + 1, 3000, 1)).toEqual({
+            start: CHUNK_SIZE + 16,
+            end: ciphertextSize(CHUNK_SIZE + 1, 3000) - 1,
+        });
+        expect(chunkRange(CHUNK_SIZE + 1, 3000, 0)).toEqual(chunkRange(CHUNK_SIZE + 1, 0, 0));
         expect(() => chunkCiphertextLength(CHUNK_SIZE + 1, 2)).toThrow(CryptoError);
     });
 
@@ -172,6 +179,17 @@ describe('content suite 1 framing', () => {
         const cipher = await encryptChunk(plain, key, nonce, ctx);
         expect(cipher).toHaveLength(5 + 16);
         expect(await decryptChunk(cipher, key, nonce, ctx)).toEqual(plain);
+        // The last chunk opens from the front of a range that carries the trailer behind it.
+        const withTrailer = new Uint8Array(cipher.length + 3016);
+        withTrailer.set(cipher);
+        expect(await decryptChunk(withTrailer, key, nonce, ctx)).toEqual(plain);
+        // Any other chunk must be exact, and the last one no shorter.
+        await expect(
+            decryptChunk(withTrailer, key, nonce, { ...ctx, index: 0 }),
+        ).rejects.toBeInstanceOf(CryptoError);
+        await expect(decryptChunk(cipher.subarray(1), key, nonce, ctx)).rejects.toBeInstanceOf(
+            CryptoError,
+        );
         // Presented as a one-chunk file of 5 bytes: a truncated object must not open.
         await expect(
             decryptChunk(cipher, key, nonce, { ...ctx, index: 0, chunkCount: 1, plaintextSize: 5 }),

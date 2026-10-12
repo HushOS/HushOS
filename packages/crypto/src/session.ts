@@ -1,5 +1,5 @@
 import { CryptoError } from './errors';
-import { checkPassword } from './password';
+import { checkPassword, normalizePassword } from './password';
 import {
     createSecurityChange,
     type SecurityAction,
@@ -567,9 +567,35 @@ export function createCryptoSession() {
     let unlockedUserId: string | null = null;
     // Drive keys, opened on demand and kept for the session; every one dies with a lock.
     const workspaceKeys = new Map<string, { key: Uint8Array<ArrayBuffer>; version: number }>();
-    const nodeKeys = new Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number }>();
+    /*
+     * Node keys by workspace and node, in two pools: the account's own
+     * workspaces (whose grants this worker opened) and everything reached
+     * through a share, a link or a report. A key from a share, link or report
+     * arrives under a workspace and node the server named, so it must never
+     * stand in for a key of the person's own tree, where it would wrap every new
+     * child and upload under a key the server chose.
+     */
+    type NodeKeys = Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number }>;
+    const ownNodeKeys: NodeKeys = new Map();
+    const guestNodeKeys: NodeKeys = new Map();
     /* Previous node keys while a rotation runs: what children not yet rotated are still wrapped under. */
-    const prevNodeKeys = new Map<string, { key: Uint8Array<ArrayBuffer>; epoch: number }>();
+    const ownPrevNodeKeys: NodeKeys = new Map();
+    const guestPrevNodeKeys: NodeKeys = new Map();
+    const slot = (workspaceId: string, nodeId: string) => `${workspaceId}/${nodeId}`;
+    function nodeKeysOf(workspaceId: string) {
+        return workspaceKeys.has(workspaceId) ? ownNodeKeys : guestNodeKeys;
+    }
+    function prevNodeKeysOf(workspaceId: string) {
+        return workspaceKeys.has(workspaceId) ? ownPrevNodeKeys : guestPrevNodeKeys;
+    }
+    function nodeKey(workspaceId: string, nodeId: string) {
+        return nodeKeysOf(workspaceId).get(slot(workspaceId, nodeId));
+    }
+    /* A share, link or report naming one of this account's own workspaces: a key planted, never taken. */
+    function refuseOwnWorkspace(workspaceId: string) {
+        if (workspaceKeys.has(workspaceId))
+            throw new CryptoError('This was refused: it claims to be a folder of your own.');
+    }
     let identityKey:
         | {
               userId: string;
@@ -604,6 +630,8 @@ export function createCryptoSession() {
         contentKey: Uint8Array<ArrayBuffer>;
         contentNonce: Uint8Array<ArrayBuffer>;
         plaintextSize: number;
+        /* The trailer's length: the last chunk's range runs on through it (see chunkRange). */
+        thumbnailBytes: number;
         chunkCount: number;
         controllers: Map<number, AbortController>;
     };
@@ -671,13 +699,13 @@ export function createCryptoSession() {
     function forgetDriveKeys() {
         forgetIdentity();
         for (const entry of workspaceKeys.values()) entry.key.fill(0);
-        for (const entry of nodeKeys.values()) entry.key.fill(0);
-        for (const entry of prevNodeKeys.values()) entry.key.fill(0);
-        prevNodeKeys.clear();
+        for (const pool of [ownNodeKeys, guestNodeKeys, ownPrevNodeKeys, guestPrevNodeKeys]) {
+            for (const entry of pool.values()) entry.key.fill(0);
+            pool.clear();
+        }
         for (const objectId of uploads.keys()) forgetUpload(objectId);
         for (const objectId of downloads.keys()) closeDownload(objectId);
         workspaceKeys.clear();
-        nodeKeys.clear();
     }
     /* The key a node is wrapped under: the workspace key for the root, else its parent's. */
     function parentKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
@@ -688,20 +716,32 @@ export function createCryptoSession() {
                 throw new CryptoError('This folder was wrapped under an older workspace key.');
             return workspace.key;
         }
-        const parent = nodeKeys.get(parentId);
+        const parent = nodeKey(workspaceId, parentId);
         if (!parent) throw new CryptoError('Open the containing folder first.');
         if (parent.epoch === parentKeyEpoch) return parent.key;
-        const previous = prevNodeKeys.get(parentId);
+        const previous = prevNodeKeysOf(workspaceId).get(slot(workspaceId, parentId));
         if (previous && previous.epoch === parentKeyEpoch) return previous.key;
         throw new CryptoError('This item was wrapped under an older folder key.');
     }
-    function rememberNodeKey(nodeId: string, key: Uint8Array<ArrayBuffer>, epoch: number) {
-        nodeKeys.get(nodeId)?.key.fill(0);
-        nodeKeys.set(nodeId, { key, epoch });
+    function rememberNodeKey(
+        workspaceId: string,
+        nodeId: string,
+        key: Uint8Array<ArrayBuffer>,
+        epoch: number,
+    ) {
+        const pool = nodeKeysOf(workspaceId);
+        pool.get(slot(workspaceId, nodeId))?.key.fill(0);
+        pool.set(slot(workspaceId, nodeId), { key, epoch });
     }
-    function rememberPrevNodeKey(nodeId: string, key: Uint8Array<ArrayBuffer>, epoch: number) {
-        prevNodeKeys.get(nodeId)?.key.fill(0);
-        prevNodeKeys.set(nodeId, { key, epoch });
+    function rememberPrevNodeKey(
+        workspaceId: string,
+        nodeId: string,
+        key: Uint8Array<ArrayBuffer>,
+        epoch: number,
+    ) {
+        const pool = prevNodeKeysOf(workspaceId);
+        pool.get(slot(workspaceId, nodeId))?.key.fill(0);
+        pool.set(slot(workspaceId, nodeId), { key, epoch });
     }
     async function rotateOne(
         workspaceId: string,
@@ -712,7 +752,7 @@ export function createCryptoSession() {
         const nodeId = node.id;
         // The key as it is: cached from a listing, or opened now under the parent
         // key its envelope was wrapped under (a previous one, when the parent rotated first).
-        const cached = nodeKeys.get(nodeId);
+        const cached = nodeKey(workspaceId, nodeId);
         const old =
             cached && cached.epoch === node.keyEpoch
                 ? cached.key.slice()
@@ -737,7 +777,7 @@ export function createCryptoSession() {
                 parentKeyEpoch: node.parentKeyEpoch,
                 keyEpoch: node.keyEpoch,
             });
-            if (!cached) rememberNodeKey(nodeId, old, node.keyEpoch);
+            if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch);
             else old.fill(0);
             return {
                 id: nodeId,
@@ -860,8 +900,8 @@ export function createCryptoSession() {
                 }
             }
             // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
-            rememberPrevNodeKey(nodeId, old, node.keyEpoch);
-            rememberNodeKey(nodeId, fresh, targetEpoch);
+            rememberPrevNodeKey(workspaceId, nodeId, old, node.keyEpoch);
+            rememberNodeKey(workspaceId, nodeId, fresh, targetEpoch);
             return {
                 id: nodeId,
                 keyEnvelope: encode(keyEnvelope),
@@ -1086,7 +1126,7 @@ export function createCryptoSession() {
             }
             case 'loginStart': {
                 clearState();
-                password = message.input.password;
+                password = normalizePassword(message.input.password);
                 const result = client.startLogin({ password });
                 state = result.clientLoginState;
                 phase = 'login';
@@ -1188,7 +1228,7 @@ export function createCryptoSession() {
                     message.input;
                 if (!identityKey || identityKey.userId !== granterUserId)
                     throw new CryptoError('Open your identity first.');
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -1210,9 +1250,10 @@ export function createCryptoSession() {
             case 'driveOpenShare': {
                 const { workspaceId, nodeId, keyEpoch, granterUserId, granteeUserId } =
                     message.input;
+                refuseOwnWorkspace(workspaceId);
                 if (!identityKey || identityKey.userId !== granteeUserId)
                     throw new CryptoError('Open your identity first.');
-                const cached = nodeKeys.get(nodeId);
+                const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
                 const secrets = {
                     privateKey: identityKey.key,
@@ -1224,7 +1265,7 @@ export function createCryptoSession() {
                     secrets,
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
-                rememberNodeKey(nodeId, key, keyEpoch);
+                rememberNodeKey(workspaceId, nodeId, key, keyEpoch);
                 if (message.input.prevShareEnvelope && message.input.prevKeyEpoch) {
                     const previous = await openShareKey(
                         decode(message.input.prevShareEnvelope),
@@ -1238,13 +1279,13 @@ export function createCryptoSession() {
                             granterUserId,
                         },
                     );
-                    rememberPrevNodeKey(nodeId, previous, message.input.prevKeyEpoch);
+                    rememberPrevNodeKey(workspaceId, nodeId, previous, message.input.prevKeyEpoch);
                 }
                 return { opened: true as const };
             }
             case 'driveSealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -1278,7 +1319,7 @@ export function createCryptoSession() {
             }
             case 'driveSealReport': {
                 const { workspaceId, nodeId, keyEpoch, reportId } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -1323,9 +1364,10 @@ export function createCryptoSession() {
             }
             case 'driveOpenReport': {
                 const { workspaceId, nodeId, keyEpoch, reportId, operatorUserId } = message.input;
+                refuseOwnWorkspace(workspaceId);
                 if (!identityKey || identityKey.userId !== operatorUserId)
                     throw new CryptoError('Open your identity first.');
-                const cached = nodeKeys.get(nodeId);
+                const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
                 const key = await openReportKey(
                     decode(message.input.keyEnvelope),
@@ -1336,12 +1378,12 @@ export function createCryptoSession() {
                     },
                     { workspaceId, nodeId, keyEpoch, reportId, operatorUserId },
                 );
-                rememberNodeKey(nodeId, key, keyEpoch);
+                rememberNodeKey(workspaceId, nodeId, key, keyEpoch);
                 return { opened: true as const };
             }
             case 'driveLinkSecret': {
                 const { workspaceId, nodeId, keyEpoch, linkId } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 const { secret, token, fromPassword } = await openLinkSecret(
                     decode(message.input.secretEnvelope),
@@ -1357,7 +1399,7 @@ export function createCryptoSession() {
             }
             case 'driveResealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -1393,7 +1435,8 @@ export function createCryptoSession() {
             }
             case 'driveOpenLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
-                const cached = nodeKeys.get(nodeId);
+                refuseOwnWorkspace(workspaceId);
+                const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
                 const secret = decode(message.input.secret, 32);
                 try {
@@ -1404,7 +1447,7 @@ export function createCryptoSession() {
                         decode(message.input.salt, 16),
                         { workspaceId, nodeId, keyEpoch, linkId },
                     );
-                    rememberNodeKey(nodeId, key, keyEpoch);
+                    rememberNodeKey(workspaceId, nodeId, key, keyEpoch);
                     return { opened: true as const };
                 } finally {
                     secret.fill(0);
@@ -1504,11 +1547,11 @@ export function createCryptoSession() {
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
                         // Later nodes in the batch may be children of this one.
-                        rememberNodeKey(node.id, key, node.keyEpoch);
+                        rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
                     }
                 } catch (error) {
                     for (const node of created) {
-                        nodeKeys.delete(node.id);
+                        nodeKeysOf(workspaceId).delete(slot(workspaceId, node.id));
                         node.key.fill(0);
                     }
                     throw error;
@@ -1520,7 +1563,7 @@ export function createCryptoSession() {
                 const nodes: DriveOpenedNode[] = [];
                 for (const node of message.input.nodes) {
                     try {
-                        const cached = nodeKeys.get(node.id);
+                        const cached = nodeKey(workspaceId, node.id);
                         let key = cached && cached.epoch === node.keyEpoch ? cached.key : undefined;
                         if (!key) {
                             const parentKey = parentKeyFor(
@@ -1535,7 +1578,7 @@ export function createCryptoSession() {
                                 parentKeyEpoch: node.parentKeyEpoch,
                                 keyEpoch: node.keyEpoch,
                             })) as Uint8Array<ArrayBuffer>;
-                            rememberNodeKey(node.id, key, node.keyEpoch);
+                            rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
                         }
                         // Mid-rotation: the same key under the previous parent key opens
                         // children the rotation has not reached; failure to open it is
@@ -1558,7 +1601,12 @@ export function createCryptoSession() {
                                         keyEpoch: node.prevKeyEpoch,
                                     },
                                 )) as Uint8Array<ArrayBuffer>;
-                                rememberPrevNodeKey(node.id, previous, node.prevKeyEpoch);
+                                rememberPrevNodeKey(
+                                    workspaceId,
+                                    node.id,
+                                    previous,
+                                    node.prevKeyEpoch,
+                                );
                             } catch {
                                 /* The previous parent key is not held here; only rotated nodes open. */
                             }
@@ -1600,7 +1648,7 @@ export function createCryptoSession() {
                 return { nodes };
             }
             case 'driveSealMetadata': {
-                const entry = nodeKeys.get(message.input.nodeId);
+                const entry = nodeKey(message.input.workspaceId, message.input.nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 const metadataEnvelope = await sealMetadata(message.input.metadata, entry.key, {
                     workspaceId: message.input.workspaceId,
@@ -1611,7 +1659,7 @@ export function createCryptoSession() {
             }
             case 'driveRewrapNode': {
                 const { workspaceId, nodeId, parentId, parentKeyEpoch, keyEpoch } = message.input;
-                const entry = nodeKeys.get(nodeId);
+                const entry = nodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 if (entry.epoch !== keyEpoch)
                     throw new CryptoError(
@@ -1629,7 +1677,7 @@ export function createCryptoSession() {
             }
             case 'driveUploadPrepare': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 forgetUpload(objectId);
                 const contentKey = generateKey();
@@ -1676,7 +1724,7 @@ export function createCryptoSession() {
             }
             case 'driveThumbnailFetch': {
                 const { workspaceId, nodeId, version, url } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 const opened = await openVersionUnder(node.key, workspaceId, nodeId, version);
                 try {
@@ -1710,7 +1758,7 @@ export function createCryptoSession() {
             }
             case 'driveOpenVersions': {
                 const { workspaceId, nodeId } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 const versions: DriveOpenedVersion[] = [];
                 for (const version of message.input.versions) {
@@ -1743,7 +1791,7 @@ export function createCryptoSession() {
                 const { workspaceId, objectId, nodeId, versionId } = message.input;
                 const upload = uploads.get(objectId);
                 if (!upload) throw new CryptoError('This upload is not open here.');
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the destination folder first.');
                 const envelope = await sealVersion(
                     {
@@ -1758,7 +1806,7 @@ export function createCryptoSession() {
             }
             case 'driveCopyFile': {
                 const { workspaceId, source, node, versionId } = message.input;
-                const sourceKey = nodeKeys.get(source.nodeId);
+                const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
                 const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
@@ -1799,7 +1847,7 @@ export function createCryptoSession() {
                             suite: opened.suite,
                         },
                     );
-                    rememberNodeKey(node.id, key, node.keyEpoch);
+                    rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
                     return {
                         keyEnvelope: encode(keyEnvelope),
                         metadataEnvelope: encode(metadataEnvelope),
@@ -1814,7 +1862,7 @@ export function createCryptoSession() {
             }
             case 'driveUploadReopen': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (message.input.contentSuite !== CONTENT_SUITE)
                     throw new CryptoError(
@@ -1865,7 +1913,7 @@ export function createCryptoSession() {
                 if (!upload)
                     throw new CryptoError('This upload is no longer prepared. Start it again.');
                 const plaintext = await readChunk(upload, message.input.file, message.input.index);
-                const digest = await chunkDigest(plaintext);
+                const digest = await chunkDigest(plaintext, upload.contentKey);
                 plaintext.fill(0);
                 return { digest: encode(digest) };
             }
@@ -1884,7 +1932,7 @@ export function createCryptoSession() {
                         chunkCount: upload.chunkCount,
                         plaintextSize: upload.plaintextSize,
                     }),
-                    chunkDigest(plaintext),
+                    chunkDigest(plaintext, upload.contentKey),
                 ]);
                 plaintext.fill(0);
                 // The last part carries the trailer after the last chunk: one PUT, one range.
@@ -1988,7 +2036,7 @@ export function createCryptoSession() {
                 return { forgotten: forgetUpload(message.input.objectId) };
             case 'driveDownloadOpen': {
                 const { workspaceId, nodeId, version } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 closeDownload(version.objectId);
                 const opened = await openVersionUnder(node.key, workspaceId, nodeId, version);
@@ -1998,6 +2046,7 @@ export function createCryptoSession() {
                     contentKey: opened.contentKey,
                     contentNonce: decode(message.input.contentNonce, 16) as Uint8Array<ArrayBuffer>,
                     plaintextSize: opened.plaintextSize,
+                    thumbnailBytes: opened.thumbnailBytes,
                     chunkCount: chunkCount(opened.plaintextSize),
                     controllers: new Map(),
                 });
@@ -2012,7 +2061,7 @@ export function createCryptoSession() {
                 const download = downloads.get(objectId);
                 if (!download)
                     throw new CryptoError('This download is no longer open. Start it again.');
-                const range = chunkRange(download.plaintextSize, index);
+                const range = chunkRange(download.plaintextSize, download.thumbnailBytes, index);
                 const controller = new AbortController();
                 download.controllers.set(index, controller);
                 try {
@@ -2098,7 +2147,7 @@ export function createCryptoSession() {
                 return { closed: closeDownload(message.input.objectId) };
             case 'driveExportKeys': {
                 const { workspaceId, nodeId, version } = message.input;
-                const node = nodeKeys.get(nodeId);
+                const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 let content: CryptoResults['driveExportKeys']['content'] = null;
                 if (version) {

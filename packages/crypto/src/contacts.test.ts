@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { createIdentity, openIdentityEncryptionKey, verifyIdentitySigningKey } from './identity';
-import { EMPTY_SETTINGS, fingerprint, openSettings, sealSettings, type Settings } from './contacts';
+import {
+    EMPTY_SETTINGS,
+    fingerprint,
+    openSettings,
+    sealSettings,
+    SETTINGS_PAD_STEP,
+    type Settings,
+} from './contacts';
 import { decode } from './keys';
 
 const USER = '11111111-1111-4111-8111-111111111111';
@@ -108,6 +115,15 @@ describe('settings', () => {
         const rewrapped = await rewrapIdentity(root, newRoot, USER, identity, 2);
         const reopened = await openIdentityEncryptionKey(newRoot, USER, rewrapped);
         expect(await openSettings(reopened, USER, sealed)).toEqual(EMPTY_SETTINGS);
+    });
+
+    test('pads to whole kibibytes, so the length says little about how many are pinned', async () => {
+        const { key } = await identityWithKey();
+        const one = await sealSettings(key, USER, 1, EMPTY_SETTINGS);
+        const two = await sealSettings(key, USER, 1, settings);
+        expect(decode(one.ciphertext).length - 16).toBe(SETTINGS_PAD_STEP);
+        expect(decode(two.ciphertext).length).toBe(decode(one.ciphertext).length);
+        expect(await openSettings(key, USER, two)).toEqual(settings);
     });
 
     test('refuses a document over the size cap', async () => {

@@ -540,9 +540,16 @@ export function chunkPlaintextLength(plaintextSize: number, index: number) {
 export function chunkCiphertextLength(plaintextSize: number, index: number) {
     return chunkPlaintextLength(plaintextSize, index) + CHUNK_TAG_BYTES;
 }
-/* Byte range of chunk `index` inside the stored object. */
-export function chunkRange(plaintextSize: number, index: number) {
+/*
+ * The bytes to fetch for chunk `index`. The last chunk runs on to the end of
+ * the object, thumbnail trailer and all: a range that stopped where the trailer
+ * begins would hand the store the trailer's length and so the file's exact
+ * size. decryptChunk takes the chunk from the front of what comes back.
+ */
+export function chunkRange(plaintextSize: number, thumbnailBytes: number, index: number) {
     const start = index * (CHUNK_SIZE + CHUNK_TAG_BYTES);
+    if (index === chunkCount(plaintextSize) - 1)
+        return { start, end: ciphertextSize(plaintextSize, thumbnailBytes) - 1 };
     return { start, end: start + chunkCiphertextLength(plaintextSize, index) - 1 };
 }
 
@@ -611,16 +618,19 @@ export async function decryptChunk(
     ctx: ChunkContext,
 ) {
     await sodium.ready;
+    // The last chunk may come with the trailer behind it (see chunkRange); every other must be exact.
+    const length = chunkCiphertextLength(ctx.plaintextSize, ctx.index);
+    const last = ctx.index === ctx.chunkCount - 1;
     if (
         ctx.chunkCount !== chunkCount(ctx.plaintextSize) ||
-        ciphertext.length !== chunkCiphertextLength(ctx.plaintextSize, ctx.index)
+        (last ? ciphertext.length < length : ciphertext.length !== length)
     )
         throw new CryptoError('This file could not be decrypted. It may be damaged.');
     try {
         return new Uint8Array(
             sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
                 null,
-                ciphertext,
+                ciphertext.subarray(0, length),
                 chunkContext(ctx),
                 chunkNonce(contentNonce, ctx.index),
                 contentKey,
@@ -690,8 +700,17 @@ export async function decryptThumbnail(
     }
 }
 
-/* BLAKE2b of a plaintext chunk, for the upload journal. */
-export async function chunkDigest(plaintext: Uint8Array) {
+/*
+ * BLAKE2b of a plaintext chunk for the upload journal, keyed under a subkey of
+ * the upload's content key: the journal keeps these on the device, and an
+ * unkeyed hash would let anyone holding the device confirm a guessed file.
+ */
+export async function chunkDigest(plaintext: Uint8Array, contentKey: Uint8Array) {
     await sodium.ready;
-    return new Uint8Array(sodium.crypto_generichash(32, plaintext, null));
+    const key = sodium.crypto_kdf_derive_from_key(32, 2, 'hushjrnl', contentKey);
+    try {
+        return new Uint8Array(sodium.crypto_generichash(32, plaintext, key));
+    } finally {
+        key.fill(0);
+    }
 }

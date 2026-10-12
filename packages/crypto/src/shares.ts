@@ -97,16 +97,13 @@ export async function sealShareKey(
     granterPrivateKey: Uint8Array,
     ctx: ShareContext,
 ) {
+    // Hybrid only: suite 1 is still opened, never made. A share sealed to X25519 alone is a
+    // harvest-now, decrypt-later target, and withholding the KEM key is all it would take.
+    if (!grantee.kemPublicKey)
+        throw new CryptoError('This person has no post-quantum key yet, so nothing was shared.');
     const pair = await pairKey(grantee.encryptionPublicKey, granterPrivateKey);
     const nonce = crypto.getRandomValues(new Uint8Array(24));
     try {
-        if (!grantee.kemPublicKey) {
-            const body = await encryptKey(nodeKey, pair, nonce, shareContext(ctx, 1));
-            const envelope = new Uint8Array(SHARE_ENVELOPE_BYTES);
-            envelope.set(nonce);
-            envelope.set(body, 24);
-            return envelope;
-        }
         if (grantee.kemPublicKey.length !== KEM_PUBLIC_KEY_BYTES)
             throw new CryptoError('Invalid identity key.');
         const { ciphertext, sharedSecret } = kemEncapsulate(grantee.kemPublicKey);

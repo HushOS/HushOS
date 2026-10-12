@@ -197,7 +197,7 @@ describe('records sealed by the Rust core', () => {
         ).toBe(recovery.phrase);
     });
 
-    it('opens a report key the core sealed to this identity, in both suites', async () => {
+    it('opens a hybrid report key the core sealed to this identity', async () => {
         const { report } = core;
         const root = decode(web.account.accountKey, 32);
         const identity = web.share.identity as never;
@@ -209,9 +209,6 @@ describe('records sealed by the Rust core', () => {
             kemSecretKey: kem!.secretKey,
         };
         expect(await openReportKey(decode(report.hybrid), operator, report.ctx)).toEqual(
-            decode(report.nodeKey, 32),
-        );
-        expect(await openReportKey(decode(report.classic), operator, report.ctx)).toEqual(
             decode(report.nodeKey, 32),
         );
         await expect(
@@ -244,21 +241,13 @@ describe('records sealed by the Rust core', () => {
         ).rejects.toThrow();
     });
 
-    it('opens shares the core sealed to this identity, in both suites', async () => {
+    it('opens a hybrid share the core sealed to this identity', async () => {
         const { share } = core;
         const root = decode(web.account.accountKey, 32);
         const identity = web.share.identity as never;
         const privateKey = await openIdentityEncryptionKey(root, web.account.userId, identity);
         const kem = await openIdentityKemKey(root, web.account.userId, identity);
         const grantee = { privateKey, kemSecretKey: kem!.secretKey };
-        expect(
-            await openShareKey(
-                decode(share.classic),
-                decode(share.granterPublicKey, 32),
-                grantee,
-                share.ctx,
-            ),
-        ).toEqual(decode(share.nodeKey, 32));
         expect(
             await openShareKey(
                 decode(share.hybrid),

@@ -17,6 +17,22 @@ import { KEY_STRETCHING } from './protocol';
 export const LINK_SECRET_BYTES = 32;
 export const LINK_SALT_BYTES = 16;
 export const LINK_ENVELOPE_BYTES = 24 + 32 + 16;
+/*
+ * How a link's key is made, kept on the link's row so a reader knows before it
+ * opens anything and a later version can sit beside this one. 2: argon2id under
+ * the account profile, then BLAKE2b-256 over a label, the secret and that. A
+ * link of any other version is refused rather than guessed at.
+ */
+export const LINK_KDF_VERSION = 2;
+const LINK_KEY_LABEL = new TextEncoder().encode('hushos/drive/link/key/v2');
+/* Whoever holds the URL can guess a link's password offline, so a short one is refused. */
+export const LINK_PASSWORD_MIN_LENGTH = 8;
+export function checkLinkPassword(password: string | null) {
+    if (password !== null && Array.from(password).length < LINK_PASSWORD_MIN_LENGTH)
+        throw new CryptoError(
+            `A link password needs at least ${LINK_PASSWORD_MIN_LENGTH} characters.`,
+        );
+}
 
 export type LinkContext = {
     workspaceId: string;
@@ -29,7 +45,7 @@ export function linkContext(ctx: LinkContext) {
     return new TextEncoder().encode(
         JSON.stringify([
             'hushos/drive/link',
-            1,
+            LINK_KDF_VERSION,
             ctx.workspaceId.toLowerCase(),
             ctx.nodeId.toLowerCase(),
             ctx.keyEpoch,
@@ -55,14 +71,15 @@ export async function passwordKey(password: string | null, salt: Uint8Array) {
     return Uint8Array.from(hex.match(/../g)!, (byte) => parseInt(byte, 16));
 }
 
-/* The link key from the secret and the password's stretched key (zeros without a password). */
+/* The link key from a label, the secret and the password's stretched key (zeros without a password). */
 export async function linkKeyFrom(secret: Uint8Array, fromPassword: Uint8Array) {
     await sodium.ready;
     if (secret.length !== LINK_SECRET_BYTES) throw new CryptoError('Invalid link secret.');
     if (fromPassword.length !== 32) throw new CryptoError('Invalid link password key.');
-    const input = new Uint8Array(64);
-    input.set(secret);
-    input.set(fromPassword, 32);
+    const input = new Uint8Array(LINK_KEY_LABEL.length + 64);
+    input.set(LINK_KEY_LABEL);
+    input.set(secret, LINK_KEY_LABEL.length);
+    input.set(fromPassword, LINK_KEY_LABEL.length + 32);
     try {
         return sodium.crypto_generichash(32, input, null) as Uint8Array<ArrayBuffer>;
     } finally {
@@ -92,6 +109,7 @@ export async function sealLinkKey(
     salt: Uint8Array,
     ctx: LinkContext,
 ) {
+    checkLinkPassword(password);
     const key = await linkKey(secret, password, salt);
     try {
         return await sealUnderLinkKey(nodeKey, key, ctx);
@@ -161,7 +179,7 @@ function secretContext(ctx: LinkContext) {
     return new TextEncoder().encode(
         JSON.stringify([
             'hushos/drive/link-secret',
-            1,
+            LINK_KDF_VERSION,
             ctx.workspaceId.toLowerCase(),
             ctx.nodeId.toLowerCase(),
             ctx.keyEpoch,

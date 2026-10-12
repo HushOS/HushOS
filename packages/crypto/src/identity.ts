@@ -9,9 +9,9 @@ import { KEM_PUBLIC_KEY_BYTES, KEM_SEED_BYTES, kemKeypair } from './pq';
  * wrapped under the account root beside the X25519 key and the signing seed,
  * and a signature by the identity's Ed25519 key binding the public key to this
  * identity. The signature is what lets a contact accept the key on the strength
- * of the fingerprint they already compared: the fingerprint covers the X25519
- * key, the signing key vouches for the KEM key, and a server that swapped the
- * KEM key alone could not produce the signature.
+ * of the fingerprint they compared: the fingerprint covers the X25519 key and
+ * the signing key, the signing key vouches for the KEM key, and a server that
+ * swapped the KEM key could not produce the signature.
  */
 export type IdentityKem = {
     publicKey: string;

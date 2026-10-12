@@ -107,6 +107,7 @@ describe('rotation', () => {
             granterUserId: USER,
             granteeUserId: GUEST,
             granteePublicKey: guestIdentity.encryptionPublicKey,
+            granteeKemPublicKey: guestIdentity.kem!.publicKey,
         })) as { shareEnvelope: string };
         const link = (await owner('driveSealLink', {
             workspaceId: WS,

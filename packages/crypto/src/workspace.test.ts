@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { CryptoError } from './errors';
-import { checkPassword } from './password';
+import { checkPassword, normalizePassword } from './password';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from './protocol';
 import { createWorkspaceGrant, openWorkspaceKey, rewrapWorkspaceGrant } from './workspace';
 
@@ -77,5 +77,14 @@ describe('checkPassword', () => {
         expect(() => checkPassword('a'.repeat(PASSWORD_MIN_LENGTH - 1))).toThrow(CryptoError);
         expect(() => checkPassword('a'.repeat(PASSWORD_MAX_LENGTH + 1))).toThrow(CryptoError);
         expect(() => checkPassword(undefined)).toThrow(CryptoError);
+    });
+
+    test('hands OPAQUE the NFC form, so composed and decomposed accents are one password', () => {
+        // The native core normalizes the same way (opaque.rs); without it the two would lock each other out.
+        const decomposed = 'cafe\u0301 au lait, please';
+        const composed = 'caf\u00e9 au lait, please';
+        expect(decomposed).not.toBe(composed);
+        expect(checkPassword(decomposed)).toBe(composed);
+        expect(normalizePassword(decomposed)).toBe(normalizePassword(composed));
     });
 });

@@ -37,35 +37,14 @@ describe('report envelopes', () => {
         kemSecretKey: kem?.secretKey ?? null,
     });
 
-    test('suite 1: open for the operator and the report they were sealed for, and for nothing else', async () => {
+    test('an operator without a KEM key is sealed nothing: a classical seal is a harvest-now target', async () => {
         await sodium.ready;
         const operator = sodium.crypto_box_keypair();
-        const other = sodium.crypto_box_keypair();
         const nodeKey = crypto.getRandomValues(new Uint8Array(32));
-        const envelope = await sealReportKey(nodeKey, x25519(operator), ctx);
-        expect(envelope).toHaveLength(REPORT_ENVELOPE_BYTES);
-        expect(await openReportKey(envelope, secrets(operator), ctx)).toEqual(nodeKey);
-        // Two seals of the same key differ: the box carries a fresh ephemeral key each time.
-        expect(await sealReportKey(nodeKey, x25519(operator), ctx)).not.toEqual(envelope);
-
-        await expect(openReportKey(envelope, secrets(other), ctx)).rejects.toThrow(
-            /not sealed to your operator key/,
+        await expect(sealReportKey(nodeKey, x25519(operator), ctx)).rejects.toThrow(
+            /no post-quantum key/,
         );
-        await expect(
-            openReportKey(envelope, secrets(operator), {
-                ...ctx,
-                reportId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-            }),
-        ).rejects.toThrow(/different report/);
-        await expect(
-            openReportKey(envelope, secrets(operator), { ...ctx, operatorUserId: ctx.reportId }),
-        ).rejects.toThrow(/different report/);
-        const tampered = envelope.slice();
-        tampered[60] = tampered[60]! ^ 1;
-        await expect(openReportKey(tampered, secrets(operator), ctx)).rejects.toThrow(/not sealed/);
-        await expect(openReportKey(envelope.subarray(1), secrets(operator), ctx)).rejects.toThrow(
-            /Invalid report envelope/,
-        );
+        expect(REPORT_ENVELOPE_BYTES).toBe(112);
     });
 
     test('suite 2: an operator with a KEM key gets a hybrid envelope that needs both private halves', async () => {
@@ -106,9 +85,13 @@ describe('report envelopes', () => {
                 /not sealed to your operator key/,
             );
         }
-        // A suite 1 envelope still opens for an operator who has since gained a KEM key.
-        const old = await sealReportKey(nodeKey, x25519(operator), ctx);
-        expect(await openReportKey(old, secrets(operator, kem), ctx)).toEqual(nodeKey);
+        // X25519 ignores the top bit, so this ephemeral key gives the same DH output; the
+        // associated data carries the key itself, so the recoded envelope must not open.
+        const recoded = envelope.slice();
+        recoded[31] = recoded[31]! ^ 0x80;
+        await expect(openReportKey(recoded, secrets(operator, kem), ctx)).rejects.toThrow(
+            /not sealed to your operator key/,
+        );
         // A bad KEM public key is refused before anything is sealed.
         await expect(
             sealReportKey(nodeKey, { ...keys, kemPublicKey: kem.publicKey.subarray(1) }, ctx),
