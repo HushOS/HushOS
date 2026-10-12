@@ -1,0 +1,37 @@
+packages/crypto/src/core-fixtures.test.ts
+  s_75dbe24a0bc379::t_3d4884edc492b3 72,89,91,93,117,144,148
+docs/integrity-design.md
+  s_75dbe24a0bc379::t_c66d69da70844b 11-13,31,45
+packages/crypto/src/session.drive.test.ts
+  s_75dbe24a0bc379::t_cefa24464683b2 261,319,326,341,362,638-775,778-815,818-871
+  s_75dbe24a0bc379::t_b650e5e2c097a4 7,9-10,12,438,455-458,483,492-498,502,511-512,557,580,587,602-605,625,912,939
+  s_75dbe24a0bc379::t_51b91451c101c8 816-817
+  s_75dbe24a0bc379::t_e45d5941653c9d 776-777,872-873
+packages/crypto/src/session.ts
+  s_75dbe24a0bc379::t_6332e38ca4284b 1956,2174,2177-2181
+packages/crypto/src/drive.test.ts
+  s_75dbe24a0bc379::t_fda697fa66e718 421,454,464
+  s_75dbe24a0bc379::t_0160accf85828f 13-14,34-36,138-139,142,145,148,154,156,158-160,162-165,186,190,218,239,243
+  s_75dbe24a0bc379::t_3b87e7871fdfb4 9,399-420,422-453,455-463,465-543
+  s_75dbe24a0bc379::t_859fc95884f6f4 252-258,288-289,324,330-335,347-349,353-356,369-371,380,384,547,549,553-556,564-567,572,574
+  s_75dbe24a0bc379::t_006d25baad5261 544-545
+packages/crypto/src/drive.ts
+  s_75dbe24a0bc379::t_545c443b545df2 20-25,100,117-118,138,224,413,447,510-512,520,522,603-604,625,634-636,639,647-648,651-653,667,687,689
+  s_75dbe24a0bc379::t_6332e38ca4284b 498-501
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b2dfde20ea4d7994fa68e7b169bf752d0d20a9ff",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
