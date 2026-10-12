@@ -189,3 +189,74 @@ What the server stores and serves, and what clients send. Base64url without padd
 - `GET /api/auth/settings` returns `{ settings, settingsKey }`, where `settingsKey` is `{ nonce, ciphertext }` (a 24-byte nonce and the 32-byte settings key sealed under the account-root wrap key, 48 bytes with its tag) or null.
 - `PUT /api/auth/settings-key` stores it once (409 if one exists); `PUT /api/auth/settings` accepts envelope `version: 2` (sealed under the settings key) and, until every client has moved, `version: 1`.
 - A master-key rotation re-wraps the settings key under the new root alongside the other account envelopes (it is in the rotation request).
+
+## Round 3: closing what a malicious server could still do
+
+The third leak audit (2026-10-13) found that the integrity layer above held against a passive server but not an active one. These changes ship together, on every client, with the server.
+
+### Checking fails closed
+
+A client that cannot load what it trusts (its own identity history, the settings with the pins, or because the settings are refused as rolled back) or whose check throws, shows every record as **Couldn't check** rather than as clean. It is a fifth result, `unchecked`, drawn like Unverified, with its own explanation ("HushOS couldn't check who wrote this. Try again later.") and a retry. No record is ever shown without a mark because a request failed.
+
+`unsigned` no longer gets a softer explanation: a stripped signature and a record written before signatures read the same ("HushOS can't confirm who wrote this"), so a server cannot pick the milder warning by stripping one.
+
+### Re-sealing never launders
+
+Rotation and copy re-seal records under a new key and must sign the new envelope. Before signing, the client checks the record as it was (the same check as reading). A `verified` record is re-signed with the ordinary statement. Anything else (including a copy saved from a link, whose signatures a visitor never sees) is signed with a **re-sealed** statement:
+
+```
+metadata: ["hushos/drive/sig/metadata-resealed", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)]
+version:  ["hushos/drive/sig/version-resealed", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope)]
+```
+
+It says "I re-locked this; I don't vouch for who wrote it". Readers verify against the ordinary statement first, then the re-sealed one; a valid re-sealed signature yields `resealed`, shown as Unverified ("Re-locked by you; HushOS couldn't confirm who wrote it before"). A rotation needs the trust set loaded: if it can't load, the rotation stops and retries rather than marking everything re-sealed. The server accepts either statement on every signed write.
+
+### Retired keys
+
+A record signed with a signing key its writer has since replaced (one of the earlier keys a succession chain vouches for, or the reader's own earlier key) yields `retired-key`, shown as Unverified ("Signed with keys Maya has since replaced"). Replacing keys is what an account does when its keys may be exposed, so those keys stop vouching for anything. A suite 3 share opens only against the granter's current signing key; one sealed under an earlier key waits for the granter's re-seal ("Ask Maya to share it again" until then).
+
+### Rollback marks
+
+- The settings high-water mark is kept per user (not per identity key), survives a succession, and is never lowered.
+- Each device also keeps the highest own identity `keyVersion` it has opened and refuses an identity served as current with a lower one.
+- A new device has no marks; that is inherent.
+
+### Legacy readers removed
+
+Share suites 1 and 2 and settings envelope version 1 no longer open anywhere (TS and Rust). Production had no suite 1/2 shares left; the three accounts still on settings version 1 start afresh at version 2 (their pins and ledger are lost and contacts are checked again). Content suites 1 and 2 still open: those objects exist.
+
+### Who sees whom
+
+- Node and version views carry `metadataSigner` / `signer` as `{ id }` only. A client names a signer from its own pins ("you", a checked contact's name) or says "someone you haven't checked".
+- Link visitors get no signatures and no signer: a visitor has nothing to check them against, and a signature can be tested against keys from contact lookup to identify the writer. `workspaceId` stays: it is bound into every envelope.
+- A grantee's change feed carries only changes inside the share, tombstones included, and an opaque cursor, so it shows neither deletions elsewhere in the owner's drive nor how busy the drive is.
+- An upload or copy refused for space tells only workspace members the bytes left.
+- Contact lookup and succession reads are limited per address as well as per account.
+- Clients follow a pinned contact's served keys only when the person asks ("Check again"), and fetch a succession chain whole, so lookups do not reveal which contacts are pinned or at which version.
+
+### Smaller fixes
+
+- Link API routes take the token in an `x-link-token` header, not the path, so proxy access logs do not keep it. `/s/<token>` stays the page address; docs/self-hosting.md says to keep it out of access logs.
+- `/s/*` pages do not fetch the session until the visitor asks to sign in or save a copy. The page request itself still carries the session cookie (a top-level navigation), which the docs say plainly.
+- A ranged read that touches a file's last real chunk also fetches the padding chunks after it, so where a file ends is not revealed by reads.
+- The web loads every viewer, grammar and thumbnailer chunk after unlock, at idle, so which ones are fetched does not depend on what is opened.
+- Releasing a report also clears its reporter, the free-text reason and the snapshot's envelopes, keeping only the object ids the evidence purge needs.
+- An id that already exists is refused with the same answer whichever workspace holds it.
+- Log redaction covers every `*Signature*`, `*Envelope*` and `settingsKey` field.
+- The reports dialog and code say what is true: operator keys come from the server, so whoever runs it can open what is reported.
+- Native: iOS refuses third-party keyboards and keeps the recovery phrase out of plain text fields; Android hides file names from lock-screen notifications, protects link and QR screens from capture, labels unverified items in the system file picker, and turns off keyboard learning on the link field; both sweep every plaintext temp directory; the Rust core wipes private keys on drop.
+
+### Sizes, stated plainly
+
+Padmé rounds the padded content up to a bucket that grows with the file: below 256 bytes everything is 256; otherwise at most about 12% is added, so the server learns a file's size to within roughly 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB. The security page, privacy policy and llms.txt say this instead of "the size of each encrypted object".
+
+### API contract (round 3)
+
+- **Signer views:** `NodeView.metadataSigner` and `VersionView.signer` are `{ id } | null`.
+- **Link routes:** `GET /api/drive/links/open`, `/links/children`, `/links/nodes/:nodeId/...`, `/links/versions/:versionId/url` and the rest of today's `/api/drive/links/:token/...` family move the token to `x-link-token` (same paths without the token segment). Responses omit `metadataSigner`, `metadataSignature`, `signer` and `signature` (absent, not null). The old path form answers 410 "Update HushOS to open links".
+- **Share feed:** `GET /api/drive/shares/:id/changes?cursor=<opaque>` returns `{ changes, cursor, hasMore }`. Changes carry no `changeSeq`; they are in order. `cursor` is an opaque string (sealed server-side); no cursor means from the start. Tombstones are kept only for nodes that were inside the share when purged (the purge records the purged node's ancestor ids).
+- **Quota refusal:** 402 bodies carry `freeBytes` only for workspace members.
+- **Signatures:** every signed write accepts either statement form; the server verifies the ordinary one, then the re-sealed one.
+- **Settings:** `PUT /api/auth/settings` accepts `version: 2` only (409 otherwise). `GET` returns a version 1 document as `settings: null`.
+- **Shares:** `shareEnvelope` must be 1256 bytes; anything else is refused on create and re-seal, and stored suite 1/2 rows are not served.
+- **Lookups:** `POST /api/auth/contacts/lookup` and `GET /api/auth/contacts/:userId/succession` are limited per account and per address.
