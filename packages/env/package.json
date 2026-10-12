@@ -7,6 +7,7 @@
         "./server": "./src/server.ts",
         "./db": "./src/db.ts",
         "./auth": "./src/auth.ts",
+        "./opaque": "./src/opaque.ts",
         "./email": "./src/email.ts",
         "./billing": "./src/billing.ts",
         "./app": "./src/app.ts",

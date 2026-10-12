@@ -1,6 +1,7 @@
 import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
+import { keyedHash } from './hash-key';
 import {
     personalWorkspaces,
     workspaceKeys,
@@ -344,10 +345,17 @@ export async function deleteSession(tokenHash: Buffer) {
     await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
 }
 
-export async function consumeRateLimit(keyHash: Buffer, limit: number, windowMs: number) {
+/*
+ * Counts one use of a bucket and says whether it is within the limit. Callers
+ * name the bucket by a digest of its key (`auth:address:<ip>` and the like);
+ * the row keeps that digest keyed again under the server hash key, so a dump of
+ * the table cannot be matched to an address, an email or an account.
+ */
+export async function consumeRateLimit(bucket: Buffer, limit: number, windowMs: number) {
+    const keyHash = keyedHash(bucket);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + windowMs);
-    const [bucket] = await db
+    const [row] = await db
         .insert(authRateLimits)
         .values({ keyHash, count: 1, expiresAt })
         .onConflictDoUpdate({
@@ -358,7 +366,7 @@ export async function consumeRateLimit(keyHash: Buffer, limit: number, windowMs:
             },
         })
         .returning({ count: authRateLimits.count });
-    return bucket !== undefined && bucket.count <= limit;
+    return row !== undefined && row.count <= limit;
 }
 
 /*

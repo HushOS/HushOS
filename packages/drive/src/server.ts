@@ -1,7 +1,8 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
     authRepository,
     driveRepository,
+    keyedHash,
     reportsRepository,
     rotationsRepository,
     type NodeRow,
@@ -1743,24 +1744,6 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
 
-/*
- * What an anonymous reporter's address is kept as, for one open report per
- * address and node: an HMAC under a key the server keeps, never a plain hash,
- * which the 2^32 IPv4 addresses would undo in seconds. It is cleared when the
- * report closes.
- */
-let addressKey: Promise<Buffer> | undefined;
-function reportAddressKey() {
-    addressKey ??= authRepository
-        .ensureServerSecret('report-address-key', () => randomBytes(32).toString('base64'))
-        .then((value) => Buffer.from(value, 'base64'))
-        .catch((error: unknown) => {
-            addressKey = undefined;
-            throw error;
-        });
-    return addressKey;
-}
-
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: {
     userId: string;
@@ -1807,7 +1790,6 @@ export async function fileReport(
         keys: { operatorUserId: string; keyEnvelope: string }[];
     },
 ) {
-    const addressKey = await reportAddressKey();
     const limits = [hashToken(`report:address:${actor.address}`)];
     if (actor.userId) limits.push(hashToken(`report:user:${actor.userId}`));
     for (const key of limits)
@@ -1846,9 +1828,9 @@ export async function fileReport(
         reason,
         reporterUserId: actor.userId,
         reporterEmail: actor.userId ? null : input.reporterEmail?.trim() || null,
-        reporterAddressHash: actor.userId
-            ? null
-            : createHmac('sha256', addressKey).update(actor.address).digest(),
+        // For one open report per address and node: keyed under the server hash key, never in
+        // the database, since a plain hash of an IPv4 address is undone in seconds. Released with the report.
+        reporterAddressHash: actor.userId ? null : keyedHash(`report:reporter:${actor.address}`),
         keys: input.keys.map((key) => ({
             operatorUserId: key.operatorUserId,
             keyEnvelope: reportEnvelope(key.keyEnvelope),
