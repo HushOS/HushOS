@@ -510,6 +510,8 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 envelope: envelopeSchema,
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
+                // Every earlier identity, re-wrapped under the new root by a master-key rotation.
+                identityHistory: t.Optional(t.Array(identitySchema, { maxItems: 1000 })),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
         },
@@ -532,6 +534,28 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .get('/auth/identity', ({ sessionToken }) => auth.getIdentityEnvelope(sessionToken))
     .post('/auth/identity/kem', { body: identityKemSchema }, ({ sessionToken, body }) =>
         auth.addIdentityKem(sessionToken, body),
+    )
+    // Identity succession: new keys at the next version, signed by the current signing key.
+    .post(
+        '/auth/identity/succession',
+        { body: t.Object({ identity: identitySchema, signature: signatureSchema }) },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.succeedIdentity(sessionToken, body);
+        },
+    )
+    .get('/auth/identity/history', ({ sessionToken, set }) => {
+        set.headers['Cache-Control'] = 'no-store';
+        return auth.getIdentityHistory(sessionToken);
+    })
+    .get(
+        '/auth/contacts/:userId/succession',
+        {
+            params: t.Object({ userId: uuidSchema }),
+            query: t.Object({ from: t.Numeric({ minimum: 1, maximum: 2147483646 }) }),
+        },
+        ({ sessionToken, params, query }) =>
+            auth.contactSuccession(sessionToken, params.userId, query.from),
     )
     // A POST so the address is in the body: a query string sits in proxy and access logs.
     .post(

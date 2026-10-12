@@ -6,6 +6,7 @@ import {
     integer,
     jsonb,
     pgTable,
+    primaryKey,
     smallint,
     text,
     timestamp,
@@ -287,6 +288,59 @@ export const accountIdentities = pgTable(
         check(
             'account_identities_lengths_valid',
             sql`octet_length(${table.wrappingSalt}) = 32 and octet_length(${table.encryptionPublicKey}) = 32 and octet_length(${table.encryptionPrivateKeyNonce}) = 24 and octet_length(${table.encryptedEncryptionPrivateKey}) = 48 and octet_length(${table.signingPublicKey}) = 32 and octet_length(${table.signingSeedNonce}) = 24 and octet_length(${table.encryptedSigningSeed}) = 48`,
+        ),
+    ],
+);
+
+/*
+ * Every identity an account has replaced, kept sealed under the account root as
+ * it was, because shares sealed to the old keys still open only with them. Each
+ * row carries the succession that replaced it: the new key version and public
+ * keys, and the old signing key's signature over the statement in
+ * docs/integrity-design.md, so a contact can walk from a pinned identity to the
+ * current one link by link without asking for anything else.
+ */
+export const accountIdentityHistory = pgTable(
+    'account_identity_history',
+    {
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        version: smallint().notNull(),
+        keyVersion: integer('key_version').notNull(),
+        wrappingSalt: bytea('wrapping_salt').notNull(),
+        encryptionPublicKey: bytea('encryption_public_key').notNull(),
+        encryptionPrivateKeyNonce: bytea('encryption_private_key_nonce').notNull(),
+        encryptedEncryptionPrivateKey: bytea('encrypted_encryption_private_key').notNull(),
+        signingPublicKey: bytea('signing_public_key').notNull(),
+        signingSeedNonce: bytea('signing_seed_nonce').notNull(),
+        encryptedSigningSeed: bytea('encrypted_signing_seed').notNull(),
+        kemPublicKey: bytea('kem_public_key'),
+        kemSeedNonce: bytea('kem_seed_nonce'),
+        encryptedKemSeed: bytea('encrypted_kem_seed'),
+        kemSignature: bytea('kem_signature'),
+        createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+        replacedAt: timestamp('replaced_at', { withTimezone: true }).defaultNow().notNull(),
+        // The succession: what replaced this identity, signed by this identity's signing key.
+        replacedByKeyVersion: integer('replaced_by_key_version').notNull(),
+        newEncryptionPublicKey: bytea('new_encryption_public_key').notNull(),
+        newSigningPublicKey: bytea('new_signing_public_key').notNull(),
+        newKemPublicKey: bytea('new_kem_public_key').notNull(),
+        successionSignature: bytea('succession_signature').notNull(),
+    },
+    (table) => [
+        primaryKey({ columns: [table.userId, table.keyVersion] }),
+        check(
+            'account_identity_history_versions_valid',
+            sql`${table.version} = 1 and ${table.keyVersion} > 0 and ${table.replacedByKeyVersion} > ${table.keyVersion}`,
+        ),
+        check(
+            'account_identity_history_kem_valid',
+            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and octet_length(${table.kemSignature}) = 64)`,
+        ),
+        check(
+            'account_identity_history_lengths_valid',
+            sql`octet_length(${table.wrappingSalt}) = 32 and octet_length(${table.encryptionPublicKey}) = 32 and octet_length(${table.encryptionPrivateKeyNonce}) = 24 and octet_length(${table.encryptedEncryptionPrivateKey}) = 48 and octet_length(${table.signingPublicKey}) = 32 and octet_length(${table.signingSeedNonce}) = 24 and octet_length(${table.encryptedSigningSeed}) = 48 and octet_length(${table.newEncryptionPublicKey}) = 32 and octet_length(${table.newSigningPublicKey}) = 32 and octet_length(${table.newKemPublicKey}) = 1184 and octet_length(${table.successionSignature}) = 64`,
         ),
     ],
 );

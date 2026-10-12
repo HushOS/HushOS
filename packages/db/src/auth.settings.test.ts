@@ -91,6 +91,7 @@ describe('identity lookup', () => {
                 'encryptionPublicKey',
                 'kemPublicKey',
                 'kemSignature',
+                'keyVersion',
                 'name',
                 'signingPublicKey',
                 'userId',
