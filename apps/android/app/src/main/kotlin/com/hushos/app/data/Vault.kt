@@ -42,7 +42,16 @@ import com.hushos.core.shareSeal
 import com.hushos.core.identityFingerprint
 import com.hushos.core.versionReseal
 import com.hushos.core.ContentKey
+import com.hushos.core.MetadataStatement
+import com.hushos.core.NodeKind
+import com.hushos.core.VersionStatement
+import com.hushos.core.contentSuite
+import com.hushos.core.identitySucceed
+import com.hushos.core.metadataSign
+import com.hushos.core.settingsKeyCreate
+import com.hushos.core.settingsKeyOpen
 import com.hushos.core.versionSeal
+import com.hushos.core.versionSign
 import com.hushos.core.workspaceOpen
 import org.json.JSONArray
 import org.json.JSONObject
@@ -75,7 +84,8 @@ data class Opened(
     }
     /* When it last changed in HushOS (an upload, a rename, a move), whatever the file's own date: what Recent goes by, as on the web. */
     val changedMillis: Long? get() = node.updatedAt?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
-    val hasThumbnail get() = !isFolder && node.currentVersion?.contentSuite == 2u
+    /* Suites 2 and 3 carry a thumbnail trailer when the sealed size says so; suite 1 never does. */
+    val hasThumbnail get() = !isFolder && (node.currentVersion?.contentSuite ?: 0u) >= 2u
 }
 
 /*
@@ -107,7 +117,8 @@ internal fun sealedSize(node: NodeView, key: ByteArray): Long? {
 data class TrashItem(val item: Opened, val parentTrashed: Boolean, val wasIn: String? = null)
 
 data class OpenedVersion(val content: Content, val versionId: String) {
-    val layout get() = contentLayout(content.plaintextSize, content.thumbnailBytes)
+    /* The object's layout: suite 3 is padded, so it has more chunks than the file's bytes fill; the trailing ones decrypt to nothing. */
+    val layout get() = contentLayout(content.suite, content.plaintextSize, content.thumbnailBytes)
 }
 
 /*
@@ -116,7 +127,7 @@ data class OpenedVersion(val content: Content, val versionId: String) {
  * their parents. A node-to-parent index persists so a document id the system
  * asks about cold is found by listing the folder it was last seen in.
  */
-class Vault(private val context: Context, val api: DriveApi) {
+class Vault(internal val context: Context, val api: DriveApi) {
     private var accountKey: ByteArray? = null
     private var workspace: WorkspaceView? = null
     private var workspaceKey: ByteArray? = null
@@ -131,12 +142,20 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* Node keys and rows by (workspace, node): a share's keys never answer for this account's own nodes (NodeCache). */
     internal val nodes = NodeCache { workspace?.workspaceId }
     private var identity: IdentityKeys? = null
+    /* The account's earlier identities, opened, newest first; null until asked (shares sealed to earlier keys need them). */
+    private var history: List<IdentityKeys>? = null
+    /* The settings key, opened under the account key once the server served it (or this device made it). */
+    private var settingsKey: ByteArray? = null
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
             val json = JSONObject(indexFile.readText())
             for (key in json.keys()) map[key] = json.getString(key)
         }
+    }
+
+    init {
+        api.onBadSignature = { identity = null; history = null }
     }
 
     companion object {
@@ -178,11 +197,12 @@ class Vault(private val context: Context, val api: DriveApi) {
         // Never opened on any device: the top folder is made here, once, for the app, the Files app and the queue alike.
         if (view.root == null) {
             val parentEpoch = grant.grant.workspaceKeyVersion
+            val ws = view.workspaceId
             view = ensureRoot(view, parentEpoch, api, seal = { id, epoch, parentKeyEpoch ->
                 val key = randomBytes(32u)
-                val wrapped = nodeWrap(NodeKeyContext(view.workspaceId, id, view.workspaceId, parentKeyEpoch, epoch), wsKey, key)
-                val sealed = metadataSeal(MetadataContext(view.workspaceId, id, 1uL), key, NodeMetadata(ROOT_NAME, null, null, null))
-                base64urlEncode(wrapped) to base64urlEncode(sealed)
+                val wrapped = nodeWrap(NodeKeyContext(ws, id, ws, parentKeyEpoch, epoch), wsKey, key)
+                val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, NodeMetadata(ROOT_NAME, null, null, null))
+                SealedRoot(base64urlEncode(wrapped), base64urlEncode(sealed), signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed))
             })
             runCatching { mirror.putDocument(key, api.workspaceJson().toString()) }
         }
@@ -208,6 +228,33 @@ class Vault(private val context: Context, val api: DriveApi) {
 
     /* The identity's private keys, opened once under the account key. */
     internal fun identityKeys(): IdentityKeys = identity ?: identityOpen(api.session.userId, unlockAccount(), Auth.identity(context)).also { identity = it }
+
+    /*
+     * Every identity this account has held, the current one first, then the earlier ones newest first, each opened (and
+     * so proven) under the account key. Without the network the earlier ones are left out this time, not forgotten;
+     * `strict` fails instead, for a caller that would misread their absence.
+     */
+    internal fun identities(strict: Boolean = false): List<IdentityKeys> {
+        val current = identityKeys()
+        val load = { Auth.identityHistory(context).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() }
+        val earlier = history ?: (if (strict) load() else runCatching(load).getOrNull())?.also { history = it }
+        return listOf(current) + earlier.orEmpty().filter { it.signingPublicKey != current.signingPublicKey }
+    }
+
+    /*
+     * The signing keys this device trusts and for whom: its own, current and earlier, and every checked contact's.
+     * Without the earlier ones, what this account signed before replacing its keys would read as forged, so their
+     * absence fails the whole answer (no row is marked) rather than marking those rows.
+     */
+    fun trust(): Trust = Trust.of(api.session.userId, identities(strict = true).map { base64urlDecode(it.signingPublicKey) }, loadSettings().contacts)
+
+    /* The writer's signature over a metadata envelope (docs/integrity-design.md, section 2): every write that sets one sends it. */
+    internal fun signMetadata(workspaceId: String, nodeId: String, kind: NodeKind, metadataVersion: ULong, envelope: ByteArray): String =
+        base64urlEncode(metadataSign(identityKeys().signingSeed, MetadataStatement(workspaceId, nodeId, kind, metadataVersion), envelope))
+
+    /* The writer's signature over a content-key envelope, in the suite of the object it opens. */
+    internal fun signVersion(workspaceId: String, nodeId: String, versionId: String, objectId: String, suite: UInt, envelope: ByteArray): String =
+        base64urlEncode(versionSign(identityKeys().signingSeed, VersionStatement(workspaceId, nodeId, versionId, objectId, suite), envelope))
 
     /* The links the owner made for this item. */
     fun links(item: Opened): List<LinkView> = api.links(item.id, item.node.workspaceId)
@@ -275,17 +322,57 @@ class Vault(private val context: Context, val api: DriveApi) {
     /* This device's mark for the account and identity signed in now (see SettingsMark). */
     private fun settingsMarkKey(): String = SettingsMark.key(api.session.userId, identityKeys().encryptionPublicKey)
 
-    /* The settings as the server holds them, refused when older than this device has seen (or gone after it saw some). */
+    /* The settings key the server holds, opened under the account key; null until some device stored one. */
+    private fun openSettingsKey(stored: Auth.StoredSettings): ByteArray? {
+        settingsKey?.let { return it }
+        val wrapped = stored.key ?: return null
+        return settingsKeyOpen(api.session.userId, unlockAccount(), wrapped).also { settingsKey = it }
+    }
+
+    /*
+     * The settings key for the next save: the stored one, or a new one wrapped under the account key and stored first
+     * (once per account; a device that raced reads the one that won and uses that).
+     */
+    private fun settingsKeyForSave(): ByteArray {
+        settingsKey?.let { return it }
+        val stored = Auth.settings(context)
+        openSettingsKey(stored)?.let { return it }
+        val made = settingsKeyCreate(api.session.userId, unlockAccount())
+        try {
+            Auth.putSettingsKey(context, made.envelope)
+        } catch (error: AuthFailure) {
+            if (error.status != 409) throw error
+            return openSettingsKey(Auth.settings(context)) ?: throw error
+        }
+        settingsKey = made.key
+        return made.key
+    }
+
+    /*
+     * The settings as the server holds them, refused when older than this device has seen (or gone after it saw some).
+     * Version 2 opens under the settings key; version 1 (sealed under an identity's X25519 key) under the current
+     * identity or an earlier one, and is sealed again as version 2 at the next save.
+     */
     fun loadSettings(): Settings {
-        val keys = identityKeys()
         val mark = SettingsMark.of(context)
         val markKey = settingsMarkKey()
-        val envelope = Auth.settings(context)
+        val stored = Auth.settings(context)
+        val envelope = stored.envelope
         mark.check(markKey, envelope?.settingsVersion)
         if (envelope == null) return Settings.empty()
-        val settings = Settings.parse(settingsOpen(keys.encryptionPrivateKey, api.session.userId, envelope), envelope.settingsVersion)
+        val text = if (envelope.version == 2u) settingsOpen(api.session.userId, openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again."), null, envelope)
+        else openLegacySettings(envelope)
+        val settings = Settings.parse(text, envelope.settingsVersion)
         mark.record(markKey, envelope.settingsVersion)
         return settings
+    }
+
+    private fun openLegacySettings(envelope: com.hushos.core.SettingsEnvelope): String {
+        var refusal: Exception? = null
+        for (keys in identities()) {
+            try { return settingsOpen(api.session.userId, null, keys.encryptionPrivateKey, envelope) } catch (error: Exception) { if (refusal == null) refusal = error }
+        }
+        throw refusal ?: AuthFailure("Your settings could not be opened.")
     }
 
     /*
@@ -294,14 +381,15 @@ class Vault(private val context: Context, val api: DriveApi) {
      * is edited in place, so fields this app doesn't know (the web's, a later client's) survive.
      */
     internal fun updateSettings(change: (Settings) -> Unit): Settings {
-        val keys = identityKeys()
+        val key = settingsKeyForSave()
         var attempt = 0
         while (true) {
             val settings = loadSettings()
             change(settings)
             val next = settings.version + 1uL
             try {
-                val saved = Auth.putSettings(context, settings.version, settingsSeal(keys.encryptionPrivateKey, api.session.userId, next, settings.text()))
+                // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
+                val saved = Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
                 SettingsMark.of(context).record(settingsMarkKey(), maxOf(saved, next))
                 return Settings(settings.json, saved)
             } catch (error: AuthFailure) {
@@ -320,6 +408,8 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun lookup(email: String): Lookup {
         val contact = Auth.lookupContact(context, email)
         val pinned = loadSettings().contacts[contact.userId]
+        // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
+        if (pinned != null && !pinned.matches(contact.served)) followPin(pinned, contact.served)?.let { return Lookup(contact, it, changed = false, followed = true) }
         var changed = false
         if (pinned != null) {
             // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
@@ -331,11 +421,44 @@ class Vault(private val context: Context, val api: DriveApi) {
         return Lookup(contact, pinned, changed, recheck = pinned != null && !pinned.verified)
     }
 
-    /* Trusts the keys shown now: what the person does after checking the words. A fresh fingerprint and signing key replace an old pin's. */
+    /*
+     * Trusts the keys shown now: what the person does after checking the words. A fresh fingerprint and signing key
+     * replace an old pin's. The earlier keys a succession vouched for stay only when the words were compared over the
+     * same keys again (the notice after a succession); a different key accepted by hand vouches for none of them.
+     */
     fun pin(contact: Contact) {
-        val pin = ContactPin(contact.userId, contact.email, contact.name, contact.encryptionPublicKey, contact.signingPublicKey,
-            contact.fingerprint, Instant.now().toString(), if (contact.kemSigned) contact.kemHash else null)
-        updateSettings { it.pin(pin) }
+        updateSettings { settings ->
+            val before = settings.contacts[contact.userId]
+            val previous = if (before != null && before.signingPublicKey == contact.signingPublicKey) before.previousSigningKeys else emptyList()
+            settings.pin(ContactPin(contact.userId, contact.email, contact.name, contact.encryptionPublicKey, contact.signingPublicKey,
+                contact.fingerprint, Instant.now().toString(), if (contact.kemSigned) contact.kemHash else null, contact.keyVersion, previous, null))
+        }
+    }
+
+    /*
+     * A pinned contact whose served keys differ: their succession chain from the pin, checked link by link; the pin
+     * follows it and is saved when it holds. Null when it doesn't, or can't be asked: the changed-key warning stands.
+     */
+    internal fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
+        if (!needsChain(pin, served)) return null
+        val links = runCatching { Auth.succession(context, pin.userId, chainFrom(pin)) }.getOrNull() ?: return null
+        val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
+        updateSettings { settings ->
+            // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
+            val now = settings.contacts[pin.userId]
+            if (now == null || now.encryptionPublicKey == pin.encryptionPublicKey) settings.pin(next)
+        }
+        return next
+    }
+
+    /* Pins as the settings hold them, each following a checked succession to the keys served for it, when one is given. */
+    internal fun followedPins(served: Map<String, ServedIdentity>): Map<String, ContactPin> {
+        val pins = HashMap(loadSettings().contacts)
+        for ((userId, identity) in served) {
+            val pin = pins[userId] ?: continue
+            if (!pin.matches(identity)) followPin(pin, identity)?.let { pins[userId] = it }
+        }
+        return pins
     }
 
     fun unpin(pin: ContactPin) {
@@ -356,14 +479,18 @@ class Vault(private val context: Context, val api: DriveApi) {
         val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in People you share with before you share with them.")
         if (!current.verified) throw SharingRefused("Check ${current.displayName}’s words again in People you share with before you share with them.")
         val contact = Auth.lookupContact(context, current.email)
-        if (contact.userId != current.userId || contact.encryptionPublicKey != current.encryptionPublicKey) throw ContactChanged()
-        val kem = granteeKem(current, contact.kemPublicKey, contact.kemSignature)
-        kem.firstHash?.let { hash -> updateSettings { it.rememberKem(current.userId, hash) } }
+        if (contact.userId != current.userId) throw ContactChanged()
+        // Keys replaced by a succession the pinned keys signed are followed; any other change is refused.
+        val checked = if (current.matches(contact.served)) current else followPin(current, contact.served) ?: throw ContactChanged()
+        val kem = granteeKem(checked, contact.kemPublicKey, contact.kemSignature)
+        kem.firstHash?.let { hash -> updateSettings { it.rememberKem(checked.userId, hash) } }
         val keys = identityKeys()
-        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, current.userId, api.session.userId)
-        val envelope = shareSeal(ctx, nodeKey, keys.encryptionPrivateKey, base64urlDecode(current.encryptionPublicKey), kem.publicKey)
+        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, checked.userId, api.session.userId)
+        // Suite 3: a fresh X25519 key and ML-KEM to the pinned keys, signed by this account's identity.
+        val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(checked.encryptionPublicKey), kem.publicKey)
         val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
+        ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
         updateSettings { it.addShare(item.id, current.userId) }
         return share
     }
@@ -372,6 +499,108 @@ class Vault(private val context: Context, val api: DriveApi) {
     fun revokeShare(share: OwnedShare, item: Opened) {
         updateSettings { it.removeShare(item.id, share.granteeId) }
         api.revokeShare(share.id, item.node.workspaceId)
+    }
+
+    /*
+     * Replaces this account's sharing keys (X25519, Ed25519, ML-KEM) by a succession the current signing key signs
+     * (docs/integrity-design.md, section 4): people who checked the old words follow it without comparing again. The
+     * settings move to their own key first if they are still sealed under the identity, the new identity is stored,
+     * opened (the old one joins the history, which still opens what was shared to it), and every share in the ledger
+     * is sealed again in suite 3 under the new keys. Returns how many shares were sealed again and who was left out.
+     */
+    fun replaceSharingKeys(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
+        val userId = api.session.userId
+        if (Auth.settings(context).envelope?.version == 1u) updateSettings { }
+        val seen = SettingsMark.of(context).seen(settingsMarkKey())
+        val current = Auth.identity(context)
+        val succession = identitySucceed(userId, unlockAccount(), current)
+        Auth.succeedIdentity(context, succession)
+        // From here the shares wait to be sealed again: a pass cut short is finished on the next Drive open, never by minting again.
+        ShareSeals.of(context).pending = succession.identity.keyVersion
+        identity = null
+        history = null
+        val keys = identityKeys()
+        if (keys.signingPublicKey != succession.identity.signingPublicKey) throw ApiError(502, "HushOS answered with other keys than the new ones. Try again.")
+        // The settings didn't change with the identity: this device's high-water mark carries over to the new one.
+        SettingsMark.of(context).record(settingsMarkKey(), seen)
+        // The keys are replaced from here on, whatever happens next: a failure below is said, not undone or retried by minting again.
+        return try {
+            resealLedgerShares(progress)
+        } catch (error: Exception) {
+            if (error is NotAuthenticated) throw error
+            RotationResult(0, listOf("Your shares weren’t sealed again under the new keys yet. They’re tried again the next time you open HushOS."))
+        }
+    }
+
+    /*
+     * The re-seal pass: every share in the ledger that needs it (see needsReseal) is sealed again with this account's
+     * current identity, in suite 3, only to pins that vouch for the keys served now (following a checked succession
+     * first), never to X25519 alone. It finishes a key replacement that failed or was cut short, upgrades older
+     * suites, and follows grantees who replaced their keys. What it sealed is recorded (ShareSeals); a pass with no
+     * failures clears the waiting replacement and is not run again for a day.
+     */
+    internal fun resealLedgerShares(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
+        val seals = ShareSeals.of(context)
+        val settings = loadSettings()
+        val ledger = settings.ledger
+        val pins = HashMap(settings.contacts)
+        val keys = identityKeys()
+        val skipped = LinkedHashSet<String>()
+        val firstKems = HashMap<String, String>()
+        val served = HashMap<String, Contact?>()
+        val todo = ledger.shares.filterValues { it.isNotEmpty() }
+        var done = 0
+        var failed = 0
+        progress(0, todo.size)
+        for ((index, entry) in todo.entries.withIndex()) {
+            val (nodeId, people) = entry
+            try {
+                // A node gone from the drive has nothing left to share; its ledger entry goes with its next revoke.
+                val item = runCatching { resolve(nodeId) }.getOrNull()?.takeIf { it.node.workspaceId == workspaceId && it.node.trashedAt == null } ?: continue
+                val nodeKey = nodes.key(item) ?: continue
+                val rows = api.shares(item.id, item.node.workspaceId).filter { it.granteeId in people }
+                val wire = rows.mapNotNull { share ->
+                    // Someone no longer pinned, or not found now, keeps the envelope they have.
+                    val pin = pins[share.granteeId] ?: return@mapNotNull null
+                    val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email) }.getOrNull() }
+                    val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
+                    if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, grantee.keyVersion)) return@mapNotNull null
+                    if (!pin.matches(grantee.served)) followPin(pin, grantee.served)?.let { pins[share.granteeId] = it }
+                    JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", JSONObject()
+                        .put("encryptionPublicKey", grantee.encryptionPublicKey).put("signingPublicKey", grantee.signingPublicKey)
+                        .put("kem", grantee.kemPublicKey?.let { JSONObject().put("publicKey", it).put("signature", grantee.kemSignature ?: "") } ?: JSONObject.NULL))
+                }
+                val plan = planReseal(item.id, wire, emptyList(), ledger, pins)
+                skipped.addAll(plan.skipped)
+                firstKems.putAll(plan.firstKems)
+                for (share in plan.shares) {
+                    val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, share.granteeUserId, api.session.userId)
+                    api.resealShare(share.id, item.node.workspaceId, item.node.keyEpoch, base64urlEncode(shareSeal(ctx, nodeKey, keys, share.publicKey, share.kemPublicKey)))
+                    // Sealed to the pinned keys, which are the ones served at this version.
+                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, served[share.granteeUserId]?.keyVersion)))
+                    done++
+                }
+            } catch (error: Unreachable) {
+                throw error
+            } catch (error: NotAuthenticated) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w("HushOSShares", "sealing the shares of $nodeId again failed: ${error.javaClass.name}")
+                failed++
+            } finally {
+                progress(index + 1, todo.size)
+            }
+        }
+        if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
+        else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
+        if (firstKems.isNotEmpty()) runCatching { updateSettings { s -> firstKems.forEach { (user, hash) -> s.rememberKem(user, hash) } } }
+        return RotationResult(done, skipped.toList())
+    }
+
+    /* Whether the re-seal pass should run now: a key replacement is waiting to finish, or the last full pass is a day old. */
+    fun resealDue(now: Long = System.currentTimeMillis()): Boolean {
+        val seals = ShareSeals.of(context)
+        return seals.pending != null || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
     }
 
     /* Rotates the subtree under `item` after a revoke; returns how many nodes were re-sealed and who was left out, and why. */
@@ -584,15 +813,17 @@ class Vault(private val context: Context, val api: DriveApi) {
         val shares = api.sharedWithMe()
         if (shares.isEmpty()) return emptyList()
         val own = workspaceId
-        val keys = identityKeys()
-        val pins = loadSettings().contacts
+        val identities = identities()
+        val served = shares.associate { it.granterId to it.granter }
+        // A granter whose keys changed by a checked succession is followed before anything opens.
+        val pins = followedPins(served)
         return shares.map { share ->
             runCatching {
                 // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
                 checkShare(share, own)
                 checkSuite(share.node.envelopeSuite)
-                val granter = granterKey(share.granterId, share.granterName.ifEmpty { share.granterEmail }, share.granterPublicKey, pins)
-                val key = shareOpen(base64urlDecode(share.shareEnvelope), granter, keys,
+                val granters = granterKeys(share.granterId, share.granterName.ifEmpty { share.granterEmail }, share.granter, pins)
+                val key = openShare(base64urlDecode(share.shareEnvelope), granters, identities,
                     ShareContext(share.workspaceId, share.node.id, share.keyEpoch, api.session.userId, share.granterId))
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
                 // Kept under the granter's workspace only (NodeCache.adoptShare). The root's parent is the granter's and
@@ -699,15 +930,19 @@ class Vault(private val context: Context, val api: DriveApi) {
         return OpenedVersion(content, id)
     }
 
-    /* Downloads and decrypts a file's version into `destination`, chunk by chunk, resuming a `.part` an earlier try left. */
+    /*
+     * Downloads and decrypts a file's version into `destination`, chunk by chunk, resuming a `.part` an earlier try left.
+     * Every chunk is fetched, the padding of a suite 3 object included, so the store never learns where the file ends;
+     * the core returns only the file's own bytes.
+     */
     fun download(id: String, destination: File, version: VersionListView? = null, progress: (Float) -> Unit = {}) {
         val item = resolve(id)
         val v = openVersion(item, version)
         var url = api.versionUrl(v.versionId, item.node.workspaceId)
         Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
-            online = { Resumable.online(context) }, progress = progress,
+            online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
             onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
-        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, v.content.thumbnailBytes, index))) }
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }
 
     fun thumbnail(id: String): ByteArray? {
@@ -718,7 +953,7 @@ class Vault(private val context: Context, val api: DriveApi) {
         val ciphertext = mirror.thumbnail(v.versionId) ?: run {
             val url = api.thumbnailUrl(v.versionId, item.node.workspaceId) ?: return null
             // The range is a fixed tail window (so the store never learns the trailer's length); keep only the trailer at its end.
-            val window = api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes))
+            val window = api.range(url, thumbnailRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes))
             window.copyOfRange(maxOf(0, window.size - v.content.thumbnailBytes.toInt() - 16), window.size).also { mirror.putThumbnail(v.versionId, it) }
         }
         return thumbnailDecrypt(v.content, ciphertext)
@@ -778,7 +1013,8 @@ class Vault(private val context: Context, val api: DriveApi) {
         val metadata = NodeMetadata(checkName(name), null, null, null)
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
         val node = api.createFolder(ws, JSONObject().put("id", id).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
-            .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed)))
+            .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
+            .put("metadataSignature", signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)))
         return adoptWritten(node, key, metadata, ws, id)
     }
 
@@ -786,8 +1022,10 @@ class Vault(private val context: Context, val api: DriveApi) {
         val item = resolve(id)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val metadata = item.metadata.copy(name = name)
-        val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, item.node.metadataVersion + 1uL), key, metadata)
-        val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed))
+        val next = item.node.metadataVersion + 1uL
+        val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, next), key, metadata)
+        val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
+            signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed))
         return adoptWritten(node, key, metadata, item.node.workspaceId, id)
     }
 
@@ -832,10 +1070,13 @@ class Vault(private val context: Context, val api: DriveApi) {
             VersionContext(ws, newId, versionId, version.objectId), version.contentSuite, key,
             ContentKey(opened.content.key, opened.content.plaintextSize, opened.content.thumbnailBytes),
         )
+        // Signed over the copy's node and version, the source version's object and its content suite.
         val node = api.copy(source.id, ws, JSONObject().put("sourceVersionId", version.id)
             .put("node", JSONObject().put("id", newId).put("parentId", parent.id).put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEpoch", epoch.toLong())
-                .put("keyEnvelope", base64urlEncode(keyEnvelope)).put("metadataEnvelope", base64urlEncode(metadataEnvelope)))
-            .put("versionId", versionId).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope)))
+                .put("keyEnvelope", base64urlEncode(keyEnvelope)).put("metadataEnvelope", base64urlEncode(metadataEnvelope))
+                .put("metadataSignature", signMetadata(ws, newId, NodeKind.FILE, 1uL, metadataEnvelope)))
+            .put("versionId", versionId).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope))
+            .put("versionSignature", signVersion(ws, newId, versionId, version.objectId, version.contentSuite, contentKeyEnvelope)))
         return adoptWritten(node, key, metadata, ws, newId)
     }
 
@@ -928,13 +1169,17 @@ class Vault(private val context: Context, val api: DriveApi) {
             val sealed = metadataSeal(MetadataContext(ws, nodeId, 1uL), nodeKey, metadata)
             nodeInput = JSONObject().put("existing", false).put("id", nodeId).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
                 .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
+                .put("metadataSignature", signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed))
         }
+        // Suite 3: the object is padded to a Padmé bucket, so its size says little about the file's; the core pads each chunk.
+        val suite = contentSuite()
         val version = versionSeal(VersionContext(ws, nodeId, versionId, objectId), nodeKey, contentKey, size, thumbnailBytes)
-        val content = Content(ws, objectId, 2u, contentKey, contentNonce, size, thumbnailBytes)
+        val content = Content(ws, objectId, suite, contentKey, contentNonce, size, thumbnailBytes)
         val layout = version.layout
         val begun = api.beginUpload(ws, JSONObject().put("node", nodeInput).put("versionId", versionId).put("objectId", objectId)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
-            .put("contentSuite", 2).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString()))
+            .put("versionSignature", signVersion(ws, nodeId, versionId, objectId, suite, version.envelope))
+            .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString()))
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -943,10 +1188,13 @@ class Vault(private val context: Context, val api: DriveApi) {
                 for (index in 0uL until layout.chunkCount) {
                     val partNumber = index.toInt() + 1
                     if (!urls.containsKey(partNumber)) for (part in api.partUrls(begun.uploadId, ws, partNumber)) urls[part.partNumber] = part.url
+                    // The file's own bytes for this chunk (none in the padding past its end); the core adds the zeros.
                     val length = chunkLength(size, index).toInt()
                     val plaintext = ByteArray(length)
-                    raf.seek((index * layout.chunkBytes).toLong())
-                    raf.readFully(plaintext)
+                    if (length > 0) {
+                        raf.seek((index * layout.chunkBytes).toLong())
+                        raf.readFully(plaintext)
+                    }
                     var sealed = chunkEncrypt(content, index, plaintext)
                     if (index == layout.chunkCount - 1uL && thumbnail != null && thumbnailBytes > 0u) sealed += thumbnailEncrypt(content, thumbnail)
                     // A part the network dropped is sent again; an expired address is fetched fresh first.
@@ -958,7 +1206,7 @@ class Vault(private val context: Context, val api: DriveApi) {
                         api.putPart(urls[partNumber] ?: throw ApiError(500, "No URL for part $partNumber"), sealed)
                     }
                     etags.put(JSONObject().put("partNumber", partNumber).put("etag", etag))
-                    progress((index + 1uL).toFloat() / layout.chunkCount.toFloat())
+                    progress(Resumable.fraction(index + 1uL, layout.chunkCount, layout.chunkBytes.toLong(), size.toLong()))
                 }
             }
         } catch (error: Exception) {
@@ -971,8 +1219,9 @@ class Vault(private val context: Context, val api: DriveApi) {
         if (replacing != null) {
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
-            val sealed = metadataSeal(MetadataContext(ws, nodeId, node.metadataVersion + 1uL), nodeKey, final)
-            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed))
+            val next = node.metadataVersion + 1uL
+            val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
+            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed))
         }
         return adoptWritten(node, nodeKey, final, ws, nodeId)
     }

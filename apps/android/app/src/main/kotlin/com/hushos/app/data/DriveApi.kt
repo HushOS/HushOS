@@ -8,20 +8,37 @@ import java.net.URL
 import java.net.URLEncoder
 
 class NotAuthenticated : Exception("Sign in to HushOS to see your files.")
-class ApiError(val status: Int, message: String) : Exception(message)
+class ApiError(val status: Int, message: String, val code: String? = null) : Exception(message)
 class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
+
+/* What every request says this client is: 3 since content suite 3, writer signatures and signed shares. */
+const val CLIENT_HEADER = "android/3"
+
+/* Who the server says wrote a record: for display only; the signature is what this device checks. */
+data class Signer(val id: String, val name: String, val email: String) {
+    val displayName: String get() = name.ifEmpty { email }
+
+    companion object {
+        fun from(json: JSONObject?): Signer? = json?.let { Signer(it.getString("id"), it.optString("name"), it.optString("email")) }
+    }
+}
+
+private fun JSONObject.nullableString(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
 
 /* The Drive API's views, as the server returns them (packages/drive/src/api.ts). */
 data class VersionView(
     val id: String, val objectId: String, val contentKeyEnvelope: String, val status: String,
     val contentSuite: UInt, val chunkCount: Int, val contentNonce: String, val plaintextSize: String?,
+    /* The account that sealed the content-key envelope and its signature; null before signatures (and the signer on link routes). */
+    val signer: Signer? = null, val signature: String? = null,
 ) {
     companion object {
         fun from(json: JSONObject) = VersionView(
             json.getString("id"), json.getString("objectId"), json.getString("contentKeyEnvelope"), json.getString("status"),
             json.getInt("contentSuite").toUInt(), json.getInt("chunkCount"), json.getString("contentNonce"),
             json.optString("plaintextSize").takeIf { !json.isNull("plaintextSize") },
+            Signer.from(json.optJSONObject("signer")), json.nullableString("signature"),
         )
     }
 }
@@ -35,6 +52,8 @@ data class NodeView(
     val rawJson: String = "",
     /* How its key and metadata are sealed; rows from before servers said so are suite 1. */
     val envelopeSuite: Int = ENVELOPE_SUITE,
+    /* Who wrote the metadata envelope and their signature; null before signatures (and the signer on link routes). */
+    val metadataSigner: Signer? = null, val metadataSignature: String? = null,
 ) {
     val isFolder get() = kind == "folder"
 
@@ -50,6 +69,7 @@ data class NodeView(
             if (json.isNull("changeSeq")) null else json.optInt("changeSeq"),
             json.toString(),
             if (json.isNull("envelopeSuite")) ENVELOPE_SUITE else json.getInt("envelopeSuite"),
+            Signer.from(json.optJSONObject("metadataSigner")), json.nullableString("metadataSignature"),
         )
     }
 }
@@ -81,8 +101,12 @@ data class StorageBreakdown(val trashBytes: Long, val trashItems: Int, val super
 data class ShareView(
     val id: String, val workspaceId: String, val role: String, val createdAt: String, val keyEpoch: ULong, val shareEnvelope: String,
     val granterId: String, val granterName: String, val granterEmail: String, val granterPublicKey: String, val node: NodeView,
+    /* The granter's current signing key and identity version: what a suite 3 share is checked against, and where a succession chain starts. */
+    val granterSigningKey: String = "", val granterKeyVersion: ULong? = null,
 ) {
     val isFolder get() = node.isFolder
+    /* The granter's identity as served now, for the pin check. */
+    val granter: ServedIdentity get() = ServedIdentity(granterKeyVersion, granterPublicKey, granterSigningKey, null)
 }
 
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
@@ -90,13 +114,18 @@ private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { get
 /* The Drive API over HttpURLConnection with the stored session cookie; every method is one route. */
 class DriveApi(val session: Shared.Session) : RootApi {
     private val origin = session.origin
+    /*
+     * Called when the server could not verify a write's signature against this account's current keys: the
+     * identity this device holds is stale (replaced on another device), so it is opened afresh before the next try.
+     */
+    @Volatile var onBadSignature: () -> Unit = {}
     private val cookie = (if (origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
     private fun open(path: String, method: String): HttpURLConnection {
         val connection = URL("$origin/api/drive$path").openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.setRequestProperty("Cookie", cookie)
-        connection.setRequestProperty("HushOS-Client", "android/2")
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.setRequestProperty("Origin", origin)
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
@@ -115,9 +144,12 @@ class DriveApi(val session: Shared.Session) : RootApi {
         }
         if (status == 401) throw NotAuthenticated()
         if (status !in 200..299) {
-            val message = runCatching { JSONObject(text).optString("message") }.getOrNull()
+            val body = runCatching { JSONObject(text) }.getOrNull()
+            val message = body?.optString("message")
+            val code = body?.optString("code")?.ifEmpty { null }
             if (status == 404) throw NotFound(if (message.isNullOrEmpty()) "This item no longer exists." else message)
-            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message)
+            if (code == "bad-signature") onBadSignature()
+            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message, code)
         }
         return if (text.isEmpty()) JSONObject() else JSONObject(text)
     }
@@ -196,7 +228,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
         val granter = it.getJSONObject("granter")
         ShareView(it.getString("id"), it.getString("workspaceId"), it.getString("role"), it.getString("createdAt"), it.getLong("keyEpoch").toULong(),
             it.getString("shareEnvelope"), granter.getString("id"), granter.optString("name"), granter.optString("email"), granter.getString("encryptionPublicKey"),
-            NodeView.from(it.getJSONObject("node")))
+            NodeView.from(it.getJSONObject("node")), granter.optString("signingPublicKey"),
+            if (granter.has("keyVersion") && !granter.isNull("keyVersion")) granter.getLong("keyVersion").toULong() else null)
     }
 
     fun links(nodeId: String, workspaceId: String): List<LinkView> =
@@ -240,13 +273,19 @@ class DriveApi(val session: Shared.Session) : RootApi {
             )
         }
 
-    fun rotateNodes(workspaceId: String, nodeId: String, nodes: JSONArray): List<String> =
-        send("/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.getString("status") }
+    /* Each node's outcome, by id. */
+    fun rotateNodes(workspaceId: String, nodeId: String, nodes: JSONArray): List<Pair<String, String>> =
+        send("/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.optString("id") to it.getString("status") }
 
     fun shares(nodeId: String, workspaceId: String): List<OwnedShare> =
         get("/nodes/$nodeId/shares" + q("workspaceId" to workspaceId)).getJSONArray("shares").objects().map(OwnedShare::from)
 
     fun createShare(nodeId: String, body: JSONObject): OwnedShare = OwnedShare.from(send("/nodes/$nodeId/shares", body).getJSONObject("share"))
+
+    /* Replaces a live share's envelope at the node's current epoch with a suite 3 one (after this account's keys were replaced). */
+    fun resealShare(shareId: String, workspaceId: String, keyEpoch: ULong, envelope: String) {
+        send("/shares/$shareId/envelope", JSONObject().put("workspaceId", workspaceId).put("keyEpoch", keyEpoch.toLong()).put("shareEnvelope", envelope), "PUT")
+    }
 
     fun revokeShare(shareId: String, workspaceId: String) {
         send("/shares/$shareId", JSONObject().put("workspaceId", workspaceId), "DELETE")
@@ -288,14 +327,16 @@ class DriveApi(val session: Shared.Session) : RootApi {
 
     override fun createRoot(workspaceId: String, root: RootInput): NodeView =
         NodeView.from(send("/workspaces/$workspaceId/root", JSONObject().put("id", root.id).put("keyEpoch", root.keyEpoch.toLong())
-            .put("parentKeyEpoch", root.parentKeyEpoch.toLong()).put("keyEnvelope", root.keyEnvelope).put("metadataEnvelope", root.metadataEnvelope)).getJSONObject("root"))
+            .put("parentKeyEpoch", root.parentKeyEpoch.toLong()).put("keyEnvelope", root.keyEnvelope).put("metadataEnvelope", root.metadataEnvelope)
+            .put("metadataSignature", root.metadataSignature)).getJSONObject("root"))
 
     fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
         NodeView.from(send("/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
 
-    fun rename(nodeId: String, workspaceId: String, metadataVersion: ULong, keyEpoch: ULong, metadataEnvelope: String): NodeView =
+    /* `metadataSignature` is over `metadataVersion + 1`, the version the server stores. */
+    fun rename(nodeId: String, workspaceId: String, metadataVersion: ULong, keyEpoch: ULong, metadataEnvelope: String, metadataSignature: String): NodeView =
         NodeView.from(send("/nodes/$nodeId/metadata", JSONObject().put("workspaceId", workspaceId).put("metadataVersion", metadataVersion.toLong())
-            .put("keyEpoch", keyEpoch.toLong()).put("metadataEnvelope", metadataEnvelope)).getJSONObject("node"))
+            .put("keyEpoch", keyEpoch.toLong()).put("metadataEnvelope", metadataEnvelope).put("metadataSignature", metadataSignature)).getJSONObject("node"))
 
     fun move(nodeId: String, workspaceId: String, parentId: String, parentKeyEpoch: ULong, keyEnvelope: String): NodeView =
         NodeView.from(send("/nodes/$nodeId/parent", JSONObject().put("workspaceId", workspaceId).put("parentId", parentId)

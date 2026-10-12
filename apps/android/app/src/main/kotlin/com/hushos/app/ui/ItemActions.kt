@@ -156,6 +156,7 @@ fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle:
             Text(item.name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal), maxLines = 2, overflow = TextOverflow.Ellipsis)
             // A sheet's header is a detail, not a list row: plain words, no link icon.
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (model.unverified(item, state) != null) Box(Modifier.padding(top = AlpineSpace.S1)) { UnverifiedMark(model, state, item) }
         }
     }
 }
@@ -593,6 +594,7 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4), horizontalAlignment = Alignment.CenterHorizontally) {
                 Mark(item, bitmap, box = if (bitmap != null) 120.dp else 88.dp)
                 Text(item.name, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S3))
+                UnverifiedMark(model, state, item)
             }
             Fact("Kind", kindOf(item))
             item.size?.let { Fact("Size", formatBytes(it)) }

@@ -67,10 +67,18 @@ object Resumable {
         }
     }
 
+    /* How far a transfer is after `chunks` whole chunks, against the file's real size: padding chunks past its end leave the bar at 1. */
+    fun fraction(chunks: ULong, count: ULong, chunkBytes: Long, fileSize: Long?): Float {
+        if (fileSize == null) return if (count == 0uL) 1f else chunks.toFloat() / count.toFloat()
+        if (fileSize <= 0L) return if (chunks >= count) 1f else 0f
+        return (chunks.toDouble() * chunkBytes / fileSize).coerceIn(0.0, 1.0).toFloat()
+    }
+
     /*
      * Fetches chunks `0 until count` into `destination`, each `chunkBytes` of plaintext
      * but the last, continuing a `.part` left by an earlier try from its last whole chunk.
-     * `fetch` returns one chunk's plaintext; it is retried through `run`.
+     * `fetch` returns one chunk's plaintext; it is retried through `run`. A padded object has
+     * chunks past the file's end (they come back empty); progress counts `fileSize` when given.
      */
     fun download(
         destination: File,
@@ -80,6 +88,7 @@ object Resumable {
         sleep: (Long) -> Unit = Thread::sleep,
         onExpired: () -> Unit = {},
         progress: (Float) -> Unit = {},
+        fileSize: Long? = null,
         fetch: (ULong) -> ByteArray,
     ) {
         destination.parentFile?.mkdirs()
@@ -91,7 +100,7 @@ object Resumable {
             file.seek(file.length())
             for (index in kept until count) {
                 file.write(run(online, sleep, onExpired) { fetch(index) })
-                progress((index + 1uL).toFloat() / count.toFloat())
+                progress(fraction(index + 1uL, count, chunkBytes, fileSize))
             }
         }
         if (destination.exists()) destination.delete()

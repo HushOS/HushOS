@@ -25,14 +25,14 @@ class DriveRootTest {
     }
 
     private val sealedFor = ArrayList<Triple<String, ULong, ULong>>()
-    private val seal = { id: String, epoch: ULong, parentEpoch: ULong -> sealedFor.add(Triple(id, epoch, parentEpoch)); "key-$id" to "name-$id" }
+    private val seal = { id: String, epoch: ULong, parentEpoch: ULong -> sealedFor.add(Triple(id, epoch, parentEpoch)); SealedRoot("key-$id", "name-$id", "signed-$id") }
 
     @Test
     fun noRootMakesOneOnceUnderTheWorkspaceWithTheAllocatedEpoch() {
         val api = FakeApi { node(it.id) }
         val view = ensureRoot(WorkspaceView(ws, 0, null, null), workspaceKeyVersion, api, seal, newId = { "root-1" })
         assertEquals(listOf(ws), api.allocated)
-        assertEquals(listOf(RootInput("root-1", 7uL, workspaceKeyVersion, "key-root-1", "name-root-1")), api.created)
+        assertEquals(listOf(RootInput("root-1", 7uL, workspaceKeyVersion, "key-root-1", "name-root-1", "signed-root-1")), api.created)
         // Sealed for the id it is stored under, with the allocated epoch over the workspace key's version.
         assertEquals(listOf(Triple("root-1", 7uL, workspaceKeyVersion)), sealedFor)
         assertEquals("root-1", view.root?.id)

@@ -199,6 +199,7 @@ fun keepProblemOf(state: DriveState, item: Opened, note: String? = null): String
  * The link icon (Hush blue) first when anyone with the link can open it, then who can open it, then a small phone
  * (kept on this phone, as Home's row) before `time`, all in the muted colour. One line when it fits;
  * otherwise it wraps up to `maxLines` (large font sizes), breaking only between the "·" parts: each part stays whole.
+ * A record this account can't verify the writer of starts the line with the small Unverified mark.
  */
 @Composable
 fun ItemLine(model: DriveViewModel, state: DriveState, item: Opened, who: WhoCanOpen?, time: String?, keepProblem: String?, maxLines: Int, color: Color) {
@@ -209,7 +210,8 @@ fun ItemLine(model: DriveViewModel, state: DriveState, item: Opened, who: WhoCan
     val linked = who == WhoCanOpen.AnyoneWithLink && !opening
     // Up to three of its tags as dots after the line, as iOS and the web mark them.
     val tags = state.tags.tagsOf(item.id)
-    if (line.isEmpty() && !kept && keepProblem == null && tags.isEmpty()) return
+    val unverified = !opening && model.unverified(item, state) != null
+    if (line.isEmpty() && !kept && keepProblem == null && tags.isEmpty() && !unverified) return
     val text = androidx.compose.ui.text.buildAnnotatedString {
         val whole = { part: String -> part.replace(' ', '\u00A0').replace('\u202F', '\u00A0') }
         val parts = { part: String -> part.split(" · ").joinToString(" · ") { whole(it) } }
@@ -226,6 +228,7 @@ fun ItemLine(model: DriveViewModel, state: DriveState, item: Opened, who: WhoCan
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (unverified) UnverifiedMark(model, state, item)
         if (text.isNotEmpty()) Text(
             text, style = MaterialTheme.typography.bodyMedium, maxLines = maxLines, overflow = TextOverflow.Ellipsis, color = color,
             inlineContent = mapOf("link" to subtitleGlyph(Icons.Outlined.Link, alpine.primary), "phone" to subtitleGlyph(Icons.Outlined.Smartphone, alpine.inkMuted)),

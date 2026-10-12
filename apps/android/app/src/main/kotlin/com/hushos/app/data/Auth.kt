@@ -46,7 +46,7 @@ object Auth {
         connection.doOutput = true
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("Origin", origin)
-        connection.setRequestProperty("HushOS-Client", "android/2")
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         if (cookie != null) connection.setRequestProperty("Cookie", cookie)
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
@@ -159,7 +159,7 @@ object Auth {
         val cookieName = if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session"
         connection.setRequestProperty("Cookie", "$cookieName=${session.token}")
         connection.setRequestProperty("Origin", session.origin)
-        connection.setRequestProperty("HushOS-Client", "android/2")
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.connectTimeout = 20_000
         connection.readTimeout = 20_000
         if (connection.responseCode != 200) return null
@@ -176,7 +176,7 @@ object Auth {
         connection.requestMethod = method ?: if (body == null) "GET" else "POST"
         connection.setRequestProperty("Cookie", cookie(session))
         connection.setRequestProperty("Origin", session.origin)
-        connection.setRequestProperty("HushOS-Client", "android/2")
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
         val status: Int
@@ -201,6 +201,31 @@ object Auth {
 
     /* The identity envelope the server keeps for this account. */
     fun identity(context: Context): com.hushos.core.IdentityEnvelope = identityEnvelope(call(context, "/api/auth/identity").getJSONObject("identity"))
+
+    /* The account's earlier identities, oldest first, still sealed under the root: shares sealed to earlier keys open only with them. */
+    fun identityHistory(context: Context): List<com.hushos.core.IdentityEnvelope> {
+        val list = call(context, "/api/auth/identity/history").optJSONArray("identities") ?: return emptyList()
+        return (0 until list.length()).map { identityEnvelope(list.getJSONObject(it)) }
+    }
+
+    /* Stores the next identity, vouched for by the current signing key; the server keeps the current one in the history. */
+    fun succeedIdentity(context: Context, succession: com.hushos.core.IdentitySuccession) {
+        call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature))
+    }
+
+    /* A contact's successions from key version `from` to their current one, in order, for the device to check link by link. */
+    fun succession(context: Context, userId: String, from: ULong): List<com.hushos.core.SuccessionLink> {
+        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$from").optJSONArray("links") ?: return emptyList()
+        return (0 until links.length()).map { index ->
+            val link = links.getJSONObject(index)
+            com.hushos.core.SuccessionLink(
+                link.getLong("oldKeyVersion").toULong(), link.getLong("newKeyVersion").toULong(),
+                link.getString("oldEncryptionPublicKey"), link.getString("oldSigningPublicKey"),
+                link.getString("newEncryptionPublicKey"), link.getString("newSigningPublicKey"),
+                link.getString("newKemPublicKey"), link.getString("signature"),
+            )
+        }
+    }
 
     private fun identityEnvelope(json: JSONObject): com.hushos.core.IdentityEnvelope {
         val kem = json.optJSONObject("kem")?.let { com.hushos.core.IdentityKem(it.getString("publicKey"), it.getString("seedNonce"), it.getString("encryptedSeed"), it.getString("signature")) }
@@ -240,16 +265,30 @@ object Auth {
             ?: throw AuthFailure("No HushOS account uses that email.")
         val kem = json.optJSONObject("kem")
         return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), json.getString("encryptionPublicKey"),
-            json.getString("signingPublicKey"), kem?.getString("publicKey"), kem?.getString("signature"))
+            json.getString("signingPublicKey"), kem?.getString("publicKey"), kem?.getString("signature"),
+            if (json.isNull("keyVersion")) null else json.optLong("keyVersion").takeIf { it >= 1 }?.toULong())
     }
 
-    fun settings(context: Context): com.hushos.core.SettingsEnvelope? =
-        call(context, "/api/auth/settings").optJSONObject("settings")?.let(::settingsEnvelope)
+    /* The settings as stored, and the settings key wrapped under the root (null until a device stored one). */
+    data class StoredSettings(val envelope: com.hushos.core.SettingsEnvelope?, val key: com.hushos.core.SettingsKeyEnvelope?)
 
-    /* Saves the envelope over `expectedVersion`; returns the version the server now holds. */
+    fun settings(context: Context): StoredSettings = call(context, "/api/auth/settings").let { body ->
+        StoredSettings(body.optJSONObject("settings")?.let(::settingsEnvelope),
+            body.optJSONObject("settingsKey")?.let { com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")) })
+    }
+
+    /* Stores the wrapped settings key once; a 409 means another device stored one first (read it and use that). */
+    fun putSettingsKey(context: Context, envelope: com.hushos.core.SettingsKeyEnvelope) {
+        call(context, "/api/auth/settings-key", json(envelope), "PUT")
+    }
+
+    /* Saves the envelope over `expectedVersion`, as its own envelope version; returns the version the server now holds. */
     fun putSettings(context: Context, expectedVersion: ULong, envelope: com.hushos.core.SettingsEnvelope): ULong =
-        call(context, "/api/auth/settings", JSONObject().put("expectedVersion", expectedVersion.toLong()).put("nonce", envelope.nonce).put("ciphertext", envelope.ciphertext), "PUT")
+        call(context, "/api/auth/settings", JSONObject().put("expectedVersion", expectedVersion.toLong()).put("version", envelope.version.toInt())
+            .put("nonce", envelope.nonce).put("ciphertext", envelope.ciphertext), "PUT")
             .optLong("settingsVersion", envelope.settingsVersion.toLong()).toULong()
+
+    private fun json(key: com.hushos.core.SettingsKeyEnvelope): JSONObject = JSONObject().put("nonce", key.nonce).put("ciphertext", key.ciphertext)
 
     /* The recovery key envelope the server keeps. */
     fun recoveryKey(context: Context): com.hushos.core.RecoveryEnvelope =
@@ -257,8 +296,9 @@ object Auth {
 
     /*
      * Rotates the master key, as the web's "Rotate keys" does: a fresh account
-     * key replaces the old one under the same password, the identity and every
-     * workspace grant are sealed again under it, and a new recovery phrase is
+     * key replaces the old one under the same password, the identity (and every
+     * earlier one), the settings key and every workspace grant are sealed again
+     * under it, and a new recovery phrase is
      * minted. The server ends every session, so the caller signs in again.
      * Returns the phrase to show once.
      */
@@ -277,7 +317,16 @@ object Auth {
         val sealed = accountSeal(userId, registered.exportKey, newRoot, keyVersion, old.credentialVersion + 1uL)
         val oldRecovery = recoveryEnvelope(challenge.getJSONObject("recovery"))
         val recovery = com.hushos.core.recoveryCreate(userId, newRoot, oldRecovery.recoveryVersion + 1uL, keyVersion)
-        val identity = com.hushos.core.identityRewrap(userId, oldRoot, newRoot, identityEnvelope(challenge.getJSONObject("identity")), keyVersion)
+        // The identity keeps its own version (it counts generations, not roots); every earlier one comes along, in order,
+        // or shares sealed to it would die with the old root. The settings key too, when there is one.
+        val identity = com.hushos.core.identityRewrap(userId, oldRoot, newRoot, identityEnvelope(challenge.getJSONObject("identity")))
+        val history = JSONArray()
+        challenge.optJSONArray("identityHistory")?.let { earlier ->
+            for (index in 0 until earlier.length()) history.put(json(com.hushos.core.identityRewrap(userId, oldRoot, newRoot, identityEnvelope(earlier.getJSONObject(index)))))
+        }
+        val settingsKey = challenge.optJSONObject("settingsKey")?.let {
+            com.hushos.core.settingsKeyRewrap(userId, oldRoot, newRoot, com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")))
+        }
         val workspaces = JSONArray()
         val grants = challenge.getJSONArray("workspaces")
         for (index in 0 until grants.length()) {
@@ -291,7 +340,8 @@ object Auth {
             .put("envelope", JSONObject().put("envelopeVersion", sealed.envelopeVersion.toInt()).put("keyVersion", sealed.keyVersion.toLong())
                 .put("credentialVersion", sealed.credentialVersion.toLong()).put("wrappingSalt", sealed.wrappingSalt)
                 .put("wrappingNonce", sealed.wrappingNonce).put("encryptedKey", sealed.encryptedKey))
-            .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces))
+            .put("recovery", json(recovery.envelope)).put("identity", json(identity)).put("workspaces", workspaces)
+            .put("identityHistory", history).apply { settingsKey?.let { put("settingsKey", json(it)) } })
         Shared.writeDevice(context, deviceRemember(userId, newRoot, sealed.keyVersion, sealed.credentialVersion, UUID.randomUUID().toString()))
         return recovery.phrase
     }
