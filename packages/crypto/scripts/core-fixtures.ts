@@ -33,7 +33,12 @@ import {
 } from '../src/links';
 import { createRecovery } from '../src/recovery';
 import { createSettingsKey, sealSettings } from '../src/contacts';
-import { openIdentityEncryptionKey } from '../src/identity';
+import {
+    createSuccessor,
+    openIdentityEncryptionKey,
+    openIdentitySigningKey,
+} from '../src/identity';
+import { metadataStatement, signStatement, versionStatement } from '../src/signatures';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
 
@@ -397,6 +402,58 @@ const settings = {
     v2: await sealSettings(settingsKey.key, userId, 5, settingsJson),
 };
 
+// Writer signatures by the account's identity over the node's metadata and its suite 3 version.
+const signingKey = await openIdentitySigningKey(accountKey, userId, identity);
+const metadataSigned = { workspaceId, nodeId, kind: 'file' as const, metadataVersion: 3 };
+const versionSigned = {
+    workspaceId,
+    nodeId,
+    versionId: node.version.ctx.versionId,
+    objectId: node.version.ctx.objectId,
+    contentSuite: CONTENT_SUITE,
+};
+const signatures = {
+    signingPublicKey: identity.signingPublicKey,
+    metadata: {
+        statement: metadataSigned,
+        envelope: node.metadataEnvelope,
+        signature: encode(
+            await signStatement(
+                await metadataStatement(metadataSigned, decode(node.metadataEnvelope)),
+                signingKey,
+            ),
+        ),
+    },
+    version: {
+        statement: versionSigned,
+        envelope: node.version.envelope,
+        signature: encode(
+            await signStatement(
+                await versionStatement(versionSigned, decode(node.version.envelope)),
+                signingKey,
+            ),
+        ),
+    },
+};
+
+// The account's identity replaced by a successor at the next version, signed by the old key.
+const successor = await createSuccessor(accountKey, userId, identity, signingKey);
+const succession = {
+    userId,
+    accountKey: encode(accountKey),
+    identity: successor.identity,
+    link: {
+        oldKeyVersion: identity.keyVersion,
+        newKeyVersion: successor.identity.keyVersion,
+        oldEncryptionPublicKey: identity.encryptionPublicKey,
+        oldSigningPublicKey: identity.signingPublicKey,
+        newEncryptionPublicKey: successor.identity.encryptionPublicKey,
+        newSigningPublicKey: successor.identity.signingPublicKey,
+        newKemPublicKey: successor.identity.kem!.publicKey,
+        signature: successor.signature,
+    },
+};
+
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
 await mkdir(out, { recursive: true });
 await writeFile(
@@ -414,6 +471,8 @@ await writeFile(
             link,
             recovery,
             settings,
+            signatures,
+            succession,
         },
         null,
         2,

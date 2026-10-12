@@ -30,3 +30,11 @@ Run `bun run core:check` (fmt, clippy with warnings denied, tests) before declar
 - `identity.rs` also rewraps the identity for a master-key rotation; `shares.rs` seals as well as opens (suite 2 when the grantee's ML-KEM key is given); `links.rs` (argon2id + BLAKE2b link keys, the owner's sealed copy, `link_url`/`link_parse`); `reports.rs` (libsodium sealed box by hand over XSalsa20-Poly1305 for suite 1, hybrid suite 2, `kem_binding_verify`); `recovery.rs` (BIP-39 English list embedded from `bip39-english.txt`, `recovery_create/open/phrase`); `contacts.rs` (fingerprint, key digest, the settings document under HKDF of the identity's X25519 private key). `drive.rs` gained `workspace_grant_rewrap`.
 - Every one of these has a fixture in both directions; `bun run fixtures` then `cargo test -p hushos-core` and `bun run --cwd packages/crypto test src/core-fixtures.test.ts` prove the web opens what the core sealed and vice versa (sealed box, argon2id, BIP-39, settings, shares, rewraps).
 - `crypto_secretbox` is used only through `encrypt_in_place_detached`, so the tag is placed first by hand as libsodium does; do not switch to `encrypt`, whose tag position is the crate's choice.
+
+## Added on 2026-10-12 (integrity)
+
+- Content suite 3 (`drive.rs`): `content_layout`, `chunk_range` and `thumbnail_range` take the suite; `chunk_encrypt` takes the file's bytes for the index and pads, `chunk_decrypt` returns the file's bytes only; `padded_length` is Padmé; `version_seal` writes suite 3 (`content_suite()`).
+- `signatures.rs`: metadata and version statements, sign with `IdentityKeys::signing_seed`, `*_verify` and `*_integrity` (`Integrity`). The statement bytes are pinned against the server's builder in `packages/db/src/signatures.ts`.
+- `shares.rs` seals suite 3 only (`share_seal` takes the granter's `IdentityKeys`); `share_open` takes a `ShareGranter` (signing key for suite 3, X25519 for 1 and 2).
+- `identity.rs`: `identity_create`, `identity_succeed`, `succession_verify`, `succession_chain_verify` (continuity by keys, not version numbers); `identity_rewrap` keeps the identity's key version.
+- `contacts.rs`: settings key (`settings_key_create/open/rewrap`), settings envelope version 2 (`settings_seal(user_id, settings_key, …)`); `settings_open` reads 1 and 2.

@@ -183,41 +183,88 @@ fn main() {
         "nodeKey": e(&node_key),
         "hybrid": e(&report_seal_key(report_ctx, node_key.clone(), operator.clone()).unwrap()),
     });
-    // A node key shared to the web's identity from a granter minted here, in both suites; and its settings resealed.
-    let granter_secret = random_bytes(32).unwrap();
-    let granter_public = {
-        let secret: [u8; 32] = granter_secret.clone().try_into().unwrap();
-        x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes().to_vec()
-    };
+    // A node key shared to the web's identity in suite 3 by a granter minted here; settings sealed as
+    // version 2 under the web's settings key; and the web's identity succeeded here.
+    let granter_root = random_bytes(32).unwrap();
+    let granter_user = uuid();
+    let granter_envelope = identity_create(granter_user.clone(), granter_root.clone(), 1).unwrap();
+    let granter = identity_open(granter_user.clone(), granter_root, granter_envelope).unwrap();
     let share_ctx = ShareContext {
         workspace_id: workspace_id.clone(),
         node_id: node_id.clone(),
         key_epoch: 9,
         grantee_user_id: web_user.clone(),
-        granter_user_id: uuid(),
+        granter_user_id: granter_user,
     };
     let grantee_public = base64url_decode(str_of(web_identity, "encryptionPublicKey")).unwrap();
     let grantee_kem = base64url_decode(str_of(&web_identity["kem"], "publicKey")).unwrap();
     let share = json!({
         "ctx": { "workspaceId": share_ctx.workspace_id, "nodeId": share_ctx.node_id, "keyEpoch": share_ctx.key_epoch, "granteeUserId": share_ctx.grantee_user_id, "granterUserId": share_ctx.granter_user_id },
         "nodeKey": e(&node_key),
-        "granterPublicKey": e(&granter_public),
-        "hybrid": e(&share_seal(share_ctx, node_key.clone(), granter_secret, grantee_public, Some(grantee_kem)).unwrap()),
+        "granterSigningPublicKey": granter.signing_public_key,
+        "signed": e(&share_seal(share_ctx, node_key.clone(), granter.clone(), grantee_public, grantee_kem).unwrap()),
     });
     let web_settings = &web["settings"];
     let settings_json = r#"{"version":1,"contacts":{}}"#;
     let sealed_settings = settings_seal(
-        base64url_decode(str_of(web_settings, "identityPrivateKey")).unwrap(),
         web_user.clone(),
+        base64url_decode(str_of(web_settings, "settingsKeyRaw")).unwrap(),
         5,
         settings_json.into(),
     )
     .unwrap();
+    let made_key = settings_key_create(web_user.clone(), web_root.clone()).unwrap();
     let settings = json!({
         "userId": web_user,
         "json": settings_json,
         "envelope": { "version": sealed_settings.version, "settingsVersion": sealed_settings.settings_version, "nonce": sealed_settings.nonce, "ciphertext": sealed_settings.ciphertext },
+        // A settings key made here under the web's root.
+        "settingsKey": { "nonce": made_key.envelope.nonce, "ciphertext": made_key.envelope.ciphertext },
+        "settingsKeyRaw": e(&made_key.key),
     });
+
+    // Writer signatures by the granter's identity, over the node's metadata and its suite 3 version.
+    let signed_metadata = MetadataStatement {
+        workspace_id: workspace_id.clone(),
+        node_id: node_id.clone(),
+        kind: NodeKind::File,
+        metadata_version: 3,
+    };
+    let signed_version = VersionStatement {
+        workspace_id: workspace_id.clone(),
+        node_id: node_id.clone(),
+        version_id: uuid(),
+        object_id: uuid(),
+        content_suite: content_suite(),
+    };
+    let signed_version_envelope = version_seal(
+        VersionContext {
+            workspace_id: workspace_id.clone(),
+            node_id: node_id.clone(),
+            version_id: signed_version.version_id.clone(),
+            object_id: signed_version.object_id.clone(),
+        },
+        node_key.clone(),
+        content_key.clone(),
+        1000,
+        0,
+    )
+    .unwrap()
+    .envelope;
+    let signatures = json!({
+        "signingPublicKey": granter.signing_public_key,
+        "metadata": {
+            "statement": { "workspaceId": signed_metadata.workspace_id, "nodeId": signed_metadata.node_id, "kind": "file", "metadataVersion": 3 },
+            "envelope": e(&metadata_envelope),
+            "signature": e(&metadata_sign(granter.signing_seed.clone(), signed_metadata, metadata_envelope.clone()).unwrap()),
+        },
+        "version": {
+            "statement": { "workspaceId": signed_version.workspace_id, "nodeId": signed_version.node_id, "versionId": signed_version.version_id, "objectId": signed_version.object_id, "contentSuite": signed_version.content_suite },
+            "envelope": e(&signed_version_envelope),
+            "signature": e(&version_sign(granter.signing_seed.clone(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
+        },
+    });
+
     let new_root = random_bytes(32).unwrap();
     let grant = &web["workspace"]["grant"];
     let rewrapped_grant = workspace_grant_rewrap(
@@ -242,23 +289,47 @@ fn main() {
         encrypted_seed: kem["encryptedSeed"].as_str().unwrap().into(),
         signature: kem["signature"].as_str().unwrap().into(),
     });
-    let rewrapped_identity = identity_rewrap(
-        web_user.clone(),
-        web_root,
-        new_root.clone(),
-        IdentityEnvelope {
-            version: web_identity["version"].as_u64().unwrap() as u32,
-            key_version: web_identity["keyVersion"].as_u64().unwrap(),
-            wrapping_salt: str_of(web_identity, "wrappingSalt"),
-            encryption_public_key: str_of(web_identity, "encryptionPublicKey"),
-            encryption_private_key_nonce: str_of(web_identity, "encryptionPrivateKeyNonce"),
-            encrypted_encryption_private_key: str_of(web_identity, "encryptedEncryptionPrivateKey"),
-            signing_public_key: str_of(web_identity, "signingPublicKey"),
-            signing_seed_nonce: str_of(web_identity, "signingSeedNonce"),
-            encrypted_signing_seed: str_of(web_identity, "encryptedSigningSeed"),
-            kem,
+    let web_envelope = IdentityEnvelope {
+        version: web_identity["version"].as_u64().unwrap() as u32,
+        key_version: web_identity["keyVersion"].as_u64().unwrap(),
+        wrapping_salt: str_of(web_identity, "wrappingSalt"),
+        encryption_public_key: str_of(web_identity, "encryptionPublicKey"),
+        encryption_private_key_nonce: str_of(web_identity, "encryptionPrivateKeyNonce"),
+        encrypted_encryption_private_key: str_of(web_identity, "encryptedEncryptionPrivateKey"),
+        signing_public_key: str_of(web_identity, "signingPublicKey"),
+        signing_seed_nonce: str_of(web_identity, "signingSeedNonce"),
+        encrypted_signing_seed: str_of(web_identity, "encryptedSigningSeed"),
+        kem,
+    };
+    let rewrapped_identity =
+        identity_rewrap(web_user.clone(), web_root.clone(), new_root.clone(), web_envelope.clone()).unwrap();
+    // The web's identity succeeded here: a successor under the web's root, signed by its key.
+    let next = identity_succeed(web_user.clone(), web_root.clone(), web_envelope.clone()).unwrap();
+    let n = &next.identity;
+    let succession = json!({
+        "userId": web_user,
+        "identity": {
+            "version": n.version, "keyVersion": n.key_version, "wrappingSalt": n.wrapping_salt,
+            "encryptionPublicKey": n.encryption_public_key, "encryptionPrivateKeyNonce": n.encryption_private_key_nonce,
+            "encryptedEncryptionPrivateKey": n.encrypted_encryption_private_key,
+            "signingPublicKey": n.signing_public_key, "signingSeedNonce": n.signing_seed_nonce, "encryptedSigningSeed": n.encrypted_signing_seed,
+            "kem": n.kem.as_ref().map(|k| json!({ "publicKey": k.public_key, "seedNonce": k.seed_nonce, "encryptedSeed": k.encrypted_seed, "signature": k.signature })),
         },
-        7,
+        "link": {
+            "oldKeyVersion": web_envelope.key_version, "newKeyVersion": n.key_version,
+            "oldEncryptionPublicKey": web_envelope.encryption_public_key, "oldSigningPublicKey": web_envelope.signing_public_key,
+            "newEncryptionPublicKey": n.encryption_public_key, "newSigningPublicKey": n.signing_public_key,
+            "newKemPublicKey": n.kem.as_ref().unwrap().public_key, "signature": next.signature,
+        },
+    });
+    let rewrapped_settings_key = settings_key_rewrap(
+        web_user.clone(),
+        web_root.clone(),
+        new_root.clone(),
+        SettingsKeyEnvelope {
+            nonce: str_of(&web_settings["settingsKey"], "nonce"),
+            ciphertext: str_of(&web_settings["settingsKey"], "ciphertext"),
+        },
     )
     .unwrap();
     let g = &rewrapped_grant;
@@ -267,6 +338,7 @@ fn main() {
         "userId": web_user,
         "newRoot": e(&new_root),
         "workspaceKey": web["workspace"]["workspaceKey"],
+        "settingsKey": { "nonce": rewrapped_settings_key.nonce, "ciphertext": rewrapped_settings_key.ciphertext },
         "grant": {
             "version": g.version, "workspaceId": g.workspace_id, "keyVersion": g.key_version, "workspaceKeyVersion": g.workspace_key_version,
             "wrappingSalt": g.wrapping_salt, "wrappingNonce": g.wrapping_nonce, "encryptedKey": g.encrypted_key,
@@ -288,6 +360,8 @@ fn main() {
         "rotation": rotation,
         "share": share,
         "settings": settings,
+        "signatures": signatures,
+        "succession": succession,
         "document": document,
         "account": account,
         "device": device,

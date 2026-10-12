@@ -245,7 +245,7 @@ fn identity(value: &Value) -> IdentityEnvelope {
 }
 
 #[test]
-fn the_identity_opens_and_shares_in_both_suites_open_with_it() {
+fn the_identity_opens_and_shares_in_every_suite_open_with_it() {
     let fixture = fixture();
     let account = &fixture["account"];
     let share = &fixture["share"];
@@ -260,14 +260,114 @@ fn the_identity_opens_and_shares_in_both_suites_open_with_it() {
         grantee_user_id: s(ctx, "granteeUserId"),
         granter_user_id: s(ctx, "granterUserId"),
     };
+    let granter = ShareGranter {
+        encryption_public_key: Some(b(share, "granterPublicKey")),
+        signing_public_key: Some(b(share, "granterSigningPublicKey")),
+    };
+    for suite in ["classic", "hybrid", "signed"] {
+        assert_eq!(
+            share_open(b(share, suite), granter.clone(), keys.clone(), ctx.clone()).unwrap(),
+            b(share, "nodeKey"),
+            "{suite}"
+        );
+    }
+    assert_eq!(b(share, "signed").len(), 1256);
+    // Suite 3 needs the granter's signing key, and the right one.
+    let unsigned = ShareGranter { signing_public_key: Some(vec![7; 32]), ..granter };
+    assert!(share_open(b(share, "signed"), unsigned, keys, ctx).is_err());
+}
+
+#[test]
+fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
+    let signatures = &fixture()["signatures"];
+    let public = b(signatures, "signingPublicKey");
+    let metadata = &signatures["metadata"];
+    let statement = MetadataStatement {
+        workspace_id: s(&metadata["statement"], "workspaceId"),
+        node_id: s(&metadata["statement"], "nodeId"),
+        kind: NodeKind::File,
+        metadata_version: n(&metadata["statement"], "metadataVersion"),
+    };
+    assert!(metadata_verify(
+        public.clone(),
+        statement.clone(),
+        b(metadata, "envelope"),
+        b(metadata, "signature")
+    ));
+    assert!(!metadata_verify(
+        public.clone(),
+        MetadataStatement { kind: NodeKind::Folder, ..statement.clone() },
+        b(metadata, "envelope"),
+        b(metadata, "signature")
+    ));
     assert_eq!(
-        share_open(b(share, "classic"), b(share, "granterPublicKey"), keys.clone(), ctx.clone()).unwrap(),
-        b(share, "nodeKey")
+        metadata_integrity(
+            vec![public.clone()],
+            statement,
+            b(metadata, "envelope"),
+            Some(b(metadata, "signature"))
+        ),
+        Integrity::Verified
     );
-    assert_eq!(
-        share_open(b(share, "hybrid"), b(share, "granterPublicKey"), keys, ctx).unwrap(),
-        b(share, "nodeKey")
-    );
+    let version = &signatures["version"];
+    let statement = VersionStatement {
+        workspace_id: s(&version["statement"], "workspaceId"),
+        node_id: s(&version["statement"], "nodeId"),
+        version_id: s(&version["statement"], "versionId"),
+        object_id: s(&version["statement"], "objectId"),
+        content_suite: n(&version["statement"], "contentSuite") as u32,
+    };
+    assert!(version_verify(
+        public.clone(),
+        statement.clone(),
+        b(version, "envelope"),
+        b(version, "signature")
+    ));
+    assert!(!version_verify(
+        public,
+        VersionStatement { content_suite: 2, ..statement },
+        b(version, "envelope"),
+        b(version, "signature")
+    ));
+}
+
+fn link(value: &Value) -> SuccessionLink {
+    SuccessionLink {
+        old_key_version: n(value, "oldKeyVersion"),
+        new_key_version: n(value, "newKeyVersion"),
+        old_encryption_public_key: s(value, "oldEncryptionPublicKey"),
+        old_signing_public_key: s(value, "oldSigningPublicKey"),
+        new_encryption_public_key: s(value, "newEncryptionPublicKey"),
+        new_signing_public_key: s(value, "newSigningPublicKey"),
+        new_kem_public_key: s(value, "newKemPublicKey"),
+        signature: s(value, "signature"),
+    }
+}
+
+#[test]
+fn the_web_s_succession_link_holds_and_its_new_identity_opens_here() {
+    let succession = &fixture()["succession"];
+    let user = s(succession, "userId");
+    let link = link(&succession["link"]);
+    assert!(succession_verify(user.clone(), link.clone()));
+    let next = identity(&succession["identity"]);
+    let keys = identity_open(user.clone(), b(succession, "accountKey"), next.clone()).unwrap();
+    assert_eq!(keys.key_version, link.new_key_version);
+    let pinned = PinnedKeys {
+        key_version: Some(link.old_key_version),
+        encryption_public_key: link.old_encryption_public_key.clone(),
+        signing_public_key: link.old_signing_public_key.clone(),
+    };
+    let served = ServedKeys {
+        key_version: next.key_version,
+        encryption_public_key: next.encryption_public_key.clone(),
+        signing_public_key: next.signing_public_key.clone(),
+        kem_public_key: next.kem.unwrap().public_key,
+    };
+    assert!(succession_chain_verify(user.clone(), pinned.clone(), served.clone(), vec![link.clone()]));
+    let mut forged = link;
+    forged.new_signing_public_key = forged.old_signing_public_key.clone();
+    assert!(!succession_chain_verify(user, pinned, served, vec![forged]));
 }
 
 #[test]
@@ -380,23 +480,30 @@ fn the_identity_kem_binding_the_web_signed_verifies_and_a_swapped_key_does_not()
 }
 
 #[test]
-fn the_settings_document_the_web_sealed_opens_under_the_identity_key() {
+fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_as_version_1_under_the_identity() {
     let settings = &fixture()["settings"];
-    let env = &settings["envelope"];
-    let envelope = SettingsEnvelope {
-        version: n(env, "version") as u32,
-        settings_version: n(env, "settingsVersion"),
-        nonce: s(env, "nonce"),
-        ciphertext: s(env, "ciphertext"),
+    let user = s(settings, "userId");
+    let envelope = |value: &Value| SettingsEnvelope {
+        version: n(value, "version") as u32,
+        settings_version: n(value, "settingsVersion"),
+        nonce: s(value, "nonce"),
+        ciphertext: s(value, "ciphertext"),
     };
+    let wrapped = SettingsKeyEnvelope {
+        nonce: s(&settings["settingsKey"], "nonce"),
+        ciphertext: s(&settings["settingsKey"], "ciphertext"),
+    };
+    let key = settings_key_open(user.clone(), b(settings, "accountKey"), wrapped).unwrap();
+    assert_eq!(key, b(settings, "settingsKeyRaw"));
+    let v2 = envelope(&settings["v2"]);
+    assert_eq!(v2.version, 2);
+    assert_eq!(settings_open(user.clone(), Some(key), None, v2.clone()).unwrap(), s(settings, "json"));
+    assert!(settings_open(user.clone(), None, Some(b(settings, "identityPrivateKey")), v2).is_err());
+    let v1 = envelope(&settings["envelope"]);
+    assert_eq!(v1.version, 1);
     assert_eq!(
-        settings_open(b(settings, "identityPrivateKey"), s(settings, "userId"), envelope.clone()).unwrap(),
+        settings_open(user.clone(), None, Some(b(settings, "identityPrivateKey")), v1.clone()).unwrap(),
         s(settings, "json")
     );
-    assert!(settings_open(
-        base64url_decode(base64url_encode(vec![0u8; 32])).unwrap(),
-        s(settings, "userId"),
-        envelope
-    )
-    .is_err());
+    assert!(settings_open(user, None, Some(vec![0u8; 32]), v1).is_err());
 }

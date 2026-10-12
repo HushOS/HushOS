@@ -16,10 +16,18 @@ import { decryptKey } from './aead';
 import { openLinkKey, openLinkSecret, passwordKey } from './links';
 import { openRecovery, readRecoveryPhrase } from './recovery';
 import { openReportKey } from './reports';
-import { openIdentityEncryptionKey, openIdentityKemKey } from './identity';
+import {
+    openIdentityEncryptionKey,
+    openIdentityKemKey,
+    openIdentitySigningKey,
+    verifyKemBinding,
+    verifySuccessionChain,
+    verifySuccessionLink,
+} from './identity';
+import { metadataStatement, verifyStatement, versionStatement } from './signatures';
 import { openWorkspaceKey } from './workspace';
 import { openShareKey } from './shares';
-import { openSettings } from './contacts';
+import { openSettings, openSettingsKey } from './contacts';
 import web from '../../../crates/hushos-core/fixtures/web.json';
 import { decode, wrappingKey } from './keys';
 import { accountKeyContext } from './protocol';
@@ -276,9 +284,11 @@ describe('records sealed by the Rust core', () => {
         await expect(
             openIdentityEncryptionKey(oldRoot, rotation.userId, rotation.identity as never),
         ).rejects.toThrow();
+        // A rotation keeps the identity's own key version.
+        expect(rotation.identity.keyVersion).toBe(web.share.identity.keyVersion);
     });
 
-    it('opens a hybrid share the core sealed to this identity', async () => {
+    it('opens a suite 3 share the core sealed and signed, and only from its signer', async () => {
         const { share } = core;
         const root = decode(web.account.accountKey, 32);
         const identity = web.share.identity as never;
@@ -286,34 +296,130 @@ describe('records sealed by the Rust core', () => {
         const kem = await openIdentityKemKey(root, web.account.userId, identity);
         const grantee = { privateKey, kemSecretKey: kem!.secretKey };
         const granter = {
-            encryptionPublicKey: decode(share.granterPublicKey, 32),
-            signingPublicKey: null,
+            encryptionPublicKey: null,
+            signingPublicKey: decode(share.granterSigningPublicKey, 32),
         };
-        expect(await openShareKey(decode(share.hybrid), granter, grantee, share.ctx)).toEqual(
+        expect(decode(share.signed)).toHaveLength(1256);
+        expect(await openShareKey(decode(share.signed), granter, grantee, share.ctx)).toEqual(
             decode(share.nodeKey, 32),
         );
         await expect(
-            openShareKey(decode(share.hybrid), granter, grantee, {
-                ...share.ctx,
-                keyEpoch: 10,
-            }),
-        ).rejects.toThrow();
+            openShareKey(decode(share.signed), granter, grantee, { ...share.ctx, keyEpoch: 10 }),
+        ).rejects.toThrow('not signed');
+        await expect(
+            openShareKey(
+                decode(share.signed),
+                { ...granter, signingPublicKey: decode(web.share.identity.signingPublicKey, 32) },
+                grantee,
+                share.ctx,
+            ),
+        ).rejects.toThrow('not signed');
     });
 
-    it('opens a settings document the core sealed', async () => {
-        const { settings } = core;
+    it('verifies the core’s writer signatures, and nothing near them', async () => {
+        const { signatures } = core;
+        const key = decode(signatures.signingPublicKey, 32);
+        const metadata = {
+            ...signatures.metadata.statement,
+            kind: signatures.metadata.statement.kind as 'file',
+        };
+        const metadataEnvelope = decode(signatures.metadata.envelope);
+        const signature = decode(signatures.metadata.signature, 64);
+        expect(
+            await verifyStatement(
+                await metadataStatement(metadata, metadataEnvelope),
+                signature,
+                key,
+            ),
+        ).toBe(true);
+        expect(
+            await verifyStatement(
+                await metadataStatement({ ...metadata, kind: 'folder' }, metadataEnvelope),
+                signature,
+                key,
+            ),
+        ).toBe(false);
+        const version = signatures.version.statement;
+        const versionEnvelope = decode(signatures.version.envelope, 84);
+        const versionSignature = decode(signatures.version.signature, 64);
+        expect(
+            await verifyStatement(
+                await versionStatement(version, versionEnvelope),
+                versionSignature,
+                key,
+            ),
+        ).toBe(true);
+        expect(
+            await verifyStatement(
+                await versionStatement({ ...version, contentSuite: 2 }, versionEnvelope),
+                versionSignature,
+                key,
+            ),
+        ).toBe(false);
+    });
+
+    it('accepts the core’s succession of this identity, and opens the successor under the root', async () => {
+        const { succession } = core;
         const root = decode(web.account.accountKey, 32);
-        const privateKey = await openIdentityEncryptionKey(
-            root,
-            web.account.userId,
-            web.share.identity as never,
-        );
+        expect(await verifySuccessionLink(succession.userId, succession.link)).toBe(true);
+        expect(succession.identity.keyVersion).toBe(web.share.identity.keyVersion + 1);
+        expect(succession.link.oldSigningPublicKey).toBe(web.share.identity.signingPublicKey);
+        await expect(
+            openIdentityEncryptionKey(root, succession.userId, succession.identity as never),
+        ).resolves.toHaveLength(32);
+        // The core's identity is the web's in every part: its signing key and KEM binding check.
+        await expect(
+            openIdentitySigningKey(root, succession.userId, succession.identity as never),
+        ).resolves.toHaveLength(64);
+        expect(
+            await verifyKemBinding(
+                succession.userId,
+                succession.identity.encryptionPublicKey,
+                succession.identity.signingPublicKey,
+                succession.identity.kem,
+            ),
+        ).toBe(true);
+        expect(
+            await verifySuccessionChain(
+                succession.userId,
+                {
+                    keyVersion: succession.link.oldKeyVersion,
+                    encryptionPublicKey: succession.link.oldEncryptionPublicKey,
+                    signingPublicKey: succession.link.oldSigningPublicKey,
+                },
+                {
+                    keyVersion: succession.identity.keyVersion,
+                    encryptionPublicKey: succession.identity.encryptionPublicKey,
+                    signingPublicKey: succession.identity.signingPublicKey,
+                    kemPublicKey: succession.identity.kem.publicKey,
+                },
+                [succession.link],
+            ),
+        ).toBe(true);
+    });
+
+    it('opens version 2 settings the core sealed, and a settings key it made and rewrapped', async () => {
+        const { settings, rotation } = core;
+        const root = decode(web.account.accountKey, 32);
+        const webKey = await openSettingsKey(root, web.settings.userId, web.settings.settingsKey);
+        expect(settings.envelope.version).toBe(2);
         expect(
             await openSettings(
-                { settingsKey: null, identityPrivateKey: privateKey },
+                { settingsKey: webKey, identityPrivateKey: null },
                 settings.userId,
                 settings.envelope as never,
             ),
         ).toEqual(JSON.parse(settings.json));
+        expect(await openSettingsKey(root, settings.userId, settings.settingsKey)).toEqual(
+            decode(settings.settingsKeyRaw, 32),
+        );
+        // The rotation's settings key is the web's key, now under the new root only.
+        const newRoot = decode(rotation.newRoot, 32);
+        expect(await openSettingsKey(newRoot, rotation.userId, rotation.settingsKey)).toEqual(
+            webKey,
+        );
+        await expect(
+            openSettingsKey(root, rotation.userId, rotation.settingsKey),
+        ).rejects.toThrow();
     });
 });

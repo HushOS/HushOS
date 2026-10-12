@@ -1,7 +1,7 @@
 //! The client side of the HushOS protocol, once, for every app that is not the
 //! web: OPAQUE, the account key and its device memory, workspace grants, Drive
-//! node, metadata and version envelopes, content chunks, shares, links,
-//! reports and the recovery key. Everything here
+//! node, metadata and version envelopes, content chunks, writer signatures,
+//! shares, links, reports, identity succession and the recovery key. Everything here
 //! is byte-for-byte what `packages/crypto` seals in the browser, so a record
 //! written on one platform opens on the others.
 //!
@@ -22,6 +22,7 @@ mod opaque;
 mod recovery;
 mod reports;
 mod shares;
+mod signatures;
 
 pub use account::*;
 pub use bytes::*;
@@ -34,6 +35,7 @@ pub use opaque::*;
 pub use recovery::*;
 pub use reports::*;
 pub use shares::*;
+pub use signatures::*;
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
