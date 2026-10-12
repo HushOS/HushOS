@@ -100,13 +100,13 @@ class SharingTrustTest {
         assertEquals(listOf("share-1"), plan.shares.map { it.id })
         assertEquals(listOf("link-1"), plan.links.map { it.getString("id") })
         assertTrue(plan.skipped.isEmpty())
-        // What the rotation seals for that row is hybrid: longer than the 72-byte X25519-only envelope.
+        // What the rotation seals for that row is hybrid: longer than the 72-byte X25519-only envelope,
+        // which the core no longer makes at all.
         val ctx = ShareContext("654850ba-18bc-430a-ad22-5ffd1c105aa2", nodeId, 6uL, userId, "8286d83e-31bc-4b1e-93bd-d18435de6b02")
         val share = plan.shares.single()
-        val classic = shareSeal(ctx, randomBytes(32u), randomBytes(32u), share.publicKey, null)
         val sealed = shareSeal(ctx, randomBytes(32u), randomBytes(32u), share.publicKey, share.kemPublicKey)
-        assertEquals(72, classic.size)
-        assertTrue(sealed.size > classic.size)
+        assertTrue(sealed.size > 72)
+        assertTrue(runCatching { shareSeal(ctx, randomBytes(32u), randomBytes(32u), share.publicKey, null) }.isFailure)
     }
 
     @Test
