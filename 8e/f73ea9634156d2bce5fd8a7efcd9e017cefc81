@@ -1,0 +1,23 @@
+packages/drive/src/transfers.test.ts
+  s_75dbe24a0bc379::t_68d8db20c0be1f 86-87,97,429-449
+  s_75dbe24a0bc379::t_4647b887722e69 42
+  s_75dbe24a0bc379::t_882f10080af53a 450-451
+packages/drive/src/transfers.ts
+  s_75dbe24a0bc379::t_76ba7c904ac663 239-241,657-664,872-873,876,1534-1549
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ef73ea9634156d2bce5fd8a7efcd9e017cefc81",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
