@@ -1,0 +1,39 @@
+apps/web/src/lib/api.server.ts
+  s_75dbe24a0bc379::t_6b7eacadb85954 513-514,538-559
+packages/auth/src/api.ts
+  s_75dbe24a0bc379::t_8e122040a0eb41 49-50,57-77,80-92,143,145
+packages/auth/src/server.ts
+  s_75dbe24a0bc379::t_7faa0569b59f2f 466-481,534-609,626,1144-1149,1278,1319,1323-1330,1333,1380-1381,1399-1406
+packages/db/drizzle/20261012174906_share_suite_3/snapshot.json
+  s_75dbe24a0bc379::t_18b17f1990c4c2 2-8126,8128-8130
+packages/db/drizzle/20261012175109_identity_history/migration.sql
+  s_75dbe24a0bc379::t_708981dd4f2b01 1-29
+packages/db/drizzle/20261012175109_identity_history/snapshot.json
+  s_75dbe24a0bc379::t_68f423c385771d 1-8451
+packages/db/src/auth.settings.test.ts
+  s_75dbe24a0bc379::t_7dc52f4bda6cdc 94
+packages/db/src/auth.test.ts
+  s_75dbe24a0bc379::t_29ceb5303221e0 4-5,467-754
+packages/db/src/auth.ts
+  s_75dbe24a0bc379::t_b656a4627442cb 1,12,18,639-666,764-791,811-812,865-869,872-906,934,954-971,1021,1029-1142
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_158b460cf4482f 14
+packages/db/src/schema/auth.ts
+  s_75dbe24a0bc379::t_55eca0b0640784 9,295-347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdb49a0f34f8f035158d7eb73142a5f3f99d3d99",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
