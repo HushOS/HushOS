@@ -112,7 +112,7 @@ describe('settings', () => {
         const sealed = await sealSettings(key, USER, 1, EMPTY_SETTINGS);
         const { rewrapIdentity } = await import('./identity');
         const newRoot = crypto.getRandomValues(new Uint8Array(32));
-        const rewrapped = await rewrapIdentity(root, newRoot, USER, identity, 2);
+        const rewrapped = await rewrapIdentity(root, newRoot, USER, identity);
         const reopened = await openIdentityEncryptionKey(newRoot, USER, rewrapped);
         expect(await openSettings(reopened, USER, sealed)).toEqual(EMPTY_SETTINGS);
     });
@@ -208,7 +208,7 @@ describe('the identity’s KEM key', () => {
         await expect(addIdentityKem(root, USER, upgraded)).rejects.toThrow();
         // Master-key rotation rewraps the seed under the new root; the public key and signature stay.
         const nextRoot = crypto.getRandomValues(new Uint8Array(32));
-        const rewrapped = await rewrapIdentity(root, nextRoot, USER, upgraded, 2);
+        const rewrapped = await rewrapIdentity(root, nextRoot, USER, upgraded);
         expect(rewrapped.kem?.publicKey).toBe(kem.publicKey);
         expect(rewrapped.kem?.signature).toBe(kem.signature);
         expect(rewrapped.kem?.encryptedSeed).not.toBe(kem.encryptedSeed);

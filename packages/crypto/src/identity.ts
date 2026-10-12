@@ -3,6 +3,12 @@ import sodium from 'libsodium-wrappers';
 import { encryptKey, decryptKey } from './aead';
 import { encode, decode } from './keys';
 import { KEM_PUBLIC_KEY_BYTES, KEM_SEED_BYTES, kemKeypair } from './pq';
+import {
+    signStatement,
+    successionStatement,
+    verifyStatement,
+    type SuccessionStatement,
+} from './signatures';
 
 /*
  * The post-quantum half of the identity: an ML-KEM-768 key pair, its seed
@@ -202,14 +208,20 @@ export async function createIdentity(
     }
 }
 
-// Rewrap the existing private keys; master-key rotation must preserve public identity.
+/*
+ * Rewraps the existing private keys under a new root; master-key rotation must
+ * preserve public identity. The identity keeps its own key version: it numbers
+ * the identity's generations (a succession adds one), not the root's
+ * revisions, so a contact's pin and a succession chain survive a rotation.
+ * Earlier identities in the account's history are rewrapped the same way.
+ */
 export async function rewrapIdentity(
     oldRoot: Uint8Array<ArrayBuffer>,
     newRoot: Uint8Array<ArrayBuffer>,
     userId: string,
     envelope: IdentityEnvelope,
-    keyVersion: number,
 ): Promise<IdentityEnvelope> {
+    const keyVersion = envelope.keyVersion;
     if (
         envelope.version !== 1 ||
         !Number.isSafeInteger(envelope.keyVersion) ||
@@ -485,4 +497,126 @@ export async function addIdentityKem(
         seed?.fill(0);
         pair?.privateKey.fill(0);
     }
+}
+
+/* A link of a succession chain as the server serves it: the statement and the old key's signature. */
+export type SuccessionLink = Omit<SuccessionStatement, 'userId'> & { signature: string };
+/*
+ * The keys a contact was pinned with (a pin made before successions records no
+ * key version: null), and the keys the server serves for them now.
+ */
+export type PinnedKeys = {
+    keyVersion: number | null;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+};
+export type ServedKeys = {
+    keyVersion: number;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    kemPublicKey: string;
+};
+
+/*
+ * A new identity for the account at the next key version, vouched for by the
+ * current one: fresh X25519, Ed25519 and ML-KEM keys wrapped under the root,
+ * and the succession statement signed with the current signing key (the
+ * caller's, proven against `current`). Nothing is installed: the server takes
+ * it or refuses it, and only then does the device open it.
+ */
+export async function createSuccessor(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    current: IdentityEnvelope,
+    signingKey: Uint8Array,
+) {
+    if (
+        current.version !== 1 ||
+        !Number.isSafeInteger(current.keyVersion) ||
+        current.keyVersion < 1
+    )
+        throw new CryptoError('Unsupported identity envelope.');
+    await sodium.ready;
+    if (signingKey.length !== 64 || encode(signingKey.subarray(32)) !== current.signingPublicKey)
+        throw new CryptoError('Identity keys do not match.');
+    const identity = await createIdentity(root, userId, current.keyVersion + 1);
+    const statement = await successionStatement({
+        userId,
+        oldKeyVersion: current.keyVersion,
+        newKeyVersion: identity.keyVersion,
+        oldEncryptionPublicKey: current.encryptionPublicKey,
+        oldSigningPublicKey: current.signingPublicKey,
+        newEncryptionPublicKey: identity.encryptionPublicKey,
+        newSigningPublicKey: identity.signingPublicKey,
+        newKemPublicKey: identity.kem!.publicKey,
+    });
+    return { identity, signature: encode(await signStatement(statement, signingKey)) };
+}
+
+/* Whether one link holds: its statement signed by the old signing key it names. */
+export async function verifySuccessionLink(userId: string, link: SuccessionLink) {
+    try {
+        return await verifyStatement(
+            await successionStatement({ ...link, userId }),
+            decode(link.signature, 64),
+            decode(link.oldSigningPublicKey, 32),
+        );
+    } catch {
+        return false;
+    }
+}
+
+/*
+ * Whether `links` carry a contact from the keys pinned to the keys served:
+ * the first link starts at the pinned keys (and version, when the pin has
+ * one; links before the pinned keys are skipped when it has none), each link
+ * starts where the one before ended and is signed by the signing key it
+ * replaces, and the last ends at the served version and names the served
+ * X25519, Ed25519 and ML-KEM keys. Any gap, fork or bad signature and the
+ * chain does not hold; that is the changed-key warning, never a silent update.
+ */
+export async function verifySuccessionChain(
+    userId: string,
+    pinned: PinnedKeys,
+    served: ServedKeys,
+    links: SuccessionLink[],
+) {
+    const start =
+        pinned.keyVersion === null
+            ? links.findIndex(
+                  (link) =>
+                      link.oldEncryptionPublicKey === pinned.encryptionPublicKey &&
+                      link.oldSigningPublicKey === pinned.signingPublicKey,
+              )
+            : 0;
+    if (start < 0) return false;
+    const chain = links.slice(start);
+    let at = {
+        keyVersion: pinned.keyVersion ?? chain[0]?.oldKeyVersion,
+        encryptionPublicKey: pinned.encryptionPublicKey,
+        signingPublicKey: pinned.signingPublicKey,
+        kemPublicKey: null as string | null,
+    };
+    for (const link of chain) {
+        if (
+            link.oldKeyVersion !== at.keyVersion ||
+            link.oldEncryptionPublicKey !== at.encryptionPublicKey ||
+            link.oldSigningPublicKey !== at.signingPublicKey ||
+            !(await verifySuccessionLink(userId, link))
+        )
+            return false;
+        at = {
+            keyVersion: link.newKeyVersion,
+            encryptionPublicKey: link.newEncryptionPublicKey,
+            signingPublicKey: link.newSigningPublicKey,
+            kemPublicKey: link.newKemPublicKey,
+        };
+    }
+    return (
+        chain.length > 0 &&
+        at.keyVersion === served.keyVersion &&
+        at.encryptionPublicKey === served.encryptionPublicKey &&
+        at.signingPublicKey === served.signingPublicKey &&
+        at.kemPublicKey === served.kemPublicKey
+    );
 }

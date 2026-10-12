@@ -127,14 +127,24 @@ succession = ["hushos/identity/succession", 1, userId, oldKeyVersion, newKeyVers
 signature  = Ed25519(oldSigningKey, utf8(succession))
 ```
 
-The server stores the new identity as current and keeps every earlier identity envelope (still sealed under the account root) in `account_identity_history`, with its succession record. The account's devices keep the earlier private keys openable, because shares sealed to them still open only with them, and re-seal what they own:
+The keys in the statement are base64url as the server serves them; the last element is SHA-256 of the new ML-KEM public key's bytes, base64url. `newKeyVersion` is always `oldKeyVersion + 1`.
+
+The server stores the new identity as current and keeps every earlier identity envelope (still sealed under the account root) in `account_identity_history`, with its succession record.
+
+### What an identity's key version counts
+
+An identity envelope's `keyVersion` (bound into the associated data of its wrapped private keys) has until now equalled the root revision, because both started at 1 and a master-key rotation set it to the new root's revision. That cannot survive succession: a rotation would renumber an identity without a link, so a contact's pinned version would name nothing in the chain, and the earlier identities in the history would all be renumbered to the same value. From this change on it numbers the identity's generations only:
+
+- a new account's identity is minted at 1 (an older account's keeps the version it has); a succession adds one;
+- a master-key rotation rewraps the current identity **and every identity in the history** under the new root, each keeping its own `keyVersion`, salt and nonces fresh; the rotation request carries the rewrapped history beside the identity, and the server requires a replacement for every history row, with the same key version and public keys, and the current identity's `keyVersion` unchanged (no longer equal to the new root revision);
+- the root revision stays in the password, recovery and grant envelopes, as before. The account's devices keep the earlier private keys openable, because shares sealed to them still open only with them, and re-seal what they own:
 
 - **What they shared:** every share in the sharing ledger is sealed again in suite 3 with the new signing key.
 - **What was shared with them:** stays sealed to the old keys until the granter's client next re-seals it (it notices the grantee's new keys on its next upgrade pass and seals to them, in suite 3).
 
 ### What contacts see
 
-When the keys served for a pinned contact differ from the pin, the client asks the server for that account's succession chain from the pinned key version to the current one and checks every link: each statement signed by the previous signing key, the first by the pinned one, the last naming the served keys. A chain that holds updates the pin to the new keys and fingerprint and is shown as a notice ("Maya replaced her sharing keys; the change is signed by her previous keys"), with the option to compare words again. A chain that does not hold, or no chain, is the changed-key warning as today. A succession can be undone by nobody but the holder of the previous signing key; one made with a stolen key is still a change the person did not make, which is why the notice suggests comparing words.
+A pin records the contact's `keyVersion` when it is made. When the keys served for a pinned contact differ from the pin, the client asks the server for that account's succession chain from the pinned key version to the current one and checks every link: each statement signed by the previous signing key, the first starting at the pinned keys and signed by the pinned signing key, each starting where the one before ended, the last naming the served version, X25519, Ed25519 and ML-KEM keys. A pin made before successions has no key version; the client asks from 1 and the chain starts at the link whose old keys are the pinned ones. A chain that holds updates the pin to the new keys and fingerprint and is shown as a notice ("Maya replaced her sharing keys; the change is signed by her previous keys"), with the option to compare words again. A chain that does not hold, or no chain, is the changed-key warning as today. A succession can be undone by nobody but the holder of the previous signing key; one made with a stolen key is still a change the person did not make, which is why the notice suggests comparing words.
 
 ### The settings key, apart from the identity
 
@@ -170,6 +180,7 @@ What the server stores and serves, and what clients send. Base64url without padd
 
 - `POST /api/auth/identity/succession` with `{ identity: IdentityEnvelope (keyVersion = current + 1, kem required), signature }`. The server checks the statement in section 4 against the account's current signing key and the new identity's KEM binding, moves the current identity row to `account_identity_history` (all of its columns, plus the succession signature that replaced it), and stores the new one. 409 when `keyVersion` is not current + 1.
 - `GET /api/auth/identity/history` returns the account's own earlier identity envelopes, oldest first, so its devices can open shares sealed to earlier keys.
+- Master-key rotation (`/api/auth/security/finish`, action `master-key`) carries `identityHistory`: every history envelope rewrapped under the new root, in the same order, each with its own `keyVersion` and public keys unchanged; the server requires one for every history row. The current identity keeps its `keyVersion`: the check that it equals the new root revision goes (see "What an identity's key version counts").
 - `GET /api/auth/contacts/:userId/succession?from=<keyVersion>` returns `{ links: [{ oldKeyVersion, newKeyVersion, oldEncryptionPublicKey, oldSigningPublicKey, newEncryptionPublicKey, newSigningPublicKey, newKemPublicKey, signature }] }` from `from` to current, for any signed-in account (rate-limited like lookup).
 - Contact lookup and every served identity (`ServedIdentity`) gain `keyVersion`.
 

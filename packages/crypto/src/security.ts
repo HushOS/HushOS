@@ -24,6 +24,8 @@ export type SecurityChallenge = {
     envelope: AccountKeyEnvelope;
     recovery: RecoveryEnvelope;
     identity: IdentityEnvelope;
+    /* The account's earlier identities (GET /api/auth/identity/history), oldest first. */
+    identityHistory?: IdentityEnvelope[];
     workspaces: WorkspaceKeyEnvelope[];
 };
 export type SecurityUpdate = {
@@ -32,6 +34,8 @@ export type SecurityUpdate = {
     envelope: AccountKeyEnvelope;
     recovery?: RecoveryEnvelope;
     identity?: IdentityEnvelope;
+    /* Master-key rotation: every earlier identity rewrapped under the new root, in the same order. */
+    identityHistory?: IdentityEnvelope[];
     workspaces?: WorkspaceKeyEnvelope[];
 };
 
@@ -93,7 +97,6 @@ export function createSecurityChange() {
                 old.keyVersion >= 2147483646 ||
                 old.credentialVersion >= 2147483646 ||
                 input.recovery.keyVersion !== old.keyVersion ||
-                input.identity.keyVersion !== old.keyVersion ||
                 input.workspaces.some((grant) => grant.keyVersion !== old.keyVersion)
             )
                 throw new CryptoError('Unsupported account-key envelope.');
@@ -159,14 +162,18 @@ export function createSecurityChange() {
                               )
                           ).recovery
                         : undefined,
+                // The identity, and every earlier one shares may still be sealed to, follow the
+                // root; each keeps its own key version and public keys.
                 identity:
                     input.action === 'master-key'
-                        ? await rewrapIdentity(
-                              root,
-                              nextRoot,
-                              input.userId,
-                              input.identity,
-                              keyVersion,
+                        ? await rewrapIdentity(root, nextRoot, input.userId, input.identity)
+                        : undefined,
+                identityHistory:
+                    input.action === 'master-key'
+                        ? await Promise.all(
+                              (input.identityHistory ?? []).map((earlier) =>
+                                  rewrapIdentity(root, nextRoot, input.userId, earlier),
+                              ),
                           )
                         : undefined,
                 // Every workspace grant follows the root; the workspace keys themselves stay put.

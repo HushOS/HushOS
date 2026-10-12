@@ -9,6 +9,11 @@ import {
 import {
     addIdentityKem,
     createIdentity,
+    createSuccessor,
+    verifySuccessionChain,
+    type PinnedKeys,
+    type ServedKeys,
+    type SuccessionLink,
     openIdentityEncryptionKey,
     openIdentityKemKey,
     openIdentitySigningKey,
@@ -131,8 +136,36 @@ export type CryptoRequests = {
      * it for the session (it dies with a lock). Settings are sealed under a key
      * derived from it, so every device that unlocks reads the same pins.
      */
-    /* `refresh` re-reads an envelope already open, after the KEM key was added on the server. */
-    identityOpen: { userId: string; identity: IdentityEnvelope; refresh?: boolean };
+    /*
+     * `refresh` re-reads an envelope already open, after the KEM key was added
+     * or a succession was accepted on the server. `history` is the account's
+     * earlier identities (GET /api/auth/identity/history), oldest first: their
+     * private keys stay open beside the current ones, since shares sealed to
+     * them open only with them, and their signing keys vouch for what they signed.
+     */
+    identityOpen: {
+        userId: string;
+        identity: IdentityEnvelope;
+        history?: IdentityEnvelope[];
+        refresh?: boolean;
+    };
+    /*
+     * A new identity at the next key version, vouched for by the open one (see
+     * docs/integrity-design.md, identity succession). Nothing is installed:
+     * send it to the server, and once it is accepted open it with identityOpen
+     * (refresh, the old identity appended to the history).
+     */
+    identitySucceed: { userId: string; identity: IdentityEnvelope };
+    /*
+     * Whether a contact's served keys follow from their pinned keys through
+     * the succession links the server returned. Pure; needs no unlock.
+     */
+    identityVerifyChain: {
+        userId: string;
+        pinned: PinnedKeys;
+        served: ServedKeys;
+        links: SuccessionLink[];
+    };
     /* An identity made before hybrid sharing gets its KEM key: minted, wrapped and signed; installed by the next open. */
     identityMintKem: { userId: string; identity: IdentityEnvelope };
     /* Whether a contact's served KEM key is vouched for by their signing key; pure, needs no unlock. */
@@ -545,10 +578,15 @@ export type CryptoResults = {
     loginFinish: { finishLoginRequest: string };
     unlock: { userId: string };
     identityOpen: {
+        keyVersion: number;
         encryptionPublicKey: string;
         signingPublicKey: string;
         kemPublicKey: string | null;
+        /* The earlier identities opened beside it, oldest first. */
+        history: { keyVersion: number; encryptionPublicKey: string; signingPublicKey: string }[];
     };
+    identitySucceed: { identity: IdentityEnvelope; signature: string };
+    identityVerifyChain: { valid: boolean };
     identityMintKem: { kem: IdentityKem };
     identityVerifyKem: { valid: boolean };
     settingsOpen: { settings: Settings };
@@ -702,11 +740,38 @@ export function createCryptoSession() {
               kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
           }
         | undefined;
+    /* Earlier identities of the account, oldest first: what shares sealed before a succession open with. */
+    let identityHistory: {
+        keyVersion: number;
+        key: Uint8Array<ArrayBuffer>;
+        publicKey: string;
+        signingPublicKey: string;
+        kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
+    }[] = [];
     function forgetIdentity() {
         identityKey?.key.fill(0);
         identityKey?.signingKey.fill(0);
         identityKey?.kem?.secretKey.fill(0);
         identityKey = undefined;
+        for (const earlier of identityHistory) {
+            earlier.key.fill(0);
+            earlier.kem?.secretKey.fill(0);
+        }
+        identityHistory = [];
+    }
+    function openedIdentity() {
+        if (!identityKey) throw new CryptoError('Open your identity first.');
+        return {
+            keyVersion: identityKey.keyVersion,
+            encryptionPublicKey: identityKey.publicKey,
+            signingPublicKey: identityKey.signingPublicKey,
+            kemPublicKey: identityKey.kem?.publicKey ?? null,
+            history: identityHistory.map((earlier) => ({
+                keyVersion: earlier.keyVersion,
+                encryptionPublicKey: earlier.publicKey,
+                signingPublicKey: earlier.signingPublicKey,
+            })),
+        };
     }
     /* A statement signed by the open identity, base64url. */
     async function sign(statement: Uint8Array) {
@@ -725,13 +790,11 @@ export function createCryptoSession() {
      */
     function granteeIdentities(keyVersion?: number | null) {
         if (!identityKey) throw new CryptoError('Open your identity first.');
-        const all = [
-            {
-                keyVersion: identityKey.keyVersion,
-                privateKey: identityKey.key,
-                kemSecretKey: identityKey.kem?.secretKey ?? null,
-            },
-        ];
+        const all = [identityKey, ...[...identityHistory].reverse()].map((identity) => ({
+            keyVersion: identity.keyVersion,
+            privateKey: identity.key,
+            kemSecretKey: identity.kem?.secretKey ?? null,
+        }));
         if (keyVersion === undefined || keyVersion === null) return all;
         const named = all.filter((identity) => identity.keyVersion === keyVersion);
         if (named.length === 0)
@@ -1323,14 +1386,23 @@ export function createCryptoSession() {
             }
             case 'identityOpen': {
                 const { userId, identity } = message.input;
+                const history = message.input.history ?? [];
                 if (!accountKey || unlockedUserId !== userId)
                     throw new CryptoError('Unlock your account first.');
-                if (identityKey && identityKey.userId === userId && !message.input.refresh)
-                    return {
-                        encryptionPublicKey: identityKey.publicKey,
-                        signingPublicKey: identityKey.signingPublicKey,
-                        kemPublicKey: identityKey.kem?.publicKey ?? null,
-                    };
+                if (
+                    identityKey &&
+                    identityKey.userId === userId &&
+                    !message.input.refresh &&
+                    history.length <= identityHistory.length
+                )
+                    return openedIdentity();
+                // Oldest first, each older than the one after and than the current one.
+                for (const [index, earlier] of history.entries())
+                    if (
+                        earlier.keyVersion >=
+                        (history[index + 1]?.keyVersion ?? identity.keyVersion)
+                    )
+                        throw new CryptoError('Your earlier keys are out of order.');
                 const root = accountKey.slice();
                 const opened: Uint8Array[] = [];
                 try {
@@ -1339,6 +1411,23 @@ export function createCryptoSession() {
                     const signingKey = await openIdentitySigningKey(root, userId, identity);
                     opened.push(signingKey);
                     const kem = await openIdentityKemKey(root, userId, identity);
+                    if (kem) opened.push(kem.secretKey);
+                    const earlier = [];
+                    for (const previous of history) {
+                        const previousKey = await openIdentityEncryptionKey(root, userId, previous);
+                        opened.push(previousKey);
+                        // Proves the signing key is the one this account held, as for the current one.
+                        (await openIdentitySigningKey(root, userId, previous)).fill(0);
+                        const previousKem = await openIdentityKemKey(root, userId, previous);
+                        if (previousKem) opened.push(previousKem.secretKey);
+                        earlier.push({
+                            keyVersion: previous.keyVersion,
+                            key: previousKey,
+                            publicKey: previous.encryptionPublicKey,
+                            signingPublicKey: previous.signingPublicKey,
+                            kem: previousKem,
+                        });
+                    }
                     forgetIdentity();
                     identityKey = {
                         userId,
@@ -1349,16 +1438,35 @@ export function createCryptoSession() {
                         signingKey,
                         kem,
                     };
+                    identityHistory = earlier;
                     opened.length = 0;
-                    return {
-                        encryptionPublicKey: identity.encryptionPublicKey,
-                        signingPublicKey: identity.signingPublicKey,
-                        kemPublicKey: kem?.publicKey ?? null,
-                    };
+                    return openedIdentity();
                 } finally {
                     root.fill(0);
                     for (const secret of opened) secret.fill(0);
                 }
+            }
+            case 'identitySucceed': {
+                const { userId, identity } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (
+                    !identityKey ||
+                    identityKey.userId !== userId ||
+                    identityKey.keyVersion !== identity.keyVersion ||
+                    identityKey.signingPublicKey !== identity.signingPublicKey
+                )
+                    throw new CryptoError('Open your identity first.');
+                const root = accountKey.slice();
+                try {
+                    return await createSuccessor(root, userId, identity, identityKey.signingKey);
+                } finally {
+                    root.fill(0);
+                }
+            }
+            case 'identityVerifyChain': {
+                const { userId, pinned, served, links } = message.input;
+                return { valid: await verifySuccessionChain(userId, pinned, served, links) };
             }
             case 'identityMintKem': {
                 const { userId, identity } = message.input;
@@ -1874,7 +1982,11 @@ export function createCryptoSession() {
                 };
                 for (const [userId, keys] of Object.entries(message.input.signers))
                     for (const key of keys) trust(userId, key);
-                if (identityKey) trust(identityKey.userId, identityKey.signingPublicKey);
+                if (identityKey) {
+                    trust(identityKey.userId, identityKey.signingPublicKey);
+                    for (const earlier of identityHistory)
+                        trust(identityKey.userId, earlier.signingPublicKey);
+                }
                 const bytesOf = (value: string | null) => {
                     if (!value) return null;
                     try {

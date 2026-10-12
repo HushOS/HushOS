@@ -42,6 +42,12 @@ export type ContactPin = {
      * swap, and none at all is a downgrade. Absent until they have one.
      */
     kemPublicKeyHash?: string | null;
+    /*
+     * The identity key version the pin was made at, so a later change of keys
+     * can be followed by its succession chain from here. Absent on pins made
+     * before successions; the chain is then found from the pinned keys.
+     */
+    keyVersion?: number | null;
 };
 
 export type Settings = {

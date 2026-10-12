@@ -1,0 +1,384 @@
+import { describe, expect, test } from 'vitest';
+import { createDeviceKey, rememberAccountKey } from './device';
+import {
+    createIdentity,
+    createSuccessor,
+    openIdentityEncryptionKey,
+    openIdentitySigningKey,
+    rewrapIdentity,
+    verifySuccessionChain,
+    verifySuccessionLink,
+    type IdentityEnvelope,
+    type SuccessionLink,
+} from './identity';
+import { createCryptoSession } from './session';
+import { createWorkspaceGrant } from './workspace';
+import { decode, encode } from './keys';
+import { signStatement, successionStatement } from './signatures';
+
+/*
+ * An identity is replaced by minting the next one under the same root and
+ * signing the change with the old signing key. A contact follows a chain of
+ * such links from the keys they pinned to the keys served, and anything but an
+ * unbroken chain signed link by link is a changed key. The account's devices
+ * keep the earlier private keys, because shares sealed to them open with
+ * nothing else.
+ */
+
+const USER = '11111111-1111-4111-8111-111111111111';
+const FRIEND = '33333333-3333-4333-8333-333333333333';
+const WS = '22222222-2222-4222-8222-222222222222';
+const ids = ['a', 'b', 'c'].map(
+    (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
+);
+const [A, B, C] = ids as [string, string, string];
+
+/* The link the server would serve for a succession from `old` to `next`, with its signature. */
+function linkOf(old: IdentityEnvelope, next: IdentityEnvelope, signature: string): SuccessionLink {
+    return {
+        oldKeyVersion: old.keyVersion,
+        newKeyVersion: next.keyVersion,
+        oldEncryptionPublicKey: old.encryptionPublicKey,
+        oldSigningPublicKey: old.signingPublicKey,
+        newEncryptionPublicKey: next.encryptionPublicKey,
+        newSigningPublicKey: next.signingPublicKey,
+        newKemPublicKey: next.kem!.publicKey,
+        signature,
+    };
+}
+
+/* Three generations of one account's identity: v1 pinned by a contact, v3 served now. */
+async function generations() {
+    const root = crypto.getRandomValues(new Uint8Array(32));
+    const first = await createIdentity(root, USER);
+    const firstKey = await openIdentitySigningKey(root, USER, first);
+    const second = await createSuccessor(root, USER, first, firstKey);
+    const secondKey = await openIdentitySigningKey(root, USER, second.identity);
+    const third = await createSuccessor(root, USER, second.identity, secondKey);
+    const links = [
+        linkOf(first, second.identity, second.signature),
+        linkOf(second.identity, third.identity, third.signature),
+    ];
+    const pinned = {
+        keyVersion: first.keyVersion,
+        encryptionPublicKey: first.encryptionPublicKey,
+        signingPublicKey: first.signingPublicKey,
+    };
+    const served = {
+        keyVersion: third.identity.keyVersion,
+        encryptionPublicKey: third.identity.encryptionPublicKey,
+        signingPublicKey: third.identity.signingPublicKey,
+        kemPublicKey: third.identity.kem!.publicKey,
+    };
+    return { root, first, second, third, links, pinned, served };
+}
+
+describe('succession', () => {
+    test('mints fresh keys at the next version, vouched for by the old signing key', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const first = await createIdentity(root, USER);
+        const signingKey = await openIdentitySigningKey(root, USER, first);
+        const { identity, signature } = await createSuccessor(root, USER, first, signingKey);
+        expect(identity.keyVersion).toBe(first.keyVersion + 1);
+        expect(identity.encryptionPublicKey).not.toBe(first.encryptionPublicKey);
+        expect(identity.signingPublicKey).not.toBe(first.signingPublicKey);
+        expect(identity.kem!.publicKey).not.toBe(first.kem!.publicKey);
+        // The new identity is the account's own: it opens under the same root.
+        await expect(openIdentityEncryptionKey(root, USER, identity)).resolves.toHaveLength(32);
+        const link = linkOf(first, identity, signature);
+        expect(await verifySuccessionLink(USER, link)).toBe(true);
+        // Bound to the account, and to the new KEM key as much as the others.
+        expect(await verifySuccessionLink(FRIEND, link)).toBe(false);
+        const otherKem = (await createIdentity(root, USER)).kem!.publicKey;
+        expect(await verifySuccessionLink(USER, { ...link, newKemPublicKey: otherKem })).toBe(
+            false,
+        );
+        // A signing key that is not the current identity's vouches for nothing.
+        const stranger = await createIdentity(root, FRIEND);
+        await expect(
+            createSuccessor(
+                root,
+                USER,
+                first,
+                await openIdentitySigningKey(root, FRIEND, stranger),
+            ),
+        ).rejects.toThrow('Identity keys do not match');
+    });
+
+    test('a chain holds from the pinned keys to the served ones, and nothing else does', async () => {
+        const { root, first, second, third, links, pinned, served } = await generations();
+        expect(await verifySuccessionChain(USER, pinned, served, links)).toBe(true);
+        // A pin made before successions has no version: the chain is found from its keys.
+        expect(
+            await verifySuccessionChain(USER, { ...pinned, keyVersion: null }, served, links),
+        ).toBe(true);
+        // A pin at v2 needs only the second link; links before it are not the start.
+        const fromSecond = {
+            keyVersion: 2,
+            encryptionPublicKey: second.identity.encryptionPublicKey,
+            signingPublicKey: second.identity.signingPublicKey,
+        };
+        expect(await verifySuccessionChain(USER, fromSecond, served, links.slice(1))).toBe(true);
+        expect(await verifySuccessionChain(USER, fromSecond, served, links)).toBe(false);
+
+        // A server that mints its own v3 and signs the link with a key it holds: v2's key did not sign.
+        const forged = await createIdentity(root, USER, 3);
+        const forgedKey = await openIdentitySigningKey(root, USER, forged);
+        const unsigned = linkOf(second.identity, forged, '');
+        const ownSignature = encode(
+            await signStatement(
+                await successionStatement({ ...unsigned, userId: USER }),
+                forgedKey,
+            ),
+        );
+        const forgedServed = {
+            keyVersion: 3,
+            encryptionPublicKey: forged.encryptionPublicKey,
+            signingPublicKey: forged.signingPublicKey,
+            kemPublicKey: forged.kem!.publicKey,
+        };
+        expect(
+            await verifySuccessionChain(USER, pinned, forgedServed, [
+                links[0]!,
+                { ...unsigned, signature: ownSignature },
+            ]),
+        ).toBe(false);
+        // The real chain does not vouch for keys the server serves beside it.
+        for (const change of [
+            { keyVersion: 4 },
+            { encryptionPublicKey: forged.encryptionPublicKey },
+            { signingPublicKey: forged.signingPublicKey },
+            { kemPublicKey: forged.kem!.publicKey },
+        ])
+            expect(await verifySuccessionChain(USER, pinned, { ...served, ...change }, links)).toBe(
+                false,
+            );
+        // A gap, links out of order, a flipped signature, a fork, or no chain at all.
+        expect(await verifySuccessionChain(USER, pinned, served, links.slice(1))).toBe(false);
+        expect(await verifySuccessionChain(USER, pinned, served, [links[1]!, links[0]!])).toBe(
+            false,
+        );
+        const flipped = decode(links[1]!.signature);
+        flipped[3]! ^= 1;
+        expect(
+            await verifySuccessionChain(USER, pinned, served, [
+                links[0]!,
+                { ...links[1]!, signature: Buffer.from(flipped).toString('base64url') },
+            ]),
+        ).toBe(false);
+        const branch = linkOf(first, third.identity, links[1]!.signature);
+        expect(await verifySuccessionChain(USER, pinned, served, [branch])).toBe(false);
+        expect(await verifySuccessionChain(USER, pinned, served, [])).toBe(false);
+        // Another account's id under the same links.
+        expect(await verifySuccessionChain(FRIEND, pinned, served, links)).toBe(false);
+    });
+
+    test('a master-key rotation keeps each identity’s key version and opens it under the new root', async () => {
+        const { root, second } = await generations();
+        const next = crypto.getRandomValues(new Uint8Array(32));
+        const rewrapped = await rewrapIdentity(root, next, USER, second.identity);
+        expect(rewrapped.keyVersion).toBe(2);
+        expect(rewrapped.signingPublicKey).toBe(second.identity.signingPublicKey);
+        await expect(openIdentityEncryptionKey(next, USER, rewrapped)).resolves.toHaveLength(32);
+        await expect(openIdentityEncryptionKey(root, USER, rewrapped)).rejects.toThrow();
+    });
+});
+
+async function device(userId: string, root: Uint8Array<ArrayBuffer>) {
+    const deviceKey = await createDeviceKey();
+    const bundle = await rememberAccountKey(root, deviceKey, {
+        userId,
+        keyVersion: 1,
+        credentialVersion: 1,
+        deviceKeyId: 'device',
+    });
+    const session = createCryptoSession();
+    let id = 0;
+    const call = <K extends Parameters<typeof session.handle>[0]['operation']>(
+        operation: K,
+        input: Extract<Parameters<typeof session.handle>[0], { operation: K }>['input'],
+    ) =>
+        session.handle({ id: ++id, operation, input } as Parameters<
+            typeof session.handle
+        >[0]) as Promise<Extract<Awaited<ReturnType<typeof session.handle>>, object>>;
+    await call('restore', { deviceKey, bundle });
+    return call;
+}
+const meta = (name: string) => ({ name, mime: null, size: null, modified: null });
+
+describe('succession in the worker', () => {
+    test('a device succeeds, then still opens what was shared to its earlier keys and trusts what they signed', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const first = await createIdentity(root, USER);
+        const me = await device(USER, root);
+        await me('identityOpen', { userId: USER, identity: first });
+
+        // A friend shares a folder to the first identity.
+        const friendRoot = crypto.getRandomValues(new Uint8Array(32));
+        const friendIdentity = await createIdentity(friendRoot, FRIEND);
+        const friend = await device(FRIEND, friendRoot);
+        await friend('identityOpen', { userId: FRIEND, identity: friendIdentity });
+        await friend('driveOpenWorkspace', {
+            userId: FRIEND,
+            grant: await createWorkspaceGrant(friendRoot, FRIEND, WS, 1),
+        });
+        await friend('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('Shared'),
+                },
+            ],
+        });
+        const { shareEnvelope } = (await friend('driveSealShare', {
+            workspaceId: WS,
+            nodeId: B,
+            keyEpoch: 2,
+            granterUserId: FRIEND,
+            granteeUserId: USER,
+            granteePublicKey: first.encryptionPublicKey,
+            granteeKemPublicKey: first.kem!.publicKey,
+        })) as { shareEnvelope: string };
+
+        // My own record, signed by the first identity.
+        await me('driveOpenWorkspace', {
+            userId: USER,
+            grant: await createWorkspaceGrant(root, USER, C, 1),
+        });
+        const mine = (await me('driveCreateNodes', {
+            workspaceId: C,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: C,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+            ],
+        })) as { nodes: { metadataEnvelope: string; metadataSignature: string }[] };
+
+        // Succeed: the worker mints and signs, installs nothing.
+        const { identity: second, signature } = (await me('identitySucceed', {
+            userId: USER,
+            identity: first,
+        })) as { identity: IdentityEnvelope; signature: string };
+        expect(second.keyVersion).toBe(2);
+        expect(await verifySuccessionLink(USER, linkOf(first, second, signature))).toBe(true);
+        expect(
+            (
+                (await me('identityOpen', { userId: USER, identity: first })) as {
+                    keyVersion: number;
+                }
+            ).keyVersion,
+        ).toBe(1);
+        // A stale envelope (not the open identity) cannot be succeeded.
+        await expect(me('identitySucceed', { userId: USER, identity: second })).rejects.toThrow(
+            'Open your identity first',
+        );
+
+        // The server took it: the device opens the new identity with the old one as history.
+        const reopened = (await me('identityOpen', {
+            userId: USER,
+            identity: second,
+            history: [first],
+            refresh: true,
+        })) as { keyVersion: number; history: { keyVersion: number }[] };
+        expect(reopened.keyVersion).toBe(2);
+        expect(reopened.history.map((earlier) => earlier.keyVersion)).toEqual([1]);
+        // History must be older than the current identity, oldest first.
+        await expect(
+            me('identityOpen', { userId: USER, identity: first, history: [second], refresh: true }),
+        ).rejects.toThrow('out of order');
+
+        const open = {
+            workspaceId: WS,
+            nodeId: B,
+            keyEpoch: 2,
+            granterUserId: FRIEND,
+            granterPublicKey: friendIdentity.encryptionPublicKey,
+            granterSigningPublicKey: friendIdentity.signingPublicKey,
+            granteeUserId: USER,
+            shareEnvelope,
+        };
+        // Named by version, the earlier identity opens it; naming the current one does not.
+        await expect(me('driveOpenShare', { ...open, granteeKeyVersion: 2 })).rejects.toThrow();
+        await expect(me('driveOpenShare', { ...open, granteeKeyVersion: 7 })).rejects.toThrow(
+            'does not hold',
+        );
+        await me('driveOpenShare', { ...open, granteeKeyVersion: 1 });
+        // Unnamed, the worker tries the current identity and then the earlier ones.
+        const fresh = await device(USER, root);
+        await fresh('identityOpen', { userId: USER, identity: second, history: [first] });
+        await fresh('driveOpenShare', open);
+
+        // What the first identity signed is still this account's own.
+        const verified = (await me('driveVerify', {
+            workspaceId: C,
+            signers: {},
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    metadataVersion: 1,
+                    metadataEnvelope: mine.nodes[0]!.metadataEnvelope,
+                    metadataSigner: USER,
+                    metadataSignature: mine.nodes[0]!.metadataSignature,
+                },
+            ],
+        })) as { nodes: { metadata: string }[] };
+        expect(verified.nodes[0]!.metadata).toBe('verified');
+        // And it no longer signs: new writes carry the second identity's signature.
+        const renamed = (await me('driveSealMetadata', {
+            workspaceId: C,
+            nodeId: A,
+            kind: 'folder',
+            metadataVersion: 2,
+            metadata: meta('Drive'),
+        })) as { metadataEnvelope: string; metadataSignature: string };
+        const { metadataStatement, verifyStatement } = await import('./signatures');
+        const statement = await metadataStatement(
+            { workspaceId: C, nodeId: A, kind: 'folder', metadataVersion: 2 },
+            decode(renamed.metadataEnvelope),
+        );
+        const signatureBytes = decode(renamed.metadataSignature, 64);
+        expect(
+            await verifyStatement(statement, signatureBytes, decode(second.signingPublicKey, 32)),
+        ).toBe(true);
+        expect(
+            await verifyStatement(statement, signatureBytes, decode(first.signingPublicKey, 32)),
+        ).toBe(false);
+
+        // A contact checks the chain without unlocking anything.
+        const chain = (await friend('identityVerifyChain', {
+            userId: USER,
+            pinned: {
+                keyVersion: 1,
+                encryptionPublicKey: first.encryptionPublicKey,
+                signingPublicKey: first.signingPublicKey,
+            },
+            served: {
+                keyVersion: 2,
+                encryptionPublicKey: second.encryptionPublicKey,
+                signingPublicKey: second.signingPublicKey,
+                kemPublicKey: second.kem!.publicKey,
+            },
+            links: [linkOf(first, second, signature)],
+        })) as { valid: boolean };
+        expect(chain.valid).toBe(true);
+    });
+});
