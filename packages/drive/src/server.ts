@@ -1,7 +1,8 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
     authRepository,
     driveRepository,
+    keyedHash,
     reportsRepository,
     rotationsRepository,
     type NodeRow,
@@ -1685,6 +1686,7 @@ function reportView(report: ReportRow, uploaderSuspended = false) {
         },
         status: report.status,
         heldAt: report.heldAt?.toISOString() ?? null,
+        releasedAt: report.releasedAt?.toISOString() ?? null,
         evidenceStatus: report.evidenceStatus,
         itemCount: report.itemCount,
         itemsTruncated: report.itemsTruncated,
@@ -1756,24 +1758,6 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
 
-/*
- * What an anonymous reporter's address is kept as, for one open report per
- * address and node: an HMAC under a key the server keeps, never a plain hash,
- * which the 2^32 IPv4 addresses would undo in seconds. It is cleared when the
- * report closes.
- */
-let addressKey: Promise<Buffer> | undefined;
-function reportAddressKey() {
-    addressKey ??= authRepository
-        .ensureServerSecret('report-address-key', () => randomBytes(32).toString('base64'))
-        .then((value) => Buffer.from(value, 'base64'))
-        .catch((error: unknown) => {
-            addressKey = undefined;
-            throw error;
-        });
-    return addressKey;
-}
-
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: {
     userId: string;
@@ -1820,7 +1804,6 @@ export async function fileReport(
         keys: { operatorUserId: string; keyEnvelope: string }[];
     },
 ) {
-    const addressKey = await reportAddressKey();
     const limits = [hashToken(`report:address:${actor.address}`)];
     if (actor.userId) limits.push(hashToken(`report:user:${actor.userId}`));
     for (const key of limits)
@@ -1859,9 +1842,9 @@ export async function fileReport(
         reason,
         reporterUserId: actor.userId,
         reporterEmail: actor.userId ? null : input.reporterEmail?.trim() || null,
-        reporterAddressHash: actor.userId
-            ? null
-            : createHmac('sha256', addressKey).update(actor.address).digest(),
+        // For one open report per address and node: keyed under the server hash key, never in
+        // the database, since a plain hash of an IPv4 address is undone in seconds. Released with the report.
+        reporterAddressHash: actor.userId ? null : keyedHash(`report:reporter:${actor.address}`),
         keys: input.keys.map((key) => ({
             operatorUserId: key.operatorUserId,
             keyEnvelope: reportEnvelope(key.keyEnvelope),
@@ -1911,7 +1894,9 @@ async function loadReport(reportId: string) {
  * A report closed without a hold has released what it held: its operator keys
  * are deleted (see reportsRepository.resolveReport), and every route that
  * reads its content is shut, so dismissing a report ends the operators' view of
- * the owner's files rather than leaving it open for good.
+ * the owner's files rather than leaving it open for good. Release is final: the
+ * repository refuses every later resolve, hold, reopen and re-seal under the
+ * report's row lock, so the checks here only spare a request the work.
  */
 const reportReleased = () =>
     new DriveError(
@@ -1919,6 +1904,8 @@ const reportReleased = () =>
         'This report was closed without a hold, so its content was released and can no longer be opened.',
         410,
     );
+const reportClosed = () =>
+    new DriveError('conflict', 'This report is already closed. Reopen it first.', 409);
 async function loadHeldReport(reportId: string) {
     const found = await loadReport(reportId);
     if (reportsRepository.isReleased(found.report)) throw reportReleased();
@@ -2015,13 +2002,15 @@ export async function requestEvidence(operatorUserId: string, reportId: string) 
     switch (result.status) {
         case 'not-found':
             throw reportGone();
+        case 'released':
+            throw reportReleased();
         case 'no-evidence':
             throw new DriveError(
                 'conflict',
                 result.evidenceStatus === 'skipped'
                     ? 'No evidence store is configured on this instance, so there is no copy to fetch.'
                     : result.evidenceStatus === 'purged'
-                      ? 'The evidence copy was deleted when this report was dismissed without a hold.'
+                      ? 'The evidence copy was deleted when this report was released.'
                       : 'The evidence copy is not complete yet. Try again in a few minutes.',
                 409,
             );
@@ -2030,6 +2019,8 @@ export async function requestEvidence(operatorUserId: string, reportId: string) 
     }
 }
 export async function getEvidenceRequest(reportId: string, requestId: string) {
+    // A release deletes its requests; the URLs of one answered before it are not served either.
+    await loadHeldReport(reportId);
     const row = await reportsRepository.getEvidenceRequest(reportId, requestId);
     if (!row) throw notFound();
     return { request: evidenceRequestView(row) };
@@ -2071,46 +2062,36 @@ export type ReportResolution =
     | { status: 'removed'; hold: boolean }
     | { status: 'filed'; filedWith: string; filedReference: string | null };
 
-/* Closes a report. Removal takes the content down first: trashed, unrestorable, every share and link on it revoked. */
+/* Closes an open report. Removal takes the content down with it: trashed, unrestorable, every share and link on it revoked. */
 export async function resolveReport(
     operatorUserId: string,
     reportId: string,
     resolution: ReportResolution,
 ) {
-    const found = await loadReport(reportId);
-    if (resolution.status === 'removed') {
-        const removed = await driveRepository.removeNode({
-            workspaceId: found.report.workspaceId,
-            nodeId: found.report.nodeId,
-        });
-        await reportsRepository.addReportEvent(
-            reportId,
-            operatorUserId,
-            'content-removed',
-            removed.status === 'ok'
-                ? `${removed.shares} shares and ${removed.links} links revoked`
-                : 'already gone',
-        );
-    }
+    const found = await loadHeldReport(reportId);
     const result = await reportsRepository.resolveReport(reportId, operatorUserId, resolution);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status === 'closed') throw reportClosed();
     if (result.status !== 'ok') throw reportGone();
     return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 export async function holdReport(operatorUserId: string, reportId: string, held: boolean) {
-    // A released report has no keys left to hold the content for.
-    const found = held ? await loadHeldReport(reportId) : await loadReport(reportId);
-    const report = await reportsRepository.setReportHold(reportId, operatorUserId, held);
-    if (!report) throw reportGone();
-    return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };
+    // A released report has no keys left to hold the content for, and nothing to let go of.
+    const found = await loadHeldReport(reportId);
+    const result = await reportsRepository.setReportHold(reportId, operatorUserId, held);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status !== 'ok') throw reportGone();
+    return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 export async function reopenReport(operatorUserId: string, reportId: string) {
     // Its keys went when it was released: a report about the same thing must be filed again.
     const found = await loadHeldReport(reportId);
-    const report = await reportsRepository.reopenReport(reportId, operatorUserId);
-    if (!report) throw reportGone();
-    return { report: reportView(report, Boolean(found.uploader?.suspendedAt)) };
+    const result = await reportsRepository.reopenReport(reportId, operatorUserId);
+    if (result.status === 'released') throw reportReleased();
+    if (result.status !== 'ok') throw reportGone();
+    return { report: reportView(result.report, Boolean(found.uploader?.suspendedAt)) };
 }
 
 /* Suspends or reinstates whoever owns the reported workspace; their sessions end at once. */

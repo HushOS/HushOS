@@ -133,3 +133,172 @@ describe('operator lists', () => {
         expect(await admin.getAccount(randomUUID())).toBeNull();
     });
 });
+
+describe('storage an operator adds', () => {
+    async function allowance(userId: string) {
+        return BigInt((await getStorageAllowance(userId))!.quotaBytes);
+    }
+
+    test('a grant raises that account’s allowance at once, and no one else’s', async () => {
+        const operator = await createTestAccount();
+        const account = await createTestAccount({ quotaBytes: 2n * GIB });
+        const other = await createTestAccount({ quotaBytes: 2n * GIB });
+
+        const granted = await admin.grantAdminStorage({
+            workspaceId: account.workspaceId,
+            quotaBytes: 100n * GIB,
+            expiresAt: null,
+            actorUserId: operator.userId,
+            note: '  Support case 41  ',
+        });
+        if (granted.status !== 'ok') throw new Error(granted.status);
+        expect(granted.quotaBytes).toBe((102n * GIB).toString());
+        expect(await allowance(account.userId)).toBe(102n * GIB);
+        expect(await allowance(other.userId)).toBe(2n * GIB);
+        expect((await admin.getAccount(account.userId))?.quotaBytes).toBe(granted.quotaBytes);
+
+        const [row] = await db
+            .select()
+            .from(storageEntitlements)
+            .where(eq(storageEntitlements.id, granted.entitlementId));
+        expect(row).toMatchObject({ source: 'admin', grantedBy: operator.userId });
+        expect(row?.note).toBe('Support case 41');
+        expect(row?.sourceReference).toMatch(/^admin:[0-9a-f-]{36}$/);
+        const listed = (await admin.getAccount(account.userId))?.grants[0];
+        expect(listed).toMatchObject({
+            id: granted.entitlementId,
+            source: 'admin',
+            grantedByEmail: operator.email,
+        });
+
+        // A second grant is its own row, never a collision with the first.
+        const again = await admin.grantAdminStorage({
+            workspaceId: account.workspaceId,
+            quotaBytes: 1n * GIB,
+            expiresAt: null,
+            actorUserId: operator.userId,
+        });
+        expect(again).toMatchObject({ status: 'ok', quotaBytes: (103n * GIB).toString() });
+    });
+
+    test('an end date stops it counting, and so does revoking it', async () => {
+        const operator = await createTestAccount();
+        const account = await createTestAccount({ quotaBytes: 2n * GIB });
+        const until = await admin.grantAdminStorage({
+            workspaceId: account.workspaceId,
+            quotaBytes: 10n * GIB,
+            expiresAt: new Date(Date.now() + DAY),
+            actorUserId: operator.userId,
+        });
+        const forever = await admin.grantAdminStorage({
+            workspaceId: account.workspaceId,
+            quotaBytes: 5n * GIB,
+            expiresAt: null,
+            actorUserId: operator.userId,
+        });
+        if (until.status !== 'ok' || forever.status !== 'ok') throw new Error('not granted');
+        expect(await allowance(account.userId)).toBe(17n * GIB);
+
+        // The day passes.
+        await db
+            .update(storageEntitlements)
+            .set({
+                startsAt: new Date(Date.now() - 2 * DAY),
+                expiresAt: new Date(Date.now() - 1000),
+            })
+            .where(eq(storageEntitlements.id, until.entitlementId));
+        expect(await allowance(account.userId)).toBe(7n * GIB);
+
+        const revoked = await admin.revokeAdminStorage(forever.entitlementId, account.workspaceId);
+        expect(revoked).toEqual({ status: 'ok', quotaBytes: (2n * GIB).toString() });
+        expect(await allowance(account.userId)).toBe(2n * GIB);
+        const [first] = await db
+            .select({ revokedAt: storageEntitlements.revokedAt })
+            .from(storageEntitlements)
+            .where(eq(storageEntitlements.id, forever.entitlementId));
+        // Revoking again changes nothing, not even when it was revoked.
+        expect(
+            (await admin.revokeAdminStorage(forever.entitlementId, account.workspaceId)).status,
+        ).toBe('ok');
+        const [second] = await db
+            .select({ revokedAt: storageEntitlements.revokedAt })
+            .from(storageEntitlements)
+            .where(eq(storageEntitlements.id, forever.entitlementId));
+        expect(second?.revokedAt?.getTime()).toBe(first?.revokedAt?.getTime());
+    });
+
+    test('revoking refuses a plan’s or a referral’s grant, and another account’s', async () => {
+        const operator = await createTestAccount();
+        const account = await createTestAccount({ quotaBytes: 2n * GIB });
+        const other = await createTestAccount({ quotaBytes: 2n * GIB });
+        const [plan] = await db
+            .insert(storageEntitlements)
+            .values({
+                workspaceId: account.workspaceId,
+                source: 'polar',
+                sourceReference: `sub_${randomUUID()}`,
+                quotaBytes: 200n * GIB,
+            })
+            .returning({ id: storageEntitlements.id });
+        const [referral] = await db
+            .insert(storageEntitlements)
+            .values({
+                workspaceId: account.workspaceId,
+                source: 'referral',
+                sourceReference: `referral:${randomUUID()}:inviter`,
+                quotaBytes: 1n * GIB,
+            })
+            .returning({ id: storageEntitlements.id });
+        const theirs = await admin.grantAdminStorage({
+            workspaceId: other.workspaceId,
+            quotaBytes: 50n * GIB,
+            expiresAt: null,
+            actorUserId: operator.userId,
+        });
+        if (theirs.status !== 'ok') throw new Error(theirs.status);
+
+        for (const id of [plan!.id, referral!.id, theirs.entitlementId, randomUUID()])
+            expect(await admin.revokeAdminStorage(id, account.workspaceId)).toEqual({
+                status: 'not-found',
+            });
+        expect(await allowance(account.userId)).toBe(203n * GIB);
+        expect(await allowance(other.userId)).toBe(52n * GIB);
+        expect(
+            (await db.select().from(storageEntitlements)).every((row) => row.revokedAt === null),
+        ).toBe(true);
+    });
+
+    test('an amount of nothing, less, or past 100 TiB is refused, as is an end date already past', async () => {
+        const operator = await createTestAccount();
+        const account = await createTestAccount({ quotaBytes: 2n * GIB });
+        const grant = (quotaBytes: bigint, expiresAt: Date | null = null, note?: string) =>
+            admin.grantAdminStorage({
+                workspaceId: account.workspaceId,
+                quotaBytes,
+                expiresAt,
+                actorUserId: operator.userId,
+                note,
+            });
+        for (const amount of [0n, -1n * GIB, admin.ADMIN_STORAGE_MAX_BYTES + 1n])
+            expect(await grant(amount)).toEqual({ status: 'invalid-amount' });
+        expect(await grant(GIB, new Date(Date.now() - 1000))).toEqual({
+            status: 'invalid-expiry',
+        });
+        expect(await grant(GIB, new Date())).toEqual({ status: 'invalid-expiry' });
+        expect(await grant(GIB, null, 'x'.repeat(501))).toEqual({ status: 'invalid-note' });
+        expect(
+            await admin.grantAdminStorage({
+                workspaceId: randomUUID(),
+                quotaBytes: GIB,
+                expiresAt: null,
+                actorUserId: operator.userId,
+            }),
+        ).toEqual({ status: 'not-found' });
+        expect(await db.select().from(storageEntitlements)).toEqual([]);
+        expect(await allowance(account.userId)).toBe(2n * GIB);
+
+        // The largest grant allowed is allowed.
+        expect((await grant(admin.ADMIN_STORAGE_MAX_BYTES)).status).toBe('ok');
+        expect(await allowance(account.userId)).toBe(2n * GIB + admin.ADMIN_STORAGE_MAX_BYTES);
+    });
+});

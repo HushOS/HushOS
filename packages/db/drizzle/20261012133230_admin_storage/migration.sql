@@ -1,0 +1,4 @@
+ALTER TABLE "storage_entitlements" ADD COLUMN "granted_by" uuid;--> statement-breakpoint
+ALTER TABLE "storage_entitlements" ADD COLUMN "note" text;--> statement-breakpoint
+ALTER TABLE "storage_entitlements" ADD CONSTRAINT "storage_entitlements_granted_by_users_id_fkey" FOREIGN KEY ("granted_by") REFERENCES "users"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "storage_entitlements" DROP CONSTRAINT "storage_entitlements_valid", ADD CONSTRAINT "storage_entitlements_valid" CHECK ("quota_bytes" > 0 and ("expires_at" is null or "expires_at" > "starts_at") and ("note" is null or char_length("note") between 1 and 500));

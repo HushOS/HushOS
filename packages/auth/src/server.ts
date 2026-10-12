@@ -713,6 +713,64 @@ export async function getAdminAccount(sessionToken: string | null, userId: strin
     };
 }
 
+/*
+ * Adds storage to an account by hand, for a support case, a trial or a
+ * correction, optionally until a date. It counts at once and is listed with
+ * the account's other grants, naming who granted it. Amounts are decimal byte
+ * strings, as every byte count on the wire is.
+ */
+export async function grantAdminAccountStorage(
+    sessionToken: string | null,
+    userId: string,
+    input: { quotaBytes: string; expiresAt?: string | null; note?: string | null },
+) {
+    const operator = await requireAdmin(sessionToken);
+    if (!/^[0-9]{1,20}$/.test(input.quotaBytes)) throw new AuthError('Enter an amount of storage.');
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) throw new AuthError('Enter a valid date.');
+    const account = await adminRepository.getAccount(userId);
+    if (!account) throw new AuthError('This account does not exist.', 404);
+    if (!account.workspaceId) throw new AuthError('This account has no storage yet.', 409);
+    const result = await adminRepository.grantAdminStorage({
+        workspaceId: account.workspaceId,
+        quotaBytes: BigInt(input.quotaBytes),
+        expiresAt,
+        actorUserId: operator.id,
+        note: input.note,
+    });
+    switch (result.status) {
+        case 'invalid-amount':
+            throw new AuthError('Add between 1 byte and 100 TiB at a time.');
+        case 'invalid-expiry':
+            throw new AuthError('The end date has to be in the future.');
+        case 'invalid-note':
+            throw new AuthError('Keep the note under 500 characters.');
+        case 'not-found':
+            throw new AuthError('This account has no storage yet.', 409);
+        case 'ok':
+            return {
+                operatorId: operator.id,
+                entitlementId: result.entitlementId,
+                quotaBytes: result.quotaBytes,
+            };
+    }
+}
+
+/* Ends storage an operator added; a plan's or an invite bonus's is not theirs to end here. */
+export async function revokeAdminAccountStorage(
+    sessionToken: string | null,
+    userId: string,
+    entitlementId: string,
+) {
+    const operator = await requireAdmin(sessionToken);
+    const account = await adminRepository.getAccount(userId);
+    if (!account?.workspaceId) throw new AuthError('This account does not exist.', 404);
+    const result = await adminRepository.revokeAdminStorage(entitlementId, account.workspaceId);
+    if (result.status !== 'ok')
+        throw new AuthError('There is no storage an operator added with that id.', 404);
+    return { operatorId: operator.id, quotaBytes: result.quotaBytes };
+}
+
 export async function listAdminWorkspaces(
     sessionToken: string | null,
     input: { sort?: 'stored' | 'created'; offset?: number },

@@ -288,11 +288,13 @@ export async function tierObjects(
 
 /*
  * Copies what each new report names into the evidence store, by report, and
- * deletes the copies of reports dismissed without a hold. Without an evidence
- * store every new report is marked skipped and the hold on the primary bucket
- * is the only preservation. A copy that fails leaves the report failed for the
- * operator to see, with the reason in the run's log; the next run tries the
- * remaining objects again. The copy is verified: the store checks the digest.
+ * deletes the copies of released reports, however they closed; a released
+ * report is never copied, and one released mid-copy is purged on the same or
+ * the next run. Without an evidence store every new report is marked skipped
+ * and the hold on the primary bucket is the only preservation. A copy that
+ * fails leaves the report failed for the operator to see, with the reason in
+ * the run's log; the next run tries the remaining objects again. The copy is
+ * verified: the store checks the digest.
  */
 export async function copyEvidence(
     { primary, evidence }: { primary: ObjectStore; evidence: ObjectStore | null },
@@ -354,7 +356,8 @@ export async function copyEvidence(
 /*
  * Answers operators' requests for the evidence copies: a presigned GET per
  * copied object, fifteen minutes, keyed by version so the page can read them
- * where it would read the primary copy. Runs for most of a minute polling the
+ * where it would read the primary copy. Requests of released reports are
+ * neither listed nor answered. Runs for most of a minute polling the
  * table, so the operator waits seconds, not the schedule. Without an evidence
  * store every request fails with the reason.
  */

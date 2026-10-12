@@ -377,10 +377,12 @@ The reporter's device seals the item's key to the identity key of every current 
 ### What a report holds
 
 - The category and the reporter's reason.
-- Who reported: the account, or an optional email and, for an anonymous visitor, an HMAC of their address under a key the server keeps, used to allow one open report per address and node and cleared when the report closes.
+- Who reported: the account, or an optional email and, for an anonymous visitor, an HMAC of their address, used to allow one open report per address and node. Both are deleted when the report is released.
 - Whose files they are, and how the reporter could see them.
 - No digest of the content. An operator who needs one (to file with an authority, say) works it out on their own device from the opened file, with SHA-256 on the report page, for files up to 64 MiB.
 - A snapshot of the reported subtree: every live node beneath the reported one, up to 2,000, with the envelopes and object framing needed to open it later. The snapshot is what makes a report outlive the owner's deletions.
+
+The address HMAC, and every rate-limit bucket built from an address, an email or an account, is keyed under the server hash key, which is never written to the database: a plain hash of an IPv4 address is undone in seconds, and a key kept beside the hashes would undo them as quickly. With `OPAQUE_SERVER_SETUP` in the environment the key is derived from it (HKDF-SHA-256), so every web process and every restart agree. Without it each process makes its own at random: rate limits then count per process, and both they and the one-open-report check start over when the process restarts. Set `OPAQUE_SERVER_SETUP` for an instance that runs more than one web process.
 
 ### Triage
 
@@ -389,17 +391,28 @@ Reports are triaged at `/app/admin/reports`. The queue orders open reports by ag
 Opening a report's content decrypts on the operator's device under their own identity and writes a "viewed" entry to the report's record. Every action is on the record with who took it:
 
 - Dismiss.
-- Remove the content: trashed in the owner's workspace where they cannot restore it, with every share and link on it revoked.
+- Remove the content: trashed in the owner's workspace where they cannot restore it, with every share and link on it revoked, in the same step that closes the report.
 - Mark as filed with an authority and their reference.
 - Keep on or release a hold.
 - Suspend or reinstate the uploader. Their sessions end at once and sign-in is refused until reinstated.
 - Add a note.
 
+Only an open report is resolved. A closed report that is still held is reopened first, then resolved again; a released one is not resolved at all.
+
 ### Holds and evidence
 
-While a report is open, and afterwards for as long as it is held, the deletion outbox leaves the reported objects in the primary bucket whatever the owner does, and the operator reads them from there. A report marked filed is always held. A report closed without a hold (dismissed or removed), or whose hold is released after it closed, is released: its bytes go to ordinary deletion, the operators' sealed copies of its key are deleted, and nothing serves its content any more, so it cannot be reopened, re-sealed to a new operator, or read again; a report about the same thing must be filed anew. An operator who opened it before could have kept the key on their device; the release ends the server's part, not that.
+While a report is open, and afterwards for as long as it is held, the deletion outbox leaves the reported objects in the primary bucket whatever the owner does, and the operator reads them from there. A report marked filed is always held. A report closed without a hold (dismissed or removed), or whose hold is released after it closed, is released, and release is final: it cannot be resolved again, held, reopened, re-sealed to a new operator or read again, and a report about the same thing must be filed anew. The report records when it was released, and every one of those actions checks that under a lock on the report, so two operators acting at once cannot undo it. A release:
 
-Optionally, the worker also copies every reported object to a separate evidence bucket within five minutes of the report, under `reports/<reportId>/<objectId>`, and deletes the copies of reports dismissed without a hold.
+- lets the bytes go to ordinary deletion;
+- deletes the operators' sealed copies of the item's key;
+- deletes the anonymous reporter's address HMAC and email, and the uploader's email;
+- deletes the report's evidence requests, and has the worker delete its evidence copy.
+
+The category, the reason, the record of who did what, and the snapshot stay. The snapshot's envelopes open nothing without the key, and the worker needs its object ids to find the evidence copies it deletes.
+
+The release ends the server's part, not what an operator kept. An operator who opened the report had the item's node key on their device and could have kept it; that key opens the item, every version, and everything the owner adds beneath it later, for anyone who also has the ciphertext. Whoever runs the instance should treat operator devices accordingly.
+
+Optionally, the worker also copies every reported object to a separate evidence bucket within five minutes of the report, under `reports/<reportId>/<objectId>`, and deletes the copies of every released report, however it closed. A report released before the worker reached it is never copied.
 
 - Give that bucket its own credentials and set them on the worker only, so a compromised web container cannot reach it.
 - Turn on object lock or a retention rule there where the provider offers one.
@@ -411,7 +424,7 @@ The operator reads the evidence copy from the report page ("Fetch from the evide
 2. The worker answers it within seconds with a presigned URL per object, fifteen minutes long.
 3. The operator's browser reads the objects from the evidence bucket directly, decrypting on their device.
 
-That is how a filed report stays readable after its hold is released and the primary copy drained, without the web service ever holding the evidence credentials. It means the evidence bucket's endpoint must be reachable from the operator's browser, not only from the worker, and needs a CORS rule allowing `GET` with the `Range` header from `APP_ORIGIN`, the same rule as the primary bucket.
+That is how a held report stays readable if its primary copy goes missing, without the web service ever holding the evidence credentials; once the report is released, no request is taken, answered or served. It means the evidence bucket's endpoint must be reachable from the operator's browser, not only from the worker, and needs a CORS rule allowing `GET` with the `Range` header from `APP_ORIGIN`, the same rule as the primary bucket.
 
 | Variable                                                                                                                                                                                       | Purpose                                                                                                                              |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -588,7 +601,8 @@ Nitro emits one evlog completion event for each request, including pre-parser au
 
 - A personal workspace and initial quota are created in the signup transaction.
 - Quota counts use PostgreSQL bigint and serialize as decimal strings.
-- Extra entitlements are separate, expiring/revocable records keyed by the billing subscription that granted them.
+- Extra entitlements are separate, expiring/revocable records keyed by what granted them: a billing subscription, a referral, or an operator.
+- An operator adds storage from an account's page under Management (Add storage: an amount up to 100 TB, optionally an end date and a note). It counts at once, is listed with the account's other grants with who added it, and is logged as `storage-granted` with the operator's and the account's ids. Only these grants can be revoked there (`storage-revoked`); a plan's or an invite bonus's ends through its own system. Revoking never deletes files: while they take more than the allowance, uploads are refused.
 - Changing the initial-quota environment variable affects new accounts only.
 
 ### Enforcement

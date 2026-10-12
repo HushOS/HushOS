@@ -33,8 +33,9 @@ export const workspaceStorage = pgTable(
     ],
 );
 
-// An authenticated billing adapter can grant storage by a unique provider reference.
-// No public quota-write API: checkout and webhook verification are a separate integration.
+// An authenticated billing adapter can grant storage by a unique provider reference, as
+// can referrals, and an operator from the management area (`source = 'admin'`, with who
+// granted it and why). No quota-write API for members.
 export const storageEntitlements = pgTable(
     'storage_entitlements',
     {
@@ -48,13 +49,15 @@ export const storageEntitlements = pgTable(
         startsAt: timestamp('starts_at', { withTimezone: true }).notNull().defaultNow(),
         expiresAt: timestamp('expires_at', { withTimezone: true }),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+        note: text(),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
         index('storage_entitlements_workspace_idx').on(table.workspaceId),
         check(
             'storage_entitlements_valid',
-            sql`${table.quotaBytes} > 0 and (${table.expiresAt} is null or ${table.expiresAt} > ${table.startsAt})`,
+            sql`${table.quotaBytes} > 0 and (${table.expiresAt} is null or ${table.expiresAt} > ${table.startsAt}) and (${table.note} is null or char_length(${table.note}) between 1 and 500)`,
         ),
     ],
 );

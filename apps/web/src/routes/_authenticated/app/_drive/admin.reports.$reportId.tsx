@@ -108,8 +108,8 @@ function ReportDetail() {
                 description={
                     <>
                         {STATUS_LABELS[report.status]}
-                        {report.heldAt ? ', on hold' : ''}. Reported{' '}
-                        {formatWhen(report.createdAt, { lower: true })}
+                        {report.releasedAt ? ', released' : report.heldAt ? ', on hold' : ''}.
+                        Reported {formatWhen(report.createdAt, { lower: true })}
                         {due ? (
                             <>
                                 , due {formatDay(dueAt(report).toISOString())}{' '}
@@ -576,7 +576,7 @@ function EvidenceTools({
                     ? 'The packet holds the files, their MD5, SHA-1 and SHA-256, the report, the record and where to file. Built on this device; every download is on the record.'
                     : 'For this category the packet holds hashes and metadata only, never the files: hand those to the authority through its own channel. Built on this device; every download is on the record.'}
                 {report.evidenceStatus === 'copied'
-                    ? ' Fetching from the evidence store reads the worker’s copy instead of the primary bucket, for when a released hold has drained it.'
+                    ? ' Fetching from the evidence store reads the worker’s copy instead of the primary bucket, for when the primary copy is missing.'
                     : ''}
                 {unsealed > 0
                     ? ` ${unsealed === 1 ? 'One operator was' : `${unsealed} operators were`} promoted after this was filed and cannot open it until you grant access, which seals the key to them on this device.`
@@ -623,7 +623,7 @@ function Actions({ report }: { report: ReportView }) {
         }
     }
     const open = report.status === 'open';
-    const released = !open && !report.heldAt;
+    const released = report.releasedAt !== null;
     return (
         <section className="flex flex-col gap-3">
             <h2 className="text-[15px] font-bold">Actions</h2>
@@ -652,8 +652,9 @@ function Actions({ report }: { report: ReportView }) {
                     </>
                 ) : released ? (
                     <p className="px-4 py-3 text-sm text-muted-foreground">
-                        Released when it closed without a hold: the operators’ keys to it are
-                        deleted, so it can’t be opened or reopened. File a new report if needed.
+                        Released when it closed without a hold: the operators’ keys to it and the
+                        reporter’s and uploader’s details are deleted, so it can’t be opened, held
+                        or reopened. File a new report if needed.
                     </p>
                 ) : (
                     <ActionRow
@@ -755,7 +756,7 @@ function Actions({ report }: { report: ReportView }) {
                             Moves the item to the owner’s trash where they cannot restore it, and
                             revokes every share and link on it. The owner can still delete it
                             forever; a hold keeps the bytes regardless. Without a hold, every
-                            operator’s key to it is deleted as it closes.
+                            operator’s key to it and the evidence copy are deleted as it closes.
                         </p>
                     )}
                     {(action === 'dismiss' || action === 'remove') && (
