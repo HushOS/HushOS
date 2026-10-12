@@ -1,0 +1,43 @@
+apps/web/src/components/drive/unverified-mark.tsx
+  s_75dbe24a0bc379::t_42880a5f9430bf 1-135
+apps/web/src/lib/integrity.ts
+  s_75dbe24a0bc379::t_0d9ce5868d8c11 1-100
+apps/web/src/components/drive/check-contact.tsx
+  s_75dbe24a0bc379::t_05606b97907b45 9-16,29,36-37,96-97,168-172
+apps/web/src/components/drive/details-panel.tsx
+  s_75dbe24a0bc379::t_a7bf869d93b836 2,8,314,355-365
+apps/web/src/components/drive/folder-view.tsx
+  s_75dbe24a0bc379::t_fcfbf743864169 39,1038,1150-1153
+apps/web/src/components/drive/home-view.tsx
+  s_75dbe24a0bc379::t_790ad830c8f596 39,528
+apps/web/src/components/drive/preview.tsx
+  s_75dbe24a0bc379::t_1ae866e8dd1d28 17,126-135
+apps/web/src/components/drive/search-view.tsx
+  s_75dbe24a0bc379::t_601694d20b1414 10,130-142,144-146
+apps/web/src/components/drive/tag-view.tsx
+  s_75dbe24a0bc379::t_28b0dffd1b505f 18,253
+apps/web/src/components/drive/versions-dialog.tsx
+  s_75dbe24a0bc379::t_76e707b0bc92d1 2-3,8,55-63,187-190,214-219
+apps/web/src/routes/_authenticated/app/_drive/admin.reports.$reportId.tsx
+  s_75dbe24a0bc379::t_5c33f93b435ac2 2,310,370-374,377,394
+apps/web/src/routes/_authenticated/app/_drive/people.tsx
+  s_75dbe24a0bc379::t_c2a3ffe4fcc70a 49,53,55,57,101-116,121-122,162-185,298-300,307
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_75dbe24a0bc379::t_259c4821ab6227 29,332-335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fc9a147c02a112028041cd939765af2a86b313c",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
