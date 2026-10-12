@@ -383,12 +383,12 @@ export async function openIdentityKemKey(
 }
 
 /*
- * Proves the served signing public key is this identity's own: its seed opens
- * under the root with that key in the associated data and derives it. What the
- * person's own fingerprint is computed from, so a server cannot show them a
- * fingerprint over a signing key it swapped in.
+ * The identity's Ed25519 signing key (libsodium's 64-byte secret key), opened
+ * under the root and proven to be the served signing public key's: its seed
+ * opens with that key in the associated data and derives it. What signs every
+ * write, a share and a succession. The caller owns the key and zeroes it.
  */
-export async function verifyIdentitySigningKey(
+export async function openIdentitySigningKey(
     root: Uint8Array<ArrayBuffer>,
     userId: string,
     envelope: IdentityEnvelope,
@@ -401,7 +401,6 @@ export async function verifyIdentitySigningKey(
         'signing-seed-wrap',
     );
     let seed: Uint8Array | undefined;
-    let pair: { publicKey: Uint8Array; privateKey: Uint8Array } | undefined;
     try {
         seed = await decryptKey(
             decode(envelope.encryptedSigningSeed, 48),
@@ -414,15 +413,31 @@ export async function verifyIdentitySigningKey(
                 envelope.signingPublicKey,
             ),
         );
-        pair = sodium.crypto_sign_seed_keypair(seed);
-        if (encode(pair.publicKey) !== envelope.signingPublicKey)
+        const pair = sodium.crypto_sign_seed_keypair(seed);
+        if (encode(pair.publicKey) !== envelope.signingPublicKey) {
+            pair.privateKey.fill(0);
             throw new CryptoError('Identity keys do not match.');
-        return envelope.signingPublicKey;
+        }
+        return pair.privateKey as Uint8Array<ArrayBuffer>;
     } finally {
         wrap.fill(0);
         seed?.fill(0);
-        pair?.privateKey.fill(0);
     }
+}
+
+/*
+ * Proves the served signing public key is this identity's own (see
+ * openIdentitySigningKey). What the person's own fingerprint is computed
+ * from, so a server cannot show them a fingerprint over a signing key it
+ * swapped in.
+ */
+export async function verifyIdentitySigningKey(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: IdentityEnvelope,
+) {
+    (await openIdentitySigningKey(root, userId, envelope)).fill(0);
+    return envelope.signingPublicKey;
 }
 
 /*

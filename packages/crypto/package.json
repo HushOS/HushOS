@@ -14,7 +14,9 @@
         "./contacts": "./src/contacts.ts",
         "./fingerprint": "./src/fingerprint.ts",
         "./links": "./src/links.ts",
-        "./pins": "./src/pins.ts"
+        "./pins": "./src/pins.ts",
+        "./signatures": "./src/signatures.ts",
+        "./shares": "./src/shares.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",

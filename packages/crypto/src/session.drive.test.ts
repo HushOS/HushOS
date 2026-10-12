@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { createDeviceKey, rememberAccountKey } from './device';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
+import { createIdentity } from './identity';
 import {
     CHUNK_SIZE,
     CHUNK_TAG_BYTES,
@@ -16,6 +17,8 @@ import {
     thumbnailRange,
 } from './drive';
 import { decode, encode } from './keys';
+import sodium from 'libsodium-wrappers';
+import { metadataStatement, signStatement, verifyStatement, versionStatement } from './signatures';
 import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
 
 /*
@@ -27,10 +30,10 @@ import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const WS = '22222222-2222-4222-8222-222222222222';
-const ids = ['a', 'b', 'c', 'd'].map(
+const ids = ['a', 'b', 'c', 'd', 'f'].map(
     (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
 );
-const [A, B, C, D] = ids as [string, string, string, string];
+const [A, B, C, D, E] = ids as [string, string, string, string, string];
 
 async function unlockedSession() {
     const root = crypto.getRandomValues(new Uint8Array(32));
@@ -52,7 +55,10 @@ async function unlockedSession() {
             typeof session.handle
         >[0]) as Promise<Extract<Awaited<ReturnType<typeof session.handle>>, object>>;
     await call('restore', { deviceKey, bundle });
-    return { session, call, grant, root };
+    // Every write is signed, so the identity is open as it is in the app.
+    const identity = await createIdentity(root, USER);
+    await call('identityOpen', { userId: USER, identity });
+    return { session, call, grant, root, identity };
 }
 
 const meta = (name: string) => ({ name, mime: null, size: null, modified: null });
@@ -64,9 +70,30 @@ describe('drive session operations', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('one') },
-                { id: C, parentId: B, parentKeyEpoch: 2, keyEpoch: 3, metadata: meta('two') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('one'),
+                },
+                {
+                    id: C,
+                    kind: 'folder',
+                    parentId: B,
+                    parentKeyEpoch: 2,
+                    keyEpoch: 3,
+                    metadata: meta('two'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         expect(created.nodes.map((n) => n.id)).toEqual([A, B, C]);
@@ -105,8 +132,22 @@ describe('drive session operations', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('one') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('one'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         // A second device of the same account: same root, its own session and no cache.
@@ -163,15 +204,44 @@ describe('drive session operations', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('one') },
-                { id: C, parentId: A, parentKeyEpoch: 1, keyEpoch: 3, metadata: meta('two') },
-                { id: D, parentId: B, parentKeyEpoch: 2, keyEpoch: 4, metadata: meta('leaf') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('one'),
+                },
+                {
+                    id: C,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    metadata: meta('two'),
+                },
+                {
+                    id: D,
+                    kind: 'folder',
+                    parentId: B,
+                    parentKeyEpoch: 2,
+                    keyEpoch: 4,
+                    metadata: meta('leaf'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         const renamed = (await call('driveSealMetadata', {
             workspaceId: WS,
             nodeId: D,
+            kind: 'folder',
             metadataVersion: 2,
             metadata: meta('renamed'),
         })) as { metadataEnvelope: string };
@@ -229,14 +299,35 @@ describe('drive session operations', () => {
     });
 
     test('a copy rewraps the same content key under a fresh node key in the destination', async () => {
-        const { call, grant, root } = await unlockedSession();
+        const { call, grant, root, identity } = await unlockedSession();
         await call('driveOpenWorkspace', { userId: USER, grant });
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('dest') },
-                { id: C, parentId: A, parentKeyEpoch: 1, keyEpoch: 3, metadata: meta('file') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('dest'),
+                },
+                {
+                    id: C,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    metadata: meta('file'),
+                },
             ],
         })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
         const objectId = D;
@@ -269,7 +360,13 @@ describe('drive session operations', () => {
                 metadata: meta('file (copy)'),
             },
             versionId: copyVersion,
-        })) as { keyEnvelope: string; metadataEnvelope: string; contentKeyEnvelope: string };
+        })) as {
+            keyEnvelope: string;
+            metadataEnvelope: string;
+            metadataSignature: string;
+            contentKeyEnvelope: string;
+            versionSignature: string;
+        };
 
         // Checked with the raw primitives, so the session cannot agree with itself by accident.
         const { openWorkspaceKey } = await import('./workspace');
@@ -328,6 +425,34 @@ describe('drive session operations', () => {
         expect(Buffer.from(rewrapped.contentKey).equals(Buffer.from(original.contentKey))).toBe(
             true,
         );
+        // The copy is signed as a new file and a new version of the shared object, by its copier.
+        const signer = decode(identity.signingPublicKey, 32);
+        expect(
+            await verifyStatement(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: copyId, kind: 'file', metadataVersion: 1 },
+                    decode(copied.metadataEnvelope),
+                ),
+                decode(copied.metadataSignature, 64),
+                signer,
+            ),
+        ).toBe(true);
+        expect(
+            await verifyStatement(
+                await versionStatement(
+                    {
+                        workspaceId: WS,
+                        nodeId: copyId,
+                        versionId: copyVersion,
+                        objectId,
+                        contentSuite: CONTENT_SUITE,
+                    },
+                    decode(copied.contentKeyEnvelope),
+                ),
+                decode(copied.versionSignature, 64),
+                signer,
+            ),
+        ).toBe(true);
         // The sizes travel with the key: the copy opens the shared object exactly as the source does.
         expect(rewrapped.plaintextSize).toBe(100);
         expect(rewrapped.thumbnailBytes).toBe(0);
@@ -346,6 +471,7 @@ describe('drive session operations', () => {
             call('driveSealMetadata', {
                 workspaceId: WS,
                 nodeId: copyId,
+                kind: 'folder',
                 metadataVersion: 2,
                 metadata: meta('renamed'),
             }),
@@ -380,7 +506,14 @@ describe('drive session operations', () => {
         await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
             ],
         });
         session.reset();
@@ -388,6 +521,7 @@ describe('drive session operations', () => {
             call('driveSealMetadata', {
                 workspaceId: WS,
                 nodeId: A,
+                kind: 'folder',
                 metadataVersion: 2,
                 metadata: meta('x'),
             }),
@@ -401,7 +535,14 @@ describe('drive session operations', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 7, metadata: meta('Drive') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 7,
+                    metadata: meta('Drive'),
+                },
             ],
         })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
         const { openWorkspaceKey } = await import('./workspace');
@@ -429,8 +570,22 @@ describe('the thumbnail trailer', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('photo.jpg') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('photo.jpg'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         const webp = crypto.getRandomValues(new Uint8Array(1234));
@@ -678,8 +833,22 @@ describe('a suite 3 object end to end', () => {
         await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('clip.mp4') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('clip.mp4'),
+                },
             ],
         });
         // Just past a chunk, with a thumbnail: the padding pushes past the file into a full second chunk.
@@ -808,8 +977,22 @@ describe('a suite 3 object end to end', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('old.txt') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('old.txt'),
+                },
             ],
         })) as { nodes: { keyEnvelope: string }[] };
         const { openWorkspaceKey } = await import('./workspace');
@@ -871,6 +1054,275 @@ describe('a suite 3 object end to end', () => {
     });
 });
 
+describe('writer signatures', () => {
+    test('every write is signed by the account making it, as the raw primitives check it', async () => {
+        const { call, grant, identity } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        const created = (await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('a.txt'),
+                },
+            ],
+        })) as {
+            nodes: { id: string; metadataEnvelope: string; metadataSignature: string }[];
+        };
+        const signer = decode(identity.signingPublicKey, 32);
+        const holds = async (statement: Uint8Array, signature: string) =>
+            verifyStatement(statement, decode(signature, 64), signer);
+        for (const [index, kind] of [
+            [0, 'folder'],
+            [1, 'file'],
+        ] as const) {
+            const node = created.nodes[index]!;
+            const ctx = { workspaceId: WS, nodeId: node.id, kind, metadataVersion: 1 };
+            expect(
+                await holds(
+                    await metadataStatement(ctx, decode(node.metadataEnvelope)),
+                    node.metadataSignature,
+                ),
+            ).toBe(true);
+            // The kind is signed: the folder's statement is not the file's.
+            expect(
+                await holds(
+                    await metadataStatement(
+                        { ...ctx, kind: kind === 'file' ? 'folder' : 'file' },
+                        decode(node.metadataEnvelope),
+                    ),
+                    node.metadataSignature,
+                ),
+            ).toBe(false);
+        }
+        const renamed = (await call('driveSealMetadata', {
+            workspaceId: WS,
+            nodeId: B,
+            kind: 'file',
+            metadataVersion: 2,
+            metadata: meta('b.txt'),
+        })) as { metadataEnvelope: string; metadataSignature: string };
+        expect(
+            await holds(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: B, kind: 'file', metadataVersion: 2 },
+                    decode(renamed.metadataEnvelope),
+                ),
+                renamed.metadataSignature,
+            ),
+        ).toBe(true);
+        const prepared = (await call('driveUploadPrepare', {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            plaintextSize: 10,
+        })) as { contentKeyEnvelope: string; versionSignature: string };
+        const versionCtx = {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            contentSuite: CONTENT_SUITE,
+        };
+        expect(
+            await holds(
+                await versionStatement(versionCtx, decode(prepared.contentKeyEnvelope)),
+                prepared.versionSignature,
+            ),
+        ).toBe(true);
+        const rewrapped = (await call('driveUploadRewrap', {
+            workspaceId: WS,
+            objectId: D,
+            nodeId: B,
+            versionId: E,
+        })) as { contentKeyEnvelope: string; versionSignature: string };
+        expect(
+            await holds(
+                await versionStatement(
+                    { ...versionCtx, versionId: E },
+                    decode(rewrapped.contentKeyEnvelope),
+                ),
+                rewrapped.versionSignature,
+            ),
+        ).toBe(true);
+    });
+
+    test('nothing is written unsigned: without the identity open, writes are refused', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const deviceKey = await createDeviceKey();
+        const bundle = await rememberAccountKey(root, deviceKey, {
+            userId: USER,
+            keyVersion: 1,
+            credentialVersion: 1,
+            deviceKeyId: 'device',
+        });
+        const session = createCryptoSession();
+        const call = (operation: string, input: unknown) =>
+            session.handle({ id: 1, operation, input } as Parameters<typeof session.handle>[0]);
+        await call('restore', { deviceKey, bundle });
+        await call('driveOpenWorkspace', {
+            userId: USER,
+            grant: await createWorkspaceGrant(root, USER, WS, 1),
+        });
+        await expect(
+            call('driveCreateNodes', {
+                workspaceId: WS,
+                nodes: [
+                    {
+                        id: A,
+                        kind: 'folder',
+                        parentId: WS,
+                        parentKeyEpoch: 1,
+                        keyEpoch: 1,
+                        metadata: meta('Drive'),
+                    },
+                ],
+            }),
+        ).rejects.toThrow('Open your identity first.');
+    });
+
+    test('a reader is told who wrote a record, and when that cannot be trusted, why', async () => {
+        const { call, grant, identity } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        const created = (await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('a.txt'),
+                },
+            ],
+        })) as { nodes: { metadataEnvelope: string; metadataSignature: string }[] };
+        const prepared = (await call('driveUploadPrepare', {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            plaintextSize: 10,
+        })) as { contentKeyEnvelope: string; versionSignature: string };
+        const version = {
+            id: C,
+            objectId: D,
+            contentSuite: CONTENT_SUITE,
+            contentKeyEnvelope: prepared.contentKeyEnvelope,
+            signer: USER,
+            signature: prepared.versionSignature,
+        };
+        const file = {
+            id: B,
+            kind: 'file' as const,
+            metadataVersion: 1,
+            metadataEnvelope: created.nodes[1]!.metadataEnvelope,
+            metadataSigner: USER,
+            metadataSignature: created.nodes[1]!.metadataSignature,
+            versions: [version],
+        };
+        // Someone holding the folder's key (a viewer, a link, the server with a stolen key)
+        // seals a name of their own and signs it with their own identity.
+        await sodium.ready;
+        const intruder = sodium.crypto_sign_keypair();
+        const INTRUDER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+        const planted = encode(
+            await signStatement(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: B, kind: 'file', metadataVersion: 1 },
+                    decode(file.metadataEnvelope),
+                ),
+                intruder.privateKey,
+            ),
+        );
+        const verify = async (nodes: unknown[], signers: Record<string, string[]> = {}) =>
+            (
+                (await call('driveVerify', {
+                    workspaceId: WS,
+                    signers,
+                    nodes: nodes as never,
+                })) as {
+                    nodes: {
+                        id: string;
+                        metadata: string;
+                        versions: { id: string; integrity: string }[];
+                    }[];
+                }
+            ).nodes;
+        const [own, intruded, lied, swapped, replayed, old, otherVersion] = await verify([
+            // This account's own records: the worker knows its own key without being told.
+            file,
+            // Signed by someone this person never verified.
+            { ...file, metadataSigner: INTRUDER, metadataSignature: planted, versions: [] },
+            // The server names this account as the writer of the intruder's record.
+            { ...file, metadataSignature: planted, versions: [] },
+            // A different envelope under the real signature (the folder's metadata, here).
+            { ...file, metadataEnvelope: created.nodes[0]!.metadataEnvelope, versions: [] },
+            // The real signature replayed at another metadata version, and onto another version.
+            {
+                ...file,
+                metadataVersion: 2,
+                versions: [{ ...version, id: E }],
+            },
+            // Written before signatures.
+            {
+                ...file,
+                metadataSigner: null,
+                metadataSignature: null,
+                versions: [{ ...version, signer: null, signature: null }],
+            },
+            // A version signature presented for the same version of another object.
+            { ...file, versions: [{ ...version, objectId: A }] },
+        ]);
+        expect(own).toEqual({
+            id: B,
+            metadata: 'verified',
+            versions: [{ id: C, integrity: 'verified' }],
+        });
+        expect(intruded!.metadata).toBe('unknown-signer');
+        expect(lied!.metadata).toBe('bad-signature');
+        expect(swapped!.metadata).toBe('bad-signature');
+        expect(replayed!.metadata).toBe('bad-signature');
+        expect(replayed!.versions).toEqual([{ id: E, integrity: 'bad-signature' }]);
+        expect(old!.metadata).toBe('unsigned');
+        expect(old!.versions).toEqual([{ id: C, integrity: 'unsigned' }]);
+        expect(otherVersion!.versions[0]!.integrity).toBe('bad-signature');
+        // Once the caller has verified the intruder (say, they compared words), their record is theirs.
+        const [known] = await verify(
+            [{ ...file, metadataSigner: INTRUDER, metadataSignature: planted, versions: [] }],
+            { [INTRUDER]: [encode(intruder.publicKey)] },
+        );
+        expect(known!.metadata).toBe('verified');
+        // A key the caller passes for this account does not stand in for its own: the
+        // intruder's signature under this account's name is still bad.
+        const [impostor] = await verify([{ ...file, metadataSignature: planted, versions: [] }], {
+            [USER]: [identity.signingPublicKey],
+        });
+        expect(impostor!.metadata).toBe('bad-signature');
+    });
+});
+
 describe('exporting keys', () => {
     test('the exported keys open the real envelopes; an unopened node has nothing to export', async () => {
         const { session, call, grant } = await unlockedSession();
@@ -878,8 +1330,22 @@ describe('exporting keys', () => {
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('file.bin') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('file.bin'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         const prepared = (await call('driveUploadPrepare', {
@@ -1017,7 +1483,14 @@ describe('keys from links, shares and reports', () => {
         await call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Mine') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Mine'),
+                },
             ],
         });
         const exported = async () =>
@@ -1039,7 +1512,16 @@ describe('keys from links, shares and reports', () => {
         expect(before).not.toBe(encode(own.planted));
         const child = (await call('driveCreateNodes', {
             workspaceId: WS,
-            nodes: [{ id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('new') }],
+            nodes: [
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('new'),
+                },
+            ],
         })) as { nodes: { keyEnvelope: string }[] };
         const ctx = { workspaceId: WS, nodeId: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2 };
         await expect(

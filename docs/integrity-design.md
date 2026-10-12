@@ -69,7 +69,7 @@ version:  ["hushos/drive/sig/version", 1, workspaceId, nodeId, versionId, object
 
 - Every write that sets a metadata envelope signs it: root and folder creation, a new file at upload begin, rename, copy (the copy's new metadata), and rotation (each re-sealed metadata envelope, signed by the account running the rotation).
 - Every write that sets a content-key envelope signs the version: upload begin, a copy's re-sealed version, rotation.
-- Restoring an earlier version, trash and restore, and moves set neither and are not signed.
+- Restoring an earlier version, trash and restore, and moves set neither and are not signed. Nor is a node a rotation only rewraps (its key already at the target epoch): its metadata envelope and signature stay as they were.
 
 ### Storage and the server's check
 
@@ -79,7 +79,7 @@ Node and version views carry `metadataSigner` / `signer` as `{ id, name, email }
 
 ### Reading
 
-For each node (and its current version) the client resolves the signer's signing public key from what it trusts: its own (proven against its own seed), or a pinned contact whose pin is verified (see pins in `drive-design.md`). The worker checks the signature and returns one of:
+For each node (and its current version) the client resolves the signer's signing public keys from what it trusts: its own (proven against its own seed, and its earlier ones from its own history), or a pinned contact whose pin is verified (see pins in `drive-design.md`), with the earlier keys a verified succession chain vouches for, since a record signed before a succession stays signed by the key that made it. The worker checks the signature against any of them and returns one of:
 
 - `verified`: the signer is the person or a verified contact, and the signature holds;
 - `unknown-signer`: the signature cannot be checked against anyone this person has verified;

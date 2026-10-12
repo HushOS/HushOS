@@ -214,9 +214,17 @@ describe('share envelopes', () => {
         const created = (await owner.call('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: ROOT, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
+                {
+                    id: ROOT,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
                 {
                     id: SHARED,
+                    kind: 'folder',
                     parentId: ROOT,
                     parentKeyEpoch: 1,
                     keyEpoch: 2,
@@ -224,6 +232,7 @@ describe('share envelopes', () => {
                 },
                 {
                     id: CHILD,
+                    kind: 'file',
                     parentId: SHARED,
                     parentKeyEpoch: 2,
                     keyEpoch: 3,

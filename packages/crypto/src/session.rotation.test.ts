@@ -6,6 +6,7 @@ import { openLinkKey } from './links';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode, encode } from './keys';
+import { metadataStatement, verifyStatement, versionStatement } from './signatures';
 
 /*
  * Rotation in the worker: a chain gets fresh keys top-down, the old keys stay
@@ -60,9 +61,30 @@ describe('rotation', () => {
         const created = (await owner('driveCreateNodes', {
             workspaceId: WS,
             nodes: [
-                { id: A, parentId: WS, parentKeyEpoch: 1, keyEpoch: 1, metadata: meta('Drive') },
-                { id: B, parentId: A, parentKeyEpoch: 1, keyEpoch: 2, metadata: meta('shared') },
-                { id: C, parentId: B, parentKeyEpoch: 2, keyEpoch: 3, metadata: meta('inner') },
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('shared'),
+                },
+                {
+                    id: C,
+                    kind: 'folder',
+                    parentId: B,
+                    parentKeyEpoch: 2,
+                    keyEpoch: 3,
+                    metadata: meta('inner'),
+                },
             ],
         })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
         const [a, b, c] = created.nodes as [
@@ -125,6 +147,7 @@ describe('rotation', () => {
             nodes: [
                 {
                     id: B,
+                    kind: 'folder',
                     parentId: A,
                     parentKeyEpoch: 1,
                     keyEpoch: 2,
@@ -158,7 +181,8 @@ describe('rotation', () => {
                 id: string;
                 keyEnvelope: string;
                 metadataEnvelope: string;
-                versions: { id: string; contentKeyEnvelope: string }[];
+                metadataSignature: string | null;
+                versions: { id: string; contentKeyEnvelope: string; signature: string }[];
                 shares: { id: string; shareEnvelope: string }[];
                 links: {
                     id: string;
@@ -171,6 +195,35 @@ describe('rotation', () => {
         };
         const rotatedB = first.nodes[0]!;
         expect(rotatedB.error).toBeUndefined();
+        // Everything re-sealed is signed by the account running the rotation, the old suite's
+        // version included; checked with the primitives against the owner's signing key.
+        const owners = decode(identity.signingPublicKey, 32);
+        expect(
+            await verifyStatement(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: B, kind: 'folder', metadataVersion: 1 },
+                    decode(rotatedB.metadataEnvelope),
+                ),
+                decode(rotatedB.metadataSignature!, 64),
+                owners,
+            ),
+        ).toBe(true);
+        expect(
+            await verifyStatement(
+                await versionStatement(
+                    {
+                        workspaceId: WS,
+                        nodeId: B,
+                        versionId: VERSION,
+                        objectId: OBJECT,
+                        contentSuite: 1,
+                    },
+                    decode(rotatedB.versions[0]!.contentKeyEnvelope),
+                ),
+                decode(rotatedB.versions[0]!.signature, 64),
+                owners,
+            ),
+        ).toBe(true);
         expect(rotatedB.keyEnvelope).not.toBe(b.keyEnvelope);
         expect(rotatedB.versions[0]!.contentKeyEnvelope).not.toBe(contentEnvelope);
         expect(decode(rotatedB.versions[0]!.contentKeyEnvelope)).toHaveLength(72);
@@ -202,6 +255,7 @@ describe('rotation', () => {
             nodes: [
                 {
                     id: C,
+                    kind: 'folder',
                     parentId: B,
                     parentKeyEpoch: 9,
                     keyEpoch: 3,
@@ -347,6 +401,7 @@ describe('rotation', () => {
             nodes: [
                 {
                     id: A,
+                    kind: 'folder',
                     parentId: WS,
                     parentKeyEpoch: 1,
                     keyEpoch: 1,

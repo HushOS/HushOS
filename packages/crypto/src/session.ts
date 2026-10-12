@@ -11,13 +11,23 @@ import {
     createIdentity,
     openIdentityEncryptionKey,
     openIdentityKemKey,
-    verifyIdentitySigningKey,
+    openIdentitySigningKey,
     verifyKemBinding,
     type IdentityEnvelope,
     type IdentityKem,
 } from './identity';
 import { openSettings, sealSettings, type Settings, type SettingsEnvelope } from './contacts';
 import { openShareKey, sealShareKey } from './shares';
+import {
+    integrityOf,
+    metadataStatement,
+    signStatement,
+    versionStatement,
+    type Integrity,
+    type MetadataStatement,
+    type NodeKind,
+    type VersionStatement,
+} from './signatures';
 import { openReportKey, sealReportKey } from './reports';
 import { KEM_PUBLIC_KEY_BYTES } from './pq';
 import {
@@ -249,11 +259,25 @@ export type CryptoRequests = {
     driveCreateNodes: { workspaceId: string; nodes: DriveNodeInput[] };
     /* Opens node keys and metadata, parents before children; keys stay cached. */
     driveOpenNodes: { workspaceId: string; nodes: DriveNodeEnvelopes[] };
+    /* A rename: the metadata sealed at its next version, and signed. */
     driveSealMetadata: {
         workspaceId: string;
         nodeId: string;
+        kind: NodeKind;
         metadataVersion: number;
         metadata: NodeMetadata;
+    };
+    /*
+     * Who wrote each record, checked against keys the caller trusts: `signers`
+     * maps an account id to its signing public keys the caller verified (a
+     * pinned contact's, and earlier ones a succession chain vouched for). The
+     * worker adds this account's own, current and earlier. A signer who is not
+     * there is an unknown signer, never a verified one. Pure: needs no unlock.
+     */
+    driveVerify: {
+        workspaceId: string;
+        signers: Record<string, string[]>;
+        nodes: DriveSignedNode[];
     };
     /* The same node key rewrapped under another parent's key, for a move. */
     driveRewrapNode: {
@@ -372,10 +396,37 @@ export type CryptoRequests = {
 };
 export type DriveNodeInput = {
     id: string;
+    /* Signed with the metadata: a folder's name cannot be passed off as a file's. */
+    kind: NodeKind;
     parentId: string;
     parentKeyEpoch: number;
     keyEpoch: number;
     metadata: NodeMetadata;
+};
+/* A node's signed records as the server serves them, for driveVerify. */
+export type DriveSignedNode = {
+    id: string;
+    kind: NodeKind;
+    metadataVersion: number;
+    metadataEnvelope: string;
+    /* The account the server says wrote the metadata, and its signature; null before signatures. */
+    metadataSigner: string | null;
+    metadataSignature: string | null;
+    /* The versions to check: the current one for a listing, all of them for a versions list. */
+    versions?: DriveSignedVersion[];
+};
+export type DriveSignedVersion = {
+    id: string;
+    objectId: string;
+    contentSuite: number;
+    contentKeyEnvelope: string;
+    signer: string | null;
+    signature: string | null;
+};
+export type DriveVerifiedNode = {
+    id: string;
+    metadata: Integrity;
+    versions: { id: string; integrity: Integrity }[];
 };
 /* A version as the server hands it over: the envelope, its object's suite, and suite 1's size on the row. */
 export type DriveVersionEnvelope = {
@@ -405,6 +456,7 @@ export type DriveNodeEnvelopes = {
 };
 export type RotateNodeInput = {
     id: string;
+    kind: NodeKind;
     parentId: string;
     /* The parent's key epoch to wrap the new key under: the target for a rotated parent, its own for the root's outside parent. */
     parentKeyEpoch: number;
@@ -428,7 +480,10 @@ export type RotatedNode =
           id: string;
           keyEnvelope: string;
           metadataEnvelope: string;
-          versions: { id: string; contentKeyEnvelope: string }[];
+          /* The re-sealed metadata's signature by this account; null when only rewrapped. */
+          metadataSignature: string | null;
+          /* Each re-sealed version and its signature by this account. */
+          versions: { id: string; contentKeyEnvelope: string; signature: string }[];
           shares: { id: string; shareEnvelope: string }[];
           links: (
               | { id: string; linkEnvelope: string; secretEnvelope: string }
@@ -500,13 +555,23 @@ export type CryptoResults = {
     driveOpenWorkspace: { workspaceId: string; workspaceKeyVersion: number };
     driveSealDocument: { envelope: string };
     driveOpenDocument: { document: unknown };
-    driveCreateNodes: { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
+    driveCreateNodes: {
+        nodes: {
+            id: string;
+            keyEnvelope: string;
+            metadataEnvelope: string;
+            metadataSignature: string;
+        }[];
+    };
     driveOpenNodes: { nodes: DriveOpenedNode[] };
-    driveSealMetadata: { metadataEnvelope: string };
+    driveSealMetadata: { metadataEnvelope: string; metadataSignature: string };
+    driveVerify: { nodes: DriveVerifiedNode[] };
     driveRewrapNode: { keyEnvelope: string };
     driveUploadPrepare: {
         contentNonce: string;
         contentKeyEnvelope: string;
+        /* The version statement signed by this account: send as `versionSignature`. */
+        versionSignature: string;
         chunkCount: number;
         /* The whole object, trailer included: what begin declares and the store must confirm. */
         ciphertextSize: number;
@@ -519,8 +584,14 @@ export type CryptoResults = {
     driveUploadSend: UploadPartResult;
     driveUploadCancel: { cancelled: number };
     driveUploadForget: { forgotten: boolean };
-    driveUploadRewrap: { contentKeyEnvelope: string };
-    driveCopyFile: { keyEnvelope: string; metadataEnvelope: string; contentKeyEnvelope: string };
+    driveUploadRewrap: { contentKeyEnvelope: string; versionSignature: string };
+    driveCopyFile: {
+        keyEnvelope: string;
+        metadataEnvelope: string;
+        metadataSignature: string;
+        contentKeyEnvelope: string;
+        versionSignature: string;
+    };
     driveThumbnailFetch: { plaintext: Uint8Array };
     driveOpenVersions: { versions: DriveOpenedVersion[] };
     driveDownloadOpen: { chunkCount: number } & DriveContentInfo;
@@ -599,19 +670,38 @@ export function createCryptoSession() {
         if (workspaceKeys.has(workspaceId))
             throw new CryptoError('This was refused: it claims to be a folder of your own.');
     }
+    /*
+     * The open identity: its X25519 and ML-KEM private keys, which open what
+     * was sealed to it, and its Ed25519 signing key, which signs every write,
+     * share and succession. All of it dies with a lock.
+     */
     let identityKey:
         | {
               userId: string;
+              keyVersion: number;
               key: Uint8Array<ArrayBuffer>;
               publicKey: string;
               signingPublicKey: string;
+              signingKey: Uint8Array<ArrayBuffer>;
               kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
           }
         | undefined;
     function forgetIdentity() {
         identityKey?.key.fill(0);
+        identityKey?.signingKey.fill(0);
         identityKey?.kem?.secretKey.fill(0);
         identityKey = undefined;
+    }
+    /* A statement signed by the open identity, base64url. */
+    async function sign(statement: Uint8Array) {
+        if (!identityKey) throw new CryptoError('Open your identity first.');
+        return encode(await signStatement(statement, identityKey.signingKey));
+    }
+    async function signMetadata(ctx: MetadataStatement, envelope: Uint8Array) {
+        return sign(await metadataStatement(ctx, envelope));
+    }
+    async function signVersion(ctx: VersionStatement, envelope: Uint8Array) {
+        return sign(await versionStatement(ctx, envelope));
     }
     type Upload = {
         workspaceId: string;
@@ -791,12 +881,15 @@ export function createCryptoSession() {
                 id: nodeId,
                 keyEnvelope: encode(keyEnvelope),
                 metadataEnvelope: node.metadataEnvelope,
+                metadataSignature: null,
                 versions: [],
                 shares: [],
                 links: [],
                 rewrap: true,
             };
         }
+        // Everything re-sealed below is signed by the account running the rotation.
+        if (!identityKey) throw new CryptoError('Open your identity first.');
         const fresh = generateKey();
         try {
             const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
@@ -817,29 +910,42 @@ export function createCryptoSession() {
                 nodeId,
                 metadataVersion: node.metadataVersion,
             });
-            const versions = [];
+            const metadataSignature = await signMetadata(
+                { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
+                metadataEnvelope,
+            );
+            const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
             for (const version of node.versions) {
                 // The same record, sealed under the fresh key in the object's own suite.
                 const opened = await openVersionUnder(old, workspaceId, nodeId, version);
                 try {
+                    const envelope = await sealVersion(
+                        {
+                            contentKey: opened.contentKey,
+                            plaintextSize: opened.plaintextSize,
+                            thumbnailBytes: opened.thumbnailBytes,
+                        },
+                        fresh,
+                        {
+                            workspaceId,
+                            nodeId,
+                            versionId: version.id,
+                            objectId: version.objectId,
+                            suite: opened.suite,
+                        },
+                    );
                     versions.push({
                         id: version.id,
-                        contentKeyEnvelope: encode(
-                            await sealVersion(
-                                {
-                                    contentKey: opened.contentKey,
-                                    plaintextSize: opened.plaintextSize,
-                                    thumbnailBytes: opened.thumbnailBytes,
-                                },
-                                fresh,
-                                {
-                                    workspaceId,
-                                    nodeId,
-                                    versionId: version.id,
-                                    objectId: version.objectId,
-                                    suite: opened.suite,
-                                },
-                            ),
+                        contentKeyEnvelope: encode(envelope),
+                        signature: await signVersion(
+                            {
+                                workspaceId,
+                                nodeId,
+                                versionId: version.id,
+                                objectId: version.objectId,
+                                contentSuite: opened.suite,
+                            },
+                            envelope,
                         ),
                     });
                 } finally {
@@ -914,6 +1020,7 @@ export function createCryptoSession() {
                 id: nodeId,
                 keyEnvelope: encode(keyEnvelope),
                 metadataEnvelope: encode(metadataEnvelope),
+                metadataSignature,
                 versions,
                 shares,
                 links,
@@ -1169,25 +1276,32 @@ export function createCryptoSession() {
                         kemPublicKey: identityKey.kem?.publicKey ?? null,
                     };
                 const root = accountKey.slice();
+                const opened: Uint8Array[] = [];
                 try {
                     const key = await openIdentityEncryptionKey(root, userId, identity);
-                    const signingPublicKey = await verifyIdentitySigningKey(root, userId, identity);
+                    opened.push(key);
+                    const signingKey = await openIdentitySigningKey(root, userId, identity);
+                    opened.push(signingKey);
                     const kem = await openIdentityKemKey(root, userId, identity);
                     forgetIdentity();
                     identityKey = {
                         userId,
+                        keyVersion: identity.keyVersion,
                         key,
                         publicKey: identity.encryptionPublicKey,
-                        signingPublicKey,
+                        signingPublicKey: identity.signingPublicKey,
+                        signingKey,
                         kem,
                     };
+                    opened.length = 0;
                     return {
                         encryptionPublicKey: identity.encryptionPublicKey,
-                        signingPublicKey,
+                        signingPublicKey: identity.signingPublicKey,
                         kemPublicKey: kem?.publicKey ?? null,
                     };
                 } finally {
                     root.fill(0);
+                    for (const secret of opened) secret.fill(0);
                 }
             }
             case 'identityMintKem': {
@@ -1526,8 +1640,10 @@ export function createCryptoSession() {
             }
             case 'driveCreateNodes': {
                 const { workspaceId } = message.input;
-                const out: { id: string; keyEnvelope: string; metadataEnvelope: string }[] = [];
+                const out: CryptoResults['driveCreateNodes']['nodes'] = [];
                 const created: { id: string; key: Uint8Array<ArrayBuffer>; epoch: number }[] = [];
+                // Every node is signed by its writer: refuse before minting anything.
+                if (!identityKey) throw new CryptoError('Open your identity first.');
                 try {
                     for (const node of message.input.nodes) {
                         const parentKey = parentKeyFor(
@@ -1552,6 +1668,15 @@ export function createCryptoSession() {
                             id: node.id,
                             keyEnvelope: encode(keyEnvelope),
                             metadataEnvelope: encode(metadataEnvelope),
+                            metadataSignature: await signMetadata(
+                                {
+                                    workspaceId,
+                                    nodeId: node.id,
+                                    kind: node.kind,
+                                    metadataVersion: 1,
+                                },
+                                metadataEnvelope,
+                            ),
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
                         // Later nodes in the batch may be children of this one.
@@ -1656,14 +1781,89 @@ export function createCryptoSession() {
                 return { nodes };
             }
             case 'driveSealMetadata': {
-                const entry = nodeKey(message.input.workspaceId, message.input.nodeId);
+                const { workspaceId, nodeId, kind, metadataVersion } = message.input;
+                const entry = nodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
+                if (!identityKey) throw new CryptoError('Open your identity first.');
                 const metadataEnvelope = await sealMetadata(message.input.metadata, entry.key, {
-                    workspaceId: message.input.workspaceId,
-                    nodeId: message.input.nodeId,
-                    metadataVersion: message.input.metadataVersion,
+                    workspaceId,
+                    nodeId,
+                    metadataVersion,
                 });
-                return { metadataEnvelope: encode(metadataEnvelope) };
+                return {
+                    metadataEnvelope: encode(metadataEnvelope),
+                    metadataSignature: await signMetadata(
+                        { workspaceId, nodeId, kind, metadataVersion },
+                        metadataEnvelope,
+                    ),
+                };
+            }
+            case 'driveVerify': {
+                const { workspaceId } = message.input;
+                // The caller's trusted keys, and this account's own: it signed with them.
+                const trusted = new Map<string, Uint8Array[]>();
+                const trust = (userId: string, key: string) => {
+                    try {
+                        const bytes = decode(key, 32);
+                        const id = userId.toLowerCase();
+                        trusted.set(id, [...(trusted.get(id) ?? []), bytes]);
+                    } catch {
+                        /* A key that is not one trusts nothing. */
+                    }
+                };
+                for (const [userId, keys] of Object.entries(message.input.signers))
+                    for (const key of keys) trust(userId, key);
+                if (identityKey) trust(identityKey.userId, identityKey.signingPublicKey);
+                const bytesOf = (value: string | null) => {
+                    if (!value) return null;
+                    try {
+                        return decode(value);
+                    } catch {
+                        // Present but unreadable is a signature that cannot hold.
+                        return new Uint8Array(0);
+                    }
+                };
+                const keysOf = (signer: string | null) =>
+                    signer ? trusted.get(signer.toLowerCase()) : undefined;
+                const nodes: DriveVerifiedNode[] = [];
+                for (const node of message.input.nodes) {
+                    const metadata = await integrityOf(
+                        async () =>
+                            metadataStatement(
+                                {
+                                    workspaceId,
+                                    nodeId: node.id,
+                                    kind: node.kind,
+                                    metadataVersion: node.metadataVersion,
+                                },
+                                decode(node.metadataEnvelope),
+                            ),
+                        bytesOf(node.metadataSignature),
+                        keysOf(node.metadataSigner),
+                    );
+                    const versions = [];
+                    for (const version of node.versions ?? [])
+                        versions.push({
+                            id: version.id,
+                            integrity: await integrityOf(
+                                async () =>
+                                    versionStatement(
+                                        {
+                                            workspaceId,
+                                            nodeId: node.id,
+                                            versionId: version.id,
+                                            objectId: version.objectId,
+                                            contentSuite: version.contentSuite,
+                                        },
+                                        decode(version.contentKeyEnvelope),
+                                    ),
+                                bytesOf(version.signature),
+                                keysOf(version.signer),
+                            ),
+                        });
+                    nodes.push({ id: node.id, metadata, versions });
+                }
+                return { nodes };
             }
             case 'driveRewrapNode': {
                 const { workspaceId, nodeId, parentId, parentKeyEpoch, keyEpoch } = message.input;
@@ -1687,6 +1887,7 @@ export function createCryptoSession() {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
+                if (!identityKey) throw new CryptoError('Open your identity first.');
                 forgetUpload(objectId);
                 const contentKey = generateKey();
                 const contentNonce = generateContentNonce();
@@ -1728,6 +1929,10 @@ export function createCryptoSession() {
                 return {
                     contentNonce: encode(contentNonce),
                     contentKeyEnvelope: encode(envelope),
+                    versionSignature: await signVersion(
+                        { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
+                        envelope,
+                    ),
                     chunkCount: chunkCount(length),
                     ciphertextSize: ciphertextSize(CONTENT_SUITE, plaintextSize, thumbnailBytes),
                     thumbnail: thumbnail ? thumbnail.slice() : null,
@@ -1809,6 +2014,7 @@ export function createCryptoSession() {
                 if (!upload) throw new CryptoError('This upload is not open here.');
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the destination folder first.');
+                if (!identityKey) throw new CryptoError('Open your identity first.');
                 const envelope = await sealVersion(
                     {
                         contentKey: upload.contentKey,
@@ -1818,12 +2024,19 @@ export function createCryptoSession() {
                     node.key,
                     { workspaceId, nodeId, versionId, objectId, suite: CONTENT_SUITE },
                 );
-                return { contentKeyEnvelope: encode(envelope) };
+                return {
+                    contentKeyEnvelope: encode(envelope),
+                    versionSignature: await signVersion(
+                        { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
+                        envelope,
+                    ),
+                };
             }
             case 'driveCopyFile': {
                 const { workspaceId, source, node, versionId } = message.input;
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
+                if (!identityKey) throw new CryptoError('Open your identity first.');
                 const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
                     sourceKey.key,
@@ -1863,11 +2076,28 @@ export function createCryptoSession() {
                             suite: opened.suite,
                         },
                     );
+                    const signatures = {
+                        metadataSignature: await signMetadata(
+                            { workspaceId, nodeId: node.id, kind: 'file', metadataVersion: 1 },
+                            metadataEnvelope,
+                        ),
+                        versionSignature: await signVersion(
+                            {
+                                workspaceId,
+                                nodeId: node.id,
+                                versionId,
+                                objectId: source.objectId,
+                                contentSuite: opened.suite,
+                            },
+                            contentKeyEnvelope,
+                        ),
+                    };
                     rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
                     return {
                         keyEnvelope: encode(keyEnvelope),
                         metadataEnvelope: encode(metadataEnvelope),
                         contentKeyEnvelope: encode(contentKeyEnvelope),
+                        ...signatures,
                     };
                 } catch (error) {
                     key.fill(0);
