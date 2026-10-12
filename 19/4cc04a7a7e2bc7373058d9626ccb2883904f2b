@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_75dbe24a0bc379::t_d2a2fe9cd93047 100,118,124,126,600,608,689-715
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_75dbe24a0bc379::t_468d087d8c3678 994-1008
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_75dbe24a0bc379::t_823df318242d1b 661,756-764
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "194cc04a7a7e2bc7373058d9626ccb2883904f2b",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
