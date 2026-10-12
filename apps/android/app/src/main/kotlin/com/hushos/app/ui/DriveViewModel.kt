@@ -135,6 +135,8 @@ data class DriveState(
     val accountDeleted: Boolean = false,
     /* Searches made on this phone, newest first. */
     val recentSearches: List<String> = emptyList(),
+    /* The signing keys this account trusts (its own, and checked contacts'); null until loaded, when no row is marked. */
+    val trust: com.hushos.app.data.Trust? = null,
 ) {
     /* Every item this session has opened, for search across folders. */
     val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
@@ -452,6 +454,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun loadRoot() = viewModelScope.launch {
         if (state.value.rootId != null) return@launch
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
+        refreshTrust()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
         buildCatalogue()
     }
@@ -556,6 +559,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         if (state.value.gate != Gate.SIGNED_IN || vault == null) return@launch
         sync(quiet = true)
         refreshKeptFolders(withShares = true)
+        // Someone checked on another device counts here too once the app is back.
+        refreshTrust()
     }
 
     /* Retry on a file that couldn't be kept: its folder's failed files are tried again now. */
@@ -858,6 +863,33 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         var failed = false
         io({ failed = true }) { it.mountShares() }?.let { shares -> _state.update { it.copy(shares = shares) }; dropUnshared(shares) }
         _state.update { it.copy(loading = it.loading - "shares", sharesFailed = failed && it.shares == null) }
+        // Opening shares may have followed a granter's succession: their new keys count from now.
+        refreshTrust()
+    }
+
+    /*
+     * The signing keys rows are checked against: this account's own (current and earlier) and every checked
+     * contact's. Quiet: without them no row is marked, which is better than marking every row for a network blip.
+     */
+    suspend fun refreshTrust() {
+        quietly { it.trust() }?.let { trust -> _state.update { it.copy(trust = trust) } }
+    }
+
+    private val integrity = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<com.hushos.app.data.Unverified>>()
+    private var integrityTrust: com.hushos.app.data.Trust? = null
+
+    /*
+     * Why an item is not verified (docs/integrity-design.md, "Reading"), or null when it is, or while the trusted keys
+     * are not loaded yet. Remembered per record and signature, and worked out again when the trusted keys change.
+     */
+    fun unverified(item: Opened, state: DriveState): com.hushos.app.data.Unverified? {
+        val trust = state.trust ?: return null
+        if (integrityTrust !== trust) { integrity.clear(); integrityTrust = trust }
+        val node = item.node
+        val version = node.currentVersion
+        val key = listOf(node.workspaceId, node.id, node.metadataVersion, node.metadataSigner?.id, node.metadataSignature, node.metadataEnvelope.hashCode(),
+            version?.id, version?.signer?.id, version?.signature).joinToString("|")
+        return integrity.getOrPut(key) { java.util.Optional.ofNullable(runCatching { com.hushos.app.data.unverifiedOf(node, trust) }.getOrNull()) }.orElse(null)
     }
 
     /* Started without a network, the account is known only by its id; once the server answers, its name and email fill in for the avatar. */
@@ -910,8 +942,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun contacts(): List<ContactPin>? = io { it.contacts() }
     suspend fun ownFingerprint(): String? = io { it.ownFingerprint() }
     suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
-    suspend fun pin(contact: Contact): Boolean = io { it.pin(contact); true } ?: false
-    suspend fun unpin(pin: ContactPin): Boolean = io { it.unpin(pin); true } ?: false
+        .also { result -> if (result.getOrNull()?.followed == true) refreshTrust() }
+    suspend fun pin(contact: Contact): Boolean = (io { it.pin(contact); true } ?: false).also { if (it) refreshTrust() }
+    suspend fun unpin(pin: ContactPin): Boolean = (io { it.unpin(pin); true } ?: false).also { if (it) refreshTrust() }
     suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
     suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }

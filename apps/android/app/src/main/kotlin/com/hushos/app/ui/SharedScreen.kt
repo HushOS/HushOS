@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -350,7 +351,10 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
         Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Mark(root, bitmap) }
         Column(Modifier.weight(1f).padding(start = AlpineSpace.S4, top = 6.dp, bottom = 6.dp)) {
             Text(root.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("From $from · ${if (mount.share.role == "editor") "can edit" else "can view"}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                UnverifiedMark(model, state, root)
+                Text("From $from · ${if (mount.share.role == "editor") "can edit" else "can view"}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1)
+            }
         }
         if (state.opening[root.id] != null) androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.padding(horizontal = 13.dp).size(22.dp), strokeWidth = 2.5.dp)
         else IconButton(onClick = onMore) { Icon(Icons.Outlined.MoreVert, "More for ${root.name}", tint = alpine.inkMuted) }
