@@ -1,0 +1,27 @@
+apps/web/src/components/account-dialogs.tsx
+  s_75dbe24a0bc379::t_f3f3d03343e975 3,16,18-19,26-29,210-309,369,389,392,400-403,407
+apps/web/src/components/recovery-phrase.tsx
+  s_75dbe24a0bc379::t_feb1b2cd8e3c08 181
+apps/web/src/lib/recovery-kit.ts
+  s_75dbe24a0bc379::t_13f07f6422bbfa 69
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_75dbe24a0bc379::t_1086d9151ae241 9,34-35,48,129-146,149,154-155,160,205-209
+apps/web/src/routes/login/route.tsx
+  s_75dbe24a0bc379::t_b74997d65b2ebc 205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7822983ce398a8c26c6951712d117dd9fed69e84",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

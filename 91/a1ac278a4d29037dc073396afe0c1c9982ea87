@@ -1,0 +1,19 @@
+e2e/integrity.spec.ts
+  s_75dbe24a0bc379::t_a2e21405a1cf31 4-5,11,37-48,156,216-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "91a1ac278a4d29037dc073396afe0c1c9982ea87",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

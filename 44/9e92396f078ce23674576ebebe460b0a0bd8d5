@@ -1,0 +1,27 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Unverified.kt
+  s_75dbe24a0bc379::t_9078de0868914e 1-75
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_75dbe24a0bc379::t_dae6e054945406 138-139,457,562-563,866-892,945-947
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_75dbe24a0bc379::t_b0545df734fbaf 159,597
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_75dbe24a0bc379::t_aa23bca595318b 202,213-214,231
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_75dbe24a0bc379::t_90ac6df26cf68a 11,354-357
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "449e92396f078ce23674576ebebe460b0a0bd8d5",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
