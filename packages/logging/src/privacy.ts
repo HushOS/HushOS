@@ -105,6 +105,7 @@ const authActions = new Set([
     'contacts/lookup',
     'contacts/:userId/succession',
     'settings',
+    'settings-key',
     'profile',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;

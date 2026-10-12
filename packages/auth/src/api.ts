@@ -71,9 +71,24 @@ export type SuccessionLink = {
     signature: string;
 };
 
-/* A security change's challenge and request, with the earlier identities a master key re-wraps. */
-export type AccountSecurityChallenge = SecurityChallenge & { identityHistory: IdentityEnvelope[] };
-export type AccountSecurityUpdate = SecurityUpdate & { identityHistory?: IdentityEnvelope[] };
+/* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */
+export type SettingsKeyEnvelope = { nonce: string; ciphertext: string };
+/* A settings envelope as stored: version 2 sealed under the settings key, 1 under the identity. */
+export type StoredSettingsEnvelope = Omit<SettingsEnvelope, 'version'> & { version: 1 | 2 };
+
+/*
+ * A security change's challenge and request, with what a master key re-wraps
+ * beyond the worker's own bundle: the earlier identities and the settings key
+ * (required in the request whenever the challenge served one).
+ */
+export type AccountSecurityChallenge = SecurityChallenge & {
+    identityHistory: IdentityEnvelope[];
+    settingsKey: SettingsKeyEnvelope | null;
+};
+export type AccountSecurityUpdate = SecurityUpdate & {
+    identityHistory?: IdentityEnvelope[];
+    settingsKey?: SettingsKeyEnvelope;
+};
 
 export interface AuthApi {
     identity(): Promise<{ identity: IdentityEnvelope }>;
@@ -93,12 +108,19 @@ export interface AuthApi {
     /* Gives an identity made before hybrid sharing its KEM key, once; 409 when it already has one. */
     addIdentityKem(kem: IdentityKem): Promise<{ ok: true }>;
     lookupContact(email: string): Promise<{ contact: ContactIdentity }>;
-    settings(): Promise<{ settings: SettingsEnvelope | null }>;
+    settings(): Promise<{
+        settings: StoredSettingsEnvelope | null;
+        settingsKey: SettingsKeyEnvelope | null;
+    }>;
+    /* Version 2 is refused with 409 until the settings key is stored. */
     saveSettings(input: {
         expectedVersion: number;
+        version?: 1 | 2;
         nonce: string;
         ciphertext: string;
     }): Promise<{ settingsVersion: number }>;
+    /* Stores the wrapped settings key once; 409 when one exists (read it and use that). */
+    saveSettingsKey(input: SettingsKeyEnvelope): Promise<{ ok: true }>;
     requestEmail(
         purpose: 'register' | 'recover',
         email: string,

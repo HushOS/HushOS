@@ -315,6 +315,12 @@ const identitySchema = t.Object({
     encryptedSigningSeed: t.String({ minLength: 64, maxLength: 64 }),
 });
 
+/* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */
+const settingsKeySchema = t.Object({
+    nonce: t.String({ minLength: 32, maxLength: 32, pattern: '^[A-Za-z0-9_-]+$' }),
+    ciphertext: t.String({ minLength: 64, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' }),
+});
+
 const workspaceIdSchema = t.String({
     pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 });
@@ -512,6 +518,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 identity: t.Optional(identitySchema),
                 // Every earlier identity, re-wrapped under the new root by a master-key rotation.
                 identityHistory: t.Optional(t.Array(identitySchema, { maxItems: 1000 })),
+                settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
         },
@@ -564,11 +571,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ sessionToken, body }) => auth.lookupContact(sessionToken, body.email),
     )
     .get('/auth/settings', ({ sessionToken }) => auth.getSettings(sessionToken))
+    .put('/auth/settings-key', { body: settingsKeySchema }, ({ request, sessionToken, body }) => {
+        guardAuthMutation(request);
+        return auth.putSettingsKey(sessionToken, body);
+    })
     .put(
         '/auth/settings',
         {
             body: t.Object({
                 expectedVersion: t.Integer({ minimum: 0, maximum: 2147483646 }),
+                // 2 is sealed under the settings key; 1 under the identity, from older clients.
+                version: t.Optional(t.Union([t.Literal(1), t.Literal(2)])),
                 nonce: t.String({ minLength: 32, maxLength: 32, pattern: '^[A-Za-z0-9_-]+$' }),
                 ciphertext: t.String({
                     minLength: 22,

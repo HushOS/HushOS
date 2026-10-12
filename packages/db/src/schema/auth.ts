@@ -346,11 +346,12 @@ export const accountIdentityHistory = pgTable(
 );
 
 /*
- * A person's settings, one sealed document per account: contact pins today,
- * anything else that must agree across devices later. Sealed under a key
- * derived from the identity, so a root rotation never has to touch it. The
- * version is a compare-and-set: a device saving over a newer document is
- * refused and re-reads.
+ * A person's settings, one sealed document per account: contact pins and the
+ * sharing ledger today, anything else that must agree across devices later.
+ * Envelope version 1 was sealed under a key derived from the identity's X25519
+ * key; version 2 under the settings key below, so replacing the identity does
+ * not strand it. The settings version is a compare-and-set: a device saving
+ * over a newer document is refused and re-reads.
  */
 export const userSettings = pgTable(
     'user_settings',
@@ -367,7 +368,32 @@ export const userSettings = pgTable(
     (table) => [
         check(
             'user_settings_valid',
-            sql`${table.version} = 1 and ${table.settingsVersion} >= 1 and octet_length(${table.nonce}) = 24 and octet_length(${table.ciphertext}) between 16 and 65552`,
+            sql`${table.version} in (1, 2) and ${table.settingsVersion} >= 1 and octet_length(${table.nonce}) = 24 and octet_length(${table.ciphertext}) between 16 and 65552`,
+        ),
+    ],
+);
+
+/*
+ * The random 32-byte key settings envelope version 2 is sealed under, wrapped
+ * under the account root (XChaCha20-Poly1305, 72 bytes with the nonce; see
+ * docs/integrity-design.md). Stored once; a master-key rotation re-wraps it
+ * with the other account envelopes.
+ */
+export const accountSettingsKeys = pgTable(
+    'account_settings_keys',
+    {
+        userId: uuid('user_id')
+            .primaryKey()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        nonce: bytea().notNull(),
+        ciphertext: bytea().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => [
+        check(
+            'account_settings_keys_lengths_valid',
+            sql`octet_length(${table.nonce}) = 24 and octet_length(${table.ciphertext}) = 48`,
         ),
     ],
 );

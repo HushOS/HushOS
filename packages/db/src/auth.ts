@@ -16,6 +16,7 @@ import {
     accountRecoveryKeys,
     accountIdentities,
     accountIdentityHistory,
+    accountSettingsKeys,
     accountRecoveryAttempts,
     accountKeys,
     authRateLimits,
@@ -761,8 +762,14 @@ export async function getSecurityBundles(userId: string) {
         .from(workspaceKeys)
         .where(eq(workspaceKeys.userId, userId))
         .orderBy(workspaceKeys.workspaceId);
-    // Earlier identities are sealed under the root too: a master-key rotation re-wraps them.
-    return { ...bundles, workspaces: grants, identityHistory: await listIdentityHistory(userId) };
+    // Earlier identities and the settings key are sealed under the root too: a master-key
+    // rotation re-wraps them.
+    return {
+        ...bundles,
+        workspaces: grants,
+        identityHistory: await listIdentityHistory(userId),
+        settingsKey: await getSettingsKey(userId),
+    };
 }
 
 /* An identity's wrapped halves, as a rotation re-wraps them; the public keys stay. */
@@ -810,6 +817,8 @@ export async function changeAccountSecurity(input: {
     identity?: Omit<typeof accountIdentities.$inferInsert, 'userId'>;
     /* Every earlier identity, re-wrapped under the new root at its own key version. */
     identityHistory?: IdentityWrap[];
+    /* The settings key re-wrapped under the new root, whenever the account has one. */
+    settingsKey?: SettingsKeyInput;
     workspaces?: WorkspaceGrantInput[];
 }) {
     return db.transaction(async (tx) => {
@@ -931,7 +940,15 @@ export async function changeAccountSecurity(input: {
                 })
             )
                 return false;
-        } else if (input.identity || input.workspaces || input.identityHistory) return false;
+            // The settings key follows the root; one left behind would seal settings nobody opens.
+            const [settingsKey] = await tx
+                .select({ userId: accountSettingsKeys.userId })
+                .from(accountSettingsKeys)
+                .where(eq(accountSettingsKeys.userId, user.id))
+                .for('update');
+            if (Boolean(settingsKey) !== Boolean(input.settingsKey)) return false;
+        } else if (input.identity || input.workspaces || input.identityHistory || input.settingsKey)
+            return false;
         const version = input.credentialVersion + 1;
         await tx
             .update(opaqueCredentials)
@@ -951,6 +968,11 @@ export async function changeAccountSecurity(input: {
                 .update(accountIdentities)
                 .set(input.identity)
                 .where(eq(accountIdentities.userId, user.id));
+        if (input.settingsKey)
+            await tx
+                .update(accountSettingsKeys)
+                .set({ ...input.settingsKey, updatedAt: new Date() })
+                .where(eq(accountSettingsKeys.userId, user.id));
         for (const wrap of input.identityHistory ?? [])
             await tx
                 .update(accountIdentityHistory)
@@ -1164,6 +1186,7 @@ export async function addIdentityKem(input: {
 export async function getSettings(userId: string) {
     const [row] = await db
         .select({
+            version: userSettings.version,
             settingsVersion: userSettings.settingsVersion,
             nonce: userSettings.nonce,
             ciphertext: userSettings.ciphertext,
@@ -1180,9 +1203,12 @@ export async function getSettings(userId: string) {
 export async function putSettings(input: {
     userId: string;
     expectedVersion: number;
+    /* The envelope's version: 1 under the identity-derived key, 2 under the settings key. */
+    version?: 1 | 2;
     nonce: Buffer;
     ciphertext: Buffer;
 }) {
+    const version = input.version ?? 1;
     return db.transaction(async (tx) => {
         const [current] = await tx
             .select({ settingsVersion: userSettings.settingsVersion })
@@ -1192,11 +1218,15 @@ export async function putSettings(input: {
         const stored = current?.settingsVersion ?? 0;
         if (stored !== input.expectedVersion)
             return { status: 'conflict' as const, settingsVersion: stored };
+        // Sealed under a settings key the server does not have: no device could open it again.
+        if (version === 2 && !(await getSettingsKey(input.userId, tx)))
+            return { status: 'no-key' as const, settingsVersion: stored };
         const settingsVersion = stored + 1;
         await tx
             .insert(userSettings)
             .values({
                 userId: input.userId,
+                version,
                 settingsVersion,
                 nonce: input.nonce,
                 ciphertext: input.ciphertext,
@@ -1204,6 +1234,7 @@ export async function putSettings(input: {
             .onConflictDoUpdate({
                 target: userSettings.userId,
                 set: {
+                    version,
                     settingsVersion,
                     nonce: input.nonce,
                     ciphertext: input.ciphertext,
@@ -1212,6 +1243,31 @@ export async function putSettings(input: {
             });
         return { status: 'ok' as const, settingsVersion };
     });
+}
+
+export type SettingsKeyInput = { nonce: Buffer; ciphertext: Buffer };
+
+/* The wrapped settings key, if the account has one yet. */
+export async function getSettingsKey(userId: string, tx: Tx | typeof db = db) {
+    const [row] = await tx
+        .select({ nonce: accountSettingsKeys.nonce, ciphertext: accountSettingsKeys.ciphertext })
+        .from(accountSettingsKeys)
+        .where(eq(accountSettingsKeys.userId, userId));
+    return row ?? null;
+}
+
+/*
+ * Stores the wrapped settings key once. A second device that minted its own
+ * meanwhile is refused and must use the stored one, or the two would seal
+ * settings the other cannot open.
+ */
+export async function putSettingsKey(input: { userId: string } & SettingsKeyInput) {
+    const [row] = await db
+        .insert(accountSettingsKeys)
+        .values(input)
+        .onConflictDoNothing()
+        .returning({ userId: accountSettingsKeys.userId });
+    return row !== undefined;
 }
 
 /* An operator's suspension on a report: sessions stop being served and sign-in is refused until cleared. */

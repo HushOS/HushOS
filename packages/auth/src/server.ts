@@ -637,24 +637,62 @@ export async function lookupContact(sessionToken: string | null, email: string) 
     };
 }
 
+/* The settings key wrapped under the account root: a nonce and the sealed 32-byte key. */
+export type SettingsKeyEnvelope = { nonce: string; ciphertext: string };
+function encodeSettingsKey(key: { nonce: Buffer; ciphertext: Buffer } | null) {
+    return key
+        ? {
+              nonce: key.nonce.toString('base64url'),
+              ciphertext: key.ciphertext.toString('base64url'),
+          }
+        : null;
+}
+function decodeSettingsKey(key: SettingsKeyEnvelope) {
+    return { nonce: decodeField(key.nonce, 24), ciphertext: decodeField(key.ciphertext, 48) };
+}
+
 export async function getSettings(sessionToken: string | null) {
     const { user } = await requireSession(sessionToken, 'Sign in to read your settings.');
-    const stored = await authRepository.getSettings(user.id);
+    const [stored, settingsKey] = await Promise.all([
+        authRepository.getSettings(user.id),
+        authRepository.getSettingsKey(user.id),
+    ]);
     return {
         settings: stored
             ? {
-                  version: 1 as const,
+                  version: (stored.version === 2 ? 2 : 1) as 1 | 2,
                   settingsVersion: stored.settingsVersion,
                   nonce: stored.nonce.toString('base64url'),
                   ciphertext: stored.ciphertext.toString('base64url'),
               }
             : null,
+        settingsKey: encodeSettingsKey(settingsKey),
     };
+}
+
+/*
+ * Stores the settings key once, wrapped on the person's device under the
+ * account root. A device that raced is told so, and uses the stored one.
+ */
+export async function putSettingsKey(sessionToken: string | null, input: SettingsKeyEnvelope) {
+    const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
+    if (!(await authRepository.putSettingsKey({ userId: user.id, ...decodeSettingsKey(input) })))
+        throw new AuthError(
+            'Your settings key was already saved on another device. Reload and try again.',
+            409,
+        );
+    return { ok: true as const };
 }
 
 export async function putSettings(
     sessionToken: string | null,
-    input: { expectedVersion: number; nonce: string; ciphertext: string },
+    input: {
+        expectedVersion: number;
+        /* 2: sealed under the settings key; 1, the identity-derived key, until every client moves. */
+        version?: 1 | 2;
+        nonce: string;
+        ciphertext: string;
+    },
 ) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
     // Every client pads settings to 1 KiB steps (see @hushos/crypto/contacts); an unpadded one
@@ -665,6 +703,7 @@ export async function putSettings(
     const result = await authRepository.putSettings({
         userId: user.id,
         expectedVersion: input.expectedVersion,
+        version: input.version ?? 1,
         nonce: Buffer.from(input.nonce, 'base64url'),
         ciphertext: Buffer.from(input.ciphertext, 'base64url'),
     });
@@ -673,6 +712,8 @@ export async function putSettings(
             'Your settings changed on another device. They have been reloaded; try again.',
             409,
         );
+    if (result.status === 'no-key')
+        throw new AuthError('Save your settings key before settings sealed under it.', 409);
     return { settingsVersion: result.settingsVersion };
 }
 
@@ -1317,16 +1358,23 @@ export async function startSecurityChange(
         workspaces: bundles.workspaces.map(encodeWorkspaceGrant),
         identity: encodeIdentity(i),
         identityHistory: bundles.identityHistory.map(encodeIdentity),
+        settingsKey: encodeSettingsKey(bundles.settingsKey),
     };
 }
 
 /*
  * What a security change carries beyond the worker's own types: every earlier
- * identity, since a master-key rotation must re-wrap those under the new root
- * too or the shares sealed to them are lost with the old root.
+ * identity and the settings key, since a master-key rotation must re-wrap
+ * those under the new root too or what they open is lost with the old root.
  */
-export type ServerSecurityChallenge = SecurityChallenge & { identityHistory: IdentityEnvelope[] };
-export type ServerSecurityUpdate = SecurityUpdate & { identityHistory?: IdentityEnvelope[] };
+export type ServerSecurityChallenge = SecurityChallenge & {
+    identityHistory: IdentityEnvelope[];
+    settingsKey: SettingsKeyEnvelope | null;
+};
+export type ServerSecurityUpdate = SecurityUpdate & {
+    identityHistory?: IdentityEnvelope[];
+    settingsKey?: SettingsKeyEnvelope;
+};
 
 export async function finishSecurityChange(
     sessionToken: string | null,
@@ -1378,7 +1426,8 @@ export async function finishSecurityChange(
         (input.action === 'password' ? input.recovery !== undefined : !input.recovery) ||
         (input.action === 'master-key' ? !input.identity : input.identity !== undefined) ||
         (input.action === 'master-key' ? !input.workspaces : input.workspaces !== undefined) ||
-        (input.action !== 'master-key' && input.identityHistory !== undefined)
+        (input.action !== 'master-key' &&
+            (input.identityHistory !== undefined || input.settingsKey !== undefined))
     )
         throw failure();
     const changed = await authRepository.changeAccountSecurity({
@@ -1404,6 +1453,7 @@ export async function finishSecurityChange(
         identityHistory: input.identityHistory?.map((earlier) =>
             decodeIdentity(earlier, earlier.keyVersion, user.id),
         ),
+        settingsKey: input.settingsKey ? decodeSettingsKey(input.settingsKey) : undefined,
         workspaces: input.workspaces?.map((grant) =>
             decodeWorkspaceGrant({ id: grant.workspaceId, grant }, keyVersion),
         ),

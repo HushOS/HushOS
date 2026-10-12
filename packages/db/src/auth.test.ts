@@ -752,3 +752,88 @@ describe('identity succession', () => {
         expect((await auth.getIdentity(user.id))?.keyVersion).toBe(2);
     });
 });
+
+describe('the settings key in a master-key rotation', () => {
+    test('is re-wrapped with the root when the account has one, and only then', async () => {
+        const workspaceId = randomUUID();
+        const created = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment('settings-key@hushos.test'),
+            ...registration(workspaceId),
+        });
+        if (created.status !== 'created') throw new Error(created.status);
+        const user = created.user;
+        const sessionTokenHash = await signedIn(user.id);
+        const stored = (await auth.getIdentity(user.id))!;
+        const change = (
+            action: 'master-key' | 'password',
+            settingsKey: { nonce: Buffer; ciphertext: Buffer } | undefined,
+        ) =>
+            auth.changeAccountSecurity({
+                userId: user.id,
+                action,
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: action === 'master-key' ? 2 : 1,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery:
+                    action === 'master-key'
+                        ? {
+                              keyVersion: 2,
+                              recoveryVersion: 2,
+                              wrappingSalt: bytes(32),
+                              wrappingNonce: bytes(24),
+                              encryptedKey: bytes(48),
+                              backupNonce: bytes(24),
+                              encryptedRecoveryKey: bytes(48),
+                              publicKey: bytes(32),
+                          }
+                        : undefined,
+                identity:
+                    action === 'master-key'
+                        ? {
+                              keyVersion: 2,
+                              wrappingSalt: bytes(32),
+                              encryptionPublicKey: stored.encryptionPublicKey,
+                              encryptionPrivateKeyNonce: bytes(24),
+                              encryptedEncryptionPrivateKey: bytes(48),
+                              signingPublicKey: stored.signingPublicKey,
+                              signingSeedNonce: bytes(24),
+                              encryptedSigningSeed: bytes(48),
+                          }
+                        : undefined,
+                settingsKey,
+                workspaces:
+                    action === 'master-key'
+                        ? [
+                              {
+                                  id: workspaceId,
+                                  grant: {
+                                      keyVersion: 2,
+                                      workspaceKeyVersion: 1,
+                                      wrappingSalt: bytes(32),
+                                      wrappingNonce: bytes(24),
+                                      encryptedKey: bytes(48),
+                                  },
+                              },
+                          ]
+                        : undefined,
+            });
+        const rewrapped = { nonce: bytes(24), ciphertext: bytes(48) };
+        // No key stored yet: a rotation carrying one would invent it.
+        expect(await change('master-key', rewrapped)).toBe(false);
+        await auth.putSettingsKey({ userId: user.id, nonce: bytes(24), ciphertext: bytes(48) });
+        // A key stored and not carried along would stay sealed under a root that is gone.
+        expect(await change('master-key', undefined)).toBe(false);
+        // A password change keeps the root, so it has no settings key to carry.
+        expect(await change('password', rewrapped)).toBe(false);
+        expect(await change('master-key', rewrapped)).toBe(true);
+        const now = await auth.getSettingsKey(user.id);
+        expect(now?.ciphertext.equals(rewrapped.ciphertext)).toBe(true);
+        expect(now?.nonce.equals(rewrapped.nonce)).toBe(true);
+    });
+});
