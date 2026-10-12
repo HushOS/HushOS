@@ -42,6 +42,12 @@ export type NodeView = {
     changeSeq: number | null;
     createdAt: string;
     updatedAt: string;
+    /*
+     * How the node's key and metadata envelopes are sealed. 1 today; a reader
+     * refuses any other value rather than guess, so a later suite can sit
+     * beside this one while a workspace is re-wrapped.
+     */
+    envelopeSuite: number;
 };
 
 export type NodeEnvelopes = {
@@ -88,7 +94,14 @@ export type ChangeFeed = {
     resync: boolean;
 };
 /* A sealed workspace document as the server holds it: kind, the version it is at, bytes. */
-export type DocumentView = { kind: string; version: number; envelope: string; updatedAt: string };
+export type DocumentView = {
+    kind: string;
+    version: number;
+    envelope: string;
+    updatedAt: string;
+    /* As on nodes: 1 today, and anything else is refused. */
+    envelopeSuite: number;
+};
 /* A node the rotation still has to visit, with everything sealed under its key. */
 export type RotationWorkNode = NodeView & {
     depth: number;
@@ -224,6 +237,8 @@ export type LinkView = {
     /* The owner's sealed copy of the secret and token; null for links made before it existed. */
     secretEnvelope: string | null;
     hasPassword: boolean;
+    /* How the link's key is derived (see @hushos/crypto/links); a reader refuses any version it does not know. */
+    kdfVersion: number;
     expiresAt: string | null;
     useCount: number;
     lastUsedAt: string | null;
@@ -236,6 +251,7 @@ export type OpenedLink = {
         workspaceId: string;
         keyEpoch: number;
         hasPassword: boolean;
+        kdfVersion: number;
         linkSalt: string;
         linkEnvelope: string;
         expiresAt: string | null;

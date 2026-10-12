@@ -5,7 +5,8 @@ import type {
     DriveVersionEnvelope,
     NodeMetadata,
 } from '@hushos/crypto';
-import { checkName } from '@hushos/crypto/drive';
+import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
+import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { Catalogue, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
@@ -126,8 +127,9 @@ export type DriveClientOptions = {
     reportApi?: ReportApi;
     /*
      * Decides which identity key a share's granter is trusted with: the pinned
-     * one, or the served one on first use. Throws to refuse (a key that changed
-     * since it was pinned). Without it, shares received cannot be opened.
+     * one, and only when the served key matches it. Throws to refuse (no pin, an
+     * unchecked one, or a key that changed). Without it, shares received cannot
+     * be opened.
      */
     trustGranter?: (granter: Granter) => Promise<string>;
     /*
@@ -140,6 +142,27 @@ export type DriveClientOptions = {
         granteeUserId: string,
         served: ServedIdentity,
     ) => Promise<{ encryptionPublicKey: string; kemPublicKey: string | null }>;
+    /*
+     * The owner's own record of what they shared. Without it nothing is ever
+     * re-sealed: not on rotation, not when older shares are upgraded.
+     */
+    ledger?: SharingLedger;
+};
+
+/*
+ * The owner's own record of what they shared, kept sealed in their settings:
+ * the people each node was shared with, and the links they made. The server
+ * lists shares and links on every rotation and re-seal, and its list is only a
+ * claim: sealing again what it names would hand a node key to anyone it added
+ * or revive a share or link the owner stopped. So only what the ledger holds is
+ * ever sealed again, and a stop leaves the ledger before it reaches the server.
+ */
+export type SharingLedger = {
+    read(): Promise<{ shares: Record<string, string[]>; links: Record<string, string> }>;
+    addShare(nodeId: string, granteeUserId: string): Promise<void>;
+    removeShare(nodeId: string, granteeUserId: string): Promise<void>;
+    addLink(linkId: string, nodeId: string): Promise<void>;
+    removeLink(linkId: string): Promise<void>;
 };
 
 /* `unverified`: the share stays shut until its granter is pinned after a words check. */
@@ -184,30 +207,40 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function decorate(nodes: NodeView[]): Promise<DriveNode[]> {
         if (!nodes.length) return [];
         remember(nodes);
-        const { nodes: opened } = await rpc('driveOpenNodes', {
-            workspaceId: nodes[0]!.workspaceId,
-            nodes: nodes.map((node) => ({
-                id: node.id,
-                parentId: parentRef(node),
-                parentKeyEpoch: node.parentKeyEpoch,
-                keyEpoch: node.keyEpoch,
-                keyEnvelope: node.keyEnvelope,
-                metadataVersion: node.metadataVersion,
-                metadataEnvelope: node.metadataEnvelope,
-                prevKeyEnvelope: node.prevKeyEnvelope,
-                prevKeyEpoch: node.prevKeyEpoch,
-                prevParentKeyEpoch: node.prevParentKeyEpoch,
-                version: node.currentVersion ? versionEnvelopeOf(node.currentVersion) : null,
-            })),
-        });
-        return nodes.map((node, index) => {
-            const result = opened[index]!;
+        // A suite this client does not know never reaches the worker: the node stays shut.
+        // Rows the device mirrored before nodes carried a suite are suite 1.
+        const known = nodes.filter(
+            (node) => (node.envelopeSuite ?? DRIVE_ENVELOPE_SUITE) === DRIVE_ENVELOPE_SUITE,
+        );
+        const { nodes: opened } = known.length
+            ? await rpc('driveOpenNodes', {
+                  workspaceId: nodes[0]!.workspaceId,
+                  nodes: known.map((node) => ({
+                      id: node.id,
+                      parentId: parentRef(node),
+                      parentKeyEpoch: node.parentKeyEpoch,
+                      keyEpoch: node.keyEpoch,
+                      keyEnvelope: node.keyEnvelope,
+                      metadataVersion: node.metadataVersion,
+                      metadataEnvelope: node.metadataEnvelope,
+                      prevKeyEnvelope: node.prevKeyEnvelope,
+                      prevKeyEpoch: node.prevKeyEpoch,
+                      prevParentKeyEpoch: node.prevParentKeyEpoch,
+                      version: node.currentVersion ? versionEnvelopeOf(node.currentVersion) : null,
+                  })),
+              })
+            : { nodes: [] };
+        const results = new Map(known.map((node, index) => [node, opened[index]!]));
+        return nodes.map((node) => {
+            const result = results.get(node) ?? {
+                error: 'Made by a newer version of HushOS. Update to open it.',
+            };
             if (!result.error) openedNodes.add(node.id);
-            const metadata = result.metadata ?? null;
+            const metadata = 'metadata' in result ? (result.metadata ?? null) : null;
             return {
                 ...node,
                 metadata,
-                content: result.content ?? null,
+                content: 'content' in result ? (result.content ?? null) : null,
                 name: metadata?.name ?? (node.parentId === null ? ROOT_NAME : 'Unreadable item'),
                 openError: result.error ?? null,
             };
@@ -446,6 +479,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function readRegistry(ws: string) {
         const { document } = await api.document(ws, TAGS_DOCUMENT);
         if (!document) return { value: emptyRegistry(), base: emptyRegistry(), version: 0 };
+        if (document.envelopeSuite !== DRIVE_ENVELOPE_SUITE)
+            throw new Error(
+                'Your tags were saved by a newer version of HushOS. Update to see them.',
+            );
         const opened = await rpc('driveOpenDocument', {
             workspaceId: ws,
             kind: TAGS_DOCUMENT,
@@ -764,14 +801,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             granteePublicKey: contact.encryptionPublicKey,
             granteeKemPublicKey: contact.kemPublicKey,
         });
-        return (
-            await api.share(ws, node.id, {
-                granteeUserId: contact.userId,
-                role,
-                keyEpoch: node.keyEpoch,
-                shareEnvelope,
-            })
-        ).share;
+        const { share } = await api.share(ws, node.id, {
+            granteeUserId: contact.userId,
+            role,
+            keyEpoch: node.keyEpoch,
+            shareEnvelope,
+        });
+        await options.ledger?.addShare(node.id, contact.userId);
+        return share;
     }
     async function nodeShares(node: DriveNode) {
         return (await api.nodeShares(node.workspaceId, node.id)).shares;
@@ -783,12 +820,18 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * sealed to. Returns how many were re-sealed and how many were refused.
      */
     async function upgradeShares() {
-        if (!currentUserId || !options.trustGrantee) return { resealed: 0, refused: 0 };
-        const mine = await api.sharedByMe();
+        if (!currentUserId || !options.trustGrantee || !options.ledger)
+            return { resealed: 0, refused: 0 };
+        const [mine, ledger] = await Promise.all([api.sharedByMe(), options.ledger.read()]);
         let resealed = 0;
         let refused = 0;
         for (const share of mine.shares) {
             if (share.suite !== 1 || !share.granteeIdentity.kem) continue;
+            // Only a share the owner made: the server's list alone is no reason to seal.
+            if (!ledger.shares[share.node.id]?.includes(share.grantee.id)) {
+                refused++;
+                continue;
+            }
             let keys: { encryptionPublicKey: string; kemPublicKey: string | null };
             try {
                 keys = await options.trustGrantee(share.grantee.id, share.granteeIdentity);
@@ -818,6 +861,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return { resealed, refused };
     }
     async function revokeShare(node: DriveNode, shareId: string) {
+        // Out of the ledger first, so the rotation that follows never seals to them again.
+        const grantee = (await nodeShares(node)).find((share) => share.id === shareId)?.grantee.id;
+        if (grantee) await options.ledger?.removeShare(node.id, grantee);
         await api.revokeShare(node.workspaceId, shareId);
     }
     /*
@@ -850,6 +896,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             hasPassword: input.password !== null,
             expiresAt: input.expiresAt,
         });
+        await options.ledger?.addLink(linkId, node.id);
         return { link, token: sealed.token, secret: sealed.secret };
     }
     /* The full URL of a link the owner made, from the sealed copy; null for links made before it existed. */
@@ -908,11 +955,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return (await api.nodeLinks(node.workspaceId, node.id)).links;
     }
     async function revokeLink(node: DriveNode, linkId: string) {
+        await options.ledger?.removeLink(linkId);
         await api.revokeLink(node.workspaceId, linkId);
     }
     async function openLink(token: string, secret: string, password: string | null) {
         if (!options.linkApi) throw new Error('Links cannot be opened on this client.');
         const opened = await options.linkApi.open(token);
+        if (opened.link.kdfVersion !== LINK_KDF_VERSION)
+            throw new Error(
+                'This link was made by an older version of HushOS. Ask for a new link.',
+            );
         remember([opened.node]);
         guestWorkspaceId = opened.link.workspaceId;
         await rpc('driveOpenLink', {
@@ -1032,6 +1084,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // The root's own chain must be open: its parent key is what the new root key wraps under.
         if (kind === 'folder') await listFolder(rootId);
         else if (rootParentId) await listFolder(rootParentId);
+        // What may be sealed again: the owner's ledger, never the server's list alone.
+        const ledger = (await options.ledger?.read()) ?? { shares: {}, links: {} };
         let done = 0;
         let cursor: string | null = null;
         let idle = 0;
@@ -1075,26 +1129,23 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         shares: (
                             await Promise.all(
                                 n.shares.map(async (share) => {
-                                    // The server names the grantee; the pin decides which keys are
-                                    // sealed to. A share the pin refuses keeps its old envelope, which
-                                    // the rotation leaves unopenable: closed, never re-sealed to a
-                                    // key the person did not vouch for.
+                                    // The server names the grantee; the ledger says whether the
+                                    // owner shared with them and the pin which keys are sealed to.
+                                    // A share either refuses keeps its old envelope, which the
+                                    // rotation leaves unopenable: closed, never re-sealed to someone
+                                    // the person did not share with or a key they did not vouch for.
+                                    if (!ledger.shares[n.id]?.includes(share.granteeUserId))
+                                        return null;
+                                    if (!options.trustGrantee) return null;
                                     let keys: {
                                         encryptionPublicKey: string;
                                         kemPublicKey: string | null;
                                     };
                                     try {
-                                        keys = options.trustGrantee
-                                            ? await options.trustGrantee(
-                                                  share.granteeUserId,
-                                                  share.grantee,
-                                              )
-                                            : {
-                                                  encryptionPublicKey:
-                                                      share.grantee.encryptionPublicKey,
-                                                  kemPublicKey:
-                                                      share.grantee.kem?.publicKey ?? null,
-                                              };
+                                        keys = await options.trustGrantee(
+                                            share.granteeUserId,
+                                            share.grantee,
+                                        );
                                     } catch {
                                         return null;
                                     }
@@ -1107,7 +1158,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                 }),
                             )
                         ).filter((share) => share !== null),
-                        links: n.links,
+                        // A link the owner did not make, or stopped, is left to the rotation to close.
+                        links: n.links.filter((link) => ledger.links[link.id] === n.id),
                     })),
                 ),
             });

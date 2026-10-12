@@ -14,6 +14,7 @@ import {
     partLength,
     validObjectSize,
 } from '@hushos/crypto/drive';
+import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { objectKey, primaryStore } from './storage';
 import { storageEnv } from '@hushos/env/storage';
 import {
@@ -96,7 +97,13 @@ export type VersionView = {
     readyAt: string | null;
 };
 /* A sealed workspace document as it travels: kind, version, Base64url bytes. */
-export type DocumentView = { kind: string; version: number; envelope: string; updatedAt: string };
+export type DocumentView = {
+    kind: string;
+    version: number;
+    envelope: string;
+    updatedAt: string;
+    envelopeSuite: number;
+};
 
 export type NodeView = {
     id: string;
@@ -116,6 +123,8 @@ export type NodeView = {
     changeSeq: number | null;
     createdAt: string;
     updatedAt: string;
+    /* How the key and metadata envelopes are sealed; every row is suite 1 today. */
+    envelopeSuite: number;
 };
 
 function b64(buffer: Buffer | Uint8Array) {
@@ -159,6 +168,7 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
         changeSeq: node.changeSeq,
         createdAt: node.createdAt.toISOString(),
         updatedAt: node.updatedAt.toISOString(),
+        envelopeSuite: DRIVE_ENVELOPE_SUITE,
     };
 }
 
@@ -842,6 +852,7 @@ function documentView(row: driveRepository.DocumentRow): DocumentView {
         version: row.version,
         envelope: row.envelope.toString('base64url'),
         updatedAt: row.updatedAt.toISOString(),
+        envelopeSuite: DRIVE_ENVELOPE_SUITE,
     };
 }
 function documentKind(kind: string) {
@@ -1405,6 +1416,7 @@ function linkView(row: Awaited<ReturnType<typeof driveRepository.listNodeLinks>>
         keyEpoch: row.keyEpoch,
         secretEnvelope: row.secretEnvelope ? b64(row.secretEnvelope) : null,
         hasPassword: row.hasPassword,
+        kdfVersion: LINK_KDF_VERSION,
         expiresAt: row.expiresAt?.toISOString() ?? null,
         useCount: row.useCount,
         lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
@@ -1555,6 +1567,7 @@ export async function openLink(token: string, address: string) {
             workspaceId: resolved.link.workspaceId,
             keyEpoch: resolved.link.keyEpoch,
             hasPassword: resolved.link.hasPassword,
+            kdfVersion: LINK_KDF_VERSION,
             linkSalt: b64(resolved.link.linkSalt),
             linkEnvelope: b64(resolved.link.linkEnvelope),
             expiresAt: resolved.link.expiresAt?.toISOString() ?? null,
@@ -1738,6 +1751,7 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
         changeSeq: null,
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.createdAt.toISOString(),
+        envelopeSuite: DRIVE_ENVELOPE_SUITE,
     };
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);

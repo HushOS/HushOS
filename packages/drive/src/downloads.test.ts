@@ -57,6 +57,7 @@ function file(
         name,
         content: { plaintextSize, thumbnailBytes: 0 },
         openError: null,
+        envelopeSuite: 1,
     };
 }
 function folder(id: string, parentId: string | null = 'root'): DriveNode {

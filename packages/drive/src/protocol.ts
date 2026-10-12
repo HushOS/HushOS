@@ -18,6 +18,7 @@ export {
     DOCUMENT_MAX_BYTES,
     METADATA_MAX_BYTES,
 } from '@hushos/crypto/drive';
+export { LINK_KDF_VERSION, LINK_PASSWORD_MIN_LENGTH } from '@hushos/crypto/links';
 
 /* 2: the thumbnail is a trailer of the object and the version envelope carries the sizes. */
 export const DRIVE_PROTOCOL_VERSION = 2;
