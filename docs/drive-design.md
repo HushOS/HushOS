@@ -4,7 +4,7 @@ This document fixed the shape of HushOS Drive before code was written, the way `
 
 ## Status
 
-Content suite 2 is current, with the thumbnail sealed into the object and the plaintext size in the version envelope. Content suite 1, an earlier layout, is read but never written. The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive.ts`.
+Content suite 3 is current: suite 2's layout (the thumbnail sealed into the object, the plaintext size in the version envelope) padded to a Padmé bucket. Suites 2 and 1 are read but never written. Writer signatures, share suite 3, identity succession and the settings key are specified in [integrity-design.md](integrity-design.md), whose API contract the server implements; where this document and that one differ, that one is current. The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive.ts`.
 
 ### Implemented as designed
 
@@ -455,7 +455,7 @@ Quota is reserved before any byte is accepted, confirmed against the real object
 
 ### 1. Begin
 
-`POST /api/drive/uploads` with the node (new or existing), its envelopes, the object's `contentSuite`, `chunkCount`, `ciphertextSize`, `contentNonce`, and the version envelope. The client knows the ciphertext size exactly before it begins, because the thumbnail is rendered first and sealed into the envelope with the size; nothing about the object changes after begin.
+`POST /api/drive/uploads` with the node (new or existing), its envelopes and, for a new node, the `metadataSignature`, the object's `contentSuite` (3; anything else is 409, "Update HushOS to upload"), `chunkCount`, `ciphertextSize`, `contentNonce`, the version envelope and its `versionSignature` (see integrity-design.md). The client knows the ciphertext size exactly before it begins, because the thumbnail is rendered first and sealed into the envelope with the size; nothing about the object changes after begin.
 
 What the server refuses:
 
@@ -628,7 +628,7 @@ Sharing is built after the first release, but the tree, the keys and the walk ar
 
 A share is one node's key, sealed to one grantee, with a role. The grantee unwraps the node key and descends the subtree exactly as the owner does, because every descendant's key is wrapped under its parent's. A share is one row and one envelope whatever the size of the subtree, and the workspace key is never involved.
 
-Share envelopes come in two suites, told apart by length. Suite 2 is hybrid: the X25519 agreement of suite 1 and an ML-KEM-768 (FIPS 203) encapsulation to the grantee's post-quantum identity key, combined so the envelope opens only for someone holding both private halves and stays shut unless both problems fall. Suite 1 is still read, for shares made before the grantee had a KEM key, and still written for a grantee who has none yet; it is never chosen when the grantee's KEM key is known, and a suite 1 share is re-sealed as suite 2 by the owner's device once the grantee's key appears (see re-sealing below).
+Share envelopes come in three suites, told apart by length. Suite 3 (1256 bytes: an ephemeral X25519 key, ML-KEM-768 and the granter's signature, see integrity-design.md) is the only one written: a new share, a re-seal or a rotation in any other suite is refused with 409. What follows describes suites 1 and 2, which are served as stored. Suite 2 is hybrid: the X25519 agreement of suite 1 and an ML-KEM-768 (FIPS 203) encapsulation to the grantee's post-quantum identity key, combined so the envelope opens only for someone holding both private halves and stays shut unless both problems fall. Suite 1 is still read, for shares made before the grantee had a KEM key, and still written for a grantee who has none yet; it is never chosen when the grantee's KEM key is known, and a suite 1 share is re-sealed as suite 2 by the owner's device once the grantee's key appears (see re-sealing below).
 
 ```text
 shareEnvelope, suite 1 (72 bytes; X25519 alone)
@@ -941,7 +941,8 @@ The earlier prototype worked, and its tree idea, per-node keys wrapped by the pa
 - Authorization for every request is the walk: membership of the workspace, else the nearest live share in the ancestor chain, else 404. A revoked share is refused on the next request; URLs it already obtained expire within 15 minutes.
 - Every write that wraps a key states the epoch it wrapped under and is refused if that epoch has moved; an envelope the server stores is always one a current key can open, or sits beside one that can while a rotation finishes. Epochs come from one counter per workspace, so a rotation's target exceeds every epoch in it.
 - A version's envelope names its object and carries the plaintext size and the thumbnail length; the server stores neither, and infers a file's kind from nothing. No object can be served in another object's place, and the thumbnail opens only under a key derived for that role.
-- The server accepts uploads in content suite 2 only and reads suite 1 forever; the envelope's length follows the object's suite, and a copy keeps the source's suite.
+- The server accepts uploads in content suite 3 only and reads suites 1 and 2 forever; the envelope's length follows the object's suite, and a copy keeps the source's suite.
+- Every write that sets a metadata or content-key envelope carries the writer's signature, verified against the writer's current signing key inside the writing transaction; one that does not verify is refused with 400 and changes nothing.
 - A rotation is finished only when every node in its subtree has its own epoch and its parent-key epoch at or above the target, the root judged by its own epoch and its outside parent's current key; creates and moves within or into the subtree are allowed and are visited, not skipped; nothing leaves the subtree until the rotation finishes, and a node still carrying a previous envelope does not move at all; every rotation row carries the node's `change_seq` as its precondition.
 - A same-node attach requires the version precondition begin recorded; a sibling attach never overwrites anything.
 - Trash never blocks a completion; purge aborts it.
