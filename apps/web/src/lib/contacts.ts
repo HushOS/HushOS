@@ -71,10 +71,12 @@ export function openIdentity(userId: string, refresh = false) {
         opened = {
             userId,
             promise: (async () => {
+                requireUnlocked(userId);
                 let [{ identity }, { identities: history }] = await Promise.all([
                     authClient.identity(),
                     authClient.identityHistory(),
                 ]);
+                requireUnlocked(userId);
                 let result = await authClient.rpc('identityOpen', {
                     userId,
                     identity,
@@ -210,8 +212,16 @@ function settingsKeyReady(userId: string, served: SettingsKeyEnvelope | null, cr
     return promise;
 }
 
+/* Background reads stop at a lock rather than ask a locked worker, which would lock it again. */
+function requireUnlocked(userId: string) {
+    if (authClient.store.getState().unlockedUserId !== userId)
+        throw new Error('Unlock your account first.');
+}
+
 async function readSettings(userId: string, create: boolean): Promise<LoadedSettings> {
+    requireUnlocked(userId);
     const own = await openIdentity(userId);
+    requireUnlocked(userId);
     const { settings: envelope, settingsKey } = await authClient.settings();
     await settingsKeyReady(userId, settingsKey, create);
     const seen = settingsSeen(userId, own.encryptionPublicKey);

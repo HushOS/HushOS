@@ -107,8 +107,12 @@ export function createAuthClient(
             // A failed account operation leaves nothing to trust and the worker has
             // already reset itself, so lock here too. A Drive operation that fails is an
             // ordinary error for its caller; the transport reports its own death
-            // through onLock, which is the only Drive failure that should lock.
-            if (!String(operation).startsWith('drive') && transport === activeTransport) lock();
+            // through onLock, which is the only Drive failure that should lock. While a
+            // sign-in or security change runs, it owns the worker and locks on its own
+            // failures: a background read refused by the locked worker (settings, an
+            // identity) must not throw away the change's state mid-way.
+            if (!String(operation).startsWith('drive') && !busy && transport === activeTransport)
+                lock();
             throw error;
         }
     }
