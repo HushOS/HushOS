@@ -1,0 +1,73 @@
+packages/db/src/signatures.test.ts
+  s_75dbe24a0bc379::t_a4a3575b2844e9 1-146
+packages/db/src/drive.signatures.test.ts
+  s_75dbe24a0bc379::t_f06c861d4a7013 1-493
+  s_75dbe24a0bc379::t_1887c70a0276f8 494-508
+packages/db/src/signatures.ts
+  s_75dbe24a0bc379::t_eec5ed97a28a54 1-100
+packages/db/test/signed.ts
+  s_75dbe24a0bc379::t_035479bd7129e2 1-277
+  s_75dbe24a0bc379::t_7f2dd4f1645d77 278-279
+apps/web/src/lib/api.server.ts
+  s_75dbe24a0bc379::t_3fae612ea671dd 192,216-217,223,770,838,913,923,981,1260,1265
+packages/db/drizzle/20261012174046_writer_signatures/migration.sql
+  s_75dbe24a0bc379::t_5b79cc304fe95a 1-15
+packages/db/drizzle/20261012174046_writer_signatures/snapshot.json
+  s_75dbe24a0bc379::t_e2a6d67aa8cd85 1-8130
+packages/db/src/drive.changes.test.ts
+  s_75dbe24a0bc379::t_1fc8da4c54c04a 3-9,32,56,65
+packages/db/src/drive.copy.test.ts
+  s_75dbe24a0bc379::t_837f7c8a70f74d 4-10,50,77,116,118,152-153
+packages/db/src/drive.links.test.ts
+  s_75dbe24a0bc379::t_0a406ef064e333 4-10,36,58,116-117
+packages/db/src/drive.ops.test.ts
+  s_75dbe24a0bc379::t_d586f50f07cc0f 4-10,35,85-86
+packages/db/src/drive.purge.test.ts
+  s_75dbe24a0bc379::t_32651f03823a78 4-10,49,73,118-119,220,307,449
+packages/db/src/drive.reports.test.ts
+  s_75dbe24a0bc379::t_83de992df0eb9d 4-10,14,39,61,96,136,183-194
+packages/db/src/drive.rotations.test.ts
+  s_75dbe24a0bc379::t_38bce156a13c57 4-10,14,38,60,100-102,132-133,214-219,233-235,237,245,279-281,325,349,365,416,418,426,437,459
+packages/db/src/drive.shares.test.ts
+  s_75dbe24a0bc379::t_7eb22d1c94ed1d 3-9,12,36,58,110,129
+packages/db/src/drive.test.ts
+  s_75dbe24a0bc379::t_bc2ff052c13fe8 4-10,36,53,81,89,106,140,193,222,281,283,291,293,301,303
+packages/db/src/drive.trash.test.ts
+  s_75dbe24a0bc379::t_d25033bff8d8f5 4-10,46,84-85
+packages/db/src/drive.ts
+  s_75dbe24a0bc379::t_8d95506c2b7c1d 4,208-209,241-242,244-248,253-255,268-303,312-315,317-323,327-374,394-395,398-400,405,423-424,440,443-444,447-463,557-567,572,613,618,620,635-637,645-646,650-651,659-670,676-677,689-693,781,799,894,1062-1064,1128-1144,1159,1186-1187,1299-1305,1423-1429,1439,1442,1451,1456-1462,1472,1474-1475,1501-1522,1540,1580-1581,1592,1696-1698,1702,1704,1723,1725,1763,1814-1828,1843,1858-1859,1915-1918,1922,2055-2061,2100-2101
+packages/db/src/drive.uploads.test.ts
+  s_75dbe24a0bc379::t_125751de86e039 4-10,61,107-108,285,287,296,328,330,361,363,371,373,380,382
+packages/db/src/readiness.ts
+  s_75dbe24a0bc379::t_e44a71a1dcf437 14
+packages/db/src/reports.ts
+  s_75dbe24a0bc379::t_9cacc9c826592f 3-11,41-57,216-219,402,415-420,428,433-441,443
+packages/db/src/rotations.ts
+  s_75dbe24a0bc379::t_c943caa2ab79bc 8-9,12-13,17,109-111,169-170,176-179,224-225,262-265,268-269,277-283,295-296,352-400,413-414,421-425
+packages/db/src/schema/drive.ts
+  s_75dbe24a0bc379::t_38284cb6ed4ec3 51-57,96-99,117-120,192-195,205-207,216-219,532-537,545-548
+packages/db/test/helpers.ts
+  s_75dbe24a0bc379::t_e66bf4e3a2516f 1-8,11-17,49-100
+packages/drive/src/api.ts
+  s_75dbe24a0bc379::t_a87eecd08df48d 10-12,16,28-33,60-62,70-71,128-130,150-152,158-164,195,197,202,227-228,335-336,389-395
+packages/drive/src/protocol.ts
+  s_75dbe24a0bc379::t_e5000c7ded1518 25-26,75-77
+packages/drive/src/server.ts
+  s_75dbe24a0bc379::t_9b8f9f680c9680 84-85,100-102,133-135,156-157,182-183,200-201,321-323,371-372,380,397,457-458,470-476,482,486,490,618-619,648,654-655,960-961,1105,1139-1140,1261,1263,1268,1289,1292,1303,1338-1339,1786-1787,1809-1810,2204-2205,2311-2313,2327,2336,2339,2341,2357-2359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e6de92960be13b28fdacdb9be35da0b04108af50",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
