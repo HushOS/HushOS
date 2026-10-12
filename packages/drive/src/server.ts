@@ -12,6 +12,7 @@ import {
 import {
     documentPadStep,
     METADATA_PAD_STEP,
+    paddedLength,
     partLength,
     validObjectSize,
 } from '@hushos/crypto/drive';
@@ -26,7 +27,6 @@ import {
     DRIVE_ENVELOPE_SUITE,
     DRIVE_PROTOCOL_VERSION,
     KEY_ENVELOPE_BYTES,
-    LEGACY_CONTENT_SUITE,
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
     MAX_PART_URLS_PER_REQUEST,
@@ -973,10 +973,18 @@ function uploadView(row: UploadRow): UploadView {
 
 /*
  * What the server can check about a declared object: that a last part of the
- * declared size can hold a chunk and a trailer, and that the plaintext it bounds
- * (the object less its tags, allowing for a trailer) is within the file limit.
+ * declared size can hold a chunk and a trailer, and that what it bounds (the
+ * object less its tags) is no larger than the largest file allowed would be
+ * once its thumbnail trailer is added and the whole is padded to its bucket.
  * The plaintext size itself is sealed in the envelope and never seen here.
  */
+let maxPadded: bigint | undefined;
+const MAX_PADDED_BYTES = () =>
+    (maxPadded ??= BigInt(
+        paddedLength(
+            Number(storageEnv.DRIVE_MAX_FILE_BYTES) + THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES,
+        ),
+    ));
 function parseCiphertextSize(value: string, chunkCount: number) {
     if (!Number.isInteger(chunkCount) || chunkCount < 1 || chunkCount > 10_000)
         throw new DriveError('invalid', 'Invalid chunk count.');
@@ -984,9 +992,7 @@ function parseCiphertextSize(value: string, chunkCount: number) {
     const size = BigInt(value);
     if (!validObjectSize(Number(size), chunkCount))
         throw new DriveError('invalid', 'The object size does not fit its chunk count.');
-    const contentBound =
-        size - BigInt(CHUNK_TAG_BYTES * chunkCount) - BigInt(THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES);
-    if (contentBound > storageEnv.DRIVE_MAX_FILE_BYTES)
+    if (size - BigInt(CHUNK_TAG_BYTES * chunkCount) > MAX_PADDED_BYTES())
         throw new DriveError(
             'too-large',
             `Files can be at most ${Number(storageEnv.DRIVE_MAX_FILE_BYTES / (1024n * 1024n * 1024n))} GiB on this server.`,
@@ -1030,13 +1036,9 @@ async function presignParts(upload: UploadRow, from: number, count: number) {
 export async function beginUpload(userId: string, workspaceId: string, input: UploadBeginInput) {
     if (input.node.existing) await requireAccess(userId, workspaceId, input.node.id, 'editor');
     else await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
+    // Suite 3 alone is written: an older suite would hand the server the file's exact size.
     if (input.contentSuite !== CONTENT_SUITE)
-        throw new DriveError(
-            'unsupported',
-            input.contentSuite === LEGACY_CONTENT_SUITE
-                ? 'This app is out of date for this server. Reload and try again.'
-                : 'This server does not accept files stored that way.',
-        );
+        throw new DriveError('unsupported', 'Update HushOS to upload.', 409);
     const ciphertextSize = parseCiphertextSize(input.ciphertextSize, input.chunkCount);
     const contentNonce = decodeEnvelope(input.contentNonce, 16);
     const key = objectKey(workspaceId, input.objectId);

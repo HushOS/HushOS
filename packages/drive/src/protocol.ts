@@ -20,8 +20,11 @@ export {
 } from '@hushos/crypto/drive';
 export { LINK_KDF_VERSION, LINK_PASSWORD_MIN_LENGTH } from '@hushos/crypto/links';
 
-/* 2: the thumbnail is a trailer of the object and the version envelope carries the sizes. */
-export const DRIVE_PROTOCOL_VERSION = 2;
+/*
+ * 2: the thumbnail is a trailer of the object and the version envelope carries the sizes.
+ * 3: objects are padded to a Padmé bucket (content suite 3).
+ */
+export const DRIVE_PROTOCOL_VERSION = 3;
 export const MAX_DEPTH = 64;
 export const ANCESTOR_WALK_CAP = 128;
 export const TOMBSTONE_DAYS = 90;

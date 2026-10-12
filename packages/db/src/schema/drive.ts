@@ -122,10 +122,11 @@ export const driveObjects = pgTable(
         chunkSize: integer('chunk_size').notNull(),
         chunkCount: integer('chunk_count').notNull(),
         contentNonce: bytea('content_nonce').notNull(),
-        // Suite 1 only. Under suite 2 the version envelope holds it, so the server cannot
+        // Suite 1 only. Under suites 2 and 3 the version envelope holds it, so the server cannot
         // subtract it from the stored size and learn whether a thumbnail trailer is there.
         plaintextSize: bigint('plaintext_size', { mode: 'bigint' }),
-        // Declared by the client at begin (the trailer included) and confirmed at the store.
+        // Declared by the client at begin (the trailer and, under suite 3, the padding included)
+        // and confirmed at the store; what the allowance is charged.
         ciphertextSize: bigint('ciphertext_size', { mode: 'bigint' }).notNull(),
         status: text().notNull().$type<'pending' | 'ready' | 'missing'>().default('pending'),
         storageClass: text('storage_class')
@@ -154,7 +155,7 @@ export const driveObjects = pgTable(
         check('drive_objects_class_valid', sql`${table.storageClass} in ('standard', 'cold')`),
         check(
             'drive_objects_framing_valid',
-            sql`${table.chunkSize} > 0 and ${table.chunkCount} >= 1 and octet_length(${table.contentNonce}) = 16 and ((${table.contentSuite} = 1 and ${table.plaintextSize} >= 0 and ${table.ciphertextSize} = ${table.plaintextSize} + 16 * ${table.chunkCount}) or (${table.contentSuite} = 2 and ${table.plaintextSize} is null and ${table.ciphertextSize} >= 16 * ${table.chunkCount}))`,
+            sql`${table.chunkSize} > 0 and ${table.chunkCount} >= 1 and octet_length(${table.contentNonce}) = 16 and ((${table.contentSuite} = 1 and ${table.plaintextSize} >= 0 and ${table.ciphertextSize} = ${table.plaintextSize} + 16 * ${table.chunkCount}) or (${table.contentSuite} in (2, 3) and ${table.plaintextSize} is null and ${table.ciphertextSize} >= 16 * ${table.chunkCount}))`,
         ),
     ],
 );
@@ -171,7 +172,7 @@ export const fileVersions = pgTable(
             .references(() => workspaces.id, { onDelete: 'cascade' }),
         // Null only once purged: retiring the object clears the pointer.
         objectId: uuid('object_id').references(() => driveObjects.id, { onDelete: 'set null' }),
-        // 72 bytes under suite 1 (the key), 84 under suite 2 (the key with the sizes); null once purged.
+        // 72 bytes under suite 1 (the key), 84 under suites 2 and 3 (the key with the sizes); null once purged.
         contentKeyEnvelope: bytea('content_key_envelope'),
         status: text().notNull().$type<'pending' | 'ready' | 'purged'>().default('pending'),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -865,7 +865,7 @@ async function adjustStorage(tx: Tx, workspaceId: string, used: bigint, reserved
         .where(eq(workspaceStorage.workspaceId, workspaceId));
 }
 
-/* The version envelope's length follows the object's suite: the key alone, or the key with the sizes. */
+/* The version envelope's length follows the object's suite: the key alone (1), or the key with the sizes (2 and 3). */
 export function envelopeLengthFor(contentSuite: number) {
     return contentSuite === 1 ? 72 : 84;
 }
