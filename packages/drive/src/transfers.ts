@@ -236,6 +236,9 @@ function isLockError(error: unknown) {
     return error instanceof Error && /locked/i.test(error.message);
 }
 
+/* How long sign-out waits for the server to hear of each stopped upload before it forgets them anyway. */
+const FORGET_TIMEOUT_MS = 5_000;
+
 export function createTransferManager(options: TransferManagerOptions) {
     const {
         rpc,
@@ -651,6 +654,14 @@ export function createTransferManager(options: TransferManagerOptions) {
                 file,
                 index,
             });
+            // Sent before under this key and nonce with other bytes (the file changed under us):
+            // sending these too would hand the store two plaintexts under one nonce. Start over.
+            const before = u.digests.get(part) ?? u.entry?.parts[part]?.digest;
+            if (before !== undefined && before !== encrypted.digest) {
+                u.inFlight.delete(part);
+                if (u.generation === generation) await startOver(u);
+                return;
+            }
             u.digests.set(part, encrypted.digest);
             await journalPart(u, part, { digest: encrypted.digest });
             if (u.generation !== generation || u.item.status !== 'uploading') {
@@ -858,9 +869,11 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
 
     let scheduling = false;
+    /* Set while sign-out forgets everything: nothing new starts in the meantime. */
+    let stopping = false;
     /* Hands out work: start queued files while under the limit, then fill the part pool. */
     async function schedule() {
-        if (scheduling) return;
+        if (scheduling || stopping) return;
         scheduling = true;
         try {
             let active = [...uploads.values()].filter(isActive).length;
@@ -1518,12 +1531,22 @@ export function createTransferManager(options: TransferManagerOptions) {
      * stash's decrypted bytes.
      */
     async function forgetAll() {
-        for (const id of order.slice()) await cancel(id);
-        uploads.clear();
-        order.length = 0;
-        emit();
-        await journal?.clear().catch(() => {});
-        await options.stash?.sweep?.(new Set()).catch(() => {});
+        stopping = true;
+        try {
+            // Every upload at once, and not forever: an offline sign-out must still finish.
+            await Promise.race([
+                Promise.allSettled(order.slice().map((id) => cancel(id))),
+                new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
+            ]);
+            for (const u of uploads.values()) u.generation++;
+            uploads.clear();
+            order.length = 0;
+            emit();
+            await journal?.clear().catch(() => {});
+            await options.stash?.sweep?.(new Set()).catch(() => {});
+        } finally {
+            stopping = false;
+        }
     }
 
     return {

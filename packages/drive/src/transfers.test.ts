@@ -39,6 +39,7 @@ function node(id: string, parentId: string | null = 'root'): DriveNode {
         name: id,
         content: null,
         openError: null,
+        envelopeSuite: 1,
     };
 }
 
@@ -82,6 +83,8 @@ function harness(
         stash?: ReturnType<typeof fakeStash>;
         random?: () => number;
         offline?: () => boolean;
+        /* What the fake worker hashes a chunk to; by name and index unless a test changes the bytes. */
+        digest?: (file: File, index: number) => string;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -91,7 +94,7 @@ function harness(
     let inFlight = 0;
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
-    const digestOf = (file: File, index: number) => `d-${file.name}-${index}`;
+    const digestOf = options.digest ?? ((file: File, index: number) => `d-${file.name}-${index}`);
     const rpc: Rpc = async <K extends keyof CryptoRequests>(
         operation: K,
         input: CryptoRequests[K],
@@ -421,6 +424,29 @@ describe('transfer manager', () => {
         await settle(2_000);
         expect(h.item(second!).status).toBe('done');
         expect(h.server.completed.map((c) => c.id)).toEqual(['up-1', 'up-2']);
+    });
+
+    test('a part retried after the file changed under it starts over, never re-sent under the same nonce', async () => {
+        let encryptions = 0;
+        const h = harness({
+            random: () => 0.5,
+            // The second chunk reads differently the second time it is encrypted.
+            digest: (file, index) =>
+                index === 1 && ++encryptions > 1 ? 'changed' : `d-${file.name}-${index}`,
+            send: async (_objectId, index) => {
+                await new Promise((resolve) => setTimeout(resolve, 20));
+                if (index === 1 && encryptions === 1)
+                    return { ok: false, status: 503, retryable: true, message: 'busy' };
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        const [id] = h.manager.enqueue([{ file: fakeFile(3 * CHUNK), parent: node('root', null) }]);
+        await settle(5_000);
+        // The first object is abandoned, and the changed bytes went out only in a fresh one.
+        expect(h.server.aborted).toContain('up-1');
+        expect(h.calls.filter((c) => c === 'driveUploadPrepare').length).toBeGreaterThan(1);
+        expect(h.server.completed.some((c) => c.id === 'up-1')).toBe(false);
+        expect(h.item(id!).status).not.toBe('failed');
     });
 
     test('a retryable part failure backs off and the file still completes', async () => {
