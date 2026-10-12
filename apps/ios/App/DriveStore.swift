@@ -69,6 +69,12 @@ final class DriveStore {
     var deepFile: Opened?
     var deepSiblings: [Opened] = []
     /* What others shared with this account, opened: the Shared tab and the folder picker read it. */
+    /*
+     * Whose signatures this person can check (their own keys and their verified pins'); nil until
+     * loaded, and until then no item carries a mark: a mark drawn on a guess would be noise.
+     */
+    var signers: TrustedSigners?
+    @ObservationIgnored private var provenanceCache: [String: (stamp: String, value: Provenance?)] = [:]
     var mounts: [ShareMount] = []
     var mountsError: String?
     var mountsLoaded = false
@@ -207,7 +213,7 @@ final class DriveStore {
     private var networkToken: UUID?
 
     /*
-     * The same account signed in again (Change password and Reset sharing keys end every
+     * The same account signed in again (Change password and Rotate account key end every
      * session): the new session's vault takes over in place, so screens and open sheets
      * stay as they are, and the lists catch up from the server under it.
      */
@@ -215,6 +221,7 @@ final class DriveStore {
         guard next !== vault else { return }
         vault = next
         BackgroundTransfers.shared.vault = next
+        Task { await refreshSigners() }
         await sync()
         for id in folders.keys { await refresh(folder: id) }
         await refreshRecents()
@@ -260,6 +267,9 @@ final class DriveStore {
             names[id] = "HushOS"
             myWorkspace = try? await vault.workspaceId()
             Task { await refreshSharing() }
+            Task { await refreshSigners() }
+            // Shares still in an older suite, a re-seal a succession left unfinished, grantees with new keys: sealed again now.
+            Task { [vault] in _ = try? await vault.upgradeShares() }
             // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
             Task { await buildCatalogue() }
             return id
@@ -384,6 +394,33 @@ final class DriveStore {
             mountsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         mountsLoaded = true
+        // Opening shares may have moved a granter's pin along their succession: whose signatures count changed with it.
+        await refreshSigners()
+    }
+
+    /* Reads whose signatures count again: after the pins change (someone added or checked) or the identity does. */
+    func refreshSigners() async {
+        await vault.forgetSigners()
+        guard let next = try? await vault.signers() else { return }
+        if next != signers {
+            provenanceCache = [:]
+            signers = next
+        }
+    }
+
+    /*
+     * The Unverified mark an item carries, or nil: verified, or not known yet. Kept per record
+     * (the signature, metadata version and current version), since rows ask on every draw.
+     */
+    func provenance(of item: Opened) -> Provenance? {
+        guard let signers else { return nil }
+        let node = item.node
+        let stamp = [node.workspaceId, String(node.metadataVersion), node.metadataSignature ?? "-", node.metadataSigner?.id ?? "-",
+                     node.currentVersion?.id ?? "-", node.currentVersion?.signature ?? "-", node.currentVersion?.signer?.id ?? "-"].joined(separator: "|")
+        if let cached = provenanceCache[node.id], cached.stamp == stamp { return cached.value }
+        let value = signers.provenance(of: node)
+        provenanceCache[node.id] = (stamp, value)
+        return value
     }
 
     /* The nearest folder, from `folderId` up, that is shared: the one the access banner speaks for. */

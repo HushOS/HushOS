@@ -446,6 +446,13 @@ struct InfoSheet: View {
                     .textCase(nil)
                     .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
                 }
+                if let provenance = store.provenance(of: item) {
+                    Section {
+                        UnverifiedMark(provenance: provenance, row: true).alpineRow()
+                    } footer: {
+                        Text(provenance.explanation)
+                    }
+                }
                 Section {
                     fact("Kind", kind)
                     if let size = item.size { fact("Size", formatBytes(Int64(size))) }

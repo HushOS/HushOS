@@ -242,6 +242,14 @@ final class BackgroundTransfers {
 
     func fraction(of record: Record) -> Double {
         guard record.total > 0 else { return 0 }
+        // In the file's own bytes when its size is known: parts of padding alone move nothing.
+        if let size = record.size, size >= 0 {
+            var pieces: [UInt64: Double] = [:]
+            for (piece, moved) in inFlight[record.id] ?? [:] where piece >= 0 { pieces[UInt64(piece)] = moved }
+            let landed = record.kind == .upload ? record.etags.keys.map { $0 - 1 } : Array(record.fetched)
+            for piece in landed where piece >= 0 { pieces[UInt64(piece)] = 1 }
+            return FileProgress.fraction(size: UInt64(size), pieces: pieces)
+        }
         let moving = inFlight[record.id]?.values.reduce(0, +) ?? 0
         return min(1, (Double(record.landed) + moving) / Double(record.total))
     }

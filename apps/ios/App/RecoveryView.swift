@@ -438,7 +438,7 @@ private struct ScannerView: UIViewControllerRepresentable {
     }
 }
 
-/* After the reset: the new phrase, Save the kit, then the three-word check, as after Reset sharing keys. */
+/* After the reset: the new phrase, Save the kit, then the three-word check, as after Rotate account key. */
 private struct NewPhraseStep: View {
     @Environment(AppModel.self) private var model
     let account: RecoveredAccount

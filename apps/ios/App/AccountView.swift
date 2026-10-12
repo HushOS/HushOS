@@ -452,12 +452,13 @@ struct StorageFullSheet: View {
 
 /* MARK: Advanced */
 
-/* The rare, heavy things: resetting sharing keys, the account ID support may ask for, the server, and deleting the account. */
+/* The rare, heavy things: replacing sharing keys, rotating the account key, the account ID support may ask for, the server, and deleting the account. */
 struct AdvancedView: View {
     @Environment(AppModel.self) private var model
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var resetting = false
+    @State private var replacing = false
     @State private var deleting = false
 
     var body: some View {
@@ -467,10 +468,10 @@ struct AdvancedView: View {
                     .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
             }
             Section {
-                Button { resetting = true } label: {
+                Button { replacing = true } label: {
                     HStack(spacing: Alpine.Space.s3) {
-                        SettingsGlyph(symbol: "exclamationmark.shield")
-                        Text("Reset sharing keys").foregroundStyle(Alpine.ink)
+                        SettingsGlyph(symbol: "key")
+                        Text("Replace sharing keys").foregroundStyle(Alpine.ink)
                         Spacer()
                         Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
                     }
@@ -478,7 +479,21 @@ struct AdvancedView: View {
                 }
                 .alpineRow()
             } footer: {
-                Text("Only if you think someone saw your password or recovery phrase. You get a new recovery phrase and your other devices are signed out. Files, shares and links stay as they are.")
+                Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.")
+            }
+            Section {
+                Button { resetting = true } label: {
+                    HStack(spacing: Alpine.Space.s3) {
+                        SettingsGlyph(symbol: "exclamationmark.shield")
+                        Text("Rotate account key").foregroundStyle(Alpine.ink)
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .alpineRow()
+            } footer: {
+                Text("A new master key for your account. Your files, sharing keys and links stay as they are.")
             }
             Section {
                 if let id = model.user?.id {
@@ -525,6 +540,7 @@ struct AdvancedView: View {
         .navigationTitle("Advanced")
         .screenChrome(title: "Advanced", back: { dismiss() })
         .sheet(isPresented: $resetting) { ResetKeysSheet().environment(store) }
+        .sheet(isPresented: $replacing) { ReplaceKeysSheet().environment(store) }
         .sheet(isPresented: $deleting) { DeleteAccountSheet() }
     }
 }
@@ -622,7 +638,7 @@ struct ChangePasswordSheet: View {
 struct PasswordField: View {
     let label: String
     @Binding var text: String
-    /* Nil for a password typed only to confirm (Reset sharing keys, Delete account): not a sign-in, so nothing to save. */
+    /* Nil for a password typed only to confirm (Rotate account key, Delete account): not a sign-in, so nothing to save. */
     var content: UITextContentType? = .password
 
     var body: some View {
@@ -786,7 +802,7 @@ struct RecoveryPhraseSheet: View {
     }
 }
 
-/* Was "Rotate keys". Says when to use it and what changes, then shows the new phrase until it's saved. */
+/* Rotate account key (was "Rotate keys", then "Reset sharing keys"). Says when to use it and what changes, then shows the new phrase until it's saved. */
 struct ResetKeysSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -818,8 +834,8 @@ struct ResetKeysSheet: View {
                 } else {
                     Section {} header: {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                            Text("Use this if you think someone saw your password or recovery phrase.").foregroundStyle(Alpine.ink)
-                            Text("• You get a new recovery phrase. The old one stops working.\n• Your other devices are signed out.\n• Your files, shares and links stay as they are.")
+                            Text("A new master key for your account. Your files, sharing keys and links stay as they are.").foregroundStyle(Alpine.ink)
+                            Text("• Use it if you think someone saw your password or recovery phrase.\n• You get a new recovery phrase. The old one stops working.\n• Your other devices are signed out.")
                                 .foregroundStyle(Alpine.inkMuted)
                         }
                         .font(Theme.Text.callout).textCase(nil)
@@ -831,14 +847,14 @@ struct ResetKeysSheet: View {
                         Text("Enter your password to confirm.")
                     }
                     Section {
-                        Button { reset() } label: { Text(pending ? "Resetting…" : "Reset sharing keys").frame(maxWidth: .infinity) }
+                        Button { reset() } label: { Text(pending ? "Rotating…" : "Rotate account key").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle()).disabled(pending || password.isEmpty)
                             .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
                     }
                 }
             }
             .alpineGrouped()
-            .navigationTitle(phrase == nil ? "Reset sharing keys" : "Your new recovery phrase")
+            .navigationTitle(phrase == nil ? "Rotate account key" : "Your new recovery phrase")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if phrase == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } } }
             .interactiveDismissDisabled(phrase != nil || pending)
@@ -860,6 +876,77 @@ struct ResetKeysSheet: View {
                 // Every session ended with the reset; sign in again under the new key.
                 if let email = model.user?.email { try await model.signIn(email: email, password: password) }
                 phrase = made
+            } catch {
+                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            pending = false
+        }
+    }
+}
+
+/*
+ * Replacing the sharing keys by a succession: new keys signed by the old ones. People who
+ * checked the old words follow the signature; what was shared is sealed again under the new
+ * keys. Distinct from Rotate account key, which replaces the master key and the phrase.
+ */
+struct ReplaceKeysSheet: View {
+    @Environment(DriveStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var pending = false
+    @State private var error = ""
+    @State private var outcome: RotationOutcome?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {} header: {
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.").foregroundStyle(Alpine.ink)
+                        Text("• Your twelve words change. People who checked the old ones see that your new keys are signed by them.\n• Everything you shared is sealed again under the new keys.\n• Your password, recovery phrase and devices stay as they are.")
+                            .foregroundStyle(Alpine.inkMuted)
+                    }
+                    .font(Theme.Text.callout).textCase(nil)
+                }
+                if let outcome {
+                    Section {
+                        Text(outcome.rotated == 1 ? "Done. 1 share was sealed again." : "Done. \(outcome.rotated) shares were sealed again.").foregroundStyle(Alpine.ink).alpineRow()
+                        ForEach(outcome.skipped, id: \.self) { reason in
+                            Text(reason).font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
+                        }
+                    } footer: {
+                        if !outcome.skipped.isEmpty { Text("Those shares still open with your old keys until you share again.") }
+                    }
+                } else {
+                    if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
+                    Section {
+                        Button { replace() } label: { Text(pending ? "Replacing…" : "Replace sharing keys").frame(maxWidth: .infinity) }
+                            .buttonStyle(PrimaryCapsuleStyle()).disabled(pending)
+                            .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    }
+                }
+            }
+            .alpineGrouped()
+            .navigationTitle("Replace sharing keys")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if outcome != nil {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                } else {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(pending) }
+                }
+            }
+            .interactiveDismissDisabled(pending)
+        }
+    }
+
+    private func replace() {
+        pending = true
+        error = ""
+        Task {
+            do {
+                outcome = try await store.vault.replaceSharingKeys()
+                await store.refreshSigners()
+                await store.refreshSharing()
             } catch {
                 self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }

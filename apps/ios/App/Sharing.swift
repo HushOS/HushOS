@@ -709,7 +709,10 @@ struct CheckContactView: View {
                     .alpineRow()
                 }
                 Section {
-                    if found.recheck && !found.changed {
+                    if found.followed || (found.pinned.map(ReplacedKeysSeen.notice) == true && !found.changed && !found.recheck) {
+                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure, ask \(first) to read you their twelve words. If they match these, it’s really them.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
+                    } else if found.recheck && !found.changed {
                         Text("You added \(first) before HushOS checked both of their keys. Ask \(first) to open People you share with in HushOS and read you their twelve words. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.changed {
@@ -731,7 +734,7 @@ struct CheckContactView: View {
                 }
                 if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
                 Section {
-                    if found.pinned != nil && !found.changed && !found.recheck {
+                    if found.pinned != nil && !found.changed && !found.recheck && found.pinned.map(ReplacedKeysSeen.notice) != true {
                         Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in people you share with").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle())
                     } else {
@@ -823,10 +826,26 @@ struct PeopleView: View {
                         .padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     if let error { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
+                    // Quiet: a succession their old keys signed is no alarm, but comparing the words again is still the surest check.
+                    ForEach(pins.filter(ReplacedKeysSeen.notice)) { pin in
+                        VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                            Text("\(firstName(pin)) replaced their sharing keys; the change is signed by their previous keys.")
+                                .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).fixedSize(horizontal: false, vertical: true)
+                            Button("Compare words again") { rechecking = pin }
+                                .font(Theme.Text.footnote.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, Alpine.Space.s2)
+                        .alpineRow()
+                    }
                     ForEach(pins) { pin in
                         Menu {
                             // A pin that vouches for nothing has no words worth reading back: look them up and compare afresh.
-                            Button("Check it’s them", systemImage: "checkmark.shield") { if pin.verified { checking = pin } else { rechecking = pin } }
+                            if ReplacedKeysSeen.notice(pin) {
+                                // Followed along their succession: the words are new, so they are compared against a fresh lookup.
+                                Button("Compare words again", systemImage: "checkmark.shield") { rechecking = pin }
+                            } else {
+                                Button("Check it’s them", systemImage: "checkmark.shield") { if pin.verified { checking = pin } else { rechecking = pin } }
+                            }
                             Divider()
                             Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }.tint(Alpine.danger)
                         } label: {
@@ -839,6 +858,8 @@ struct PeopleView: View {
                                 Spacer(minLength: 0)
                                 if !pin.verified {
                                     Text("Check their words again").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
+                                } else if ReplacedKeysSeen.notice(pin) {
+                                    Text("New keys").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                                 } else if let added = parseDate(pin.pinnedAt) {
                                     Text("Added \(changedLabel(added) ?? "")").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                                 }
@@ -872,7 +893,7 @@ struct PeopleView: View {
                 CheckContactView(email: "") { pin in
                     adding = false
                     store.notify("\(pin.name.isEmpty ? pin.email : pin.name) added")
-                    Task { await load() }
+                    Task { await load(); await store.refreshSigners() }
                 }
                 .environment(store)
             }
@@ -881,7 +902,7 @@ struct PeopleView: View {
                 CheckContactView(email: pin.email, intro: "Check it’s them again before you share with them or open what they share.") { pin in
                     rechecking = nil
                     store.notify("\(pin.name.isEmpty ? pin.email : pin.name) checked")
-                    Task { await load() }
+                    Task { await load(); await store.refreshSigners() }
                 }
                 .environment(store)
             }
@@ -894,6 +915,7 @@ struct PeopleView: View {
                         do {
                             try await store.vault.unpin(pin)
                             store.notify("\(firstName(pin)) removed")
+                            await store.refreshSigners()
                         } catch {
                             store.notify("Couldn’t remove them. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
                         }
