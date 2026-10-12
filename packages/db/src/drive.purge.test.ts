@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import {
@@ -40,7 +46,7 @@ async function storage() {
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
     const id = randomUUID();
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: account.workspaceId,
         userId: account.userId,
         folders: [
@@ -64,7 +70,7 @@ async function file(parentId: string, parentKeyEpoch: number, plaintext = 1n * M
     const chunkCount = Number(plaintext === 0n ? 1n : (plaintext + 8n * MiB - 1n) / (8n * MiB));
     const ciphertext = plaintext + 16n * BigInt(chunkCount);
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: account.workspaceId,
         userId: account.userId,
         node: {
@@ -109,7 +115,8 @@ async function outboxHas(objectId: string) {
 beforeEach(async () => {
     await resetDatabase();
     account = await createTestAccount({ quotaBytes: 100n * MiB });
-    const created = await drive.createRoot({
+    await createTestIdentity(account.userId);
+    const created = await signed.createRoot({
         workspaceId: account.workspaceId,
         userId: account.userId,
         id: randomUUID(),
@@ -210,7 +217,7 @@ describe('delete forever', () => {
         const target = await file(rootId, rootEpoch, 1n * MiB);
         const objectId = randomUUID();
         const size = 2n * MiB + 16n;
-        const begun = await drive.beginUpload({
+        const begun = await signed.beginUpload({
             workspaceId: account.workspaceId,
             userId: account.userId,
             node: {
@@ -297,7 +304,7 @@ describe('the sweeps', () => {
         // A second version supersedes the first.
         const objectId = randomUUID();
         const size = 2n * MiB + 16n;
-        const begun = await drive.beginUpload({
+        const begun = await signed.beginUpload({
             workspaceId: account.workspaceId,
             userId: account.userId,
             node: {
@@ -439,7 +446,7 @@ describe('the sweeps', () => {
             // A second version of `versioned` makes the first one superseded.
             const objectId = randomUUID();
             const size = 3n * MiB + 16n;
-            const begun = await drive.beginUpload({
+            const begun = await signed.beginUpload({
                 workspaceId: account.workspaceId,
                 userId: account.userId,
                 node: {

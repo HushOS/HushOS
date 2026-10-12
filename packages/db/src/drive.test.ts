@@ -1,7 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { driveNodes, workspaces } from './schema';
@@ -27,7 +33,7 @@ async function epochs(count: number) {
 
 async function makeRoot() {
     const [keyEpoch] = await epochs(1);
-    const result = await drive.createRoot({
+    const result = await signed.createRoot({
         workspaceId: account.workspaceId,
         userId: account.userId,
         id: randomUUID(),
@@ -44,7 +50,7 @@ async function makeRoot() {
 
 async function folder(parentId: string, parentKeyEpoch: number) {
     const [keyEpoch] = await epochs(1);
-    const result = await drive.createFolders({
+    const result = await signed.createFolders({
         workspaceId: account.workspaceId,
         userId: account.userId,
         folders: [
@@ -72,6 +78,7 @@ async function node(id: string) {
 beforeEach(async () => {
     await resetDatabase();
     account = await createTestAccount();
+    await createTestIdentity(account.userId);
     rootId = (await makeRoot()).id;
 });
 afterAll(closeDatabase);
@@ -79,7 +86,7 @@ afterAll(closeDatabase);
 describe('root and epochs', () => {
     test('a workspace has exactly one root, and a second create returns it', async () => {
         const [keyEpoch] = await epochs(1);
-        const again = await drive.createRoot({
+        const again = await signed.createRoot({
             workspaceId: account.workspaceId,
             userId: account.userId,
             id: randomUUID(),
@@ -96,7 +103,7 @@ describe('root and epochs', () => {
 
     test('an epoch the workspace never issued is refused', async () => {
         const root = await node(rootId);
-        const result = await drive.createFolders({
+        const result = await signed.createFolders({
             workspaceId: account.workspaceId,
             userId: account.userId,
             folders: [
@@ -130,7 +137,7 @@ describe('create and list', () => {
         const one = randomUUID();
         const two = randomUUID();
         const three = randomUUID();
-        const result = await drive.createFolders({
+        const result = await signed.createFolders({
             workspaceId: account.workspaceId,
             userId: account.userId,
             folders: [
@@ -183,7 +190,7 @@ describe('create and list', () => {
 
     test('a batch that wraps under the wrong parent epoch is refused whole', async () => {
         const [e1] = await epochs(1);
-        const result = await drive.createFolders({
+        const result = await signed.createFolders({
             workspaceId: account.workspaceId,
             userId: account.userId,
             folders: [
@@ -212,7 +219,7 @@ describe('create and list', () => {
         for (let depth = 1; depth <= drive.MAX_DEPTH; depth++)
             parent = await node((await folder(parent.id, parent.keyEpoch)).id);
         const [e] = await epochs(1);
-        const result = await drive.createFolders({
+        const result = await signed.createFolders({
             workspaceId: account.workspaceId,
             userId: account.userId,
             folders: [
@@ -271,8 +278,9 @@ describe('rename', () => {
     test('a stale metadata version or epoch is refused with the current row', async () => {
         const root = await node(rootId);
         const a = await folder(rootId, root.keyEpoch);
-        const first = await drive.renameNode({
+        const first = await signed.renameNode({
             workspaceId: account.workspaceId,
+            userId: account.userId,
             nodeId: a.id,
             metadataVersion: 1,
             keyEpoch: a.keyEpoch,
@@ -280,8 +288,9 @@ describe('rename', () => {
         });
         expect(first.status).toBe('ok');
         if (first.status === 'ok') expect(first.node.metadataVersion).toBe(2);
-        const replay = await drive.renameNode({
+        const replay = await signed.renameNode({
             workspaceId: account.workspaceId,
+            userId: account.userId,
             nodeId: a.id,
             metadataVersion: 1,
             keyEpoch: a.keyEpoch,
@@ -289,8 +298,9 @@ describe('rename', () => {
         });
         expect(replay.status).toBe('stale');
         if (replay.status === 'stale') expect(replay.node.metadataVersion).toBe(2);
-        const rotated = await drive.renameNode({
+        const rotated = await signed.renameNode({
             workspaceId: account.workspaceId,
+            userId: account.userId,
             nodeId: a.id,
             metadataVersion: 2,
             keyEpoch: a.keyEpoch + 1,

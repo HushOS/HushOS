@@ -7,10 +7,13 @@ import type { Capabilities, DriveErrorCode } from './protocol';
  * are Base64url strings, byte counts decimal strings, dates ISO strings.
  */
 
+/* Who the server says wrote a record: for display only; the signature is what a reader checks. */
+export type Signer = { id: string; name: string; email: string };
+
 export type VersionView = {
     id: string;
     objectId: string;
-    /* 72 bytes under suite 1, 84 under suite 2, where it also seals the sizes. */
+    /* 72 bytes under suite 1, 84 under suites 2 and 3, where it also seals the sizes. */
     contentKeyEnvelope: string;
     status: 'pending' | 'ready' | 'purged';
     objectStatus: 'pending' | 'ready' | 'missing';
@@ -22,6 +25,12 @@ export type VersionView = {
     plaintextSize: string | null;
     ciphertextSize: string;
     readyAt: string | null;
+    /*
+     * The account that sealed the content-key envelope and its Ed25519 signature
+     * over the version statement (docs/integrity-design.md); null before signatures.
+     */
+    signer: Signer | null;
+    signature: string | null;
 };
 
 export type NodeView = {
@@ -48,6 +57,9 @@ export type NodeView = {
      * beside this one while a workspace is re-wrapped.
      */
     envelopeSuite: number;
+    /* The account that wrote the metadata envelope and its signature; null before signatures. */
+    metadataSigner: Signer | null;
+    metadataSignature: string | null;
 };
 
 export type NodeEnvelopes = {
@@ -55,6 +67,8 @@ export type NodeEnvelopes = {
     parentKeyEpoch: number;
     keyEnvelope: string;
     metadataEnvelope: string;
+    /* The writer's Ed25519 signature over the metadata statement, at metadata version 1. */
+    metadataSignature: string;
 };
 
 export type WorkspaceView = {
@@ -111,6 +125,9 @@ export type RotationWorkNode = NodeView & {
         contentKeyEnvelope: string;
         contentSuite: number;
         plaintextSize: string | null;
+        /* Who signed the envelope being replaced. */
+        signer: Signer | null;
+        signature: string | null;
     }[];
     /* Each live share with the grantee's served identity, for the owner's pin check before re-sealing. */
     shares: { id: string; granteeUserId: string; grantee: ServedIdentity }[];
@@ -130,13 +147,21 @@ export type RotateNodeWire = {
     keyEnvelope: string;
     rotated: {
         metadataEnvelope: string;
-        versions: { id: string; contentKeyEnvelope: string }[];
+        /* The rotating account's signature over the node's unchanged metadata version. */
+        metadataSignature: string;
+        versions: { id: string; contentKeyEnvelope: string; signature: string }[];
         shares: { id: string; shareEnvelope: string }[];
         links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
         unsealableLinks: string[];
     } | null;
 };
-export type RotateOutcome = 'ok' | 'stale' | 'not-found' | 'parent-not-ready' | 'already';
+export type RotateOutcome =
+    | 'ok'
+    | 'stale'
+    | 'not-found'
+    | 'parent-not-ready'
+    | 'already'
+    | 'bad-signature';
 
 export type Listing = {
     folder: NodeView;
@@ -167,12 +192,14 @@ export type UploadNodeInput =
     | ({ existing: false; id: string; parentId: string } & NodeEnvelopes)
     | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
 
+/* Either way a fresh envelope, signed over the version where it lands (the sibling's id, if so). */
 export type UploadAttachInput =
-    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string }
+    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string; versionSignature: string }
     | {
           mode: 'sibling';
           node: { id: string; parentId: string } & NodeEnvelopes;
           contentKeyEnvelope: string;
+          versionSignature: string;
       };
 
 export type UploadView = {
@@ -197,6 +224,8 @@ export type CopyInput = {
     node: { id: string; parentId: string } & NodeEnvelopes;
     versionId: string;
     contentKeyEnvelope: string;
+    /* Over the copy's node and version, the source version's object and its content suite. */
+    versionSignature: string;
 };
 
 export type ShareRole = 'viewer' | 'editor';
@@ -303,6 +332,8 @@ export interface DriveApi {
             versionId: string;
             objectId: string;
             contentKeyEnvelope: string;
+            /* The writer's signature over the version statement; the suite in it is 3. */
+            versionSignature: string;
             contentNonce: string;
             contentSuite: number;
             chunkCount: number;
@@ -355,7 +386,13 @@ export interface DriveApi {
     rename(
         workspaceId: string,
         nodeId: string,
-        input: { metadataVersion: number; keyEpoch: number; metadataEnvelope: string },
+        input: {
+            metadataVersion: number;
+            keyEpoch: number;
+            metadataEnvelope: string;
+            /* Signed over `metadataVersion + 1`, the version the server stores. */
+            metadataSignature: string;
+        },
     ): Promise<{ node: NodeView }>;
     move(
         workspaceId: string,

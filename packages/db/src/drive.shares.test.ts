@@ -1,9 +1,15 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { accountIdentities, workspaceKeys } from './schema';
+import { workspaceKeys } from './schema';
 
 /*
  * Authorization is the walk. A member owns everything; a grantee holds the
@@ -27,7 +33,7 @@ async function epoch() {
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
     const id = randomUUID();
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -49,7 +55,7 @@ async function folder(parentId: string, parentKeyEpoch: number) {
 async function file(parentId: string, parentKeyEpoch: number) {
     const plaintext = 1n * MiB;
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         node: {
@@ -101,16 +107,7 @@ async function share(
     });
 }
 async function identityFor(userId: string) {
-    await db.insert(accountIdentities).values({
-        userId,
-        wrappingSalt: randomBytes(32),
-        encryptionPublicKey: randomBytes(32),
-        encryptionPrivateKeyNonce: randomBytes(24),
-        encryptedEncryptionPrivateKey: randomBytes(48),
-        signingPublicKey: randomBytes(32),
-        signingSeedNonce: randomBytes(24),
-        encryptedSigningSeed: randomBytes(48),
-    });
+    await createTestIdentity(userId);
 }
 
 beforeEach(async () => {
@@ -129,7 +126,7 @@ beforeEach(async () => {
     });
     // Every account has an identity; the owner's listing joins the grantee's.
     for (const person of [owner, guest, stranger]) await identityFor(person.userId);
-    const created = await drive.createRoot({
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),

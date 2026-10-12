@@ -1,7 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import { driveLinks } from './schema';
@@ -27,7 +33,7 @@ async function epoch() {
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
     const id = randomUUID();
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -49,7 +55,7 @@ async function folder(parentId: string, parentKeyEpoch: number) {
 async function file(parentId: string, parentKeyEpoch: number) {
     const plaintext = 1n * MiB;
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         node: {
@@ -107,7 +113,8 @@ async function link(
 beforeEach(async () => {
     await resetDatabase();
     owner = await createTestAccount();
-    const created = await drive.createRoot({
+    await createTestIdentity(owner.userId);
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),

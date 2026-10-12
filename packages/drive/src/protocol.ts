@@ -22,7 +22,8 @@ export { LINK_KDF_VERSION, LINK_PASSWORD_MIN_LENGTH } from '@hushos/crypto/links
 
 /*
  * 2: the thumbnail is a trailer of the object and the version envelope carries the sizes.
- * 3: objects are padded to a Padmé bucket (content suite 3).
+ * 3: objects are padded to a Padmé bucket (content suite 3), and every metadata and
+ *    content-key envelope carries its writer's signature.
  */
 export const DRIVE_PROTOCOL_VERSION = 3;
 export const MAX_DEPTH = 64;
@@ -71,7 +72,9 @@ export type DriveErrorCode =
     | 'invalid'
     | 'expired'
     | 'rotating'
-    | 'forbidden';
+    | 'forbidden'
+    /* A write's signature did not verify against the writer's current signing key. */
+    | 'bad-signature';
 
 /* ------------------------------------------------------------------------- */
 /* The client header                                                          */

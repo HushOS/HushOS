@@ -1,11 +1,17 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import * as rotations from './rotations';
-import { accountIdentities, driveLinks, driveNodes, driveShares, workspaceKeys } from './schema';
+import { driveLinks, driveNodes, driveShares, workspaceKeys } from './schema';
 
 /*
  * Rotation on the server: one per workspace, work listed parents first and
@@ -29,7 +35,7 @@ async function epoch() {
     return (await drive.allocateKeyEpochs(owner.workspaceId, 1))!.from;
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -51,7 +57,7 @@ async function folder(parentId: string, parentKeyEpoch: number) {
 async function file(parentId: string, parentKeyEpoch: number) {
     const plaintext = 1n * MiB;
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         node: {
@@ -91,7 +97,9 @@ async function current(id: string) {
 function rotated(
     node: { id: string; changeSeq: number | null },
     parentKeyEpoch: number,
-    extra: Partial<NonNullable<rotations.RotatedNodeInput['rotated']>> = {},
+    extra: Partial<
+        Omit<NonNullable<rotations.RotatedNodeInput['rotated']>, 'versions' | 'metadataSignature'>
+    > & { versions?: { id: string; contentKeyEnvelope: Buffer }[] } = {},
 ) {
     return {
         id: node.id,
@@ -121,18 +129,8 @@ beforeEach(async () => {
         wrappingNonce: randomBytes(24),
         encryptedKey: randomBytes(48),
     });
-    for (const userId of [owner.userId, guest.userId])
-        await db.insert(accountIdentities).values({
-            userId,
-            wrappingSalt: randomBytes(32),
-            encryptionPublicKey: randomBytes(32),
-            encryptionPrivateKeyNonce: randomBytes(24),
-            encryptedEncryptionPrivateKey: randomBytes(48),
-            signingPublicKey: randomBytes(32),
-            signingSeedNonce: randomBytes(24),
-            encryptedSigningSeed: randomBytes(48),
-        });
-    const created = await drive.createRoot({
+    for (const userId of [owner.userId, guest.userId]) await createTestIdentity(userId);
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),
@@ -213,7 +211,12 @@ describe('rotation', () => {
         ).toBe('active');
         expect((await drive.getPersonalWorkspace(owner.userId))?.rotation?.nodeId).toBe(project.id);
 
-        const ws = { workspaceId: owner.workspaceId, rootId: project.id, targetEpoch };
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch,
+            userId: owner.userId,
+        };
         const work = await rotations.listRotationWork(ws);
         expect(work.nodes.map((n) => n.id)).toEqual([project.id, inner.id, doc.id]);
         expect(work.nodes[0]!.shares.map((s) => s.granteeUserId)).toEqual([guest.userId]);
@@ -227,11 +230,11 @@ describe('rotation', () => {
         expect(work.nodes.some((n) => n.id === outside.id)).toBe(false);
 
         // A child before its parent is refused; a stale change sequence is refused.
+        expect(await signed.rotateNodes({ ...ws, nodes: [rotated(inner, targetEpoch)] })).toEqual([
+            { id: inner.id, status: 'parent-not-ready' },
+        ]);
         expect(
-            await rotations.rotateNodes({ ...ws, nodes: [rotated(inner, targetEpoch)] }),
-        ).toEqual([{ id: inner.id, status: 'parent-not-ready' }]);
-        expect(
-            await rotations.rotateNodes({
+            await signed.rotateNodes({
                 ...ws,
                 nodes: [rotated({ id: project.id, changeSeq: project.changeSeq! - 1 }, rootEpoch)],
             }),
@@ -239,7 +242,7 @@ describe('rotation', () => {
 
         // The root, with its share re-sealed; the previous envelope and grant stay.
         const before = await current(project.id);
-        const first = await rotations.rotateNodes({
+        const first = await signed.rotateNodes({
             ...ws,
             nodes: [
                 rotated(project, rootEpoch, {
@@ -273,9 +276,9 @@ describe('rotation', () => {
             inner.id,
             doc.id,
         ]);
-        expect(
-            await rotations.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] }),
-        ).toEqual([{ id: project.id, status: 'stale' }]);
+        expect(await signed.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] })).toEqual([
+            { id: project.id, status: 'stale' },
+        ]);
 
         // While it runs: nothing leaves the subtree, and a reached node cannot move.
         expect(
@@ -319,7 +322,7 @@ describe('rotation', () => {
 
         // inner: one link re-sealed, the legacy password link cannot be and is revoked.
         const innerNow = await current(inner.id);
-        const second = await rotations.rotateNodes({
+        const second = await signed.rotateNodes({
             ...ws,
             nodes: [
                 rotated(innerNow, targetEpoch, {
@@ -343,7 +346,7 @@ describe('rotation', () => {
         const docNow = await current(doc.id);
         const newContent = env();
         expect(
-            await rotations.rotateNodes({
+            await signed.rotateNodes({
                 ...ws,
                 nodes: [
                     rotated(docNow, targetEpoch, {
@@ -359,7 +362,7 @@ describe('rotation', () => {
         // Not finished while work remains; the moved-in folder is rotated last.
         expect(await rotations.finishRotation(ws)).toBe(false);
         const outsideNow = await current(outside.id);
-        await rotations.rotateNodes({ ...ws, nodes: [rotated(outsideNow, targetEpoch)] });
+        await signed.rotateNodes({ ...ws, nodes: [rotated(outsideNow, targetEpoch)] });
         expect((await rotations.listRotationWork(ws)).nodes).toEqual([]);
         expect(await rotations.finishRotation(ws)).toBe(true);
         for (const id of [project.id, inner.id, doc.id, outside.id]) {
@@ -410,8 +413,9 @@ describe('rotation', () => {
             workspaceId: owner.workspaceId,
             rootId: project.id,
             targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
         };
-        await rotations.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] });
+        await signed.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] });
         // A folder created under the rotated root draws an epoch above the target but is
         // wrapped under... the new key already, so it is not work. Create one under the
         // unrotated child instead: wrapped under inner's old key, its own epoch above target.
@@ -419,7 +423,7 @@ describe('rotation', () => {
         expect(late.keyEpoch).toBeGreaterThan(ws.targetEpoch);
         // inner rotates; the share on it is not re-sealed by the client: revoked, not left dead.
         const innerNow = await current(inner.id);
-        await rotations.rotateNodes({ ...ws, nodes: [rotated(innerNow, ws.targetEpoch)] });
+        await signed.rotateNodes({ ...ws, nodes: [rotated(innerNow, ws.targetEpoch)] });
         const [share] = await db
             .select()
             .from(driveShares)
@@ -430,7 +434,7 @@ describe('rotation', () => {
         expect(work.nodes.map((n) => n.id)).toEqual([late.id]);
         const lateNow = await current(late.id);
         expect(
-            await rotations.rotateNodes({
+            await signed.rotateNodes({
                 ...ws,
                 nodes: [
                     {
@@ -452,7 +456,7 @@ describe('rotation', () => {
         // Sending a full rotation for a rewrap, or a rewrap for a rotation, is refused.
         expect(
             (
-                await rotations.rotateNodes({
+                await signed.rotateNodes({
                     ...ws,
                     nodes: [rotated(await current(late.id), ws.targetEpoch)],
                 })

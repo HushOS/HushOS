@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import { heldObjectCondition } from './reports';
+import { metadataStatement, verifySignature, versionStatement } from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -204,6 +205,8 @@ async function raiseHeightBounds(tx: Tx, ancestors: Ancestor[], leafHeight: numb
 const nodeColumns = {
     id: driveNodes.id,
     envelopeSuite: driveNodes.envelopeSuite,
+    metadataSignerId: driveNodes.metadataSignerId,
+    metadataSignature: driveNodes.metadataSignature,
     workspaceId: driveNodes.workspaceId,
     parentId: driveNodes.parentId,
     kind: driveNodes.kind,
@@ -235,12 +238,21 @@ const versionColumns = {
     contentSuite: driveObjects.contentSuite,
     objectStatus: driveObjects.status,
     readyAt: fileVersions.readyAt,
+    signerId: fileVersions.signerId,
+    signature: fileVersions.signature,
 };
-export type NodeRow = Omit<typeof driveNodes.$inferSelect, 'createdBy' | 'purgedAt'>;
+/* Who wrote a record, as the server knows the account: for display, never for trust. */
+export type Signer = { id: string; name: string; email: string };
+type RawNodeRow = Omit<typeof driveNodes.$inferSelect, 'createdBy' | 'purgedAt'>;
+export type NodeRow = RawNodeRow & { metadataSigner: Signer | null };
+type RawVersionRow = Omit<VersionRow, 'signer'>;
 export type VersionRow = {
     id: string;
     objectId: string;
     contentKeyEnvelope: Buffer | null;
+    signerId: string | null;
+    signature: Buffer | null;
+    signer: Signer | null;
     status: 'pending' | 'ready' | 'purged';
     /* Suite 1 only; null under suite 2, where the envelope carries it. */
     plaintextSize: bigint | null;
@@ -253,6 +265,42 @@ export type VersionRow = {
     readyAt: Date | null;
 };
 
+/* The accounts behind these signer ids, by id; a deleted account is simply absent. */
+export async function signersById(tx: Tx | typeof db, ids: (string | null | undefined)[]) {
+    const unique = [...new Set(ids.filter((id): id is string => typeof id === 'string'))];
+    if (!unique.length) return new Map<string, Signer>();
+    const rows = await tx
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(inArray(users.id, unique));
+    return new Map(rows.map((row) => [row.id, row]));
+}
+function withVersionSigner(version: RawVersionRow, signers: Map<string, Signer>): VersionRow {
+    return {
+        ...version,
+        signer: version.signerId ? (signers.get(version.signerId) ?? null) : null,
+    };
+}
+/* Version rows with who signed each, in one lookup. */
+async function signVersions<T extends RawVersionRow>(tx: Tx | typeof db, versions: T[]) {
+    const signers = await signersById(
+        tx,
+        versions.map((version) => version.signerId),
+    );
+    return versions.map((version) => ({ ...version, ...withVersionSigner(version, signers) }));
+}
+/* Node rows read without their versions (an update's returning clause), with their signers. */
+async function signNodes(tx: Tx, nodes: RawNodeRow[]): Promise<NodeRow[]> {
+    const signers = await signersById(
+        tx,
+        nodes.map((node) => node.metadataSignerId),
+    );
+    return nodes.map((node) => ({
+        ...node,
+        metadataSigner: node.metadataSignerId ? (signers.get(node.metadataSignerId) ?? null) : null,
+    }));
+}
+
 export async function selectNodes(tx: Tx, ids: string[]) {
     if (!ids.length) return [] as (NodeRow & { currentVersion: VersionRow | null })[];
     const rows = await tx
@@ -261,10 +309,67 @@ export async function selectNodes(tx: Tx, ids: string[]) {
         .leftJoin(fileVersions, eq(fileVersions.id, driveNodes.currentVersionId))
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(inArray(driveNodes.id, ids));
+    const signers = await signersById(
+        tx,
+        rows.flatMap((row) => [row.node.metadataSignerId, row.version.signerId]),
+    );
     return rows.map((row) => ({
-        ...(row.node as NodeRow),
-        currentVersion: row.version.id ? (row.version as VersionRow) : null,
+        ...(row.node as RawNodeRow),
+        metadataSigner: row.node.metadataSignerId
+            ? (signers.get(row.node.metadataSignerId) ?? null)
+            : null,
+        currentVersion: row.version.id
+            ? withVersionSigner(row.version as RawVersionRow, signers)
+            : null,
     }));
+}
+
+/*
+ * Whether every statement carries a valid signature by `userId`'s current
+ * identity signing key. Checked inside the writing transaction, before any
+ * row changes, so a write either lands signed or not at all.
+ */
+export type SignedStatement = { message: Buffer; signature: Buffer };
+export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
+    const [identity] = await tx
+        .select({ signingPublicKey: accountIdentities.signingPublicKey })
+        .from(accountIdentities)
+        .where(eq(accountIdentities.userId, userId));
+    if (!identity) return false;
+    return statements.every((statement) =>
+        verifySignature(identity.signingPublicKey, statement.message, statement.signature),
+    );
+}
+/* The metadata statement for a node's envelope as it is about to be stored. */
+function metadataSigned(
+    workspaceId: string,
+    nodeId: string,
+    kind: NodeKind,
+    metadataVersion: number,
+    envelopes: { metadataEnvelope: Buffer; metadataSignature: Buffer },
+): SignedStatement {
+    return {
+        message: metadataStatement({
+            workspaceId,
+            nodeId,
+            kind,
+            metadataVersion,
+            metadataEnvelope: envelopes.metadataEnvelope,
+        }),
+        signature: envelopes.metadataSignature,
+    };
+}
+function versionSigned(input: {
+    workspaceId: string;
+    nodeId: string;
+    versionId: string;
+    objectId: string;
+    contentSuite: number;
+    contentKeyEnvelope: Buffer;
+    signature: Buffer;
+}): SignedStatement {
+    const { signature, ...statement } = input;
+    return { message: versionStatement(statement), signature };
 }
 
 /* The user's personal workspace and their grant to its key, for opening Drive. */
@@ -286,15 +391,18 @@ export async function getPersonalWorkspace(userId: string) {
         )
         .where(eq(personalWorkspaces.userId, userId));
     if (!row) return null;
-    const [root] = await db
-        .select(nodeColumns)
+    const [rootId] = await db
+        .select({ id: driveNodes.id })
         .from(driveNodes)
         .where(and(eq(driveNodes.workspaceId, row.workspaceId), isNull(driveNodes.parentId)));
+    const [root] = rootId
+        ? await db.transaction((tx) => selectNodes(tx, [rootId.id]))
+        : [undefined];
     return {
         workspaceId: row.workspaceId,
         changeSeq: row.changeSeq,
         grant: row.grant?.workspaceId ? row.grant : null,
-        root: (root as NodeRow | undefined) ?? null,
+        root: root ?? null,
         rotation: await activeRotation(db, row.workspaceId),
     };
 }
@@ -312,6 +420,8 @@ export type NodeEnvelopes = {
     parentKeyEpoch: number;
     keyEnvelope: Buffer;
     metadataEnvelope: Buffer;
+    /* The writer's Ed25519 signature over the metadata statement (docs/integrity-design.md). */
+    metadataSignature: Buffer;
 };
 
 /*
@@ -327,25 +437,30 @@ export async function createRoot(input: {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
         const [existing] = await tx
-            .select(nodeColumns)
+            .select({ id: driveNodes.id })
             .from(driveNodes)
             .where(and(eq(driveNodes.workspaceId, input.workspaceId), isNull(driveNodes.parentId)));
-        if (existing) return { status: 'exists' as const, root: existing as NodeRow };
+        if (existing)
+            return { status: 'exists' as const, root: (await selectNodes(tx, [existing.id]))[0]! };
         if (!(await epochWasAllocated(tx, input.workspaceId, input.envelopes.keyEpoch)))
             return { status: 'stale' as const };
-        const [root] = await tx
-            .insert(driveNodes)
-            .values({
-                id: input.id,
-                workspaceId: input.workspaceId,
-                parentId: null,
-                kind: 'folder',
-                ...input.envelopes,
-                createdBy: input.userId,
-                changeSeq,
-            })
-            .returning(nodeColumns);
-        return { status: 'created' as const, root: root as NodeRow };
+        if (
+            !(await signedBy(tx, input.userId, [
+                metadataSigned(input.workspaceId, input.id, 'folder', 1, input.envelopes),
+            ]))
+        )
+            return { status: 'bad-signature' as const };
+        await tx.insert(driveNodes).values({
+            id: input.id,
+            workspaceId: input.workspaceId,
+            parentId: null,
+            kind: 'folder',
+            ...input.envelopes,
+            metadataSignerId: input.userId,
+            createdBy: input.userId,
+            changeSeq,
+        });
+        return { status: 'created' as const, root: (await selectNodes(tx, [input.id]))[0]! };
     });
 }
 
@@ -439,11 +554,22 @@ export async function createFolders(input: {
 }) {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        // Every folder's signature first: a batch lands whole or not at all.
+        if (
+            !(await signedBy(
+                tx,
+                input.userId,
+                input.folders.map((folder) =>
+                    metadataSigned(input.workspaceId, folder.id, 'folder', 1, folder.envelopes),
+                ),
+            ))
+        )
+            return { status: 'bad-signature' as const, id: null };
         const created = new Map<
             string,
             { depth: number; keyEpoch: number; ancestors: Ancestor[] }
         >();
-        const rows: NodeRow[] = [];
+        const ids: string[] = [];
         for (const folder of input.folders) {
             const inBatch = created.get(folder.parentId);
             let parentDepth: number;
@@ -484,13 +610,14 @@ export async function createFolders(input: {
                     parentId: folder.parentId,
                     kind: 'folder',
                     ...folder.envelopes,
+                    metadataSignerId: input.userId,
                     createdBy: input.userId,
                     changeSeq,
                 })
                 .onConflictDoNothing()
-                .returning(nodeColumns);
+                .returning({ id: driveNodes.id });
             if (!row) return { status: 'conflict' as const, id: folder.id };
-            rows.push(row as NodeRow);
+            ids.push(row.id);
             await raiseHeightBounds(tx, ancestors, 0);
             created.set(folder.id, {
                 depth: parentDepth + 1,
@@ -505,7 +632,9 @@ export async function createFolders(input: {
                 ],
             });
         }
-        return { status: 'created' as const, nodes: rows, changeSeq };
+        const rows = await selectNodes(tx, ids);
+        const nodes = ids.map((id) => rows.find((row) => row.id === id)!);
+        return { status: 'created' as const, nodes, changeSeq };
     });
 }
 
@@ -513,9 +642,13 @@ export async function createFolders(input: {
 export async function renameNode(input: {
     workspaceId: string;
     nodeId: string;
+    /* The account writing, whose signature this must be. */
+    userId: string;
     metadataVersion: number; // the version the client saw
     keyEpoch: number; // the epoch the new envelope was encrypted under
     metadataEnvelope: Buffer;
+    /* Signed over the version the envelope will have: the one seen, plus one. */
+    metadataSignature: Buffer;
 }) {
     return db.transaction(async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
@@ -523,11 +656,25 @@ export async function renameNode(input: {
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
         if (chain.trashed) return { status: 'trashed' as const };
+        if (
+            !(await signedBy(tx, input.userId, [
+                metadataSigned(
+                    input.workspaceId,
+                    input.nodeId,
+                    chain.node.kind,
+                    input.metadataVersion + 1,
+                    input,
+                ),
+            ]))
+        )
+            return { status: 'bad-signature' as const };
         const [updated] = await tx
             .update(driveNodes)
             .set({
                 metadataEnvelope: input.metadataEnvelope,
                 metadataVersion: input.metadataVersion + 1,
+                metadataSignerId: input.userId,
+                metadataSignature: input.metadataSignature,
                 changeSeq,
                 updatedAt: new Date(),
             })
@@ -539,7 +686,11 @@ export async function renameNode(input: {
                 ),
             )
             .returning(nodeColumns);
-        if (updated) return { status: 'ok' as const, node: updated as NodeRow };
+        if (updated)
+            return {
+                status: 'ok' as const,
+                node: (await signNodes(tx, [updated as RawNodeRow]))[0]!,
+            };
         const [current] = await selectNodes(tx, [input.nodeId]);
         return { status: 'stale' as const, node: current! };
     });
@@ -627,7 +778,7 @@ export async function moveNode(input: {
             ],
             chain.node.height_bound,
         );
-        return { status: 'ok' as const, node: moved as NodeRow };
+        return { status: 'ok' as const, node: (await signNodes(tx, [moved as RawNodeRow]))[0]! };
     });
 }
 
@@ -645,7 +796,7 @@ export async function trashNode(input: { workspaceId: string; nodeId: string }) 
             .set({ trashedAt: new Date(), changeSeq })
             .where(eq(driveNodes.id, input.nodeId))
             .returning(nodeColumns);
-        return { status: 'ok' as const, node: node as NodeRow };
+        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
     });
 }
 
@@ -740,7 +891,7 @@ export async function restoreNode(input: {
                     chain.node.height_bound,
                 );
         }
-        return { status: 'ok' as const, node: node as NodeRow };
+        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
     });
 }
 
@@ -908,8 +1059,9 @@ export type UploadBegin = {
     node:
         | { existing: false; id: string; parentId: string; envelopes: NodeEnvelopes }
         | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
-    version: { id: string; contentKeyEnvelope: Buffer };
-    /* Suite 2: the sizes are in the envelope, so the row carries only the declared object size. */
+    /* The content-key envelope and the writer's signature over the version statement. */
+    version: { id: string; contentKeyEnvelope: Buffer; signature: Buffer };
+    /* Suites 2 and 3: the sizes are in the envelope, so the row carries only the declared object size. */
     object: {
         id: string;
         objectKey: string;
@@ -973,6 +1125,23 @@ export async function beginUpload(input: UploadBegin) {
                 },
             ];
         }
+        const statements = [
+            versionSigned({
+                workspaceId: input.workspaceId,
+                nodeId: input.node.id,
+                versionId: input.version.id,
+                objectId: input.object.id,
+                contentSuite: input.object.contentSuite,
+                contentKeyEnvelope: input.version.contentKeyEnvelope,
+                signature: input.version.signature,
+            }),
+        ];
+        if (!input.node.existing)
+            statements.push(
+                metadataSigned(input.workspaceId, input.node.id, 'file', 1, input.node.envelopes),
+            );
+        if (!(await signedBy(tx, input.userId, statements)))
+            return { status: 'bad-signature' as const };
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
         if (storage.free < input.object.ciphertextSize)
@@ -987,6 +1156,7 @@ export async function beginUpload(input: UploadBegin) {
                     parentId: input.node.parentId,
                     kind: 'file',
                     ...input.node.envelopes,
+                    metadataSignerId: input.userId,
                     createdBy: input.userId,
                     changeSeq: null,
                 })
@@ -1013,6 +1183,8 @@ export async function beginUpload(input: UploadBegin) {
             workspaceId: input.workspaceId,
             objectId: input.object.id,
             contentKeyEnvelope: input.version.contentKeyEnvelope,
+            signerId: input.userId,
+            signature: input.version.signature,
             status: 'pending',
         });
         const [upload] = await tx
@@ -1124,7 +1296,13 @@ async function releaseUpload(tx: Tx, upload: UploadRow, status: 'aborted' | 'com
     await adjustStorage(tx, upload.workspaceId, 0n, -upload.reservedBytes);
     await tx
         .update(fileVersions)
-        .set({ status: 'purged', contentKeyEnvelope: null, purgedAt: new Date() })
+        .set({
+            status: 'purged',
+            contentKeyEnvelope: null,
+            signerId: null,
+            signature: null,
+            purgedAt: new Date(),
+        })
         .where(eq(fileVersions.id, upload.versionId));
     await tx
         .update(driveUploads)
@@ -1242,7 +1420,13 @@ async function publishUpload(
         for (const version of older) {
             await tx
                 .update(fileVersions)
-                .set({ status: 'purged', contentKeyEnvelope: null, purgedAt: now })
+                .set({
+                    status: 'purged',
+                    contentKeyEnvelope: null,
+                    signerId: null,
+                    signature: null,
+                    purgedAt: now,
+                })
                 .where(eq(fileVersions.id, version.id));
             await adjustStorage(tx, row.workspaceId, -version.size, 0n);
             if (version.objectId) await retireObjectIfUnreferenced(tx, version.objectId);
@@ -1252,11 +1436,10 @@ async function publishUpload(
             .set({ supersededAt: now })
             .where(eq(fileVersions.id, displacedId));
     }
-    const [published] = await tx
+    await tx
         .update(driveNodes)
         .set({ currentVersionId: row.versionId, changeSeq, updatedAt: now })
-        .where(eq(driveNodes.id, row.nodeId))
-        .returning(nodeColumns);
+        .where(eq(driveNodes.id, row.nodeId));
     if (row.newNode) await raiseHeightBounds(tx, ancestors, 0);
     await tx
         .update(driveUploads)
@@ -1265,16 +1448,20 @@ async function publishUpload(
     const [withVersion] = await selectNodes(tx, [row.nodeId]);
     return {
         status: 'published' as const,
-        node: withVersion ?? (published as NodeRow),
+        node: withVersion!,
         displacedVersionId: displacedId,
     };
 }
 
-export type AttachInput =
-    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: Buffer }
+/* Either way a fresh content-key envelope, so a fresh signature by the account attaching. */
+export type AttachInput = {
+    userId: string;
+    contentKeyEnvelope: Buffer;
+    versionSignature: Buffer;
+} & (
+    | { mode: 'same-node'; keyEpoch: number }
     | {
           mode: 'sibling';
-          userId: string;
           node: {
               id: string;
               parentId: string;
@@ -1282,9 +1469,10 @@ export type AttachInput =
               parentKeyEpoch: number;
               keyEnvelope: Buffer;
               metadataEnvelope: Buffer;
+              metadataSignature: Buffer;
           };
-          contentKeyEnvelope: Buffer;
-      };
+      }
+);
 
 /*
  * Attach: a `conflicted` upload's finished object is published under fresh keys
@@ -1310,6 +1498,28 @@ export async function attachUpload(workspaceId: string, uploadId: string, input:
         const row = upload as UploadRow;
         if (row.objectId === null || row.ciphertextSize === null)
             return { status: 'not-conflicted' as const, uploadStatus: row.status };
+        const [object] = await tx
+            .select({ contentSuite: driveObjects.contentSuite })
+            .from(driveObjects)
+            .where(eq(driveObjects.id, row.objectId));
+        if (!object) return { status: 'not-conflicted' as const, uploadStatus: row.status };
+        const nodeId = input.mode === 'same-node' ? row.nodeId : input.node.id;
+        const statements = [
+            versionSigned({
+                workspaceId,
+                nodeId,
+                versionId: row.versionId,
+                objectId: row.objectId,
+                contentSuite: object.contentSuite,
+                contentKeyEnvelope: input.contentKeyEnvelope,
+                signature: input.versionSignature,
+            }),
+        ];
+        if (input.mode === 'sibling')
+            statements.push(metadataSigned(workspaceId, nodeId, 'file', 1, input.node));
+        if (!(await signedBy(tx, input.userId, statements)))
+            return { status: 'bad-signature' as const };
+        const signed = { signerId: input.userId, signature: input.versionSignature };
 
         if (input.mode === 'same-node') {
             const chain = await walk(tx, row.nodeId);
@@ -1327,7 +1537,7 @@ export async function attachUpload(workspaceId: string, uploadId: string, input:
                 return { status: 'conflicted' as const, currentVersionId: node.currentVersionId };
             await tx
                 .update(fileVersions)
-                .set({ contentKeyEnvelope: input.contentKeyEnvelope })
+                .set({ contentKeyEnvelope: input.contentKeyEnvelope, ...signed })
                 .where(eq(fileVersions.id, row.versionId));
             await tx
                 .update(driveUploads)
@@ -1367,6 +1577,8 @@ export async function attachUpload(workspaceId: string, uploadId: string, input:
                 parentKeyEpoch: input.node.parentKeyEpoch,
                 keyEnvelope: input.node.keyEnvelope,
                 metadataEnvelope: input.node.metadataEnvelope,
+                metadataSignerId: input.userId,
+                metadataSignature: input.node.metadataSignature,
                 createdBy: input.userId,
                 changeSeq: null,
             })
@@ -1377,7 +1589,7 @@ export async function attachUpload(workspaceId: string, uploadId: string, input:
         // created for this upload, which nobody has seen, goes with the old plan.
         await tx
             .update(fileVersions)
-            .set({ nodeId: input.node.id, contentKeyEnvelope: input.contentKeyEnvelope })
+            .set({ nodeId: input.node.id, contentKeyEnvelope: input.contentKeyEnvelope, ...signed })
             .where(eq(fileVersions.id, row.versionId));
         await tx
             .update(driveUploads)
@@ -1481,15 +1693,15 @@ export async function getVersionForDownload(workspaceId: string, versionId: stri
         if (!row) return { status: 'not-found' as const };
         const chain = await walk(tx, row.nodeId);
         if (!chain || chain.purged) return { status: 'not-found' as const };
-        const version = row.version as VersionRow;
-        if (version.status !== 'ready' || version.objectStatus !== 'ready')
-            return { status: 'not-ready' as const, objectStatus: version.objectStatus };
+        const [version] = await signVersions(tx, [row.version as RawVersionRow]);
+        if (version!.status !== 'ready' || version!.objectStatus !== 'ready')
+            return { status: 'not-ready' as const, objectStatus: version!.objectStatus };
         const [node] = await selectNodes(tx, [row.nodeId]);
         return {
             status: 'ok' as const,
-            version,
+            version: version!,
             node: node!,
-            objectKey: objectKeyFor(workspaceId, version.objectId),
+            objectKey: objectKeyFor(workspaceId, version!.objectId),
         };
     });
 }
@@ -1508,9 +1720,9 @@ export async function getVersionsForDownload(workspaceId: string, versionIds: st
                     eq(fileVersions.workspaceId, workspaceId),
                 ),
             );
-        const out: { version: VersionRow; objectKey: string }[] = [];
+        const out: { version: RawVersionRow; objectKey: string }[] = [];
         for (const row of rows) {
-            const version = row.version as VersionRow;
+            const version = row.version as RawVersionRow;
             if (version.status !== 'ready' || version.objectStatus !== 'ready') continue;
             const chain = await walk(tx, row.nodeId);
             if (!chain || chain.purged) continue;
@@ -1548,7 +1760,7 @@ export type CopyFile = {
     /* The version the client rewrapped; anything else means the file moved on. */
     sourceVersionId: string;
     node: { id: string; parentId: string; envelopes: NodeEnvelopes };
-    version: { id: string; contentKeyEnvelope: Buffer };
+    version: { id: string; contentKeyEnvelope: Buffer; signature: Buffer };
 };
 
 /*
@@ -1599,6 +1811,21 @@ export async function copyFile(input: CopyFile) {
             return { status: 'stale' as const };
         if (input.version.contentKeyEnvelope.length !== envelopeLengthFor(version.contentSuite))
             return { status: 'invalid' as const };
+        if (
+            !(await signedBy(tx, input.userId, [
+                metadataSigned(input.workspaceId, input.node.id, 'file', 1, input.node.envelopes),
+                versionSigned({
+                    workspaceId: input.workspaceId,
+                    nodeId: input.node.id,
+                    versionId: input.version.id,
+                    objectId: version.objectId,
+                    contentSuite: version.contentSuite,
+                    contentKeyEnvelope: input.version.contentKeyEnvelope,
+                    signature: input.version.signature,
+                }),
+            ]))
+        )
+            return { status: 'bad-signature' as const };
         const cost = version.ciphertextSize;
         const storage = await freeBytes(tx, input.workspaceId);
         if (!storage) return { status: 'not-found' as const };
@@ -1613,6 +1840,7 @@ export async function copyFile(input: CopyFile) {
                 parentId: input.node.parentId,
                 kind: 'file',
                 ...input.node.envelopes,
+                metadataSignerId: input.userId,
                 createdBy: input.userId,
                 changeSeq,
             })
@@ -1627,6 +1855,8 @@ export async function copyFile(input: CopyFile) {
                 workspaceId: input.workspaceId,
                 objectId: version.objectId,
                 contentKeyEnvelope: input.version.contentKeyEnvelope,
+                signerId: input.userId,
+                signature: input.version.signature,
                 status: 'ready',
                 readyAt: now,
             })
@@ -1682,10 +1912,14 @@ export async function listVersions(workspaceId: string, nodeId: string) {
             .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
             .where(and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.status, 'ready')))
             .orderBy(desc(fileVersions.readyAt));
+        const signers = await signersById(
+            tx,
+            rows.map((row) => row.version.signerId),
+        );
         return {
             currentVersionId: node?.currentVersionId ?? null,
             versions: rows.map((row) => ({
-                ...(row.version as VersionRow),
+                ...withVersionSigner(row.version as RawVersionRow, signers),
                 supersededAt: row.supersededAt,
                 createdAt: row.createdAt,
             })),
@@ -1818,7 +2052,13 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
     }
     await tx
         .update(fileVersions)
-        .set({ status: 'purged', contentKeyEnvelope: null, purgedAt: new Date() })
+        .set({
+            status: 'purged',
+            contentKeyEnvelope: null,
+            signerId: null,
+            signature: null,
+            purgedAt: new Date(),
+        })
         .where(eq(fileVersions.id, version.id));
     if (version.status === 'ready' && version.size !== null)
         await adjustStorage(tx, workspaceId, -version.size, 0n);
@@ -1857,6 +2097,8 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
             purgedAt: now,
             keyEnvelope: null,
             metadataEnvelope: null,
+            metadataSignerId: null,
+            metadataSignature: null,
             changeSeq,
             updatedAt: now,
         })

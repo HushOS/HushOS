@@ -48,6 +48,13 @@ export const driveNodes = pgTable(
         metadataEnvelope: bytea('metadata_envelope'), // null once purged
         // How the key and metadata envelopes are sealed; readers refuse a suite they do not know.
         envelopeSuite: smallint('envelope_suite').notNull().default(1),
+        // Who wrote the metadata envelope, and their Ed25519 signature over it (see
+        // docs/integrity-design.md). The server checked it on write; readers check again.
+        // Null on nodes written before signatures; the signer goes with a deleted account.
+        metadataSignerId: uuid('metadata_signer').references(() => users.id, {
+            onDelete: 'set null',
+        }),
+        metadataSignature: bytea('metadata_signature'),
         currentVersionId: uuid('current_version_id').references(
             (): AnyPgColumn => fileVersions.id,
             { onDelete: 'set null' },
@@ -86,6 +93,10 @@ export const driveNodes = pgTable(
         index('drive_nodes_purged_idx')
             .on(table.workspaceId, table.purgedAt)
             .where(sql`purged_at is not null`),
+        // Deleting an account clears its name from what it signed without a full scan.
+        index('drive_nodes_signer_idx')
+            .on(table.metadataSignerId)
+            .where(sql`metadata_signer is not null`),
         check('drive_nodes_kind_valid', sql`${table.kind} in ('folder', 'file')`),
         check(
             'drive_nodes_root_is_folder',
@@ -102,6 +113,10 @@ export const driveNodes = pgTable(
         check(
             'drive_nodes_prev_envelope_valid',
             sql`(${table.prevKeyEnvelope} is null) = (${table.prevParentKeyEpoch} is null) and (${table.prevKeyEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevKeyEnvelope} is null or (octet_length(${table.prevKeyEnvelope}) = 72 and ${table.prevKeyEpoch} >= 1))`,
+        ),
+        check(
+            'drive_nodes_signature_valid',
+            sql`(${table.metadataSignature} is null and ${table.metadataSignerId} is null) or (octet_length(${table.metadataSignature}) = 64 and ${table.metadataEnvelope} is not null)`,
         ),
         check(
             'drive_nodes_file_has_no_children_marker',
@@ -174,6 +189,10 @@ export const fileVersions = pgTable(
         objectId: uuid('object_id').references(() => driveObjects.id, { onDelete: 'set null' }),
         // 72 bytes under suite 1 (the key), 84 under suites 2 and 3 (the key with the sizes); null once purged.
         contentKeyEnvelope: bytea('content_key_envelope'),
+        // Who sealed the content-key envelope, and their signature over the version; null
+        // before signatures and once purged.
+        signerId: uuid('signer').references(() => users.id, { onDelete: 'set null' }),
+        signature: bytea('signature'),
         status: text().notNull().$type<'pending' | 'ready' | 'purged'>().default('pending'),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
         readyAt: timestamp('ready_at', { withTimezone: true }),
@@ -183,6 +202,9 @@ export const fileVersions = pgTable(
     (table) => [
         index('file_versions_object_idx').on(table.objectId),
         index('file_versions_node_idx').on(table.nodeId),
+        index('file_versions_signer_idx')
+            .on(table.signerId)
+            .where(sql`signer is not null`),
         index('file_versions_superseded_idx')
             .on(table.workspaceId, table.supersededAt)
             .where(sql`superseded_at is not null and purged_at is null`),
@@ -190,6 +212,10 @@ export const fileVersions = pgTable(
         check(
             'file_versions_envelope_valid',
             sql`(${table.status} = 'purged' and ${table.contentKeyEnvelope} is null and ${table.purgedAt} is not null) or (${table.status} <> 'purged' and octet_length(${table.contentKeyEnvelope}) in (72, 84) and ${table.objectId} is not null)`,
+        ),
+        check(
+            'file_versions_signature_valid',
+            sql`(${table.signature} is null and ${table.signerId} is null) or (octet_length(${table.signature}) = 64 and ${table.contentKeyEnvelope} is not null)`,
         ),
     ],
 );
@@ -503,6 +529,12 @@ export const driveReportItems = pgTable(
         // Suite 1 only; under suite 2 the operator learns the size from the envelope, as any reader does.
         plaintextSize: bigint('plaintext_size', { mode: 'bigint' }),
         ciphertextSize: bigint('ciphertext_size', { mode: 'bigint' }),
+        // The writers' signatures as they stood, so an operator can tell who wrote what.
+        // No reference to the account: the snapshot outlives it.
+        metadataSignerId: uuid('metadata_signer'),
+        metadataSignature: bytea('metadata_signature'),
+        versionSignerId: uuid('version_signer'),
+        versionSignature: bytea('version_signature'),
         evidenceCopiedAt: timestamp('evidence_copied_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },
@@ -510,6 +542,10 @@ export const driveReportItems = pgTable(
         primaryKey({ columns: [table.reportId, table.nodeId] }),
         index('drive_report_items_object_idx').on(table.objectId),
         index('drive_report_items_parent_idx').on(table.reportId, table.parentId),
+        check(
+            'drive_report_items_signatures_valid',
+            sql`(${table.metadataSignature} is null or octet_length(${table.metadataSignature}) = 64) and (${table.versionSignature} is null or octet_length(${table.versionSignature}) = 64)`,
+        ),
         check(
             'drive_report_items_valid',
             sql`${table.depth} >= 0 and ${table.keyEpoch} >= 1 and ${table.parentKeyEpoch} >= 1 and octet_length(${table.keyEnvelope}) = 72 and octet_length(${table.metadataEnvelope}) between 42 and 4136 and ((${table.kind} = 'folder' and ${table.versionId} is null) or (${table.kind} = 'file' and (${table.versionId} is null or (${table.objectId} is not null and ${table.objectKey} is not null and octet_length(${table.contentKeyEnvelope}) in (72, 84) and octet_length(${table.contentNonce}) = 16 and ${table.chunkSize} > 0 and ${table.chunkCount} >= 1 and (${table.plaintextSize} is null or ${table.plaintextSize} >= 0) and ${table.ciphertextSize} >= 0))))`,

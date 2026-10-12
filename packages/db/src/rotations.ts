@@ -5,11 +5,16 @@ import {
     activeRotation,
     nextChangeSeq,
     selectNodes,
+    signedBy,
+    signersById,
     walk,
     type NodeRow,
+    type Signer,
+    type SignedStatement,
     type Tx,
     type VersionRow,
 } from './drive';
+import { metadataStatement, versionStatement } from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -101,6 +106,9 @@ export type RotationWorkNode = NodeRow & {
         contentKeyEnvelope: Buffer;
         contentSuite: number;
         plaintextSize: bigint | null;
+        /* Who signed the envelope being replaced, so the client knows what it re-signs. */
+        signer: Signer | null;
+        signature: Buffer | null;
     }[];
     shares: {
         id: string;
@@ -158,11 +166,17 @@ export async function listRotationWork(input: {
                       contentKeyEnvelope: fileVersions.contentKeyEnvelope,
                       contentSuite: driveObjects.contentSuite,
                       plaintextSize: driveObjects.plaintextSize,
+                      signerId: fileVersions.signerId,
+                      signature: fileVersions.signature,
                   })
                   .from(fileVersions)
                   .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
                   .where(and(inArray(fileVersions.nodeId, ids), eq(fileVersions.status, 'ready')))
             : [];
+        const signers = await signersById(
+            tx,
+            versions.map((v) => v.signerId),
+        );
         const shares = ids.length
             ? await tx
                   .select({
@@ -207,6 +221,8 @@ export async function listRotationWork(input: {
                             contentKeyEnvelope: v.contentKeyEnvelope!,
                             contentSuite: v.contentSuite,
                             plaintextSize: v.plaintextSize,
+                            signer: v.signerId ? (signers.get(v.signerId) ?? null) : null,
+                            signature: v.signature,
                         })),
                     shares: shares
                         .filter((s) => s.nodeId === row.id)
@@ -243,10 +259,14 @@ export type RotatedNodeInput = {
     /* The parent's current epoch the new envelope is wrapped under. */
     parentKeyEpoch: number;
     keyEnvelope: Buffer;
-    /* Absent for a rewrap: a node already at the target moved under a rotated parent keeps its key. */
+    /*
+     * Absent for a rewrap: a node already at the target moved under a rotated parent keeps its key.
+     * A rotated node's re-sealed metadata and versions carry the signatures of the account rotating.
+     */
     rotated: {
         metadataEnvelope: Buffer;
-        versions: { id: string; contentKeyEnvelope: Buffer }[];
+        metadataSignature: Buffer;
+        versions: { id: string; contentKeyEnvelope: Buffer; signature: Buffer }[];
         shares: { id: string; shareEnvelope: Buffer }[];
         links: { id: string; linkEnvelope: Buffer; secretEnvelope: Buffer }[];
         /* Links the owner's device could not re-seal: revoked, since nobody could open them anyway. */
@@ -254,7 +274,13 @@ export type RotatedNodeInput = {
     } | null;
 };
 
-export type RotateOutcome = 'ok' | 'stale' | 'not-found' | 'parent-not-ready' | 'already';
+export type RotateOutcome =
+    | 'ok'
+    | 'stale'
+    | 'not-found'
+    | 'parent-not-ready'
+    | 'already'
+    | 'bad-signature';
 
 /*
  * Applies a batch parents first, each node in its own transaction under the
@@ -266,6 +292,8 @@ export async function rotateNodes(input: {
     workspaceId: string;
     rootId: string;
     targetEpoch: number;
+    /* The account rotating: every re-sealed envelope must carry its signature. */
+    userId: string;
     nodes: RotatedNodeInput[];
 }) {
     const results: { id: string; status: RotateOutcome }[] = [];
@@ -321,6 +349,55 @@ export async function rotateNodes(input: {
                 return 'ok';
             }
             const rotated = item.rotated!;
+            // Signed over what is stored: the node's kind and unchanged metadata version, and
+            // each version's own object and suite. A version not on this node is not written.
+            const stored = rotated.versions.length
+                ? await tx
+                      .select({
+                          id: fileVersions.id,
+                          objectId: fileVersions.objectId,
+                          contentSuite: driveObjects.contentSuite,
+                      })
+                      .from(fileVersions)
+                      .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
+                      .where(
+                          and(
+                              inArray(
+                                  fileVersions.id,
+                                  rotated.versions.map((v) => v.id),
+                              ),
+                              eq(fileVersions.nodeId, item.id),
+                          ),
+                      )
+                : [];
+            const statements: SignedStatement[] = [
+                {
+                    message: metadataStatement({
+                        workspaceId: input.workspaceId,
+                        nodeId: item.id,
+                        kind: node.kind,
+                        metadataVersion: node.metadataVersion,
+                        metadataEnvelope: rotated.metadataEnvelope,
+                    }),
+                    signature: rotated.metadataSignature,
+                },
+            ];
+            for (const version of rotated.versions) {
+                const row = stored.find((v) => v.id === version.id);
+                if (!row?.objectId) continue;
+                statements.push({
+                    message: versionStatement({
+                        workspaceId: input.workspaceId,
+                        nodeId: item.id,
+                        versionId: version.id,
+                        objectId: row.objectId,
+                        contentSuite: row.contentSuite,
+                        contentKeyEnvelope: version.contentKeyEnvelope,
+                    }),
+                    signature: version.signature,
+                });
+            }
+            if (!(await signedBy(tx, input.userId, statements))) return 'bad-signature';
             await tx
                 .update(driveNodes)
                 .set({
@@ -333,13 +410,19 @@ export async function rotateNodes(input: {
                     keyEpoch: input.targetEpoch,
                     parentKeyEpoch: item.parentKeyEpoch,
                     metadataEnvelope: rotated.metadataEnvelope,
+                    metadataSignerId: input.userId,
+                    metadataSignature: rotated.metadataSignature,
                     changeSeq,
                 })
                 .where(eq(driveNodes.id, item.id));
             for (const version of rotated.versions)
                 await tx
                     .update(fileVersions)
-                    .set({ contentKeyEnvelope: version.contentKeyEnvelope })
+                    .set({
+                        contentKeyEnvelope: version.contentKeyEnvelope,
+                        signerId: input.userId,
+                        signature: version.signature,
+                    })
                     .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
             for (const share of rotated.shares)
                 await tx

@@ -1,17 +1,17 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
+import {
+    closeDatabase,
+    createTestAccount,
+    createTestIdentity,
+    resetDatabase,
+} from '../test/helpers';
+import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import * as reports from './reports';
-import {
-    accountIdentities,
-    driveObjectDeletions,
-    driveReports,
-    users,
-    workspaceKeys,
-} from './schema';
+import { driveObjectDeletions, driveReports, users, workspaceKeys } from './schema';
 
 /*
  * A report freezes what was reported, holds its bytes for as long as it is
@@ -36,7 +36,7 @@ async function epoch() {
 }
 async function folder(parentId: string, parentKeyEpoch: number) {
     const id = randomUUID();
-    const created = await drive.createFolders({
+    const created = await signed.createFolders({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         folders: [
@@ -58,7 +58,7 @@ async function folder(parentId: string, parentKeyEpoch: number) {
 async function file(parentId: string, parentKeyEpoch: number) {
     const plaintext = 1n * MiB;
     const objectId = randomUUID();
-    const begun = await drive.beginUpload({
+    const begun = await signed.beginUpload({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         node: {
@@ -93,16 +93,7 @@ async function file(parentId: string, parentKeyEpoch: number) {
     return done.node;
 }
 async function identityFor(userId: string) {
-    await db.insert(accountIdentities).values({
-        userId,
-        wrappingSalt: randomBytes(32),
-        encryptionPublicKey: randomBytes(32),
-        encryptionPrivateKeyNonce: randomBytes(24),
-        encryptedEncryptionPrivateKey: randomBytes(48),
-        signingPublicKey: randomBytes(32),
-        signingSeedNonce: randomBytes(24),
-        encryptedSigningSeed: randomBytes(48),
-    });
+    await createTestIdentity(userId);
 }
 async function report(
     node: { id: string; keyEpoch: number },
@@ -142,7 +133,7 @@ beforeEach(async () => {
     await identityFor(owner.userId);
     await identityFor(operator.userId);
     await db.update(users).set({ role: 'admin' }).where(eq(users.id, operator.userId));
-    const created = await drive.createRoot({
+    const created = await signed.createRoot({
         workspaceId: owner.workspaceId,
         userId: owner.userId,
         id: randomUUID(),
@@ -189,6 +180,18 @@ describe('filing a report', () => {
             depth: 2,
         });
         expect(deep?.children[0]?.contentKeyEnvelope).toHaveLength(72);
+        // Who wrote what, as it stood: the snapshot keeps the signatures and names the signer.
+        const [live] = await db.transaction((tx) => drive.selectNodes(tx, [inside.id]));
+        expect(deep?.children[0]?.metadataSignature?.equals(live!.metadataSignature!)).toBe(true);
+        expect(deep?.children[0]?.versionSignature?.equals(live!.currentVersion!.signature!)).toBe(
+            true,
+        );
+        expect(deep?.children[0]?.metadataSigner).toEqual({
+            id: owner.userId,
+            name: 'Test',
+            email: owner.email,
+        });
+        expect(deep?.children[0]?.versionSigner?.id).toBe(owner.userId);
         expect(await reports.listReportChildren(made.report.id, rootId)).toBeNull();
         expect(await reports.getReportKey(made.report.id, operator.userId)).toHaveLength(112);
         expect(await reports.getReportKey(made.report.id, guest.userId)).toBeNull();

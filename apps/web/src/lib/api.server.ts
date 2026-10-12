@@ -189,7 +189,7 @@ const shareEnvelopeSchema = t.Union([
     keyEnvelopeSchema,
     t.String({ minLength: 1547, maxLength: 1547, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
-/* A suite 2 version envelope (84 bytes): the content key sealed with the sizes. */
+/* A version envelope of suites 2 and 3 (84 bytes): the content key sealed with the sizes. */
 const versionEnvelopeSchema = t.String({
     minLength: 112,
     maxLength: 112,
@@ -213,11 +213,14 @@ const documentEnvelopeSchema = t.String({
     pattern: '^[A-Za-z0-9_-]+$',
 });
 const documentKindSchema = t.String({ pattern: '^[a-z][a-z0-9-]{0,31}$' });
+/* An Ed25519 signature, 64 bytes; the domain checks it against the writer's current key. */
+const signatureSchema = t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' });
 const nodeEnvelopesSchema = {
     keyEpoch: epochSchema,
     parentKeyEpoch: epochSchema,
     keyEnvelope: keyEnvelopeSchema,
     metadataEnvelope: metadataEnvelopeSchema,
+    metadataSignature: signatureSchema,
 };
 const cursorSchema = t.Optional(uuidSchema);
 /* The trash pages on its own order, so its cursor is the last row's place in it, not an id. */
@@ -764,6 +767,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 metadataVersion: epochSchema,
                 keyEpoch: epochSchema,
                 metadataEnvelope: metadataEnvelopeSchema,
+                metadataSignature: signatureSchema,
             }),
         },
         async ({ request, sessionToken, params, body }) =>
@@ -831,6 +835,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 versionId: uuidSchema,
                 objectId: uuidSchema,
                 contentKeyEnvelope: versionEnvelopeSchema,
+                versionSignature: signatureSchema,
                 contentNonce: t.String({
                     minLength: 22,
                     maxLength: 22,
@@ -905,6 +910,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         mode: t.Literal('same-node'),
                         keyEpoch: epochSchema,
                         contentKeyEnvelope: versionEnvelopeSchema,
+                        versionSignature: signatureSchema,
                     }),
                     t.Object({
                         mode: t.Literal('sibling'),
@@ -914,6 +920,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                             ...nodeEnvelopesSchema,
                         }),
                         contentKeyEnvelope: versionEnvelopeSchema,
+                        versionSignature: signatureSchema,
                     }),
                 ]),
             }),
@@ -971,6 +978,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 node: t.Object({ id: uuidSchema, parentId: uuidSchema, ...nodeEnvelopesSchema }),
                 versionId: uuidSchema,
                 contentKeyEnvelope: anyVersionEnvelopeSchema,
+                versionSignature: signatureSchema,
             }),
         },
         async ({ request, sessionToken, params, body }) =>
@@ -1249,10 +1257,12 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         rotated: t.Nullable(
                             t.Object({
                                 metadataEnvelope: metadataEnvelopeSchema,
+                                metadataSignature: signatureSchema,
                                 versions: t.Array(
                                     t.Object({
                                         id: uuidSchema,
                                         contentKeyEnvelope: anyVersionEnvelopeSchema,
+                                        signature: signatureSchema,
                                     }),
                                     { maxItems: 1000 },
                                 ),

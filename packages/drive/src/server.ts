@@ -81,6 +81,8 @@ export function capabilities(): Capabilities {
 }
 
 /* Wire shapes: envelopes as Base64url, byte counts as decimal strings, dates as ISO. */
+/* Who the server says wrote a record: for display; the signature is what a reader checks. */
+export type Signer = { id: string; name: string; email: string };
 export type VersionView = {
     id: string;
     objectId: string;
@@ -95,6 +97,9 @@ export type VersionView = {
     plaintextSize: string | null;
     ciphertextSize: string;
     readyAt: string | null;
+    /* The account that sealed the content-key envelope and its Ed25519 signature; null before signatures. */
+    signer: Signer | null;
+    signature: string | null;
 };
 /* A sealed workspace document as it travels: kind, version, Base64url bytes. */
 export type DocumentView = {
@@ -125,6 +130,9 @@ export type NodeView = {
     updatedAt: string;
     /* How the key and metadata envelopes are sealed; every row is suite 1 today. */
     envelopeSuite: number;
+    /* The account that wrote the metadata envelope and its Ed25519 signature; null before signatures. */
+    metadataSigner: Signer | null;
+    metadataSignature: string | null;
 };
 
 function b64(buffer: Buffer | Uint8Array) {
@@ -145,6 +153,8 @@ function versionView(version: VersionRow | null | undefined): VersionView | null
         plaintextSize: version.plaintextSize?.toString() ?? null,
         ciphertextSize: version.ciphertextSize.toString(),
         readyAt: version.readyAt?.toISOString() ?? null,
+        signer: version.signer,
+        signature: version.signature ? b64(version.signature) : null,
     };
 }
 export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null }): NodeView {
@@ -169,6 +179,8 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
         createdAt: node.createdAt.toISOString(),
         updatedAt: node.updatedAt.toISOString(),
         envelopeSuite: node.envelopeSuite,
+        metadataSigner: node.metadataSigner,
+        metadataSignature: node.metadataSignature ? b64(node.metadataSignature) : null,
     };
 }
 
@@ -185,6 +197,8 @@ export function decodeEnvelope(value: string, exact?: number, max?: number) {
     return bytes;
 }
 const keyEnvelope = (value: string) => decodeEnvelope(value, KEY_ENVELOPE_BYTES);
+/* An Ed25519 signature: 64 bytes, checked against the writer's key in the repository. */
+const signature = (value: string) => decodeEnvelope(value, 64);
 /* A share envelope of either suite: 72 bytes under X25519 alone, 1160 hybrid. */
 function shareEnvelope(value: string) {
     const bytes = decodeEnvelope(value, undefined, 1160);
@@ -304,6 +318,9 @@ const parentTrashed = () =>
     new DriveError('parent-trashed', 'The destination folder is in the trash.', 409);
 const tooDeep = () =>
     new DriveError('too-deep', `Folders cannot be nested more than ${MAX_DEPTH} levels deep.`, 409);
+/* The repository verified the writer's signature against their current signing key and it failed. */
+const badSignature = (data?: unknown) =>
+    new DriveError('bad-signature', 'This change was not signed by your keys.', 400, data);
 const stale = (data?: unknown) =>
     new DriveError(
         'stale',
@@ -351,6 +368,8 @@ export type NodeEnvelopesInput = {
     parentKeyEpoch: number;
     keyEnvelope: string;
     metadataEnvelope: string;
+    /* The writer's signature over the metadata statement (docs/integrity-design.md). */
+    metadataSignature: string;
 };
 function envelopes(input: NodeEnvelopesInput) {
     return {
@@ -358,6 +377,7 @@ function envelopes(input: NodeEnvelopesInput) {
         parentKeyEpoch: input.parentKeyEpoch,
         keyEnvelope: keyEnvelope(input.keyEnvelope),
         metadataEnvelope: metadataEnvelope(input.metadataEnvelope),
+        metadataSignature: signature(input.metadataSignature),
     };
 }
 
@@ -374,6 +394,7 @@ export async function createRoot(
         envelopes: envelopes(input),
     });
     if (result.status === 'stale') throw stale();
+    if (result.status === 'bad-signature') throw badSignature();
     return { created: result.status === 'created', root: nodeView(result.root) };
 }
 
@@ -433,6 +454,8 @@ export async function createFolders(
             throw tooDeep();
         case 'stale':
             throw stale({ id: result.id });
+        case 'bad-signature':
+            throw badSignature();
         case 'conflict':
             throw new DriveError('conflict', 'An item with this id already exists.', 409, {
                 id: result.id,
@@ -444,18 +467,27 @@ export async function renameNode(
     userId: string,
     workspaceId: string,
     nodeId: string,
-    input: { metadataVersion: number; keyEpoch: number; metadataEnvelope: string },
+    input: {
+        metadataVersion: number;
+        keyEpoch: number;
+        metadataEnvelope: string;
+        /* Over the version the envelope will have: `metadataVersion + 1`. */
+        metadataSignature: string;
+    },
 ) {
     await requireAccess(userId, workspaceId, nodeId, 'editor');
     const result = await driveRepository.renameNode({
         workspaceId,
         nodeId,
+        userId,
         metadataVersion: input.metadataVersion,
         keyEpoch: input.keyEpoch,
         metadataEnvelope: metadataEnvelope(input.metadataEnvelope),
+        metadataSignature: signature(input.metadataSignature),
     });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
+    if (result.status === 'bad-signature') throw badSignature();
     if (result.status === 'stale') throw stale({ node: nodeView(result.node) });
     return { node: nodeView(result.node) };
 }
@@ -583,6 +615,8 @@ export type CopyInput = {
     node: { id: string; parentId: string } & NodeEnvelopesInput;
     versionId: string;
     contentKeyEnvelope: string;
+    /* Over the copy's node and version and the source's object and suite. */
+    versionSignature: string;
 };
 
 /*
@@ -611,11 +645,14 @@ export async function copyNode(
         version: {
             id: input.versionId,
             contentKeyEnvelope: anyVersionEnvelope(input.contentKeyEnvelope),
+            signature: signature(input.versionSignature),
         },
     });
     switch (result.status) {
         case 'ok':
             return { node: nodeView(result.node) };
+        case 'bad-signature':
+            throw badSignature();
         case 'invalid':
             throw new DriveError('invalid', 'The envelope does not match how this file is stored.');
         case 'over-quota':
@@ -920,6 +957,8 @@ export type UploadBeginInput = {
     versionId: string;
     objectId: string;
     contentKeyEnvelope: string;
+    /* The writer's signature over the version statement. */
+    versionSignature: string;
     contentNonce: string;
     contentSuite: number;
     chunkCount: number;
@@ -1063,6 +1102,7 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
         version: {
             id: input.versionId,
             contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+            signature: signature(input.versionSignature),
         },
         object: {
             id: input.objectId,
@@ -1096,6 +1136,8 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                 throw tooDeep();
             case 'stale':
                 throw stale();
+            case 'bad-signature':
+                throw badSignature();
             case 'conflict':
                 throw new DriveError('conflict', 'An item with this id already exists.', 409);
         }
@@ -1216,12 +1258,14 @@ export async function completeUpload(
     }
 }
 
+/* A fresh content-key envelope either way, so a fresh signature over the version where it lands. */
 export type UploadAttachInput =
-    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string }
+    | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string; versionSignature: string }
     | {
           mode: 'sibling';
           node: { id: string; parentId: string } & NodeEnvelopesInput;
           contentKeyEnvelope: string;
+          versionSignature: string;
       };
 
 /*
@@ -1242,8 +1286,10 @@ export async function attachUpload(
         input.mode === 'same-node'
             ? {
                   mode: 'same-node',
+                  userId,
                   keyEpoch: input.keyEpoch,
                   contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+                  versionSignature: signature(input.versionSignature),
               }
             : {
                   mode: 'sibling',
@@ -1254,6 +1300,7 @@ export async function attachUpload(
                       ...envelopes(input.node),
                   },
                   contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
+                  versionSignature: signature(input.versionSignature),
               },
     );
     switch (result.status) {
@@ -1288,6 +1335,8 @@ export async function attachUpload(
             throw tooDeep();
         case 'stale':
             throw stale();
+        case 'bad-signature':
+            throw badSignature();
         case 'conflict':
             throw new DriveError('conflict', 'An item with this id already exists.', 409);
     }
@@ -1734,6 +1783,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
                   plaintextSize: item.plaintextSize?.toString() ?? null,
                   ciphertextSize: (item.ciphertextSize ?? 0n).toString(),
                   readyAt: null,
+                  signer: item.versionSigner,
+                  signature: item.versionSignature ? b64(item.versionSignature) : null,
               }
             : null;
     return {
@@ -1755,6 +1806,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
         createdAt: item.createdAt.toISOString(),
         updatedAt: item.createdAt.toISOString(),
         envelopeSuite: DRIVE_ENVELOPE_SUITE,
+        metadataSigner: item.metadataSigner,
+        metadataSignature: item.metadataSignature ? b64(item.metadataSignature) : null,
     };
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
@@ -2148,6 +2201,8 @@ function rotationWorkView(row: RotationWorkRow) {
             contentKeyEnvelope: b64(v.contentKeyEnvelope),
             contentSuite: v.contentSuite,
             plaintextSize: v.plaintextSize?.toString() ?? null,
+            signer: v.signer,
+            signature: v.signature ? b64(v.signature) : null,
         })),
         shares: row.shares.map((share) => ({
             id: share.id,
@@ -2253,7 +2308,9 @@ export async function rotateNodes(
         keyEnvelope: string;
         rotated: {
             metadataEnvelope: string;
-            versions: { id: string; contentKeyEnvelope: string }[];
+            /* The rotating account's signature over the node's unchanged metadata version. */
+            metadataSignature: string;
+            versions: { id: string; contentKeyEnvelope: string; signature: string }[];
             shares: { id: string; shareEnvelope: string }[];
             links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
             unsealableLinks: string[];
@@ -2267,6 +2324,7 @@ export async function rotateNodes(
         workspaceId,
         rootId: nodeId,
         targetEpoch: rotation.targetEpoch,
+        userId,
         nodes: nodes.map((node) => ({
             id: node.id,
             changeSeq: node.changeSeq,
@@ -2275,10 +2333,12 @@ export async function rotateNodes(
             rotated: node.rotated
                 ? {
                       metadataEnvelope: metadataEnvelope(node.rotated.metadataEnvelope),
+                      metadataSignature: signature(node.rotated.metadataSignature),
                       versions: node.rotated.versions.map((v) => ({
                           id: v.id,
-                          // Resealed in the object's own suite: 72 bytes for suite 1, 84 for suite 2.
+                          // Resealed in the object's own suite: 72 bytes for suite 1, 84 for 2 and 3.
                           contentKeyEnvelope: anyVersionEnvelope(v.contentKeyEnvelope),
+                          signature: signature(v.signature),
                       })),
                       shares: node.rotated.shares.map((share) => ({
                           id: share.id,
@@ -2294,6 +2354,9 @@ export async function rotateNodes(
                 : null,
         })),
     });
+    // Each node is its own transaction: the ones before a refused one stand, and say so.
+    if (results.some((result) => result.status === 'bad-signature'))
+        throw badSignature({ results });
     return { results };
 }
 
