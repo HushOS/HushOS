@@ -1,0 +1,33 @@
+packages/crypto/src/security.test.ts
+  s_75dbe24a0bc379::t_f669e7d6dd2b43 1-106
+packages/crypto/src/succession.test.ts
+  s_75dbe24a0bc379::t_892cdd0fa99e10 122-123,149-150,178-199
+  s_75dbe24a0bc379::t_ea96f8fd6e96e6 200-217
+  s_75dbe24a0bc379::t_da32f6e0573886 218-219
+packages/crypto/src/identity.ts
+  s_75dbe24a0bc379::t_5cdf82eb80be2d 570-576,585-589,593,600,614
+packages/crypto/src/signatures.ts
+  s_75dbe24a0bc379::t_5cdf82eb80be2d 130,133-134,136-137
+packages/crypto/src/signatures.test.ts
+  s_75dbe24a0bc379::t_892cdd0fa99e10 90
+packages/crypto/src/security.ts
+  s_75dbe24a0bc379::t_979bd66d7a9548 47-79,203-205
+docs/integrity-design.md
+  s_75dbe24a0bc379::t_ff616d8c66f623 130,139,147,183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d688747307dc03f73bc5a517fce5dced9449b83",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
