@@ -1,11 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
     addContact,
+    hydrated,
+    PASSWORD,
     newContext,
     newFolder,
     openFolder,
     registerAccount,
     sampleFiles,
+    saveKit,
     shareWith,
 } from './helpers';
 
@@ -30,6 +33,18 @@ const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const mark = (p: Page, name: string) => row(p, name).locator('[data-integrity]');
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
+
+/* Account's Advanced group, opened once the page listens: a press before hydration does nothing. */
+async function showAdvanced(p: Page) {
+    await p.goto('/app/account', { waitUntil: 'networkidle' });
+    // Unlocked again from this browser's saved access: a device restore still running
+    // when a security change starts would wipe the change's state in the worker.
+    await expect(p.getByText(/ of .+ used$/)).toBeVisible({ timeout: 60_000 });
+    const show = p.getByRole('button', { name: 'Show' });
+    await hydrated(show);
+    await show.click();
+    await expect(p.getByRole('button', { name: 'Hide' })).toBeVisible();
+}
 
 test.beforeAll(async ({ browser }) => {
     test.setTimeout(300_000);
@@ -138,8 +153,7 @@ test('after Sam replaces his sharing keys, Maya follows the signed change and sh
         maya.locator('[data-shared="From Sam"]').getByRole('link', { name: 'From Sam' }),
     ).toBeVisible({ timeout: 60_000 });
 
-    await sam.goto('/app/account');
-    await sam.getByRole('button', { name: 'Show' }).click();
+    await showAdvanced(sam);
     await sam.getByRole('button', { name: 'Replace sharing keys' }).click();
     await dialog(sam).getByRole('button', { name: 'Replace sharing keys' }).click();
     await expect(sam.getByText('Sharing keys replaced')).toBeVisible({ timeout: 60_000 });
@@ -198,4 +212,25 @@ test('after Sam replaces his sharing keys, Maya follows the signed change and sh
     await expect(again).toContainText('Sam replaced their sharing keys');
     await again.getByRole('button', { name: 'They match' }).click();
     await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
+});
+
+test('rotating Sam’s account key carries his earlier keys and his settings key over', async () => {
+    // A new master key rewraps every identity Sam has had and the key his settings are under:
+    // a share sealed to his first keys and his pins must both still open afterwards.
+    await showAdvanced(sam);
+    await sam.getByRole('button', { name: 'Rotate account key' }).click();
+    await dialog(sam).getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await dialog(sam).getByRole('button', { name: 'Rotate account key' }).click();
+    await expect(sam).toHaveURL(/\/setup\/recovery-key/, { timeout: 120_000 });
+    await saveKit(sam);
+    await expect(sam).toHaveURL(/\/app/, { timeout: 60_000 });
+
+    await sam.goto('/app/people');
+    await expect(sam.locator(`[data-contact="${mayaEmail}"]`)).toBeVisible({ timeout: 60_000 });
+    await sam.goto('/app/shared');
+    await sam
+        .locator('[data-shared="Together"]')
+        .getByRole('link', { name: 'Together' })
+        .click({ timeout: 60_000 });
+    await expect(row(sam, 'module.ts')).toBeVisible({ timeout: 60_000 });
 });
