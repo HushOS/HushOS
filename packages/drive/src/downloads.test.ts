@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, DownloadChunkResult } from '@hushos/crypto';
+import { chunkCount, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi } from './api';
 import type { DriveNode, FolderListing, Rpc } from './client';
 import { createDownloadManager, type DownloadSink, type ZipEntry } from './downloads';
@@ -48,6 +49,8 @@ function file(
             plaintextSize: String(plaintextSize),
             ciphertextSize: String(plaintextSize + 16),
             readyAt: '',
+            signer: null,
+            signature: null,
         },
         trashedAt: null,
         changeSeq: 1,
@@ -58,6 +61,18 @@ function file(
         content: { plaintextSize, thumbnailBytes: 0 },
         openError: null,
         envelopeSuite: 1,
+        metadataSigner: null,
+        metadataSignature: null,
+        integrity: null,
+    };
+}
+/* A suite 3 file with a thumbnail trailer: its object is padded to a Padmé bucket. */
+function paddedFile(id: string, plaintextSize: number, thumbnailBytes: number): DriveNode {
+    const base = file(id, plaintextSize);
+    return {
+        ...base,
+        currentVersion: { ...base.currentVersion!, contentSuite: 3, plaintextSize: null },
+        content: { plaintextSize, thumbnailBytes },
     };
 }
 function folder(id: string, parentId: string | null = 'root'): DriveNode {
@@ -88,6 +103,8 @@ function harness(options: {
     zip?: boolean;
     lookahead?: number;
     offline?: () => boolean;
+    /* What a suite 3 version's envelope would say, by object id. */
+    sealed?: Record<string, { plaintextSize: number; thumbnailBytes: number }>;
 }) {
     const calls: string[] = [];
     const attempts = new Map<string, number>();
@@ -106,12 +123,17 @@ function harness(options: {
         switch (operation) {
             case 'driveDownloadOpen': {
                 const { version } = input as CryptoRequests['driveDownloadOpen'];
-                const plaintextSize = Number(version.plaintextSize);
+                // Suite 1 keeps the size on the row; suite 3 seals it, and the test passes it in.
+                const sealed = options.sealed?.[version.objectId];
+                const plaintextSize = sealed?.plaintextSize ?? Number(version.plaintextSize);
+                const thumbnailBytes = sealed?.thumbnailBytes ?? 0;
                 sizes.set(version.objectId, plaintextSize);
                 return {
-                    chunkCount: Math.max(1, Math.ceil(plaintextSize / CHUNK)),
+                    chunkCount: chunkCount(
+                        contentLength(version.contentSuite, plaintextSize, thumbnailBytes),
+                    ),
                     plaintextSize,
-                    thumbnailBytes: 0,
+                    thumbnailBytes,
                 } as CryptoResults[K];
             }
             case 'driveDownloadChunk': {
@@ -132,7 +154,8 @@ function harness(options: {
                     });
                     pendingChunks.delete(key);
                     const total = sizes.get(objectId)!;
-                    const size = Math.min(CHUNK, total - index * CHUNK);
+                    // The worker trims each chunk to the file: past its end, padding gives nothing.
+                    const size = Math.max(0, Math.min(CHUNK, total - index * CHUNK));
                     return {
                         ok: true,
                         index,
@@ -456,6 +479,49 @@ describe('download manager', () => {
         await reader.close();
         expect(h.closed).toEqual(['o-r']);
         await expect(reader.read(0, 1)).rejects.toThrow(/closed/);
+    });
+
+    test('a padded file is fetched to the end of its object and written to the end of the file', async () => {
+        // The trailer pushes the bucket past the first chunk: one chunk of file, one of padding.
+        const size = CHUNK - 10;
+        const h = harness({ sealed: { 'o-pad': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        h.manager.download([paddedFile('pad', size, 1000)]);
+        await settle(1_000);
+        const item = h.manager.getState().downloads[0]!;
+        expect(item.status).toBe('done');
+        // Both chunks were asked for, so the store cannot tell where the file stops...
+        expect([...h.attempts.keys()].sort()).toEqual(['o-pad:0', 'o-pad:1']);
+        // ...and the padding wrote nothing: the sink holds the file and only the file.
+        const [sink] = h.sinks;
+        expect(sink!.writes).toHaveLength(1);
+        expect(sameBytes(concat(sink!.writes), chunkBytes('o-pad', 0, size))).toBe(true);
+    });
+
+    test('a reader reads the file alone, and draining it fetches the padding after', async () => {
+        const size = CHUNK - 10;
+        const h = harness({ sealed: { 'o-rd': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        const reader = h.manager.openReader(paddedFile('rd', size, 1000));
+        expect(reader.size).toBe(size);
+        const all = reader.read(0, size);
+        await settle(100);
+        expect((await all).byteLength).toBe(size);
+        expect([...h.attempts.keys()]).toEqual(['o-rd:0']);
+        const drained = reader.drain!();
+        await settle(100);
+        await drained;
+        expect([...h.attempts.keys()].sort()).toEqual(['o-rd:0', 'o-rd:1']);
+        await reader.close();
+    });
+
+    test('a version whose envelope promises another chunk count than the listing is refused', async () => {
+        // The listing said no thumbnail (one chunk); the envelope opened says a trailer (two).
+        const size = CHUNK - 10;
+        const h = harness({ sealed: { 'o-x': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        h.manager.download([paddedFile('x', size, 0)]);
+        await settle(1_000);
+        const item = h.manager.getState().downloads[0]!;
+        expect(item.status).toBe('failed');
+        expect(item.error).toMatch(/changed while it was being opened/);
     });
 
     test('pause holds the next chunk fetch and the sink; resume continues where it stopped', async () => {

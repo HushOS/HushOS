@@ -1,5 +1,5 @@
 import type { NodeMetadata, UploadPartProgress, UploadPartResult } from '@hushos/crypto';
-import { CONTENT_SUITE, chunkCount, ciphertextSize } from '@hushos/crypto/drive';
+import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
 import { DriveApiError } from './api';
@@ -213,6 +213,34 @@ export function backoffDelay(attempt: number, random = Math.random) {
 }
 
 /* The server's answer when the node moved on under an upload: attach, do not retry. */
+/*
+ * An upload's object before the worker has prepared it: suite 3's padded size
+ * and chunk count for a file of `size` bytes with a thumbnail trailer of
+ * `thumbnailBytes` (0 until the render is known). Prepare replaces both with
+ * what it sealed; a journaled upload knows its trailer from the start.
+ */
+export function plannedSize(size: number, thumbnailBytes: number) {
+    return ciphertextSize(CONTENT_SUITE, size, thumbnailBytes);
+}
+export function plannedChunks(size: number, thumbnailBytes: number) {
+    return chunkCount(contentLength(CONTENT_SUITE, size, thumbnailBytes));
+}
+/*
+ * An upload's progress in the file's own bytes. What is sent is the padded
+ * object (tags, padding, the thumbnail trailer), so `loaded` of `total` runs
+ * past the file's size; shown to a person, it is scaled back to the file.
+ */
+export function fileProgress(item: Pick<UploadItem, 'size' | 'loaded' | 'total'>) {
+    if (item.total <= 0) return { loaded: 0, total: item.size };
+    const share = Math.min(1, Math.max(0, item.loaded / item.total));
+    return { loaded: Math.round(item.size * share), total: item.size };
+}
+
+/* The thumbnail's length from its sealed trailer, which carries a 16-byte tag. */
+function thumbnailBytesOf(trailer: Uint8Array | null | undefined) {
+    return trailer && trailer.length > 16 ? trailer.length - 16 : 0;
+}
+
 function isConflicted(error: unknown) {
     return (
         error instanceof DriveApiError &&
@@ -537,6 +565,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 nodes: [
                     {
                         id: u.nodeId,
+                        kind: 'file',
                         parentId: parent.id,
                         parentKeyEpoch: parent.keyEpoch,
                         keyEpoch: from,
@@ -558,6 +587,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 keyEpoch: from,
                 keyEnvelope: nodeEnvelopes.keyEnvelope,
                 metadataEnvelope: nodeEnvelopes.metadataEnvelope,
+                metadataSignature: nodes[0]!.metadataSignature,
             };
         }
         if (u.generation !== generation) return;
@@ -576,12 +606,14 @@ export function createTransferManager(options: TransferManagerOptions) {
         });
         u.prepared = true;
         if (u.generation !== generation) return;
-        set(u, { total: prepared.ciphertextSize });
+        // Padded: the object has the chunks of its bucket, which may be more than the file needs.
+        set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
         const begun = await api.beginUpload(workspaceId, {
             node,
             versionId: u.versionId,
             objectId: u.objectId,
             contentKeyEnvelope: prepared.contentKeyEnvelope,
+            versionSignature: prepared.versionSignature,
             contentNonce: prepared.contentNonce,
             contentSuite: CONTENT_SUITE,
             chunkCount: prepared.chunkCount,
@@ -798,7 +830,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (u.generation !== generation) throw new Error('Cancelled.');
         u.parent = parent;
         if (!u.prepared) {
-            await rpc('driveUploadReopen', reopenInput(entry));
+            const reopened = await rpc('driveUploadReopen', reopenInput(entry));
+            set(u, { chunkCount: reopened.chunkCount, total: reopened.ciphertextSize });
             u.prepared = true;
         }
         const versionUnchanged =
@@ -806,7 +839,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             entry.expectedVersionId !== undefined &&
             (replaces.currentVersion?.id ?? null) === entry.expectedVersionId;
         if (versionUnchanged) {
-            const { contentKeyEnvelope } = await rpc('driveUploadRewrap', {
+            const { contentKeyEnvelope, versionSignature } = await rpc('driveUploadRewrap', {
                 workspaceId,
                 objectId: u.objectId,
                 nodeId: replaces.id,
@@ -817,6 +850,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                     mode: 'same-node',
                     keyEpoch: replaces.keyEpoch,
                     contentKeyEnvelope,
+                    versionSignature,
                 });
             } catch (error) {
                 // The version moved between the listing and the attach: keep both.
@@ -831,6 +865,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             nodes: [
                 {
                     id: nodeId,
+                    kind: 'file',
                     parentId: parent.id,
                     parentKeyEpoch: parent.keyEpoch,
                     keyEpoch: from,
@@ -845,7 +880,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 },
             ],
         });
-        const { contentKeyEnvelope } = await rpc('driveUploadRewrap', {
+        const { contentKeyEnvelope, versionSignature } = await rpc('driveUploadRewrap', {
             workspaceId,
             objectId: u.objectId,
             nodeId,
@@ -860,8 +895,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                 keyEpoch: from,
                 keyEnvelope: nodes[0]!.keyEnvelope,
                 metadataEnvelope: nodes[0]!.metadataEnvelope,
+                metadataSignature: nodes[0]!.metadataSignature,
             },
             contentKeyEnvelope,
+            versionSignature,
         });
         u.nodeId = nodeId;
         set(u, { name, parentId: parent.id });
@@ -971,9 +1008,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                     error: null,
                     errorCode: null,
                     loaded: 0,
-                    total: ciphertextSize(size),
+                    total: plannedSize(size, 0),
                     bytesPerSecond: 0,
-                    chunkCount: chunkCount(size),
+                    chunkCount: plannedChunks(size, 0),
                     partsDone: 0,
                     startedAt: null,
                     finishedAt: null,
@@ -1031,7 +1068,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         const { parent, replaces } = await options.openNodes(entry);
         u.parent = parent;
         u.replaces = replaces;
-        await rpc('driveUploadReopen', reopenInput(entry));
+        const reopened = await rpc('driveUploadReopen', reopenInput(entry));
+        set(u, { chunkCount: reopened.chunkCount, total: reopened.ciphertextSize });
         u.prepared = true;
     }
 
@@ -1424,9 +1462,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                     error: null,
                     errorCode: null,
                     loaded: done.reduce((sum, part) => sum + (part.bytes ?? 0), 0),
-                    total: entry.ciphertextSize ?? ciphertextSize(entry.file.size),
+                    total: entry.ciphertextSize ?? plannedSize(entry.file.size, 0),
                     bytesPerSecond: 0,
-                    chunkCount: chunkCount(entry.file.size),
+                    chunkCount: plannedChunks(entry.file.size, thumbnailBytesOf(entry.thumbnail)),
                     partsDone: done.length,
                     startedAt: entry.createdAt,
                     finishedAt: null,
@@ -1473,9 +1511,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                     error: null,
                     errorCode: null,
                     loaded: 0,
-                    total: ciphertextSize(queued.file.size),
+                    total: plannedSize(queued.file.size, 0),
                     bytesPerSecond: 0,
-                    chunkCount: chunkCount(queued.file.size),
+                    chunkCount: plannedChunks(queued.file.size, 0),
                     partsDone: 0,
                     startedAt: null,
                     finishedAt: null,

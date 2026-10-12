@@ -1,5 +1,5 @@
 import type { DownloadChunkProgress, DownloadChunkResult } from '@hushos/crypto';
-import { CHUNK_SIZE, chunkCount } from '@hushos/crypto/drive';
+import { CHUNK_SIZE, chunkCount, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi } from './api';
 import {
     contentSize,
@@ -68,6 +68,12 @@ export type FileReader = {
      * unsubscribe.
      */
     watch?(listener: (fetched: number) => void): () => void;
+    /*
+     * Fetches the object's padding past the file (suite 3), for a reader that
+     * read the whole file: the store then sees every byte fetched, as for a
+     * download, and learns nothing about where the file ends.
+     */
+    drain?(): Promise<void>;
 };
 
 export type ZipEntry = {
@@ -267,7 +273,13 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         const size = contentSize(node);
         if (size === null) throw new Error(`“${node.name}” could not be opened on this device.`);
         const plaintextSize = size;
-        const total = chunkCount(plaintextSize);
+        // Every chunk of the object, padding included (suite 3): a reader that stopped at the
+        // file's last chunk would show the store where the file ends. Past it, chunks are empty.
+        const total = chunkCount(
+            contentLength(version.contentSuite, plaintextSize, node.content?.thumbnailBytes ?? 0),
+        );
+        /* The chunks that hold the file; the rest of `total` is padding. */
+        const fileChunks = chunkCount(plaintextSize);
         const objectId = version.objectId;
         // A zip minted URLs for all its files up front; a single file mints its own.
         const minted = track?.urls.get(version.id);
@@ -305,7 +317,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                     version: versionEnvelopeOf(version!),
                     contentNonce: version!.contentNonce,
                 });
-                if (opened.plaintextSize !== plaintextSize)
+                if (opened.plaintextSize !== plaintextSize || opened.chunkCount !== total)
                     throw new Error(`“${node.name}” changed while it was being opened.`);
                 track?.open.add(objectId);
                 void freshUrl().catch(() => {});
@@ -367,7 +379,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             await rpc('driveDownloadClose', { objectId }).catch(() => {});
             track?.open.delete(objectId);
         }
-        return { plaintextSize, total, open, fetchChunk, close };
+        return { plaintextSize, total, fileChunks, open, fetchChunk, close };
     }
 
     /*
@@ -396,15 +408,21 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 topUp();
             },
             pull: async (controller) => {
-                const head = queue.shift();
-                if (!head) {
-                    controller.close();
-                    await source.close();
+                for (;;) {
+                    const head = queue.shift();
+                    if (!head) {
+                        controller.close();
+                        await source.close();
+                        return;
+                    }
+                    const plaintext = await head;
+                    topUp();
+                    // Padding past the file comes back empty: fetched, so the store sees the
+                    // whole object read, and nothing written.
+                    if (plaintext.byteLength === 0) continue;
+                    controller.enqueue(plaintext);
                     return;
                 }
-                const plaintext = await head;
-                topUp();
-                controller.enqueue(plaintext);
             },
             cancel: async () => {
                 d.cancelled = true;
@@ -465,6 +483,13 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                     written += to - from;
                 }
                 return out;
+            },
+            async drain() {
+                if (closed) return;
+                await source.open();
+                // One at a time and uncached: they decrypt to nothing.
+                for (let index = source.fileChunks; index < source.total; index++)
+                    await source.fetchChunk(index);
             },
             async close() {
                 closed = true;

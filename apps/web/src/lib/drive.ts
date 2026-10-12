@@ -8,7 +8,17 @@ import { ROOT_LABEL } from '@hushos/drive/protocol';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
-import { sharingLedger, trustGrantee, trustGranter } from '@/lib/contacts';
+import {
+    openIdentity,
+    resealAll,
+    resealedAll,
+    resealedTo,
+    resealPending,
+    sharingLedger,
+    trustedSigners,
+    trustGrantee,
+    trustGranter,
+} from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 
 /*
@@ -17,14 +27,23 @@ import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
  * touched. Keys stay in the crypto worker, so nothing here is sensitive.
  */
 
+function unlockedUser() {
+    const userId = authClient.store.getState().unlockedUserId;
+    if (!userId) throw new Error('Unlock your account first.');
+    return userId;
+}
+
 export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     mirror: typeof indexedDB === 'undefined' ? undefined : createIndexedDbMirror(),
     trustGranter,
-    trustGrantee: (granteeUserId, served) => {
-        const userId = authClient.store.getState().unlockedUserId;
-        if (!userId) throw new Error('Unlock your account first.');
-        return trustGrantee(userId, granteeUserId, served);
-    },
+    trustGrantee: async (granteeUserId, served) =>
+        trustGrantee(unlockedUser(), granteeUserId, served),
+    signers: async () => trustedSigners(unlockedUser()),
+    openIdentity: (userId) => openIdentity(userId),
+    resealPending: async () => resealPending(unlockedUser()),
+    resealedTo: async (ids) => resealedTo(unlockedUser(), ids),
+    resealAll: async () => resealAll(unlockedUser()),
+    resealedAll: async () => resealedAll(unlockedUser()),
     linkApi,
     reportApi,
     ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),

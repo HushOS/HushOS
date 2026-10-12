@@ -40,6 +40,9 @@ function node(id: string, parentId: string | null = 'root'): DriveNode {
         content: null,
         openError: null,
         envelopeSuite: 1,
+        metadataSigner: null,
+        metadataSignature: null,
+        integrity: null,
     };
 }
 

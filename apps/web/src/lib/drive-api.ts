@@ -37,6 +37,16 @@ function evidenceUrl(versionId: string) {
     return held.urls[versionId] ? { url: held.urls[versionId], expiresAt: held.expiresAt } : null;
 }
 
+/*
+ * A write the server says this account's current keys did not sign: the
+ * identity was replaced on another device since this one opened it. The
+ * listener reopens it, so the next try signs with the current keys.
+ */
+let staleIdentity: (() => void) | null = null;
+export function onStaleIdentity(listener: () => void) {
+    staleIdentity = listener;
+}
+
 /* Like `unwrap`, but keeps the code and data a Drive refusal carries. */
 async function unwrapDrive<R extends { data: unknown; error: unknown; status: number }>(
     pending: Promise<R>,
@@ -46,6 +56,7 @@ async function unwrapDrive<R extends { data: unknown; error: unknown; status: nu
         const value = (error as { value?: unknown }).value;
         const body =
             value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+        if (body?.code === 'bad-signature') staleIdentity?.();
         throw new DriveApiError(
             typeof body?.message === 'string' ? body.message : 'Please try again.',
             typeof body?.code === 'string'

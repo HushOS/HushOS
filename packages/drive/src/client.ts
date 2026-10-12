@@ -2,6 +2,8 @@ import type {
     CryptoRequests,
     CryptoResults,
     DriveContentInfo,
+    DriveSignedNode,
+    DriveSignedVersion,
     DriveVersionEnvelope,
     NodeMetadata,
 } from '@hushos/crypto';
@@ -36,6 +38,7 @@ import {
     type NodeChange,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
+import type { Integrity, NodeIntegrity } from './trust';
 
 /*
  * Browser orchestration for Drive. Keys live in the crypto worker and are reached
@@ -65,6 +68,12 @@ export type DriveNode = NodeView & {
     content: DriveContentInfo | null;
     /* Set when the item could not be opened on this device; the row still renders. */
     openError: string | null;
+    /*
+     * Who wrote the metadata and the current version, checked against the keys
+     * this person trusts (see docs/integrity-design.md). Null when nothing was
+     * checked: a link visitor's view, or an item that would not open.
+     */
+    integrity: NodeIntegrity | null;
 };
 
 /* The version as the worker wants it: envelope, suite, and suite 1's row size. */
@@ -75,6 +84,30 @@ export function versionEnvelopeOf(version: VersionView): DriveVersionEnvelope {
         contentKeyEnvelope: version.contentKeyEnvelope,
         contentSuite: version.contentSuite,
         plaintextSize: version.plaintextSize === null ? null : Number(version.plaintextSize),
+    };
+}
+
+/* A node's signed records as driveVerify takes them; `versions` are the ones to check. */
+export function signedNodeOf(node: NodeView, versions: VersionView[]): DriveSignedNode {
+    return {
+        id: node.id,
+        kind: node.kind,
+        metadataVersion: node.metadataVersion,
+        metadataEnvelope: node.metadataEnvelope,
+        // Rows a device mirrored before signatures carry neither field.
+        metadataSigner: node.metadataSigner?.id ?? null,
+        metadataSignature: node.metadataSignature ?? null,
+        versions: versions.map(signedVersionOf),
+    };
+}
+function signedVersionOf(version: VersionView): DriveSignedVersion {
+    return {
+        id: version.id,
+        objectId: version.objectId,
+        contentSuite: version.contentSuite,
+        contentKeyEnvelope: version.contentKeyEnvelope,
+        signer: version.signer?.id ?? null,
+        signature: version.signature ?? null,
     };
 }
 
@@ -114,7 +147,15 @@ export function splitPath(input: string) {
         .filter((part) => part.length > 0);
 }
 
-export type Granter = { id: string; name: string; email: string; encryptionPublicKey: string };
+export type Granter = SharedWithMeView['granter'];
+/*
+ * The granter keys a received share may open with, as the person's pins vouch
+ * for them, newest first: after a succession, a share not yet sealed again
+ * still carries the keys of its time.
+ */
+export type TrustedGranter = { encryptionPublicKey: string; signingPublicKey: string }[];
+/* A grantee's keys as a pin vouches for them: share suite 3 needs the KEM key. */
+export type TrustedGrantee = { encryptionPublicKey: string; kemPublicKey: string | null };
 export type DriveClientOptions = {
     /*
      * Where this device keeps the workspace's tree as the server serves it, so
@@ -127,22 +168,41 @@ export type DriveClientOptions = {
     /* The operator's surface for reports; without it, reports cannot be opened here. */
     reportApi?: ReportApi;
     /*
-     * Decides which identity key a share's granter is trusted with: the pinned
-     * one, and only when the served key matches it. Throws to refuse (no pin, an
-     * unchecked one, or a key that changed). Without it, shares received cannot
-     * be opened.
+     * Decides which keys a share's granter is trusted with: the pinned ones
+     * (followed through a signed succession when the served keys moved on), and
+     * only when the served keys match. Throws to refuse (no pin, an unchecked
+     * one, or keys that changed). Without it, shares received cannot be opened.
      */
-    trustGranter?: (granter: Granter) => Promise<string>;
+    trustGranter?: (granter: Granter) => Promise<TrustedGranter>;
     /*
      * Decides which keys a share is sealed to when the server, not the person,
      * names the grantee: on rotation and when re-sealing older shares. Returns
      * the pinned X25519 key and the KEM key the pin vouches for, or null for
      * none; throws to refuse a served key that differs from the pin.
      */
-    trustGrantee?: (
-        granteeUserId: string,
-        served: ServedIdentity,
-    ) => Promise<{ encryptionPublicKey: string; kemPublicKey: string | null }>;
+    trustGrantee?: (granteeUserId: string, served: ServedIdentity) => Promise<TrustedGrantee>;
+    /*
+     * The signing keys this person trusts for other accounts, for checking who
+     * wrote what is listed (the worker adds this account's own). Without it,
+     * nothing is checked and no item carries an integrity.
+     */
+    signers?: () => Promise<Record<string, string[]>>;
+    /*
+     * Opens this account's identity in the worker: every write is signed with
+     * it. Called by `open` before anything else.
+     */
+    openIdentity?: (userId: string) => Promise<unknown>;
+    /* Grantees whose pin followed a succession: what was shared with them waits to be sealed to their new keys. */
+    resealPending?: () => Promise<string[]>;
+    /* Called once every share to them was sealed again, so the pin can stop asking for it. */
+    resealedTo?: (granteeUserIds: string[]) => Promise<void>;
+    /*
+     * Whether this account replaced its own keys and has not yet sealed every
+     * share again under them (an interrupted Replace sharing keys), and the
+     * call that says it is done. The upgrade pass finishes it.
+     */
+    resealAll?: () => Promise<boolean>;
+    resealedAll?: () => Promise<void>;
     /*
      * The owner's own record of what they shared. Without it nothing is ever
      * re-sealed: not on rotation, not when older shares are upgraded.
@@ -184,6 +244,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     let currentUserId: string | null = null;
     /* The workspace behind the link or report opened last: what a node this client has not listed resolves to. */
     let guestWorkspaceId: string | null = null;
+    /* Workspaces reached through a link: their writers are not this visitor's business, and the server names none. */
+    const linkWorkspaces = new Set<string>();
 
     function workspaceId() {
         if (!workspace) throw new Error('Open Drive first.');
@@ -232,6 +294,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
               })
             : { nodes: [] };
         const results = new Map(known.map((node, index) => [node, opened[index]!]));
+        const checked = await verify(nodes.filter((node) => !results.get(node)?.error));
         return nodes.map((node) => {
             const result = results.get(node) ?? {
                 error: 'Made by a newer version of HushOS. Update to open it.',
@@ -244,8 +307,43 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 content: 'content' in result ? (result.content ?? null) : null,
                 name: metadata?.name ?? (node.parentId === null ? ROOT_NAME : 'Unreadable item'),
                 openError: result.error ?? null,
+                integrity: checked.get(node.id) ?? null,
             };
         });
+    }
+
+    /*
+     * Who wrote each node's metadata and current version, checked in the worker
+     * against the keys this person trusts. Nothing is checked for a link
+     * visitor, nor without signers; a check that fails to run leaves the items
+     * unmarked rather than taking the listing down with it.
+     */
+    async function verify(nodes: NodeView[]) {
+        const out = new Map<string, NodeIntegrity>();
+        if (!options.signers || !nodes.length || linkWorkspaces.has(nodes[0]!.workspaceId))
+            return out;
+        try {
+            const { nodes: verified } = await rpc('driveVerify', {
+                workspaceId: nodes[0]!.workspaceId,
+                signers: await options.signers(),
+                nodes: nodes.map((node) =>
+                    signedNodeOf(node, node.currentVersion ? [node.currentVersion] : []),
+                ),
+            });
+            for (const [index, result] of verified.entries()) {
+                const node = nodes[index]!;
+                out.set(node.id, {
+                    metadata: result.metadata,
+                    version: node.currentVersion
+                        ? (result.versions.find((v) => v.id === node.currentVersion!.id)
+                              ?.integrity ?? 'unsigned')
+                        : null,
+                });
+            }
+        } catch {
+            /* Unchecked: shown without a mark, like any item this client cannot judge. */
+        }
+        return out;
     }
 
     /*
@@ -261,6 +359,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             if (!view.grant)
                 throw new Error('This account has no workspace key yet. Finish account setup.');
             workspace = view;
+            await options.openIdentity?.(userId);
             await rpc('driveOpenWorkspace', { userId, grant: view.grant });
             let root = view.root;
             if (!root) {
@@ -271,6 +370,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     nodes: [
                         {
                             id,
+                            kind: 'folder',
                             parentId: view.workspaceId,
                             parentKeyEpoch: view.grant.workspaceKeyVersion,
                             keyEpoch: from,
@@ -284,6 +384,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     parentKeyEpoch: view.grant.workspaceKeyVersion,
                     keyEnvelope: nodes[0]!.keyEnvelope,
                     metadataEnvelope: nodes[0]!.metadataEnvelope,
+                    metadataSignature: nodes[0]!.metadataSignature,
                 });
                 root = result.root;
                 workspace = { ...view, root };
@@ -459,6 +560,24 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     function tagCounts() {
         return catalogueState.phase === 'ready' ? catalogue.tagCounts() : new Map<string, number>();
     }
+    /*
+     * Checks again who wrote every item the catalogue holds, after the people
+     * this person trusts changed (a contact checked, removed, or followed to new
+     * keys). Listings are the query layer's to refetch.
+     */
+    async function recheckIntegrity() {
+        const startedIn = generation;
+        const nodes = catalogue.values().filter((node) => !node.openError);
+        for (let index = 0; index < nodes.length; index += OPEN_BATCH) {
+            const batch = nodes.slice(index, index + OPEN_BATCH);
+            const checked = await verify(batch);
+            if (generation !== startedIn) return;
+            for (const node of batch)
+                if (catalogue.has(node.id))
+                    catalogue.upsert({ ...node, integrity: checked.get(node.id) ?? null });
+        }
+        setCatalogueState({});
+    }
     /* Starts the build over from nothing, for a person who suspects the catalogue is wrong. */
     async function rebuildCatalogue() {
         const ws = workspace?.workspaceId;
@@ -608,6 +727,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             workspaceId: ws,
             nodes: specs.map((spec, index) => ({
                 id: spec.id,
+                kind: 'folder' as const,
                 parentId: index === 0 ? parent.id : specs[index - 1]!.id,
                 parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
                 keyEpoch: spec.keyEpoch,
@@ -623,6 +743,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 keyEpoch: spec.keyEpoch,
                 keyEnvelope: nodes[index]!.keyEnvelope,
                 metadataEnvelope: nodes[index]!.metadataEnvelope,
+                metadataSignature: nodes[index]!.metadataSignature,
             })),
         );
         return decorate(created.nodes);
@@ -631,9 +752,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function rename(node: DriveNode, name: string) {
         const ws = node.workspaceId;
         const clean = checkName(name);
-        const { metadataEnvelope } = await rpc('driveSealMetadata', {
+        const { metadataEnvelope, metadataSignature } = await rpc('driveSealMetadata', {
             workspaceId: ws,
             nodeId: node.id,
+            kind: node.kind,
             metadataVersion: node.metadataVersion + 1,
             metadata: {
                 ...(node.metadata ?? { mime: null, size: null, modified: null }),
@@ -644,6 +766,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             metadataVersion: node.metadataVersion,
             keyEpoch: node.keyEpoch,
             metadataEnvelope,
+            metadataSignature,
         });
         return (await decorate([result.node]))[0]!;
     }
@@ -702,9 +825,11 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 keyEpoch: from,
                 keyEnvelope: sealed.keyEnvelope,
                 metadataEnvelope: sealed.metadataEnvelope,
+                metadataSignature: sealed.metadataSignature,
             },
             versionId,
             contentKeyEnvelope: sealed.contentKeyEnvelope,
+            versionSignature: sealed.versionSignature,
         });
         return (await decorate([result.node]))[0]!;
     }
@@ -753,16 +878,36 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      */
     async function versions(node: DriveNode) {
         const listed = (await api.versions(node.workspaceId, node.id)).versions;
-        if (!listed.length) return [] as (VersionListView & { content: DriveContentInfo | null })[];
+        if (!listed.length)
+            return [] as (VersionListView & {
+                content: DriveContentInfo | null;
+                integrity: Integrity | null;
+            })[];
         const { versions: opened } = await rpc('driveOpenVersions', {
             workspaceId: node.workspaceId,
             nodeId: node.id,
             versions: listed.map(versionEnvelopeOf),
         });
+        // Each version on its own: an earlier one may have been added by someone else.
+        const checked = new Map<string, Integrity>();
+        if (options.signers && !linkWorkspaces.has(node.workspaceId)) {
+            try {
+                const { nodes } = await rpc('driveVerify', {
+                    workspaceId: node.workspaceId,
+                    signers: await options.signers(),
+                    nodes: [signedNodeOf(node, listed)],
+                });
+                for (const version of nodes[0]?.versions ?? [])
+                    checked.set(version.id, version.integrity);
+            } catch {
+                /* Unchecked: listed without marks. */
+            }
+        }
         return listed.map((version, index) => {
             const result = opened[index]!;
             return {
                 ...version,
+                integrity: checked.get(version.id) ?? null,
                 content:
                     result.error !== undefined
                         ? null
@@ -792,6 +937,11 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         role: ShareRole,
     ) {
         if (!currentUserId) throw new Error('Open Drive first.');
+        // Share suite 3 seals to the KEM key too; there is no sealing to X25519 alone any more.
+        if (!contact.kemPublicKey)
+            throw new Error(
+                'They haven’t got post-quantum keys yet, so nothing was shared. They get them the next time they sign in.',
+            );
         const ws = node.workspaceId;
         const { shareEnvelope } = await rpc('driveSealShare', {
             workspaceId: ws,
@@ -815,50 +965,88 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return (await api.nodeShares(node.workspaceId, node.id)).shares;
     }
     /*
-     * Re-seals every share still under X25519 alone whose grantee now has a KEM
-     * key the pin vouches for. Runs in the background after Drive opens; a
-     * grantee whose served key the pin refuses is skipped and counted, never
+     * Seals shares again in suite 3, signed by this account's current keys: any
+     * share in an older suite, any whose grantee's pin followed a succession
+     * (their new keys), and with `all`, every share in the ledger (after this
+     * account replaced its own keys). Runs in the background after Drive opens;
+     * a grantee whose served keys the pin refuses is skipped and counted, never
      * sealed to. Returns how many were re-sealed and how many were refused.
      */
-    async function upgradeShares() {
+    async function upgradeShares(input: { all?: boolean } = {}) {
         if (!currentUserId || !options.trustGrantee || !options.ledger)
             return { resealed: 0, refused: 0 };
         const [mine, ledger] = await Promise.all([api.sharedByMe(), options.ledger.read()]);
+        // Each grantee the owner shared with, checked against their pin once: a pin that
+        // follows a succession here asks for what was shared to be sealed to the new keys.
+        const trusted = new Map<string, Promise<TrustedGrantee>>();
+        const trust = (share: (typeof mine.shares)[number]) => {
+            let keys = trusted.get(share.grantee.id);
+            if (!keys) {
+                keys = options.trustGrantee!(share.grantee.id, share.granteeIdentity);
+                keys.catch(() => {});
+                trusted.set(share.grantee.id, keys);
+            }
+            return keys;
+        };
+        for (const share of mine.shares)
+            if (ledger.shares[share.node.id]?.includes(share.grantee.id))
+                await trust(share).catch(() => {});
+        const waiting = new Set((await options.resealPending?.()) ?? []);
+        const all = input.all || ((await options.resealAll?.()) ?? false);
+        let failed = 0;
+        // Grantees whose pin asked for this, and whether every share to them went through.
+        const owed = new Map<string, boolean>();
         let resealed = 0;
         let refused = 0;
         for (const share of mine.shares) {
-            if (share.suite !== 1 || !share.granteeIdentity.kem) continue;
+            const grantee = share.grantee.id;
+            if (waiting.has(grantee) && !owed.has(grantee)) owed.set(grantee, true);
+            if (share.suite === 3 && !all && !waiting.has(grantee)) continue;
             // Only a share the owner made: the server's list alone is no reason to seal.
-            if (!ledger.shares[share.node.id]?.includes(share.grantee.id)) {
+            if (!ledger.shares[share.node.id]?.includes(grantee)) {
                 refused++;
                 continue;
             }
-            let keys: { encryptionPublicKey: string; kemPublicKey: string | null };
+            let keys: TrustedGrantee;
             try {
-                keys = await options.trustGrantee(share.grantee.id, share.granteeIdentity);
+                keys = await trust(share);
             } catch {
+                owed.set(grantee, false);
                 refused++;
                 continue;
             }
-            if (!keys.kemPublicKey) continue;
-            const node = share.node;
-            if (node.parentId && !openedNodes.has(node.parentId)) await listFolder(node.parentId);
-            await decorate([node]);
-            const { shareEnvelope } = await rpc('driveSealShare', {
-                workspaceId: node.workspaceId,
-                nodeId: node.id,
-                keyEpoch: node.keyEpoch,
-                granterUserId: currentUserId,
-                granteeUserId: share.grantee.id,
-                granteePublicKey: keys.encryptionPublicKey,
-                granteeKemPublicKey: keys.kemPublicKey,
-            });
-            await api.resealShare(node.workspaceId, share.id, {
-                keyEpoch: node.keyEpoch,
-                shareEnvelope,
-            });
-            resealed++;
+            if (!keys.kemPublicKey) {
+                owed.set(grantee, false);
+                continue;
+            }
+            try {
+                const node = share.node;
+                if (node.parentId && !openedNodes.has(node.parentId))
+                    await listFolder(node.parentId);
+                await decorate([node]);
+                const { shareEnvelope } = await rpc('driveSealShare', {
+                    workspaceId: node.workspaceId,
+                    nodeId: node.id,
+                    keyEpoch: node.keyEpoch,
+                    granterUserId: currentUserId,
+                    granteeUserId: grantee,
+                    granteePublicKey: keys.encryptionPublicKey,
+                    granteeKemPublicKey: keys.kemPublicKey,
+                });
+                await api.resealShare(node.workspaceId, share.id, {
+                    keyEpoch: node.keyEpoch,
+                    shareEnvelope,
+                });
+                resealed++;
+            } catch (error) {
+                owed.set(grantee, false);
+                failed++;
+                if (input.all) throw error;
+            }
         }
+        const done = [...owed].flatMap(([id, ok]) => (ok ? [id] : []));
+        if (done.length) await options.resealedTo?.(done);
+        if (all && !failed) await options.resealedAll?.();
         return { resealed, refused };
     }
     async function revokeShare(node: DriveNode, shareId: string) {
@@ -968,6 +1156,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             );
         remember([opened.node]);
         guestWorkspaceId = opened.link.workspaceId;
+        linkWorkspaces.add(opened.link.workspaceId);
         await rpc('driveOpenLink', {
             workspaceId: opened.link.workspaceId,
             nodeId: opened.node.id,
@@ -1115,6 +1304,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 nodes: await Promise.all(
                     work.nodes.map(async (n) => ({
                         id: n.id,
+                        kind: n.kind,
                         parentId: parentRef(n),
                         parentKeyEpoch: n.id === rootId ? n.parentKeyEpoch : targetEpoch,
                         keyEpoch: n.keyEpoch,
@@ -1138,10 +1328,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                     if (!ledger.shares[n.id]?.includes(share.granteeUserId))
                                         return null;
                                     if (!options.trustGrantee) return null;
-                                    let keys: {
-                                        encryptionPublicKey: string;
-                                        kemPublicKey: string | null;
-                                    };
+                                    let keys: TrustedGrantee;
                                     try {
                                         keys = await options.trustGrantee(
                                             share.granteeUserId,
@@ -1168,6 +1355,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             for (const [index, result] of sealed.nodes.entries()) {
                 const source = work.nodes[index]!;
                 if (result.error !== undefined) continue;
+                if (!result.rewrap && !result.metadataSignature)
+                    throw new Error('The rotation could not sign what it sealed. Try again.');
                 batch.push({
                     id: source.id,
                     changeSeq: source.changeSeq ?? 0,
@@ -1177,6 +1366,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         ? null
                         : {
                               metadataEnvelope: result.metadataEnvelope,
+                              metadataSignature: result.metadataSignature!,
                               versions: result.versions,
                               shares: result.shares,
                               links: result.links.flatMap((link) =>
@@ -1281,6 +1471,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     content: null,
                     openError:
                         cause instanceof Error ? cause.message : 'This item could not be opened.',
+                    integrity: null,
                 });
             }
         }
@@ -1307,18 +1498,33 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 try {
                     if (!options.trustGranter || !granteeUserId)
                         throw new Error('Shares cannot be opened on this client.');
-                    const granterPublicKey = await options.trustGranter(received.granter);
-                    await rpc('driveOpenShare', {
-                        workspaceId: received.workspaceId,
-                        nodeId: received.node.id,
-                        keyEpoch: received.keyEpoch,
-                        granterUserId: received.granter.id,
-                        granterPublicKey,
-                        granteeUserId,
-                        shareEnvelope: received.shareEnvelope,
-                        prevShareEnvelope: received.prevShareEnvelope,
-                        prevKeyEpoch: received.prevKeyEpoch,
-                    });
+                    const keys = await options.trustGranter(received.granter);
+                    // Newest keys first; a share sealed before the granter replaced theirs opens with the old ones.
+                    let failure: unknown = new Error('This share could not be opened.');
+                    let opened = false;
+                    for (const key of keys) {
+                        try {
+                            await rpc('driveOpenShare', {
+                                workspaceId: received.workspaceId,
+                                nodeId: received.node.id,
+                                keyEpoch: received.keyEpoch,
+                                granterUserId: received.granter.id,
+                                granterPublicKey: key.encryptionPublicKey,
+                                granterSigningPublicKey: key.signingPublicKey,
+                                granteeUserId,
+                                // Not recorded on the share: the worker tries this account's identities in turn.
+                                granteeKeyVersion: null,
+                                shareEnvelope: received.shareEnvelope,
+                                prevShareEnvelope: received.prevShareEnvelope,
+                                prevKeyEpoch: received.prevKeyEpoch,
+                            });
+                            opened = true;
+                            break;
+                        } catch (cause) {
+                            failure = cause;
+                        }
+                    }
+                    if (!opened) throw failure;
                 } catch (cause) {
                     error =
                         cause instanceof Error ? cause.message : 'This share could not be opened.';
@@ -1331,6 +1537,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           name: 'Shared folder',
                           content: null,
                           openError: error,
+                          integrity: null,
                       }
                     : (await decorate([received.node]))[0]!;
                 out.push({ ...received, node, error, unverified });
@@ -1511,6 +1718,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         shareChangesSince,
         buildCatalogue,
         rebuildCatalogue,
+        recheckIntegrity,
         catchUp,
         subscribeCatalogue,
         get catalogueState() {

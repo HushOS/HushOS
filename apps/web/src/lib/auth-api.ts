@@ -28,6 +28,11 @@ export const authApi: AuthApi = {
     deleteFinish: (input) => unwrap(api().delete.finish.post(input)),
     updateProfile: (name) => unwrap(api().profile.post({ name })),
     identity: () => unwrap(api().identity.get()),
+    identityHistory: () => unwrap(api().identity.history.get()),
+    succeedIdentity: (input) => unwrap(api().identity.succession.post(input)),
+    contactSuccession: (userId, from) =>
+        unwrap(api().contacts({ userId }).succession.get({ query: { from } })),
+    saveSettingsKey: (input) => unwrap(api()['settings-key'].put(input)),
     addIdentityKem: (kem) => unwrap(api().identity.kem.post(kem)),
     lookupContact: (email) => unwrap(api().contacts.lookup.post({ email })),
     settings: () => unwrap(api().settings.get()),

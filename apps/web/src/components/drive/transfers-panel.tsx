@@ -1,5 +1,5 @@
 import type { DownloadItem } from '@hushos/drive/downloads';
-import { formatRate, type UploadItem } from '@hushos/drive/transfers';
+import { fileProgress, formatRate, type UploadItem } from '@hushos/drive/transfers';
 import { cn } from 'cn';
 import {
     ChevronDownIcon,
@@ -71,7 +71,8 @@ function failure(item: { error: string | null; errorCode?: string | null }) {
 }
 
 function statusLine(item: UploadItem, offline: boolean) {
-    const sent = `${formatBytes(item.loaded)} of ${formatBytes(item.total)}`;
+    const shown = fileProgress(item);
+    const sent = `${formatBytes(shown.loaded)} of ${formatBytes(shown.total)}`;
     switch (item.status) {
         case 'queued':
             return 'Waiting';

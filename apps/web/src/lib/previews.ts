@@ -197,6 +197,9 @@ export async function readAll(
             out.set(await reader.read(offset, length), offset);
             if (!unwatch) onProgress?.({ done: offset + length, total: size });
         }
+        // The whole file was read: fetch the padding after it too, so the store sees the
+        // object read to its end, as for a download, and not where the file stops.
+        if (reader.size <= limit) await reader.drain?.();
     } finally {
         unwatch?.();
     }

@@ -1,5 +1,5 @@
 import type { DownloadItem } from '@hushos/drive/downloads';
-import type { UploadItem } from '@hushos/drive/transfers';
+import { fileProgress, type UploadItem } from '@hushos/drive/transfers';
 
 /*
  * The batch as one number: how many files and bytes are done out of the ones
@@ -44,7 +44,11 @@ export function batchProgress(
         if (MOVING.has(status) && itemSize !== null)
             remaining += Math.max(0, itemSize - itemLoaded);
     };
-    for (const item of uploads) count(item.status, item.loaded, item.total, 1);
+    // In the file's own bytes: padding and tags are sent too, and would overstate it.
+    for (const item of uploads) {
+        const shown = fileProgress(item);
+        count(item.status, shown.loaded, shown.total, 1);
+    }
     for (const item of downloads) count(item.status, item.loaded, item.size, item.files);
     return {
         files: { done, total },

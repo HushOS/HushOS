@@ -79,10 +79,10 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await shareWith(owner, /E2E Tester/, 'Can edit');
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('Can edit');
-    // Sealed hybrid: X25519 and ML-KEM-768 together.
+    // Suite 3: an ephemeral X25519 key and ML-KEM-768 together, signed by the owner.
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toHaveAttribute(
         'data-suite',
-        '2',
+        '3',
     );
     // A link too, with a password: it has to survive the rotation that follows the revocation.
     linkUrl = await newLink(owner, 'open sesame');

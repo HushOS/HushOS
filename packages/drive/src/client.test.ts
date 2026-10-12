@@ -33,10 +33,13 @@ function node(id: string, parentId: string | null): NodeView {
         createdAt: '2026-10-12T00:00:00.000Z',
         updatedAt: '2026-10-12T00:00:00.000Z',
         envelopeSuite: 1,
+        metadataSigner: null,
+        metadataSignature: null,
     };
 }
 
 const identity = (id: string): ServedIdentity => ({
+    keyVersion: 1,
     encryptionPublicKey: `x25519-${id}`,
     signingPublicKey: `ed25519-${id}`,
     kem: { publicKey: `kem-${id}`, signature: `sig-${id}` },
@@ -52,10 +55,13 @@ function ledgerOf(state: Awaited<ReturnType<SharingLedger['read']>>): SharingLed
     };
 }
 
-function harness() {
+function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
     const sealedFor: string[] = [];
     const resealed: string[] = [];
     const rotated: { shares: string[]; links: string[] }[] = [];
+    const wired: unknown[] = [];
+    const verified: { signers: Record<string, string[]>; nodes: unknown[] }[] = [];
+    const opened: { granterSigningPublicKey: string | null }[] = [];
     let workCalls = 0;
     const api = {
         workspace: async () => ({
@@ -73,7 +79,7 @@ function harness() {
         sharedByMe: async () => ({
             shares: ['g1', 'g2'].map((grantee) => ({
                 id: `share-${grantee}`,
-                suite: 1,
+                suite: shareSuites[grantee] ?? 1,
                 node: node(A, ROOT),
                 grantee: { id: grantee },
                 granteeIdentity: identity(grantee),
@@ -109,7 +115,33 @@ function harness() {
                       ],
                   }
                 : { done: true, nextCursor: null, nodes: [] },
-        rotateNodes: async () => ({ results: [{ status: 'ok' }] }),
+        rotateNodes: async (_ws: string, _root: string, nodes: unknown[]) => {
+            wired.push(...nodes);
+            return { results: [{ status: 'ok' }] };
+        },
+        sharedWithMe: async () => ({
+            shares: [
+                {
+                    id: 'received',
+                    workspaceId: 'their-ws',
+                    role: 'viewer',
+                    keyEpoch: 3,
+                    shareEnvelope: 'env',
+                    prevShareEnvelope: null,
+                    prevKeyEpoch: null,
+                    createdAt: '',
+                    changeSeq: 0,
+                    granter: {
+                        id: 'granter',
+                        name: 'Maya',
+                        email: 'maya@example.com',
+                        ...identity('granter-now'),
+                        keyVersion: 2,
+                    },
+                    node: { ...node('shared', null), workspaceId: 'their-ws' },
+                },
+            ],
+        }),
     } as unknown as DriveApi;
     const rpc = (async (operation: string, input: Record<string, unknown>) => {
         switch (operation) {
@@ -124,6 +156,27 @@ function harness() {
             case 'driveSealShare':
                 sealedFor.push(input.granteeUserId as string);
                 return { shareEnvelope: 'se' };
+            case 'driveVerify': {
+                const nodes = input.nodes as { id: string; versions: { id: string }[] }[];
+                verified.push({ signers: input.signers as Record<string, string[]>, nodes });
+                return {
+                    nodes: nodes.map((n) => ({
+                        id: n.id,
+                        metadata: n.id === A ? 'unknown-signer' : 'verified',
+                        versions: n.versions.map((v) => ({ id: v.id, integrity: 'bad-signature' })),
+                    })),
+                };
+            }
+            case 'driveOpenShare':
+                opened.push({
+                    granterSigningPublicKey: input.granterSigningPublicKey as string | null,
+                });
+                // Sealed before Maya replaced her keys: only her earlier signing key opens it.
+                if (input.granterSigningPublicKey !== 'ed25519-granter-before')
+                    throw new Error('This share isn’t signed by its granter.');
+                return { opened: true };
+            case 'driveOpenLink':
+                return { opened: true };
             case 'driveRotateNodes': {
                 const nodes = input.nodes as {
                     shares: { id: string }[];
@@ -139,6 +192,7 @@ function harness() {
                         keyEnvelope: 'k',
                         rewrap: false,
                         metadataEnvelope: 'm',
+                        metadataSignature: 'msig',
                         versions: [],
                         shares: [],
                         links: [],
@@ -153,7 +207,7 @@ function harness() {
         encryptionPublicKey: `pinned-${granteeUserId}`,
         kemPublicKey: served.kem!.publicKey,
     });
-    return { api, rpc, trustGrantee, sealedFor, resealed, rotated };
+    return { api, rpc, trustGrantee, sealedFor, resealed, rotated, wired, verified, opened };
 }
 
 describe('sealing again', () => {
@@ -191,5 +245,157 @@ describe('sealing again', () => {
         await client.rotate(node(A, ROOT) as never);
         expect(h.rotated).toEqual([{ shares: [], links: [] }]);
         expect(h.sealedFor).toEqual([]);
+    });
+});
+
+describe('sealing again after a succession', () => {
+    test('suite 3 shares are sealed again only for grantees whose pin followed a succession', async () => {
+        const h = harness({ g1: 3, g2: 3 });
+        const done: string[][] = [];
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: {} }),
+            resealPending: async () => ['g2'],
+            resealedTo: async (ids) => {
+                done.push(ids);
+            },
+        });
+        await client.open('owner');
+        expect(await client.upgradeShares()).toEqual({ resealed: 1, refused: 0 });
+        expect(h.sealedFor).toEqual(['g2']);
+        // Every share to g2 went through, so the pin may stop asking.
+        expect(done).toEqual([['g2']]);
+    });
+
+    test('a grantee whose pin refuses stays owed, and replacing one’s own keys seals every share', async () => {
+        const h = harness({ g1: 3, g2: 3 });
+        const done: string[][] = [];
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: async (grantee, served) => {
+                if (grantee === 'g2') throw new Error('changed');
+                return h.trustGrantee(grantee, served);
+            },
+            ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: {} }),
+            resealPending: async () => ['g2'],
+            resealedTo: async (ids) => {
+                done.push(ids);
+            },
+        });
+        await client.open('owner');
+        expect(await client.upgradeShares({ all: true })).toEqual({ resealed: 1, refused: 1 });
+        expect(h.sealedFor).toEqual(['g1']);
+        expect(done).toEqual([]);
+    });
+});
+
+describe('finishing a replacement of one’s own keys', () => {
+    test('an interrupted re-seal is finished on the next pass, and only then marked done', async () => {
+        const h = harness({ g1: 3, g2: 3 });
+        let pending = true;
+        let failOnce = true;
+        const api = {
+            ...h.api,
+            resealShare: async (ws: string, shareId: string, input: unknown) => {
+                if (shareId === 'share-g2' && failOnce) {
+                    failOnce = false;
+                    throw new Error('dropped');
+                }
+                return h.api.resealShare(ws, shareId, input as never);
+            },
+        } as DriveApi;
+        const client = createDriveClient(h.rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: {} }),
+            resealAll: async () => pending,
+            resealedAll: async () => {
+                pending = false;
+            },
+        });
+        await client.open('owner');
+        await client.upgradeShares();
+        // One share went through, one did not: still owed.
+        expect(h.resealed).toEqual(['share-g1']);
+        expect(pending).toBe(true);
+        await client.upgradeShares();
+        expect(h.resealed).toEqual(['share-g1', 'share-g1', 'share-g2']);
+        expect(pending).toBe(false);
+        // Done: suite 3 shares are left alone from now on.
+        await client.upgradeShares();
+        expect(h.resealed).toHaveLength(3);
+    });
+});
+
+describe('signatures', () => {
+    test('a rotation sends the signatures the worker made beside what it re-sealed', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+        });
+        await client.open('owner');
+        await client.rotate(node(A, ROOT) as never);
+        expect(h.wired).toMatchObject([{ id: A, rotated: { metadataSignature: 'msig' } }]);
+    });
+
+    test('a listing carries each row’s verdict; an item without a version has none', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            signers: async () => ({ maya: ['maya-key'] }),
+        });
+        await client.open('owner');
+        const listing = await client.listFolder(ROOT);
+        expect(listing.children.map((child) => [child.id, child.integrity])).toEqual([
+            [A, { metadata: 'unknown-signer', version: null }],
+        ]);
+        expect(h.verified.at(-1)!.signers).toEqual({ maya: ['maya-key'] });
+    });
+
+    test('nothing reached through a link is checked or marked', async () => {
+        const h = harness();
+        const linkApi = {
+            open: async () => ({
+                link: {
+                    id: 'l',
+                    workspaceId: 'linked-ws',
+                    keyEpoch: 2,
+                    hasPassword: false,
+                    kdfVersion: 2,
+                    linkSalt: 's',
+                    linkEnvelope: 'e',
+                    expiresAt: null,
+                },
+                node: { ...node('linked', null), workspaceId: 'linked-ws' },
+            }),
+        };
+        const client = createDriveClient(h.rpc, h.api, {
+            signers: async () => ({}),
+            linkApi: linkApi as never,
+        });
+        const { node: opened } = await client.openLink('token', 'secret', null);
+        expect(opened.integrity).toBeNull();
+        expect(h.verified).toEqual([]);
+    });
+
+    test('a share sealed before its granter replaced their keys opens with the earlier ones', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGranter: async () => [
+                {
+                    encryptionPublicKey: 'x25519-granter-now',
+                    signingPublicKey: 'ed25519-granter-now',
+                },
+                {
+                    encryptionPublicKey: 'x25519-granter-before',
+                    signingPublicKey: 'ed25519-granter-before',
+                },
+            ],
+        });
+        await client.open('owner');
+        const [mount] = await client.mountShares();
+        expect(mount!.error).toBeNull();
+        expect(h.opened.map((o) => o.granterSigningPublicKey)).toEqual([
+            'ed25519-granter-now',
+            'ed25519-granter-before',
+        ]);
     });
 });

@@ -77,6 +77,11 @@ export class Catalogue {
         return this.nodes.has(id);
     }
 
+    /* Every node held, in no particular order. */
+    values() {
+        return [...this.nodes.values()];
+    }
+
     upsert(node: DriveNode) {
         this.remove(node.id);
         this.nodes.set(node.id, node);

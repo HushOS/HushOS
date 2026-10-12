@@ -363,11 +363,16 @@ export function createAuthClient(
             api.confirmRecoveryBackup(recoveryVersion),
         storage: () => api.storage(),
         identity: () => api.identity(),
+        identityHistory: () => api.identityHistory(),
+        succeedIdentity: (input: Parameters<AuthApi['succeedIdentity']>[0]) =>
+            api.succeedIdentity(input),
+        contactSuccession: (userId: string, from: number) => api.contactSuccession(userId, from),
         addIdentityKem: (kem: IdentityKem) => api.addIdentityKem(kem),
         lookupContact: (email: string) => api.lookupContact(email),
         settings: () => api.settings(),
-        saveSettings: (input: { expectedVersion: number; nonce: string; ciphertext: string }) =>
-            api.saveSettings(input),
+        saveSettings: (input: Parameters<AuthApi['saveSettings']>[0]) => api.saveSettings(input),
+        saveSettingsKey: (input: Parameters<AuthApi['saveSettingsKey']>[0]) =>
+            api.saveSettingsKey(input),
         recover: (email: string, password: string, phrase: string) =>
             exclusive(async () => {
                 const start = await rpc('registerStart', { password });

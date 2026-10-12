@@ -12,8 +12,9 @@ import {
     type Smoothed,
 } from './progress';
 
-const up = (status: UploadItem['status'], loaded: number, total: number) =>
-    ({ id: `${status}-${loaded}`, status, loaded, total }) as UploadItem;
+/* `total` is the object sent, padding and tags included; `size` the file, the same unless given. */
+const up = (status: UploadItem['status'], loaded: number, total: number, size = total) =>
+    ({ id: `${status}-${loaded}`, status, loaded, total, size }) as UploadItem;
 const down = (status: DownloadItem['status'], loaded: number, size: number | null, files = 1) =>
     ({ id: `d-${status}-${loaded}`, status, loaded, size, files }) as DownloadItem;
 
@@ -45,6 +46,18 @@ describe('batch progress', () => {
         expect(p.files.total).toBe(3);
         expect(p.bytes).toEqual({ loaded: 60, total: 300 });
         expect(p.secondsLeft).toBe(50 / 10);
+    });
+
+    test('an upload counts the file’s bytes, never the padding sent after them', () => {
+        // 100 bytes of file sent as a 128-byte object: all of it sent is the whole file, no more.
+        expect(batchProgress([up('uploading', 128, 128, 100)], [], 0).bytes).toEqual({
+            loaded: 100,
+            total: 100,
+        });
+        expect(batchProgress([up('uploading', 64, 128, 100)], [], 0).bytes).toEqual({
+            loaded: 50,
+            total: 100,
+        });
     });
 
     test('downloads count their files and a download of unknown size cannot be estimated', () => {

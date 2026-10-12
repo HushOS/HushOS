@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { bindContactsToQueries } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, driveOpenQueryOptions } from '@/lib/drive';
 import { useChangeFeed } from '@/lib/feed';
 import { resumePendingRotation } from '@/lib/rotation';
@@ -47,6 +48,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     // listings with it, so unlocking unwraps everything again instead of trusting
     // names that were decrypted under keys the worker no longer holds.
     const queryClient = useQueryClient();
+    // Pins a share, rotation or open follows behind the scenes reach People at once.
+    bindContactsToQueries(queryClient);
     const wasUnlocked = useRef(false);
     useEffect(() => {
         if (unlocked) {
@@ -69,7 +72,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         resumePendingRotation(queryClient);
         // The catalogue: the tree mirrored on this device and opened, resumed from wherever it stopped.
         void driveClient.buildCatalogue(workspaceId);
-        // Shares sealed before a contact had a post-quantum key are re-sealed once they do.
+        // Shares in an older suite, or sealed to a contact's keys before their succession,
+        // are sealed again in suite 3; following a contact's succession happens here too.
         void driveClient.upgradeShares().catch(() => {});
     }, [workspaceId, queryClient]);
     return null;
