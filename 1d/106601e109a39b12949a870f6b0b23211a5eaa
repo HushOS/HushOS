@@ -1,0 +1,29 @@
+docs/drive-design.md
+  s_75dbe24a0bc379::t_d3542a969867d3 22,209-211,215,708-710
+README.md
+  s_75dbe24a0bc379::t_d3542a969867d3 9
+apps/web/src/components/drive/report-dialog.tsx
+  s_75dbe24a0bc379::t_52dcb458c16812 122-125
+apps/web/src/content/blog/post-quantum-sharing.mdx
+  s_75dbe24a0bc379::t_b915af247dc9d9 33-35
+apps/web/src/content/security.mdx
+  s_75dbe24a0bc379::t_17d11a0a5bfcdc 108,278
+apps/web/src/lib/reports.ts
+  s_75dbe24a0bc379::t_bb0cb421eb4f0d 10-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d106601e109a39b12949a870f6b0b23211a5eaa",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
