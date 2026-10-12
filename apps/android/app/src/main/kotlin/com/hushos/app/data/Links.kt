@@ -122,7 +122,7 @@ class PublicApi(val origin: String) {
     private fun open(path: String, method: String): HttpURLConnection {
         val connection = URL("$origin/api/drive$path").openConnection() as HttpURLConnection
         connection.requestMethod = method
-        connection.setRequestProperty("HushOS-Client", "android/2")
+        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.setRequestProperty("Origin", origin)
         connection.connectTimeout = 30_000
         connection.readTimeout = 60_000
@@ -272,7 +272,7 @@ class LinkVault(origin: String, url: String) {
         // Resumable like the drive's own downloads: a dropped chunk is fetched again, a `.part` is continued.
         Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(), progress = progress,
             onExpired = { url = api.linkVersionUrl(token, v.versionId) },
-        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.plaintextSize, v.content.thumbnailBytes, index))) }
+        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
     }
 
     fun thumbnail(item: Opened): ByteArray? {
@@ -280,7 +280,7 @@ class LinkVault(origin: String, url: String) {
         val v = openVersion(item)
         if (v.content.thumbnailBytes == 0u) return null
         val url = api.linkThumbnailUrl(token, v.versionId) ?: return null
-        return thumbnailDecrypt(v.content, api.range(url, thumbnailRange(v.content.plaintextSize, v.content.thumbnailBytes)))
+        return thumbnailDecrypt(v.content, api.range(url, thumbnailRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes)))
     }
 
     /* Files a report on the linked item, sealing its key to every operator; anonymous. */

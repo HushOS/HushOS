@@ -3,7 +3,9 @@ package com.hushos.app.data
 import com.hushos.core.ShareContext
 import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
+import com.hushos.core.identityCreate
 import com.hushos.core.identityFingerprint
+import com.hushos.core.identityOpen
 import com.hushos.core.keyDigest
 import com.hushos.core.randomBytes
 import com.hushos.core.shareSeal
@@ -62,11 +64,15 @@ class SharingTrustTest {
     @Test
     fun anUnverifiedPinKeepsTheirSharesShut() {
         for (pin in listOf(noSigningKey, staleFingerprint)) {
-            val shut = assertThrows(GranterTrust.Recheck::class.java) { granterKey(userId, "Ada", enc, mapOf(userId to pin)) }
+            val shut = assertThrows(GranterTrust.Recheck::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to pin)) }
             assertEquals("Check Ada’s words again in People you share with to open what they shared.", shut.message)
         }
-        assertEquals(enc, base64urlEncode(granterKey(userId, "Ada", enc, mapOf(userId to verified))))
-        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", base64urlEncode(ByteArray(32) { 3 }), mapOf(userId to verified)) }
+        val granter = granterKeys(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to verified)).single()
+        assertEquals(enc, base64urlEncode(granter.encryptionPublicKey!!))
+        assertEquals(sig, base64urlEncode(granter.signingPublicKey!!))
+        assertThrows(GranterTrust.Changed::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, base64urlEncode(ByteArray(32) { 3 }), sig, null), mapOf(userId to verified)) }
+        // A swapped signing key under the pinned X25519 key is a changed account too: suite 3 shares are checked against it.
+        assertThrows(GranterTrust.Changed::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), mapOf(userId to verified)) }
     }
 
     @Test
@@ -100,13 +106,16 @@ class SharingTrustTest {
         assertEquals(listOf("share-1"), plan.shares.map { it.id })
         assertEquals(listOf("link-1"), plan.links.map { it.getString("id") })
         assertTrue(plan.skipped.isEmpty())
-        // What the rotation seals for that row is hybrid: longer than the 72-byte X25519-only envelope,
-        // which the core no longer makes at all.
-        val ctx = ShareContext("654850ba-18bc-430a-ad22-5ffd1c105aa2", nodeId, 6uL, userId, "8286d83e-31bc-4b1e-93bd-d18435de6b02")
+        // What the rotation seals for that row is suite 3 (1256 bytes: an ephemeral key, ML-KEM, the granter's
+        // signature), never the 72-byte X25519-only envelope, which the core no longer makes at all.
+        val granterId = "8286d83e-31bc-4b1e-93bd-d18435de6b02"
+        val ctx = ShareContext("654850ba-18bc-430a-ad22-5ffd1c105aa2", nodeId, 6uL, userId, granterId)
+        val root = randomBytes(32u)
+        val granter = identityOpen(granterId, root, identityCreate(granterId, root, 1uL))
         val share = plan.shares.single()
-        val sealed = shareSeal(ctx, randomBytes(32u), randomBytes(32u), share.publicKey, share.kemPublicKey)
-        assertTrue(sealed.size > 72)
-        assertTrue(runCatching { shareSeal(ctx, randomBytes(32u), randomBytes(32u), share.publicKey, null) }.isFailure)
+        val sealed = shareSeal(ctx, randomBytes(32u), granter, share.publicKey, share.kemPublicKey)
+        assertEquals(1256, sealed.size)
+        assertTrue(runCatching { shareSeal(ctx, randomBytes(32u), granter, share.publicKey, ByteArray(0)) }.isFailure)
     }
 
     @Test

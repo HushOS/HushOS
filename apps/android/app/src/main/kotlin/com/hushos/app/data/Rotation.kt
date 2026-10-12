@@ -2,6 +2,7 @@ package com.hushos.app.data
 
 import com.hushos.core.LinkContext
 import com.hushos.core.MetadataContext
+import com.hushos.core.NodeKind
 import com.hushos.core.NodeKeyContext
 import com.hushos.core.ShareContext
 import com.hushos.core.VersionContext
@@ -64,7 +65,7 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
         val pin = pins[granteeId]
         if (pin == null) { skipped.add("Someone no longer in People you share with lost access."); continue }
         val served = share.getJSONObject("grantee")
-        if (pin.encryptionPublicKey != served.optString("encryptionPublicKey")) {
+        if (!pin.matches(ServedIdentity.from(served))) {
             skipped.add("${pin.displayName}’s key has changed since you pinned it. Check it’s them in People you share with, then share again."); continue
         }
         val kem = served.optJSONObject("kem")
@@ -95,7 +96,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     val keys = identityKeys()
     // What may be sealed again: the owner's ledger and pins, never the server's list alone.
     val settings = loadSettings()
-    val pins = settings.contacts
+    val pins = HashMap(settings.contacts)
     val ledger = settings.ledger
     val skipped = LinkedHashSet<String>()
     val firstKems = HashMap<String, String>()
@@ -153,13 +154,25 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, target), wrapUnder, fresh)
             val metaCtx = MetadataContext(ws, node.id, node.metadataVersion)
             val metadataEnvelope = metadataSeal(metaCtx, fresh, metadataOpen(metaCtx, old, base64urlDecode(node.metadataEnvelope)))
+            // Every re-sealed envelope is signed by the account running the rotation, at the node's unchanged metadata version.
+            val metadataSignature = signMetadata(ws, node.id, if (node.isFolder) NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion, metadataEnvelope)
             val versions = JSONArray()
             for (version in entry.versions) {
                 val ctx = VersionContext(ws, node.id, version.getString("id"), version.getString("objectId"))
                 val suite = version.getInt("contentSuite").toUInt()
                 val rowSize = version.optString("plaintextSize").takeIf { !version.isNull("plaintextSize") }?.toULongOrNull()
                 val content = versionOpen(ctx, suite, old, base64urlDecode(version.getString("contentKeyEnvelope")), rowSize)
-                versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(versionReseal(ctx, suite, fresh, content))))
+                val resealed = versionReseal(ctx, suite, fresh, content)
+                versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(resealed))
+                    .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed)))
+            }
+            // A grantee whose keys changed by a checked succession is followed first, so their share is sealed to the new keys.
+            for (share in entry.shares) {
+                val granteeId = share.optString("granteeUserId")
+                val pin = pins[granteeId] ?: continue
+                if (!ledger.hasShare(node.id, granteeId)) continue
+                val served = share.optJSONObject("grantee")?.let { ServedIdentity.from(it) } ?: continue
+                if (!pin.matches(served)) followPin(pin, served)?.let { pins[granteeId] = it }
             }
             val plan = planReseal(node.id, entry.shares, entry.links, ledger, pins)
             skipped.addAll(plan.skipped)
@@ -167,7 +180,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             val shares = JSONArray()
             for (share in plan.shares) {
                 val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
-                shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys.encryptionPrivateKey, share.publicKey, share.kemPublicKey))))
+                shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
             }
             val links = JSONArray()
             val unsealable = JSONArray()
@@ -188,7 +201,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
                     .put("secretEnvelope", base64urlEncode(linkSecretSeal(newCtx, fresh, owned.secret, owned.token, stretched))))
             }
             wire.put("keyEnvelope", base64urlEncode(envelope)).put("rotated", JSONObject()
-                .put("metadataEnvelope", base64urlEncode(metadataEnvelope)).put("versions", versions).put("shares", shares)
+                .put("metadataEnvelope", base64urlEncode(metadataEnvelope)).put("metadataSignature", metadataSignature)
+                .put("versions", versions).put("shares", shares)
                 .put("links", links).put("unsealableLinks", unsealable))
             // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
             previous[node.id] = node.keyEpoch to old
@@ -197,7 +211,12 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             batch.put(wire)
         }
         var applied = 0
-        if (batch.length() > 0) applied = api.rotateNodes(ws, rootId, batch).count { it == "ok" || it == "already" }
+        if (batch.length() > 0) {
+            val outcomes = api.rotateNodes(ws, rootId, batch)
+            // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
+            if ("bad-signature" in outcomes) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
+            applied = outcomes.count { it == "ok" || it == "already" }
+        }
         done += applied
         progress(done)
         idle = if (applied > 0) 0 else idle + 1

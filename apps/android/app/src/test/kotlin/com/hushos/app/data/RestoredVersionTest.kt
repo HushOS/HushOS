@@ -28,7 +28,7 @@ class RestoredVersionTest {
     /* A file whose current version seals `size` bytes under `nodeKey`. */
     private fun node(nodeKey: ByteArray, size: Long): NodeView {
         val sealed = versionSeal(VersionContext(ws, nodeId, versionId, objectId), nodeKey, randomBytes(32u), size.toULong(), 0u)
-        val version = VersionView(versionId, objectId, base64urlEncode(sealed.envelope), "complete", 2u, sealed.layout.chunkCount.toInt(), "", size.toString())
+        val version = VersionView(versionId, objectId, base64urlEncode(sealed.envelope), "complete", com.hushos.core.contentSuite(), sealed.layout.chunkCount.toInt(), "", size.toString())
         return NodeView(nodeId, ws, "parent", "file", 1uL, 1uL, "", 1uL, "", version, null, "2026-09-01T10:00:00Z", restored)
     }
 
