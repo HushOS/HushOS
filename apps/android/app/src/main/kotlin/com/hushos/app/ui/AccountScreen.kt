@@ -434,7 +434,7 @@ private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
  * The recovery phrase on a page of its own, so 24 words fit: Save the kit (the
  * web's kit file, through the share sheet), Copy, and, while the phrase isn't
  * confirmed as saved, the web's check: say it's saved, then pick three words back.
- * `fresh`: the phrase was just made (Reset sharing keys, recovery), read back from the account here; no way out but "I’ve saved it".
+ * `fresh`: the phrase was just made (Rotate account key, recovery), read back from the account here; no way out but "I’ve saved it".
  */
 @Composable
 fun PhraseScreen(model: DriveViewModel, fresh: Boolean, onDone: () -> Unit) {
@@ -549,7 +549,7 @@ private fun shareKit(context: Context, user: com.hushos.app.data.SessionUser?, k
         "",
         "WHEN THIS KIT STOPS WORKING",
         "Resetting your password with this phrase, making a new recovery phrase,",
-        "or resetting sharing keys in Settings makes a new phrase. Save a new kit then.",
+        "or rotating the account key in Settings makes a new phrase. Save a new kit then.",
         "Changing your password in Settings keeps this phrase as it is.",
         "",
         "FOR RECOVERY TOOLS",
@@ -604,7 +604,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
     var selfHosting by rememberSaveable { mutableStateOf(false) }
     if (selfHosting) { SelfHostingScreen(model, state, signedIn = true) { selfHosting = false }; return }
     AccountPage("Advanced", onBack) {
-        AccountRow("Reset sharing keys", "If you think someone saw your password or phrase", Icons.Outlined.Sync, onClick = onReset)
+        AccountRow("Rotate account key", "A new master key for your account. Your files, sharing keys and links stay as they are.", Icons.Outlined.Sync, onClick = onReset)
         AccountRow("Replace sharing keys", "New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", Icons.Outlined.Key, onClick = onReplace)
         Subheader("About this account")
         state.user?.id?.let { id ->
@@ -654,7 +654,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
 }
 
 /*
- * Reset sharing keys (was "Rotate keys"): when you'd use it and what changes, the
+ * Rotate account key (was "Reset sharing keys", "Rotate keys"): when you'd use it and what changes, the
  * password, then the new phrase, which has no way out but saving it.
  */
 @Composable
@@ -671,17 +671,17 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
         PhraseScreen(model, fresh = true) { reset = false; onBack() }
         return
     }
-    AccountPage("Reset sharing keys", onBack = if (pending) null else onBack) {
+    AccountPage("Rotate account key", onBack = if (pending) null else onBack) {
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-            Text("Use this if you think someone saw your password or recovery phrase.", style = MaterialTheme.typography.bodyLarge)
-            for (line in listOf("You get a new recovery phrase. The old one stops working.", "Your other devices are signed out.", "Your files, shares and links stay as they are."))
+            Text("A new master key for your account. Your files, sharing keys and links stay as they are.", style = MaterialTheme.typography.bodyLarge)
+            for (line in listOf("Use it if you think someone saw your password or recovery phrase.", "You get a new recovery phrase. The old one stops working.", "Your other devices are signed out."))
                 Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
             PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
             Text("Enter your password to confirm.", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
             Button(enabled = !pending && password.isNotEmpty(), onClick = {
                 pending = true
                 model.rotateKeys(password) { made, failure -> pending = false; if (made) reset = true else error = failure }
-            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Resetting…" else "Reset") }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Rotating…" else "Rotate") }
         }
     }
 }
