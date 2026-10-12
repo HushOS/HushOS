@@ -658,6 +658,7 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
                 when {
                     lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
                     lookup.recheck -> "You added $first before HushOS checked both of their keys. Ask them to read you the twelve words HushOS shows for their account. If they match these, it’s really them."
+                    lookup.followed || lookup.pinned?.keysReplacedAt != null -> "$first replaced their sharing keys, and the change is signed by their previous keys. Ask them to read you their twelve words to be sure it was them."
                     else -> "Ask $first to read you the twelve words HushOS shows for their account, on a call or in person. If they match these, it’s really them."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
@@ -752,6 +753,15 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
                 androidx.compose.material3.FilledTonalButton(enabled = email.contains("@"), onClick = { checking = email.trim() to null }, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Add") }
             }
             val list = pins
+            // Someone whose keys changed by a succession their old keys signed: followed, said quietly, with the way to be sure.
+            for (pin in list.orEmpty().filter { it.verified && it.keysReplacedAt != null }) {
+                val name = pin.name.ifEmpty { pin.email }
+                Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1).background(alpine.fill, RoundedCornerShape(12.dp))
+                    .padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S3, bottom = AlpineSpace.S1)) {
+                    Text("$name replaced their sharing keys; the change is signed by their previous keys.", style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { checking = pin.email to pin }) { Text("Compare words again") }
+                }
+            }
             if (list == null) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S6), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             // The web's and iOS's words for an empty list.
             else if (list.isEmpty()) Column(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S4)) {

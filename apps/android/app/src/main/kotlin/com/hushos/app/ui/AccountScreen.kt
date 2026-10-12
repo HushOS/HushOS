@@ -97,7 +97,7 @@ private fun shortDate(iso: String?): String? = iso?.let {
     }.getOrNull()
 }
 
-private enum class Page { MAIN, PLAN, PASSWORD, PHRASE, ADVANCED, RESET, TRASH }
+private enum class Page { MAIN, PLAN, PASSWORD, PHRASE, ADVANCED, RESET, REPLACE, TRASH }
 
 /*
  * Account, a tab of its own (the user's choice over the board's avatar): who is
@@ -115,14 +115,15 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     // /app/trash: straight to Trash.
     LaunchedEffect(state.request) { if (state.request == "trash") { page = Page.TRASH; model.clearRequest() } }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
-    BackHandler(enabled = page != Page.MAIN) { page = if (page == Page.RESET) Page.ADVANCED else Page.MAIN }
+    BackHandler(enabled = page != Page.MAIN) { page = if (page == Page.RESET || page == Page.REPLACE) Page.ADVANCED else Page.MAIN }
     when (page) {
         Page.TRASH -> { TrashScreen(model, state) { page = Page.MAIN; model.refreshStorage() }; return }
         Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
         Page.PASSWORD -> { PasswordScreen(model) { page = Page.MAIN }; return }
         Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
-        Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }) { page = Page.MAIN }; return }
+        Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }) { page = Page.MAIN }; return }
         Page.RESET -> { ResetKeysScreen(model) { page = Page.ADVANCED }; return }
+        Page.REPLACE -> { ReplaceKeysScreen(model) { page = Page.ADVANCED }; return }
         Page.MAIN -> {}
     }
     val scroll = androidx.compose.material3.TopAppBarDefaults.enterAlwaysScrollBehavior()
@@ -596,7 +597,7 @@ private fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> U
 
 /* Advanced: sharing keys, what identifies this account, and deleting it. */
 @Composable
-private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: () -> Unit, onBack: () -> Unit) {
+private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: () -> Unit, onReplace: () -> Unit, onBack: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     var deleting by rememberSaveable { mutableStateOf(false) }
@@ -604,6 +605,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
     if (selfHosting) { SelfHostingScreen(model, state, signedIn = true) { selfHosting = false }; return }
     AccountPage("Advanced", onBack) {
         AccountRow("Reset sharing keys", "If you think someone saw your password or phrase", Icons.Outlined.Sync, onClick = onReset)
+        AccountRow("Replace sharing keys", "New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", Icons.Outlined.Key, onClick = onReplace)
         Subheader("About this account")
         state.user?.id?.let { id ->
             Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable {
@@ -680,6 +682,33 @@ private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
                 pending = true
                 model.rotateKeys(password) { made, failure -> pending = false; if (made) reset = true else error = failure }
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Resetting…" else "Reset") }
+        }
+    }
+}
+
+/*
+ * Replace sharing keys: a new identity, signed by the current one (a succession), so the people who checked this
+ * account's words follow it without comparing from scratch; what this account shared is sealed again under it.
+ * Nothing about the password, the phrase or the files changes, so no password is asked.
+ */
+@Composable
+private fun ReplaceKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    var pending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AccountPage("Replace sharing keys", onBack = if (pending) null else onBack) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            Text("New keys for sharing, signed by your old ones, so people you share with don’t need to compare words from scratch.", style = MaterialTheme.typography.bodyLarge)
+            for (line in listOf("Your twelve words change. People who checked them see that you replaced your keys.", "What you shared is sealed again under the new keys.", "Your password, recovery phrase and files stay as they are."))
+                Row { Text("•", modifier = Modifier.padding(end = AlpineSpace.S2)); Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
+            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger) }
+            Button(enabled = !pending, onClick = {
+                pending = true; error = null
+                model.replaceSharingKeys { failure ->
+                    pending = false
+                    if (failure == null) onBack() else error = failure
+                }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Replacing…" else "Replace keys") }
         }
     }
 }

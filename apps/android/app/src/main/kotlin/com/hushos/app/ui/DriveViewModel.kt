@@ -991,6 +991,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /*
+     * Replaces this account's sharing keys by a signed succession, then seals every share in the ledger again under
+     * them. `done(null)` when it worked (with who was left out, if anyone, said in a notice); otherwise why not.
+     */
+    fun replaceSharingKeys(done: (String?) -> Unit) = viewModelScope.launch {
+        var reason: String? = null
+        val result = io({ reason = it }) { it.replaceSharingKeys() }
+        if (result == null) { done(reason ?: com.hushos.app.data.Problems.SERVER); return@launch }
+        refreshTrust()
+        refreshShares()
+        if (result.skipped.isNotEmpty()) notifyUntilRead("Your sharing keys were replaced, but some shares weren’t sealed again. " + result.skipped.joinToString(" "))
+        else notify("Your sharing keys were replaced")
+        done(null)
+    }
+
     /* The server ends every session on a password change, as on the web; the app signs in again with the new one. */
     fun changePassword(current: String, new: String, done: (String?) -> Unit) = viewModelScope.launch {
         val email = state.value.user?.email ?: return@launch
