@@ -10,6 +10,7 @@ import {
     type AccountKeyEnvelope,
 } from './protocol';
 import { rewrapIdentity, type IdentityEnvelope } from './identity';
+import { rewrapSettingsKey, type SettingsKeyEnvelope } from './contacts';
 import { createRecovery, type RecoveryEnvelope } from './recovery';
 import { rewrapWorkspaceGrant, type WorkspaceKeyEnvelope } from './workspace';
 
@@ -26,6 +27,8 @@ export type SecurityChallenge = {
     identity: IdentityEnvelope;
     /* The account's earlier identities (GET /api/auth/identity/history), oldest first. */
     identityHistory?: IdentityEnvelope[];
+    /* The settings key as GET /api/auth/settings serves it; null before the account has one. */
+    settingsKey?: SettingsKeyEnvelope | null;
     workspaces: WorkspaceKeyEnvelope[];
 };
 export type SecurityUpdate = {
@@ -36,6 +39,8 @@ export type SecurityUpdate = {
     identity?: IdentityEnvelope;
     /* Master-key rotation: every earlier identity rewrapped under the new root, in the same order. */
     identityHistory?: IdentityEnvelope[];
+    /* Master-key rotation: the same settings key under the new root, when there is one. */
+    settingsKey?: SettingsKeyEnvelope;
     workspaces?: WorkspaceKeyEnvelope[];
 };
 
@@ -175,6 +180,10 @@ export function createSecurityChange() {
                                   rewrapIdentity(root, nextRoot, input.userId, earlier),
                               ),
                           )
+                        : undefined,
+                settingsKey:
+                    input.action === 'master-key' && input.settingsKey
+                        ? await rewrapSettingsKey(root, nextRoot, input.userId, input.settingsKey)
                         : undefined,
                 // Every workspace grant follows the root; the workspace keys themselves stay put.
                 workspaces:

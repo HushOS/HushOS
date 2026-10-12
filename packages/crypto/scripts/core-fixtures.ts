@@ -32,7 +32,7 @@ import {
     sealLinkSecret,
 } from '../src/links';
 import { createRecovery } from '../src/recovery';
-import { sealSettings } from '../src/contacts';
+import { createSettingsKey, sealSettings } from '../src/contacts';
 import { openIdentityEncryptionKey } from '../src/identity';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
@@ -337,7 +337,8 @@ const recovery = {
     phrase: recoveryMade.phrase,
 };
 
-// The settings document (contact pins) sealed under the identity's private key.
+// The settings document (contact pins): version 2 under the settings key wrapped under the root, and
+// version 1, as sealed before the settings key, under a key off the identity's private key.
 const identityPrivateKey = await openIdentityEncryptionKey(accountKey, userId, identity);
 const settingsJson = {
     version: 1 as const,
@@ -354,11 +355,46 @@ const settingsJson = {
         },
     },
 };
+const settingsKey = await createSettingsKey(accountKey, userId);
 const settings = {
     userId,
+    accountKey: encode(accountKey),
     identityPrivateKey: encode(identityPrivateKey),
     json: JSON.stringify(settingsJson),
-    envelope: await sealSettings(identityPrivateKey, userId, 4, settingsJson),
+    // Version 1: HKDF(identity private key, zeros, "hushos/settings/v1"), context version 1.
+    envelope: await (async () => {
+        const base = await crypto.subtle.importKey('raw', identityPrivateKey, 'HKDF', false, [
+            'deriveBits',
+        ]);
+        const key = new Uint8Array(
+            await crypto.subtle.deriveBits(
+                {
+                    name: 'HKDF',
+                    hash: 'SHA-256',
+                    salt: new Uint8Array(32),
+                    info: new TextEncoder().encode('hushos/settings/v1'),
+                },
+                base,
+                256,
+            ),
+        );
+        const json = new TextEncoder().encode(JSON.stringify(settingsJson));
+        const plaintext = new Uint8Array(Math.ceil(json.length / 1024) * 1024).fill(0x20);
+        plaintext.set(json);
+        const nonce = random(24);
+        const aad = new TextEncoder().encode(
+            JSON.stringify(['hushos/settings', 1, userId.toLowerCase(), 4]),
+        );
+        return {
+            version: 1,
+            settingsVersion: 4,
+            nonce: encode(nonce),
+            ciphertext: encode(await encryptKey(plaintext, key, nonce, aad)),
+        };
+    })(),
+    settingsKey: settingsKey.envelope,
+    settingsKeyRaw: encode(settingsKey.key),
+    v2: await sealSettings(settingsKey.key, userId, 5, settingsJson),
 };
 
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);

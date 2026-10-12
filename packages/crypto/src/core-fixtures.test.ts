@@ -308,8 +308,12 @@ describe('records sealed by the Rust core', () => {
             web.account.userId,
             web.share.identity as never,
         );
-        expect(await openSettings(privateKey, settings.userId, settings.envelope as never)).toEqual(
-            JSON.parse(settings.json),
-        );
+        expect(
+            await openSettings(
+                { settingsKey: null, identityPrivateKey: privateKey },
+                settings.userId,
+                settings.envelope as never,
+            ),
+        ).toEqual(JSON.parse(settings.json));
     });
 });

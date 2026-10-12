@@ -21,7 +21,15 @@ import {
     type IdentityEnvelope,
     type IdentityKem,
 } from './identity';
-import { openSettings, sealSettings, type Settings, type SettingsEnvelope } from './contacts';
+import {
+    createSettingsKey,
+    openSettings,
+    openSettingsKey,
+    sealSettings,
+    type Settings,
+    type SettingsEnvelope,
+    type SettingsKeyEnvelope,
+} from './contacts';
 import {
     openShareKey,
     sealShareKey,
@@ -175,6 +183,15 @@ export type CryptoRequests = {
         signingPublicKey: string;
         kem: { publicKey: string; signature: string };
     };
+    /*
+     * Settings. The settings key is created once per account (store it with
+     * PUT /api/auth/settings-key; on 409 open the one stored) or opened from
+     * GET /api/auth/settings, and stays in the worker until a lock. Open reads
+     * version 2 with it and version 1 with the identity's key; seal writes
+     * version 2 only.
+     */
+    settingsKeyCreate: { userId: string };
+    settingsKeyOpen: { userId: string; settingsKey: SettingsKeyEnvelope };
     settingsOpen: { userId: string; envelope: SettingsEnvelope };
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
     /*
@@ -589,6 +606,8 @@ export type CryptoResults = {
     identityVerifyChain: { valid: boolean };
     identityMintKem: { kem: IdentityKem };
     identityVerifyKem: { valid: boolean };
+    settingsKeyCreate: { settingsKey: SettingsKeyEnvelope };
+    settingsKeyOpen: { opened: true };
     settingsOpen: { settings: Settings };
     settingsSeal: { envelope: SettingsEnvelope };
     driveSealShare: { shareEnvelope: string };
@@ -759,6 +778,12 @@ export function createCryptoSession() {
         }
         identityHistory = [];
     }
+    /* The settings key, opened under the root: what settings version 2 is sealed under. */
+    let settingsKey: { userId: string; key: Uint8Array<ArrayBuffer> } | undefined;
+    function forgetSettingsKey() {
+        settingsKey?.key.fill(0);
+        settingsKey = undefined;
+    }
     function openedIdentity() {
         if (!identityKey) throw new CryptoError('Open your identity first.');
         return {
@@ -915,6 +940,7 @@ export function createCryptoSession() {
     }
     function forgetDriveKeys() {
         forgetIdentity();
+        forgetSettingsKey();
         for (const entry of workspaceKeys.values()) entry.key.fill(0);
         for (const pool of [ownNodeKeys, guestNodeKeys, ownPrevNodeKeys, guestPrevNodeKeys]) {
             for (const entry of pool.values()) entry.key.fill(0);
@@ -1490,19 +1516,46 @@ export function createCryptoSession() {
                     ),
                 };
             }
+            case 'settingsKeyCreate':
+            case 'settingsKeyOpen': {
+                const { userId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                const root = accountKey.slice();
+                try {
+                    if (message.operation === 'settingsKeyOpen') {
+                        const key = await openSettingsKey(root, userId, message.input.settingsKey);
+                        forgetSettingsKey();
+                        settingsKey = { userId, key };
+                        return { opened: true as const };
+                    }
+                    const created = await createSettingsKey(root, userId);
+                    forgetSettingsKey();
+                    settingsKey = { userId, key: created.key };
+                    return { settingsKey: created.envelope };
+                } finally {
+                    root.fill(0);
+                }
+            }
             case 'settingsOpen': {
                 const { userId, envelope } = message.input;
-                if (!identityKey || identityKey.userId !== userId)
-                    throw new CryptoError('Open your identity first.');
-                return { settings: await openSettings(identityKey.key, userId, envelope) };
+                const ownSettingsKey = settingsKey?.userId === userId ? settingsKey.key : null;
+                const ownIdentityKey = identityKey?.userId === userId ? identityKey.key : null;
+                return {
+                    settings: await openSettings(
+                        { settingsKey: ownSettingsKey, identityPrivateKey: ownIdentityKey },
+                        userId,
+                        envelope,
+                    ),
+                };
             }
             case 'settingsSeal': {
                 const { userId, settingsVersion, settings } = message.input;
-                if (!identityKey || identityKey.userId !== userId)
-                    throw new CryptoError('Open your identity first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
                 return {
                     envelope: await sealSettings(
-                        identityKey.key,
+                        settingsKey.key,
                         userId,
                         settingsVersion,
                         settings,

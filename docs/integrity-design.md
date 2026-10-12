@@ -148,7 +148,7 @@ A pin records the contact's `keyVersion` when it is made. When the keys served f
 
 ### The settings key, apart from the identity
 
-Settings (pins and the sharing ledger) were sealed under a key derived from the identity's X25519 private key, so replacing the identity would strand them and a stolen identity key opened them. Settings envelope version 2 seals under a random 32-byte settings key wrapped under the account root (`HKDF(root, "hushos/settings-key-wrap/v1")`, XChaCha20-Poly1305 with the user id as associated data) and kept on the server beside the settings. A version 1 envelope is opened once with the old derivation and saved again as version 2.
+Settings (pins and the sharing ledger) were sealed under a key derived from the identity's X25519 private key, so replacing the identity would strand them and a stolen identity key opened them. Settings envelope version 2 seals under a random 32-byte settings key wrapped under the account root (`HKDF-SHA256(ikm = root, salt = 32 zero bytes, info = "hushos/settings-key-wrap/v1")`, XChaCha20-Poly1305 with a random 24-byte nonce and the UTF-8 of the lowercase user id as associated data; the server keeps the nonce and the 48-byte ciphertext) beside the settings. The envelope itself is version 1's with 2 in its context, `["hushos/settings", 2, userId, settingsVersion]`, padded the same way to 1 KiB steps. A version 1 envelope is opened once with the old derivation and saved again as version 2.
 
 ## Rollout
 
@@ -186,6 +186,6 @@ What the server stores and serves, and what clients send. Base64url without padd
 
 ### Settings key
 
-- `GET /api/auth/settings` returns `{ settings, settingsKey }`, where `settingsKey` is `{ nonce, ciphertext }` (the 32-byte settings key sealed under the account-root wrap key, 72 bytes with tag) or null.
+- `GET /api/auth/settings` returns `{ settings, settingsKey }`, where `settingsKey` is `{ nonce, ciphertext }` (a 24-byte nonce and the 32-byte settings key sealed under the account-root wrap key, 48 bytes with its tag) or null.
 - `PUT /api/auth/settings-key` stores it once (409 if one exists); `PUT /api/auth/settings` accepts envelope `version: 2` (sealed under the settings key) and, until every client has moved, `version: 1`.
 - A master-key rotation re-wraps the settings key under the new root alongside the other account envelopes (it is in the rotation request).

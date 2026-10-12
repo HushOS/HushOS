@@ -1,17 +1,62 @@
 import { describe, expect, test } from 'vitest';
 import { createIdentity, openIdentityEncryptionKey, verifyIdentitySigningKey } from './identity';
 import {
+    createSettingsKey,
     EMPTY_SETTINGS,
     fingerprint,
     openSettings,
+    openSettingsKey,
+    rewrapSettingsKey,
     sealSettings,
     SETTINGS_PAD_STEP,
     type Settings,
+    type SettingsEnvelope,
 } from './contacts';
-import { decode } from './keys';
+import { encryptKey } from './aead';
+import { decode, encode } from './keys';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
+
+/*
+ * Settings version 1 as clients sealed them before the settings key: under
+ * HKDF of the identity's X25519 private key. Nothing seals these now; they open.
+ */
+async function legacySettings(
+    identityPrivateKey: Uint8Array<ArrayBuffer>,
+    userId: string,
+    settingsVersion: number,
+    settings: Settings,
+): Promise<SettingsEnvelope> {
+    const base = await crypto.subtle.importKey('raw', identityPrivateKey, 'HKDF', false, [
+        'deriveBits',
+    ]);
+    const key = new Uint8Array(
+        await crypto.subtle.deriveBits(
+            {
+                name: 'HKDF',
+                hash: 'SHA-256',
+                salt: new Uint8Array(32),
+                info: new TextEncoder().encode('hushos/settings/v1'),
+            },
+            base,
+            256,
+        ),
+    );
+    const json = new TextEncoder().encode(JSON.stringify(settings));
+    const plaintext = new Uint8Array(Math.ceil(json.length / 1024) * 1024).fill(0x20);
+    plaintext.set(json);
+    const nonce = crypto.getRandomValues(new Uint8Array(24));
+    const aad = new TextEncoder().encode(
+        JSON.stringify(['hushos/settings', 1, userId.toLowerCase(), settingsVersion]),
+    );
+    return {
+        version: 1,
+        settingsVersion,
+        nonce: encode(nonce),
+        ciphertext: encode(await encryptKey(plaintext, key, nonce, aad)),
+    };
+}
 
 async function identityWithKey(userId = USER) {
     const root = crypto.getRandomValues(new Uint8Array(32));
@@ -89,45 +134,85 @@ describe('settings', () => {
         },
     };
 
-    test('round-trip under the identity key, bound to the person and the version', async () => {
-        const { key } = await identityWithKey();
-        const envelope = await sealSettings(key, USER, 3, settings);
-        expect(await openSettings(key, USER, envelope)).toEqual(settings);
-        // Another identity, another person, or a replayed older version: refused.
-        const stranger = await identityWithKey(OTHER);
-        await expect(openSettings(stranger.key, USER, envelope)).rejects.toThrow();
-        await expect(openSettings(key, OTHER, envelope)).rejects.toThrow();
+    /* A settings key as an account makes it: random, wrapped under the root. */
+    async function withSettingsKey(userId = USER) {
+        const identity = await identityWithKey(userId);
+        const made = await createSettingsKey(identity.root, userId);
+        return { ...identity, settingsKey: made.key, wrapped: made.envelope };
+    }
+    const only = (settingsKey: Uint8Array<ArrayBuffer>) => ({
+        settingsKey,
+        identityPrivateKey: null,
+    });
+
+    test('version 2 round-trips under the settings key, bound to the person and the version', async () => {
+        const { key: identityKey, settingsKey } = await withSettingsKey();
+        const envelope = await sealSettings(settingsKey, USER, 3, settings);
+        expect(envelope.version).toBe(2);
+        expect(await openSettings(only(settingsKey), USER, envelope)).toEqual(settings);
+        // Another account's key, another person, or a replayed older version: refused.
+        const stranger = await withSettingsKey(OTHER);
+        await expect(openSettings(only(stranger.settingsKey), USER, envelope)).rejects.toThrow();
+        await expect(openSettings(only(settingsKey), OTHER, envelope)).rejects.toThrow();
         await expect(
-            openSettings(key, USER, { ...envelope, settingsVersion: 2 }),
+            openSettings(only(settingsKey), USER, { ...envelope, settingsVersion: 2 }),
+        ).rejects.toThrow();
+        // Presented as version 1, it does not open under the account's identity key either.
+        await expect(
+            openSettings({ settingsKey: null, identityPrivateKey: identityKey }, USER, {
+                ...envelope,
+                version: 1,
+            }),
         ).rejects.toThrow();
         // A flipped byte in the ciphertext is refused, never parsed.
         const bytes = decode(envelope.ciphertext);
         bytes[5] = bytes[5]! ^ 1;
         const tampered = { ...envelope, ciphertext: Buffer.from(bytes).toString('base64url') };
-        await expect(openSettings(key, USER, tampered)).rejects.toThrow();
+        await expect(openSettings(only(settingsKey), USER, tampered)).rejects.toThrow();
     });
 
-    test('the same identity key opens settings after the root is rotated', async () => {
-        const { root, envelope: identity, key } = await identityWithKey();
-        const sealed = await sealSettings(key, USER, 1, EMPTY_SETTINGS);
-        const { rewrapIdentity } = await import('./identity');
-        const newRoot = crypto.getRandomValues(new Uint8Array(32));
-        const rewrapped = await rewrapIdentity(root, newRoot, USER, identity);
-        const reopened = await openIdentityEncryptionKey(newRoot, USER, rewrapped);
-        expect(await openSettings(reopened, USER, sealed)).toEqual(EMPTY_SETTINGS);
+    test('version 1 still opens with the identity key, and only with it', async () => {
+        const { key, settingsKey } = await withSettingsKey();
+        const legacy = await legacySettings(key, USER, 4, settings);
+        expect(
+            await openSettings({ settingsKey: null, identityPrivateKey: key }, USER, legacy),
+        ).toEqual(settings);
+        await expect(openSettings(only(settingsKey), USER, legacy)).rejects.toThrow(
+            'Open your identity first.',
+        );
+        await expect(
+            openSettings({ settingsKey, identityPrivateKey: key }, USER, { ...legacy, version: 2 }),
+        ).rejects.toThrow();
+    });
+
+    test('the settings key opens only under its root and account, and follows a master-key rotation', async () => {
+        const { root, settingsKey, wrapped } = await withSettingsKey();
+        expect(wrapped.ciphertext).toHaveLength(64); // 48 bytes, base64url
+        expect(await openSettingsKey(root, USER, wrapped)).toEqual(settingsKey);
+        await expect(openSettingsKey(root, OTHER, wrapped)).rejects.toThrow();
+        const nextRoot = crypto.getRandomValues(new Uint8Array(32));
+        await expect(openSettingsKey(nextRoot, USER, wrapped)).rejects.toThrow();
+        // Wrapped under the root, not derived from it: an identity's key opens nothing here.
+        const sealed = await sealSettings(settingsKey, USER, 1, EMPTY_SETTINGS);
+        const rewrapped = await rewrapSettingsKey(root, nextRoot, USER, wrapped);
+        expect(rewrapped.nonce).not.toBe(wrapped.nonce);
+        const reopened = await openSettingsKey(nextRoot, USER, rewrapped);
+        expect(await openSettings(only(reopened), USER, sealed)).toEqual(EMPTY_SETTINGS);
+        await expect(openSettingsKey(root, USER, rewrapped)).rejects.toThrow();
+        await expect(rewrapSettingsKey(nextRoot, root, USER, wrapped)).rejects.toThrow();
     });
 
     test('pads to whole kibibytes, so the length says little about how many are pinned', async () => {
-        const { key } = await identityWithKey();
-        const one = await sealSettings(key, USER, 1, EMPTY_SETTINGS);
-        const two = await sealSettings(key, USER, 1, settings);
+        const { settingsKey } = await withSettingsKey();
+        const one = await sealSettings(settingsKey, USER, 1, EMPTY_SETTINGS);
+        const two = await sealSettings(settingsKey, USER, 1, settings);
         expect(decode(one.ciphertext).length - 16).toBe(SETTINGS_PAD_STEP);
         expect(decode(two.ciphertext).length).toBe(decode(one.ciphertext).length);
-        expect(await openSettings(key, USER, two)).toEqual(settings);
+        expect(await openSettings(only(settingsKey), USER, two)).toEqual(settings);
     });
 
     test('refuses a document over the size cap', async () => {
-        const { key } = await identityWithKey();
+        const { settingsKey: key } = await withSettingsKey();
         const big: Settings = { version: 1, contacts: {} };
         for (let i = 0; i < 700; i++)
             big.contacts[`u${i}`] = {
@@ -216,5 +301,61 @@ describe('the identity’s KEM key', () => {
             kem.publicKey,
         );
         await expect(openIdentityKemKey(root, USER, rewrapped)).rejects.toThrow();
+    });
+});
+
+describe('settings in the worker', () => {
+    test('version 2 needs the settings key, which a lock forgets; version 1 opens with the identity', async () => {
+        const { createDeviceKey, rememberAccountKey } = await import('./device');
+        const { createCryptoSession } = await import('./session');
+        const { root, envelope: identity, key } = await identityWithKey();
+        const deviceKey = await createDeviceKey();
+        const bundle = await rememberAccountKey(root, deviceKey, {
+            userId: USER,
+            keyVersion: 1,
+            credentialVersion: 1,
+            deviceKeyId: 'device',
+        });
+        const session = createCryptoSession();
+        const call = (operation: string, input: unknown) =>
+            session.handle({ id: 1, operation, input } as Parameters<typeof session.handle>[0]);
+        await call('restore', { deviceKey, bundle });
+        await expect(
+            call('settingsSeal', { userId: USER, settingsVersion: 1, settings: EMPTY_SETTINGS }),
+        ).rejects.toThrow('Open your settings key first.');
+        const { settingsKey } = (await call('settingsKeyCreate', { userId: USER })) as {
+            settingsKey: { nonce: string; ciphertext: string };
+        };
+        const { envelope } = (await call('settingsSeal', {
+            userId: USER,
+            settingsVersion: 2,
+            settings: EMPTY_SETTINGS,
+        })) as { envelope: SettingsEnvelope };
+        expect(envelope.version).toBe(2);
+        // The key it made is the one the server keeps: it opens the envelope from the root alone.
+        const opened = await openSettingsKey(root, USER, settingsKey);
+        expect(
+            await openSettings({ settingsKey: opened, identityPrivateKey: null }, USER, envelope),
+        ).toEqual(EMPTY_SETTINGS);
+        // A version 1 envelope opens once the identity is open, to be saved again as version 2.
+        const legacy = await legacySettings(key, USER, 1, EMPTY_SETTINGS);
+        await expect(call('settingsOpen', { userId: USER, envelope: legacy })).rejects.toThrow(
+            'Open your identity first.',
+        );
+        await call('identityOpen', { userId: USER, identity });
+        await expect(call('settingsOpen', { userId: USER, envelope: legacy })).resolves.toEqual({
+            settings: EMPTY_SETTINGS,
+        });
+        // A key for another account, or after a lock, opens nothing.
+        await expect(call('settingsKeyOpen', { userId: OTHER, settingsKey })).rejects.toThrow();
+        session.reset();
+        await call('restore', { deviceKey, bundle });
+        await expect(call('settingsOpen', { userId: USER, envelope })).rejects.toThrow(
+            'Open your settings key first.',
+        );
+        await call('settingsKeyOpen', { userId: USER, settingsKey });
+        await expect(call('settingsOpen', { userId: USER, envelope })).resolves.toEqual({
+            settings: EMPTY_SETTINGS,
+        });
     });
 });

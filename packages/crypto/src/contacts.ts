@@ -8,11 +8,12 @@ import { decode, encode } from './keys';
  * A fingerprint (see fingerprint.ts) is what two people compare over another
  * channel before they trust a key the server handed them.
  *
- * Settings (the contact pins, and later anything else that must agree across
- * devices) are one JSON document sealed under a key derived from the identity
- * encryption private key. That key survives password changes, master-key
- * rotation and recovery unchanged, so settings need no rewrap in any of those
- * flows, and they are readable exactly by whoever holds the identity.
+ * Settings (the contact pins, the sharing ledger, and later anything else that
+ * must agree across devices) are one JSON document. Version 2 seals it under a
+ * random settings key wrapped under the account root (see SettingsKeyEnvelope),
+ * so it survives an identity succession and a stolen identity key opens none
+ * of it. Version 1 sealed it under a key derived from the identity's X25519
+ * private key; it is opened once and saved again as version 2.
  */
 
 export const SETTINGS_MAX_BYTES = 64 * 1024;
@@ -21,7 +22,8 @@ export const SETTINGS_PAD_STEP = 1024;
 export { fingerprint } from './fingerprint';
 
 export type SettingsEnvelope = {
-    version: 1;
+    /* 2 under the settings key; 1 under a key off the identity, read and never written. */
+    version: 1 | 2;
     /* Bumped by every save; the server refuses a save that names a stale one. */
     settingsVersion: number;
     nonce: string;
@@ -64,37 +66,112 @@ export type Settings = {
 
 export const EMPTY_SETTINGS: Settings = { version: 1, contacts: {} };
 
-async function settingsKey(identityPrivateKey: Uint8Array<ArrayBuffer>) {
-    const key = await crypto.subtle.importKey('raw', identityPrivateKey, 'HKDF', false, [
-        'deriveBits',
-    ]);
+/*
+ * The settings key, apart from the identity: 32 random bytes wrapped under a
+ * key derived from the account root, so replacing the identity strands
+ * nothing and a stolen identity key opens no settings. The server keeps the
+ * wrapped key beside the settings; a master-key rotation rewraps it.
+ */
+export type SettingsKeyEnvelope = { nonce: string; ciphertext: string };
+
+async function hkdf(ikm: Uint8Array<ArrayBuffer>, info: string) {
+    const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
     return new Uint8Array(
         await crypto.subtle.deriveBits(
             {
                 name: 'HKDF',
                 hash: 'SHA-256',
                 salt: new Uint8Array(32),
-                info: new TextEncoder().encode('hushos/settings/v1'),
+                info: new TextEncoder().encode(info),
             },
             key,
             256,
         ),
     ) as Uint8Array<ArrayBuffer>;
 }
-function settingsContext(userId: string, settingsVersion: number) {
+/* Version 1's key, derived from the identity's X25519 private key: read once, never sealed under again. */
+function legacySettingsKey(identityPrivateKey: Uint8Array<ArrayBuffer>) {
+    return hkdf(identityPrivateKey, 'hushos/settings/v1');
+}
+function settingsKeyContext(userId: string) {
+    return new TextEncoder().encode(userId.toLowerCase());
+}
+
+/* A fresh settings key and its envelope under the root. The caller owns the key and zeroes it. */
+export async function createSettingsKey(root: Uint8Array<ArrayBuffer>, userId: string) {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    try {
+        return { key, envelope: await wrapSettingsKey(root, userId, key) };
+    } catch (error) {
+        key.fill(0);
+        throw error;
+    }
+}
+async function wrapSettingsKey(root: Uint8Array<ArrayBuffer>, userId: string, key: Uint8Array) {
+    const wrap = await hkdf(root, 'hushos/settings-key-wrap/v1');
+    const nonce = crypto.getRandomValues(new Uint8Array(24));
+    try {
+        return {
+            nonce: encode(nonce),
+            ciphertext: encode(await encryptKey(key, wrap, nonce, settingsKeyContext(userId))),
+        };
+    } finally {
+        wrap.fill(0);
+    }
+}
+export async function openSettingsKey(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: SettingsKeyEnvelope,
+) {
+    const wrap = await hkdf(root, 'hushos/settings-key-wrap/v1');
+    try {
+        const key = await decryptKey(
+            decode(envelope.ciphertext, 48),
+            wrap,
+            decode(envelope.nonce, 24),
+            settingsKeyContext(userId),
+        );
+        if (key.length !== 32) {
+            key.fill(0);
+            throw new CryptoError('Invalid settings key.');
+        }
+        return key as Uint8Array<ArrayBuffer>;
+    } finally {
+        wrap.fill(0);
+    }
+}
+/* The same settings key under a new root, for a master-key rotation: a fresh nonce, the key unchanged. */
+export async function rewrapSettingsKey(
+    oldRoot: Uint8Array<ArrayBuffer>,
+    newRoot: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: SettingsKeyEnvelope,
+) {
+    const key = await openSettingsKey(oldRoot, userId, envelope);
+    try {
+        return await wrapSettingsKey(newRoot, userId, key);
+    } finally {
+        key.fill(0);
+    }
+}
+
+function settingsContext(userId: string, version: 1 | 2, settingsVersion: number) {
     return new TextEncoder().encode(
-        JSON.stringify(['hushos/settings', 1, userId.toLowerCase(), settingsVersion]),
+        JSON.stringify(['hushos/settings', version, userId.toLowerCase(), settingsVersion]),
     );
 }
 
+/* Version 2, the only one sealed: under the settings key, padded to 1 KiB steps. */
 export async function sealSettings(
-    identityPrivateKey: Uint8Array<ArrayBuffer>,
+    settingsKey: Uint8Array<ArrayBuffer>,
     userId: string,
     settingsVersion: number,
     settings: Settings,
 ): Promise<SettingsEnvelope> {
     if (!Number.isSafeInteger(settingsVersion) || settingsVersion < 1)
         throw new CryptoError('Invalid settings version.');
+    if (settingsKey.length !== 32) throw new CryptoError('Invalid settings key.');
     const json = new TextEncoder().encode(JSON.stringify(settings));
     if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError('Settings are too large.');
     // Padded to 1 KiB steps with spaces JSON ignores, as the native core pads them, so the
@@ -107,41 +184,58 @@ export async function sealSettings(
     ).fill(0x20);
     plaintext.set(json);
     json.fill(0);
-    const key = await settingsKey(identityPrivateKey);
     const nonce = crypto.getRandomValues(new Uint8Array(24));
     try {
         return {
-            version: 1,
+            version: 2,
             settingsVersion,
             nonce: encode(nonce),
             ciphertext: encode(
-                await encryptKey(plaintext, key, nonce, settingsContext(userId, settingsVersion)),
+                await encryptKey(
+                    plaintext,
+                    settingsKey,
+                    nonce,
+                    settingsContext(userId, 2, settingsVersion),
+                ),
             ),
         };
     } finally {
-        key.fill(0);
         plaintext.fill(0);
     }
 }
 
+/*
+ * What opens settings: version 2 opens with the settings key, version 1 (once,
+ * to be saved again as version 2) with the identity's X25519 private key.
+ */
+export type SettingsKeys = {
+    settingsKey: Uint8Array<ArrayBuffer> | null;
+    identityPrivateKey: Uint8Array<ArrayBuffer> | null;
+};
+
 export async function openSettings(
-    identityPrivateKey: Uint8Array<ArrayBuffer>,
+    keys: SettingsKeys,
     userId: string,
     envelope: SettingsEnvelope,
 ): Promise<Settings> {
     if (
-        envelope.version !== 1 ||
+        (envelope.version !== 1 && envelope.version !== 2) ||
         !Number.isSafeInteger(envelope.settingsVersion) ||
         envelope.settingsVersion < 1
     )
         throw new CryptoError('Unsupported settings envelope.');
-    const key = await settingsKey(identityPrivateKey);
+    let derived: Uint8Array<ArrayBuffer> | undefined;
+    if (envelope.version === 1) {
+        if (!keys.identityPrivateKey) throw new CryptoError('Open your identity first.');
+        derived = await legacySettingsKey(keys.identityPrivateKey);
+    } else if (!keys.settingsKey) throw new CryptoError('Open your settings key first.');
+    const key = derived ?? keys.settingsKey!;
     try {
         const plaintext = await decryptKey(
             decode(envelope.ciphertext),
             key,
             decode(envelope.nonce, 24),
-            settingsContext(userId, envelope.settingsVersion),
+            settingsContext(userId, envelope.version, envelope.settingsVersion),
         );
         const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
         plaintext.fill(0);
@@ -154,6 +248,6 @@ export async function openSettings(
             throw new CryptoError('Unsupported settings document.');
         return parsed as Settings;
     } finally {
-        key.fill(0);
+        derived?.fill(0);
     }
 }
