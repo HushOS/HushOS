@@ -1,0 +1,21 @@
+packages/logging/src/privacy.test.ts
+  s_75dbe24a0bc379::t_0cb0296f6264fb 41-47
+packages/logging/src/privacy.ts
+  s_75dbe24a0bc379::t_7356ad15a978bf 103-104,106,164-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd676eb54643bc85f2887c7577b683db29865d98",
+  "prompts": {},
+  "sessions": {
+    "s_75dbe24a0bc379": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff31c0c0-5155-4ba8-bd7c-40246f630b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
