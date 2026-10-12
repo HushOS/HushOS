@@ -15,6 +15,7 @@ import { FileMark } from '@/components/drive/file-mark';
 import { Swatch, TagColourPicker } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamp, TagStamps } from '@/components/drive/tag-stamp';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import {
@@ -249,6 +250,7 @@ export function TagView({ tagId }: { tagId: string }) {
                                                     </span>
                                                 </span>
                                             </Link>
+                                            <UnverifiedMark node={node} />
                                             <TagStamps
                                                 tagIds={others}
                                                 registry={registry.data}

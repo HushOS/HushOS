@@ -1,4 +1,3 @@
-import type { ContactPin } from '@hushos/auth/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
@@ -7,7 +6,14 @@ import { PersonAvatar } from '@/components/person-avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { driveKeys, formatDay } from '@/lib/drive';
-import { lookupContact, pinContact, settingsQueryOptions, type Lookup } from '@/lib/contacts';
+import {
+    lookupContact,
+    pinContact,
+    replacementUnseen,
+    settingsQueryOptions,
+    type Lookup,
+    type Pin as ContactPin,
+} from '@/lib/contacts';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -20,12 +26,15 @@ import { cue } from '@/lib/sounds';
 export function CheckContact({
     userId,
     email: initialEmail = '',
+    recheck = false,
     onAdded,
     onCancel,
 }: {
     userId: string;
     /* Looked up at once when given, as from the share dialog's field. */
     email?: string;
+    /* Comparing words again with someone already added: "They match" saves the check afresh. */
+    recheck?: boolean;
     onAdded: (pin: ContactPin) => void;
     onCancel: () => void;
 }) {
@@ -84,7 +93,8 @@ export function CheckContact({
     }
 
     const first = found ? (found.contact.name.trim().split(/\s+/)[0] ?? found.contact.name) : '';
-    const alreadyAdded = found !== null && found.pinned !== null && !found.changed && !found.stale;
+    const alreadyAdded =
+        !recheck && found !== null && found.pinned !== null && !found.changed && !found.stale;
     const unsignedKem = found?.kem !== null && found?.kem !== undefined && !found.kem.valid;
 
     if (!found)
@@ -154,6 +164,11 @@ export function CheckContact({
                         {formatDay(found.pinned!.pinnedAt)}. That can be a new phone or a reset, or
                         someone pretending. Check it’s them before you accept.
                     </span>
+                </p>
+            ) : found.followed || (recheck && found.pinned && replacementUnseen(found.pinned)) ? (
+                <p className="text-sm leading-snug">
+                    {first} replaced their sharing keys; the change is signed by their previous
+                    keys. Ask {first} to read you their twelve words to be sure it was them.
                 </p>
             ) : found.stale ? (
                 <p className="text-sm leading-snug text-muted-foreground">

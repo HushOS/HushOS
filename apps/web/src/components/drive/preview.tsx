@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import {
     Notice,
     Opening,
@@ -122,12 +123,16 @@ export function Preview({
                         <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3 border-b border-rule bg-card py-2 pr-2 pl-5 sm:flex-nowrap sm:pr-3">
                             {/* On a phone the name takes a full line; wider, it shortens in the middle so its type stays. */}
                             <div className="min-w-0 basis-full sm:flex-1 sm:basis-auto">
-                                <DialogTitle
-                                    className="flex min-w-0 text-[15px] font-bold"
-                                    title={current.name}
-                                >
-                                    <MiddleName name={current.name} />
-                                </DialogTitle>
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <DialogTitle
+                                        className="flex min-w-0 text-[15px] font-bold"
+                                        title={current.name}
+                                    >
+                                        <MiddleName name={current.name} />
+                                    </DialogTitle>
+                                    {/* An earlier version is marked in the versions list, not here. */}
+                                    {!version && <UnverifiedMark node={current} />}
+                                </div>
                                 <DialogDescription className="truncate text-[13px] text-muted-foreground tabular-nums">
                                     {version
                                         ? version.meta

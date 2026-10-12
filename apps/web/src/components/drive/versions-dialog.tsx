@@ -1,8 +1,11 @@
 import type { DriveNode } from '@hushos/drive/client';
+import type { Signer } from '@hushos/drive/api';
+import type { Integrity, IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DownloadIcon, EyeIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useState } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Preview } from '@/components/drive/preview';
 import { Spinner } from '@/components/motion';
 import {
@@ -49,6 +52,15 @@ const replacedWhen = (iso: string) =>
  * version can be opened in the viewer, downloaded as it was, restored (the two
  * swap, nothing is purged) or discarded now rather than after 30 days.
  */
+/* A listed version's own check: who added it, as the server says, and whether that holds. */
+function versionIssues(version: {
+    integrity: Integrity | null;
+    signer: Signer | null;
+}): IntegrityIssue[] {
+    if (!version.integrity || version.integrity === 'verified') return [];
+    return [{ record: 'version', integrity: version.integrity, signer: version.signer }];
+}
+
 export function VersionsDialog({
     node,
     open,
@@ -172,7 +184,10 @@ function VersionList({
                     <div className="flex min-h-[68px] items-center gap-3 border-b border-rule px-3 py-2 last:border-0">
                         <FileMark node={node} size="list" />
                         <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="text-[15px] font-semibold">Current version</span>
+                            <span className="flex items-center gap-2">
+                                <span className="text-[15px] font-semibold">Current version</span>
+                                <UnverifiedMark issues={versionIssues(current)} />
+                            </span>
                             <span className="text-[13px] text-muted-foreground tabular-nums">
                                 {formatWhen(current.readyAt ?? current.createdAt)} ·{' '}
                                 {sizeOf(current)}
@@ -196,7 +211,12 @@ function VersionList({
                         <div className="flex min-h-[68px] flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
                             <FileMark node={node} size="list" className="opacity-70" />
                             <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="text-[15px] font-semibold">Earlier version</span>
+                                <span className="flex items-center gap-2">
+                                    <span className="text-[15px] font-semibold">
+                                        Earlier version
+                                    </span>
+                                    <UnverifiedMark issues={versionIssues(earlier)} />
+                                </span>
                                 <span className="text-[13px] text-muted-foreground tabular-nums">
                                     {formatWhen(earlier.readyAt ?? earlier.createdAt)} ·{' '}
                                     {sizeOf(earlier)}

@@ -1,4 +1,5 @@
 import { useDrive } from '@/components/drive/drive-shell';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { Preview } from '@/components/drive/preview';
 import { PendingLabel, Spinner } from '@/components/motion';
@@ -306,6 +307,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                 <div className={`${box} flex flex-wrap items-center gap-3 px-4 py-3`}>
                     <FileMark kind="file" name={opened.node.name} />
                     <span className="text-sm font-medium wrap-anywhere">{opened.node.name}</span>
+                    <UnverifiedMark node={opened.node} />
                     <span className="text-xs text-muted-foreground tabular-nums">
                         {formatBytes(contentSize(opened.node) ?? 0)}
                     </span>
@@ -365,10 +367,14 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                     ) : (
                         <ul className="divide-y divide-rule">
                             {rows.map((node) => (
-                                <li key={node.id} data-node-id={node.id}>
+                                <li
+                                    key={node.id}
+                                    data-node-id={node.id}
+                                    className="flex items-center hover:bg-muted"
+                                >
                                     <button
                                         type="button"
-                                        className="flex min-h-[46px] w-full min-w-0 cursor-pointer items-center gap-3.5 px-4 py-2 text-left text-sm transition-colors hover:bg-muted"
+                                        className="flex min-h-[46px] w-full min-w-0 flex-1 cursor-pointer items-center gap-3.5 px-4 py-2 text-left text-sm"
                                         onClick={() =>
                                             node.kind === 'folder'
                                                 ? setFolderId(node.id)
@@ -385,6 +391,7 @@ function Contents({ report, events }: { report: ReportView; events: ReportEventV
                                                 : formatBytes(contentSize(node) ?? 0)}
                                         </span>
                                     </button>
+                                    <UnverifiedMark node={node} className="mr-4" />
                                 </li>
                             ))}
                         </ul>

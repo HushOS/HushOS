@@ -7,6 +7,7 @@ import { RotateCcwIcon } from 'lucide-react';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import { useDrive } from '@/components/drive/drive-shell';
 import { FileMark } from '@/components/drive/file-mark';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Highlight } from '@/components/drive/highlight';
 import { useOpenNode } from '@/lib/open-node';
 import { Spinner } from '@/components/motion';
@@ -126,20 +127,23 @@ export function SearchView({ query }: { query: string }) {
                                     onMouseEnter={() => setFocus({ query, index })}
                                 >
                                     <td className="min-w-0 pl-5 sm:pl-8">
-                                        <Link
-                                            {...target}
-                                            className="flex min-w-0 items-center gap-4 text-[15px] font-medium hover:[&>span>span:first-child]:underline"
-                                        >
-                                            <FileMark node={node} size="list" />
-                                            <span className="flex min-w-0 flex-col">
-                                                <span className="truncate">
-                                                    <Highlight text={node.name} query={query} />
+                                        <span className="flex min-w-0 items-center gap-4">
+                                            <Link
+                                                {...target}
+                                                className="flex min-w-0 items-center gap-4 text-[15px] font-medium hover:[&>span>span:first-child]:underline"
+                                            >
+                                                <FileMark node={node} size="list" />
+                                                <span className="flex min-w-0 flex-col">
+                                                    <span className="truncate">
+                                                        <Highlight text={node.name} query={query} />
+                                                    </span>
+                                                    <span className="truncate text-[13px] font-normal text-muted-foreground">
+                                                        {path.join(' › ')}
+                                                    </span>
                                                 </span>
-                                                <span className="truncate text-[13px] font-normal text-muted-foreground">
-                                                    {path.join(' › ')}
-                                                </span>
-                                            </span>
-                                        </Link>
+                                            </Link>
+                                            <UnverifiedMark node={node} />
+                                        </span>
                                     </td>
                                     <td className="hidden min-w-0 pr-4 lg:table-cell">
                                         <AccessCell

@@ -36,6 +36,7 @@ import { ShareDialog } from '@/components/drive/share-dialog';
 import { Swatch } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
 import { PageHeader } from '@/components/page-header';
@@ -524,6 +525,7 @@ export function HomeView() {
                                                                         }}
                                                                     />
                                                                 </button>
+                                                                <UnverifiedMark node={node} />
                                                                 <TagStamps
                                                                     tagIds={
                                                                         registry

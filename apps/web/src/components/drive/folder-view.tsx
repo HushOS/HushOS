@@ -36,6 +36,7 @@ import { ReportDialog } from '@/components/drive/report-dialog';
 import { ShareDialog } from '@/components/drive/share-dialog';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { keyLabel } from '@/components/drive/shortcuts';
 import { AddMenu } from '@/components/drive/add-menu';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
@@ -1034,6 +1035,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                                     onOpen={markOpened(node)}
                                                                 />
                                                             </button>
+                                                            <UnverifiedMark node={node} />
                                                             <TagStamps
                                                                 tagIds={tagIds(node)}
                                                                 registry={registry}
@@ -1144,6 +1146,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     onToggle={() => toggle(node.id)}
                                                     className="top-3.5 left-3.5 size-5 shadow-md"
                                                     iconClassName="size-3"
+                                                />
+                                                <UnverifiedMark
+                                                    node={node}
+                                                    className="absolute top-3.5 right-3.5 shadow-md"
                                                 />
                                             </ContextMenuTrigger>
                                             <NodeContextMenu entries={entries} />

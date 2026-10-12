@@ -1,4 +1,3 @@
-import type { ContactPin } from '@hushos/auth/api';
 import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -47,11 +46,15 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
 import {
+    acknowledgeSuccession,
     ownFingerprintQueryOptions,
     pinVerified,
     removeContact,
+    replacementUnseen,
     settingsQueryOptions,
+    type Pin as ContactPin,
 } from '@/lib/contacts';
+import { afterTrustChanged } from '@/lib/integrity';
 import { formatWhen } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
@@ -95,10 +98,28 @@ function People() {
         enabled: settings.isSuccess,
     });
 
+    // Contacts whose pin followed a signed succession: told once, with the way to compare again.
+    const succeeded = contacts.filter(replacementUnseen);
+
+    async function acknowledge(contact: ContactPin) {
+        try {
+            await acknowledgeSuccession(queryClient, userId, contact.userId);
+        } catch (cause) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t save that',
+                description: cause instanceof Error ? cause.message : undefined,
+            });
+        }
+    }
+
     async function remove(contact: ContactPin) {
         setBusy(true);
         try {
             await removeContact(queryClient, userId, contact.userId);
+            // What they wrote no longer counts as checked.
+            afterTrustChanged(queryClient);
             cue('droplet');
             toast.add({ type: 'success', title: `${firstName(contact.name)} removed` });
         } catch (cause) {
@@ -138,6 +159,30 @@ function People() {
                     </Button>
                 </EmptyState>
             )}
+            {succeeded.map((contact) => (
+                <div
+                    key={contact.userId}
+                    data-succession={contact.email}
+                    className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-rule px-5 py-3 sm:px-8"
+                >
+                    <ShieldCheckIcon
+                        className="size-4 shrink-0 text-muted-foreground"
+                        aria-hidden="true"
+                    />
+                    <p className="min-w-0 flex-1 text-sm">
+                        {contact.name} replaced their sharing keys; the change is signed by their
+                        previous keys.
+                    </p>
+                    <span className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setRechecking(contact)}>
+                            Compare words again
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => void acknowledge(contact)}>
+                            Dismiss
+                        </Button>
+                    </span>
+                </div>
+            ))}
             {settings.data && contacts.length === 0 && (
                 <div className="flex items-center gap-3 border-y border-rule px-5 py-4 sm:px-8">
                     <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -250,14 +295,16 @@ function People() {
                             Check {rechecking ? firstName(rechecking.name) : ''} again
                         </DialogTitle>
                         <DialogDescription>
-                            Their twelve words now cover all of their keys. Read them together once
-                            more.
+                            {rechecking && replacementUnseen(rechecking)
+                                ? 'Their keys are new, so their twelve words are too. Read them together once more.'
+                                : 'Their twelve words now cover all of their keys. Read them together once more.'}
                         </DialogDescription>
                     </DialogHeader>
                     {rechecking && (
                         <CheckContact
                             userId={userId}
                             email={rechecking.email}
+                            recheck
                             onCancel={() => setRechecking(null)}
                             onAdded={(pin) => {
                                 setRechecking(null);

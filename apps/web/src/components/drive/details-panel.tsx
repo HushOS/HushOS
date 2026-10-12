@@ -1,9 +1,11 @@
 import { contentSize, tagsOf, type DriveNode } from '@hushos/drive/client';
+import { integrityIssues } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
@@ -309,6 +311,7 @@ export function ItemDetails({
     const tagIds = registry ? tagsOf(registry, node.id) : [];
     const version = node.kind === 'file' ? node.currentVersion : null;
     const size = contentSize(node);
+    const unverified = integrityIssues(node);
     const status =
         version === null
             ? null
@@ -349,6 +352,17 @@ export function ItemDetails({
                 <Fact label="Changed">{formatWhen(node.metadata?.modified ?? node.updatedAt)}</Fact>
                 <Fact label="Created">{formatWhen(node.createdAt)}</Fact>
                 {location && <Fact label="Folder">{location}</Fact>}
+                {/* Only when something did not verify: a verified item says nothing about it. */}
+                {unverified.length > 0 && (
+                    <Fact label="Changed by">
+                        <span className="inline-flex flex-wrap items-center gap-2">
+                            <span>
+                                {(unverified[0]!.signer ?? node.metadataSigner)?.name ?? 'Unknown'}
+                            </span>
+                            <UnverifiedMark node={node} />
+                        </span>
+                    </Fact>
+                )}
                 {version && version.objectStatus !== 'ready' && (
                     <Fact label="Status">
                         <span

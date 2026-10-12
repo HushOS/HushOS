@@ -26,6 +26,7 @@ import { describeLink } from '@/components/drive/link-row';
 import { Preview } from '@/components/drive/preview';
 import { ReportDialog } from '@/components/drive/report-dialog';
 import { ShareDialog } from '@/components/drive/share-dialog';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import {
@@ -328,7 +329,10 @@ function WithMeRow({
                 <FileMark node={share.node} size="list" />
             </span>
             <span className="flex min-w-0 flex-col">
-                <ItemName node={share.node} onPreview={onPreview} />
+                <span className="flex min-w-0 items-center gap-3">
+                    <ItemName node={share.node} onPreview={onPreview} />
+                    <UnverifiedMark node={share.node} />
+                </span>
                 <span className="truncate text-[13px] text-muted-foreground md:hidden">
                     From {from} · {role}
                 </span>
