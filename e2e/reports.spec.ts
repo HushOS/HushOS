@@ -266,7 +266,7 @@ test('releasing the hold of a closed report deletes its keys: nobody can open it
     await operator.goto(`/app/admin/reports/${reportId}`);
     await operator.getByRole('button', { name: 'Release the hold and the keys' }).click();
     await expect(operator.getByText('Hold released').first()).toBeVisible({ timeout: 60_000 });
-    await expect(operator.getByText(/can’t be opened or reopened/)).toBeVisible();
+    await expect(operator.getByText(/can’t be opened, held or reopened/)).toBeVisible();
     await expect(operator.getByRole('button', { name: 'Reopen' })).toHaveCount(0);
     await openReportContent(operator, reportId);
     await expect(operator.getByRole('alert')).toContainText(/released/, { timeout: 60_000 });
