@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { restoreAccountKey } from './device';
 import {
+    chunkCount,
+    ciphertextSize,
+    contentLength,
     decryptChunk,
+    fileBytesOf,
     decryptThumbnail,
     openDocument,
     openMetadata,
@@ -20,6 +24,26 @@ import web from '../../../crates/hushos-core/fixtures/web.json';
 import { decode, wrappingKey } from './keys';
 import { accountKeyContext } from './protocol';
 import core from './__fixtures__/core.json';
+
+/* The file's bytes as the fixture writes them; an empty file is the empty string, which decode refuses. */
+const fileOf = (value: string) => (value === '' ? new Uint8Array(0) : decode(value));
+
+type VersionFixture = {
+    ctx: {
+        workspaceId: string;
+        nodeId: string;
+        versionId: string;
+        objectId: string;
+        suite: number;
+    };
+    contentKey: string;
+    contentNonce: string;
+    plaintextSize: number;
+    thumbnailBytes: number;
+    envelope: string;
+    chunk: { index: number; chunkCount: number; plaintext: string; ciphertext: string };
+    thumbnail: { plaintext: string; ciphertext: string } | null;
+};
 
 /*
  * Records sealed by the Rust core (crates/hushos-core/examples/fixtures.rs)
@@ -69,57 +93,89 @@ describe('records sealed by the Rust core', () => {
         expect(metadata).toEqual(node.metadata);
     });
 
-    it('opens a version, its last chunk and its thumbnail', async () => {
+    it('opens suite 3 versions with and without a thumbnail, and a suite 2 one, to the file', async () => {
         const node = core.node;
-        const version = node.version;
-        const opened = await openVersion(
-            decode(version.envelope, 84),
-            decode(node.nodeKey, 32),
-            version.ctx,
-        );
-        expect(opened).toEqual({
-            contentKey: decode(version.contentKey, 32),
-            plaintextSize: version.plaintextSize,
-            thumbnailBytes: version.thumbnailBytes,
-        });
-        const contentNonce = decode(version.contentNonce, 16);
-        const ctx = {
-            workspaceId: version.ctx.workspaceId,
-            objectId: version.ctx.objectId,
-            suite: version.ctx.suite,
-            index: version.lastChunk.index,
-            chunkCount: 2,
-            plaintextSize: version.plaintextSize,
-            thumbnailBytes: version.thumbnailBytes,
-        };
-        expect(
-            await decryptChunk(
-                decode(version.lastChunk.ciphertext),
+        const nodeKey = decode(node.nodeKey, 32);
+        const versions = [node.version, node.bareVersion, node.emptyVersion, node.unpaddedVersion];
+        expect(versions.map((version) => version.ctx.suite)).toEqual([3, 3, 3, 2]);
+        for (const version of versions as VersionFixture[]) {
+            const opened = await openVersion(decode(version.envelope, 84), nodeKey, version.ctx);
+            expect(opened).toEqual({
+                contentKey: decode(version.contentKey, 32),
+                plaintextSize: version.plaintextSize,
+                thumbnailBytes: version.thumbnailBytes,
+            });
+            const contentNonce = decode(version.contentNonce, 16);
+            const { chunk } = version;
+            const ctx = {
+                workspaceId: version.ctx.workspaceId,
+                objectId: version.ctx.objectId,
+                suite: version.ctx.suite,
+                index: chunk.index,
+                chunkCount: chunk.chunkCount,
+                plaintextSize: version.plaintextSize,
+                thumbnailBytes: version.thumbnailBytes,
+            };
+            expect(chunk.chunkCount).toBe(
+                chunkCount(contentLength(ctx.suite, ctx.plaintextSize, ctx.thumbnailBytes)),
+            );
+            const plaintext = await decryptChunk(
+                decode(chunk.ciphertext),
                 opened.contentKey,
                 contentNonce,
                 ctx,
-            ),
-        ).toEqual(decode(version.lastChunk.plaintext));
+            );
+            expect(fileBytesOf(plaintext, version.plaintextSize, chunk.index)).toEqual(
+                fileOf(chunk.plaintext),
+            );
+            // Under suite 3 what follows the file is zeros, and the suite is bound.
+            expect(plaintext.subarray(fileOf(chunk.plaintext).length).every((b) => b === 0)).toBe(
+                true,
+            );
+            if (ctx.suite === 3)
+                await expect(
+                    decryptChunk(decode(chunk.ciphertext), opened.contentKey, contentNonce, {
+                        ...ctx,
+                        suite: 2,
+                    }),
+                ).rejects.toThrow();
+            if (version.thumbnail)
+                expect(
+                    await decryptThumbnail(
+                        decode(version.thumbnail.ciphertext),
+                        opened.contentKey,
+                        contentNonce,
+                        { ...ctx, thumbnailBytes: version.thumbnailBytes },
+                    ),
+                ).toEqual(decode(version.thumbnail.plaintext));
+        }
+        // Suite 2's kept chunk is the last of two: another index is another context.
+        const unpadded = node.unpaddedVersion;
         await expect(
-            decryptChunk(decode(version.lastChunk.ciphertext), opened.contentKey, contentNonce, {
-                ...ctx,
-                index: 0,
-            }),
-        ).rejects.toThrow();
-        expect(
-            await decryptThumbnail(
-                decode(version.thumbnail.ciphertext),
-                opened.contentKey,
-                contentNonce,
+            decryptChunk(
+                decode(unpadded.chunk.ciphertext),
+                decode(unpadded.contentKey, 32),
+                decode(unpadded.contentNonce, 16),
                 {
-                    workspaceId: version.ctx.workspaceId,
-                    objectId: version.ctx.objectId,
-                    suite: version.ctx.suite,
-                    plaintextSize: version.plaintextSize,
-                    thumbnailBytes: version.thumbnailBytes,
+                    ...unpadded.ctx,
+                    index: 0,
+                    chunkCount: 2,
+                    plaintextSize: unpadded.plaintextSize,
+                    thumbnailBytes: unpadded.thumbnailBytes,
                 },
             ),
-        ).toEqual(decode(version.thumbnail.plaintext));
+        ).rejects.toThrow();
+    });
+
+    it('agrees with the core on the layout of every suite and size', () => {
+        expect(core.layouts.length).toBeGreaterThan(20);
+        for (const row of core.layouts) {
+            const length = contentLength(row.suite, row.plaintextSize, row.thumbnailBytes);
+            expect([length, chunkCount(length)]).toEqual([row.contentLength, row.chunkCount]);
+            expect(ciphertextSize(row.suite, row.plaintextSize, row.thumbnailBytes)).toBe(
+                row.ciphertextSize,
+            );
+        }
     });
 
     it('opens a tags registry document the core sealed', async () => {
@@ -130,25 +186,6 @@ describe('records sealed by the Rust core', () => {
             document.ctx,
         );
         expect(opened).toEqual(JSON.parse(document.json));
-    });
-
-    it('opens an empty file the core sealed', async () => {
-        const node = core.node;
-        const plaintext = await decryptChunk(
-            decode(node.emptyFile.ciphertext),
-            decode(node.version.contentKey, 32),
-            decode(node.version.contentNonce, 16),
-            {
-                workspaceId: node.version.ctx.workspaceId,
-                objectId: node.emptyFile.objectId,
-                suite: node.version.ctx.suite,
-                index: 0,
-                chunkCount: 1,
-                plaintextSize: 0,
-                thumbnailBytes: 0,
-            },
-        );
-        expect(plaintext).toEqual(new Uint8Array(0));
     });
 
     it('opens a password link the core made, as visitor and as owner', async () => {

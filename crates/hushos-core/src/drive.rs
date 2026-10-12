@@ -1,6 +1,8 @@
 //! Drive: the workspace grant, node keys, metadata, version envelopes and
 //! content chunks, sealed and opened exactly as `packages/crypto/drive.ts`
-//! does it. The chunk arithmetic lives here too, so no app repeats it.
+//! does it. The chunk arithmetic lives here too, so no app repeats it: content
+//! suite 3 pads every object to a Padmé bucket, and only this module knows
+//! where the file ends inside one.
 
 use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open, open_key, open_with_nonce, seal, seal_with_nonce};
@@ -28,7 +30,8 @@ const THUMBNAIL_MAX_BYTES: u32 = 65_536;
 const CONTENT_NONCE_BYTES: usize = 16;
 const ENVELOPE_SUITE: u32 = 1;
 const LEGACY_CONTENT_SUITE: u32 = 1;
-const CONTENT_SUITE: u32 = 2;
+const UNPADDED_CONTENT_SUITE: u32 = 2;
+const CONTENT_SUITE: u32 = 3;
 const CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const THUMBNAIL_KDF_CONTEXT: &str = "hushthmb";
 const THUMBNAIL_KDF_SUBKEY: u64 = 1;
@@ -433,7 +436,8 @@ impl fmt::Debug for ContentKey {
 }
 
 /// Node key -> content key. Suite 1 (legacy, read-only) keeps the size on the
-/// server row and must be given it; suite 2 seals size and thumbnail length.
+/// server row and must be given it; suites 2 and 3 seal the size and the
+/// thumbnail length, each under its own suite number.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn version_open(
     ctx: VersionContext,
@@ -451,7 +455,7 @@ pub fn version_open(
             let plaintext_size = row_size.ok_or_else(|| input("This file has no size on record."))?;
             Ok(ContentKey { key, plaintext_size, thumbnail_bytes: 0 })
         }
-        CONTENT_SUITE => {
+        UNPADDED_CONTENT_SUITE | CONTENT_SUITE => {
             expect_len("envelope", &envelope, VERSION_ENVELOPE_BYTES)?;
             let record = Zeroizing::new(open(&node_key, &envelope, &aad)?);
             if record.len() != VERSION_RECORD_BYTES {
@@ -473,12 +477,35 @@ pub fn version_open(
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SealedVersion {
-    /// 84 bytes; send as `contentKeyEnvelope` with suite 2.
+    /// 84 bytes; send as `contentKeyEnvelope` with `contentSuite` [`content_suite`] (3).
     pub envelope: Vec<u8>,
+    /// Suite 3's layout: what to declare as `chunkCount` and `ciphertextSize`.
     pub layout: ContentLayout,
 }
 
-/// Suite 2: the content key, the size and the trailer length under the node key.
+/// The content suite this core writes, for `contentSuite` on an upload; suites 1 and 2 are read only.
+///
+/// ```
+/// assert_eq!(hushos_core::content_suite(), 3);
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn content_suite() -> u32 {
+    CONTENT_SUITE
+}
+
+/// Suite 3, the one written: the content key, the size and the trailer length under the node key.
+///
+/// ```
+/// use hushos_core::{random_bytes, version_open, version_seal, VersionContext};
+/// let node_key = random_bytes(32)?;
+/// let ctx = VersionContext { workspace_id: "ws".into(), node_id: "n1".into(), version_id: "v1".into(), object_id: "obj".into() };
+/// let sealed = version_seal(ctx.clone(), node_key.clone(), random_bytes(32)?, 1000, 0)?;
+/// assert_eq!(sealed.envelope.len(), 84);
+/// assert_eq!(sealed.layout.ciphertext_size, 1024 + 16, "1000 bytes pad to the 1024 bucket");
+/// assert_eq!(version_open(ctx.clone(), 3, node_key.clone(), sealed.envelope.clone(), None)?.plaintext_size, 1000);
+/// assert!(version_open(ctx, 2, node_key, sealed.envelope, None).is_err(), "the suite is bound");
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn version_seal(
     ctx: VersionContext,
@@ -495,12 +522,24 @@ pub fn version_seal(
     if plaintext_size > MAX_SAFE_INTEGER {
         return Err(input("This file is too large."));
     }
+    let envelope =
+        seal_record(&ctx, CONTENT_SUITE, &node_key, &content_key, plaintext_size, thumbnail_bytes)?;
+    Ok(SealedVersion { envelope, layout: content_layout(CONTENT_SUITE, plaintext_size, thumbnail_bytes)? })
+}
+
+fn seal_record(
+    ctx: &VersionContext,
+    suite: u32,
+    node_key: &[u8],
+    content_key: &[u8],
+    plaintext_size: u64,
+    thumbnail_bytes: u32,
+) -> CoreResult<Vec<u8>> {
     let mut record = Zeroizing::new(Vec::with_capacity(VERSION_RECORD_BYTES));
-    record.extend_from_slice(&content_key);
+    record.extend_from_slice(content_key);
     record.extend_from_slice(&plaintext_size.to_be_bytes());
     record.extend_from_slice(&thumbnail_bytes.to_be_bytes());
-    let envelope = seal(&node_key, &record, &version_context(&ctx, CONTENT_SUITE))?;
-    Ok(SealedVersion { envelope, layout: content_layout(plaintext_size, thumbnail_bytes) })
+    seal(node_key, &record, &version_context(ctx, suite))
 }
 
 /// The opened content of one version sealed again under another node key, in
@@ -513,10 +552,10 @@ pub fn version_seal(
 /// let target_key = random_bytes(32)?;
 /// let ctx = VersionContext { workspace_id: "ws".into(), node_id: "n1".into(), version_id: "v1".into(), object_id: "obj".into() };
 /// let sealed = version_seal(ctx.clone(), source_key.clone(), random_bytes(32)?, 10, 0)?;
-/// let opened = version_open(ctx.clone(), 2, source_key, sealed.envelope, None)?;
+/// let opened = version_open(ctx.clone(), 3, source_key, sealed.envelope, None)?;
 /// let copy = VersionContext { node_id: "n2".into(), version_id: "v2".into(), ..ctx };
-/// let envelope = version_reseal(copy.clone(), 2, target_key.clone(), opened.clone())?;
-/// assert_eq!(version_open(copy, 2, target_key, envelope, None)?.key, opened.key);
+/// let envelope = version_reseal(copy.clone(), 3, target_key.clone(), opened.clone())?;
+/// assert_eq!(version_open(copy, 3, target_key, envelope, None)?.key, opened.key);
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -530,9 +569,11 @@ pub fn version_reseal(
     expect_len("contentKey", &content.key, KEY_BYTES)?;
     match suite {
         LEGACY_CONTENT_SUITE => seal(&node_key, &content.key, &version_context(&ctx, LEGACY_CONTENT_SUITE)),
-        CONTENT_SUITE => {
-            Ok(version_seal(ctx, node_key, content.key, content.plaintext_size, content.thumbnail_bytes)?
-                .envelope)
+        UNPADDED_CONTENT_SUITE | CONTENT_SUITE => {
+            if content.thumbnail_bytes > THUMBNAIL_MAX_BYTES || content.plaintext_size > MAX_SAFE_INTEGER {
+                return Err(input("Invalid version record."));
+            }
+            seal_record(&ctx, suite, &node_key, &content.key, content.plaintext_size, content.thumbnail_bytes)
         }
         other => Err(input(format!("Unsupported content suite {other}."))),
     }
@@ -542,7 +583,8 @@ pub fn version_reseal(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ContentLayout {
-    /// At least one: an empty file is one 16-byte chunk.
+    /// At least one: an empty file is one 16-byte chunk. Under suite 3 it counts
+    /// the padding's chunks too: every one of them is fetched on a full read.
     pub chunk_count: u64,
     /// Plaintext bytes per chunk before the last.
     pub chunk_bytes: u64,
@@ -550,29 +592,100 @@ pub struct ContentLayout {
     pub tag_bytes: u64,
     /// The whole object: chunks, tags and the trailer if any.
     pub ciphertext_size: u64,
+    /// What the chunks cover: the file and, under suite 3, the zeros after it.
+    pub content_length: u64,
 }
 
-/// The layout of an object for a given file: how many 8 MiB chunks, and how
-/// long the whole ciphertext is once every chunk has its tag.
+fn check_suite(suite: u32) -> CoreResult<u32> {
+    match suite {
+        LEGACY_CONTENT_SUITE | UNPADDED_CONTENT_SUITE | CONTENT_SUITE => Ok(suite),
+        other => Err(input(format!("Unsupported content suite {other}."))),
+    }
+}
+
+fn trailer_len(thumbnail_bytes: u32) -> CoreResult<u64> {
+    if thumbnail_bytes > THUMBNAIL_MAX_BYTES {
+        return Err(input("Invalid thumbnail size."));
+    }
+    Ok(if thumbnail_bytes > 0 { thumbnail_bytes as u64 + TAG_BYTES as u64 } else { 0 })
+}
+
+/// Padmé: `length` rounded up so that only its top bits survive, about
+/// log2(log2(length)) of them; everything up to 256 bytes is one bucket. What
+/// the server learns of a suite 3 object is this number: the padding is under
+/// 6.25% of the length up to 64 KiB, 3.125% up to 4 GiB, 1.5625% beyond.
+///
+/// ```
+/// use hushos_core::padded_length;
+/// assert_eq!(padded_length(0)?, 256);
+/// assert_eq!(padded_length(257)?, 272);
+/// assert_eq!(padded_length(1000)?, 1024);
+/// assert_eq!(padded_length((1 << 20) + 1)?, 1_081_344);
+/// assert_eq!(padded_length(10_000_000_000)?, 10_066_329_600);
+/// assert_eq!(padded_length(padded_length(123_456)?)?, padded_length(123_456)?, "idempotent");
+/// assert!(padded_length(1 << 53).is_err(), "past what the web can count");
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn padded_length(length: u64) -> CoreResult<u64> {
+    if length > MAX_SAFE_INTEGER {
+        return Err(input("This file is too large."));
+    }
+    if length <= 256 {
+        return Ok(256);
+    }
+    let e = 63 - length.leading_zeros() as u64; // floor(log2 L) >= 8
+    let s = 64 - e.leading_zeros() as u64; // floor(log2 E) + 1
+    let mask = (1u64 << (e - s)) - 1;
+    let out = (length + mask) & !mask;
+    if out > MAX_SAFE_INTEGER {
+        return Err(input("This file is too large."));
+    }
+    Ok(out)
+}
+
+fn content_length(suite: u32, plaintext_size: u64, thumbnail_bytes: u32) -> CoreResult<u64> {
+    if plaintext_size > MAX_SAFE_INTEGER {
+        return Err(input("This file is too large."));
+    }
+    let trailer = trailer_len(thumbnail_bytes)?;
+    if check_suite(suite)? < CONTENT_SUITE {
+        return Ok(plaintext_size);
+    }
+    Ok(padded_length(plaintext_size + trailer)? - trailer)
+}
+
+/// The layout of an object in the given content suite: how many 8 MiB chunks,
+/// how much they cover and how long the whole ciphertext is once every chunk
+/// has its tag. Under suite 3 the chunks run on past the file in zeros so that
+/// the chunks and the trailer together come to a Padmé bucket; under suites 1
+/// and 2 they cover the file alone.
 ///
 /// ```
 /// use hushos_core::content_layout;
-/// assert_eq!(content_layout(0, 0).chunk_count, 1, "an empty file is one tagged empty chunk");
-/// assert_eq!(content_layout(0, 0).ciphertext_size, 16);
-/// assert_eq!(content_layout(8 * 1024 * 1024, 0).chunk_count, 1);
-/// assert_eq!(content_layout(8 * 1024 * 1024 + 1, 0).chunk_count, 2);
-/// assert_eq!(content_layout(100, 2000).ciphertext_size, 100 + 16 + 2000 + 16);
+/// assert_eq!(content_layout(3, 0, 0)?.chunk_count, 1, "an empty file is one tagged chunk");
+/// assert_eq!(content_layout(3, 0, 0)?.ciphertext_size, 256 + 16, "padded to the smallest bucket");
+/// assert_eq!(content_layout(2, 0, 0)?.ciphertext_size, 16);
+/// assert_eq!(content_layout(2, 8 * 1024 * 1024 + 1, 0)?.chunk_count, 2);
+/// assert_eq!(content_layout(2, 100, 2000)?.ciphertext_size, 100 + 16 + 2000 + 16);
+/// // With or without a thumbnail, the server sees a bucket.
+/// let a = content_layout(3, 8500, 0)?;
+/// let b = content_layout(3, 8000, 300)?;
+/// assert_eq!(a.ciphertext_size, b.ciphertext_size);
+/// assert!(content_layout(4, 1, 0).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn content_layout(plaintext_size: u64, thumbnail_bytes: u32) -> ContentLayout {
-    let chunk_count = plaintext_size.div_ceil(CHUNK_BYTES).max(1);
-    let trailer = if thumbnail_bytes > 0 { thumbnail_bytes as u64 + TAG_BYTES as u64 } else { 0 };
-    ContentLayout {
+pub fn content_layout(suite: u32, plaintext_size: u64, thumbnail_bytes: u32) -> CoreResult<ContentLayout> {
+    let content_length = content_length(suite, plaintext_size, thumbnail_bytes)?;
+    let chunk_count = content_length.div_ceil(CHUNK_BYTES).max(1);
+    Ok(ContentLayout {
         chunk_count,
         chunk_bytes: CHUNK_BYTES,
         tag_bytes: TAG_BYTES as u64,
-        ciphertext_size: plaintext_size + TAG_BYTES as u64 * chunk_count + trailer,
-    }
+        ciphertext_size: content_length + TAG_BYTES as u64 * chunk_count + trailer_len(thumbnail_bytes)?,
+        content_length,
+    })
 }
 
 /// Inclusive byte offsets, as an HTTP range header wants them.
@@ -583,42 +696,65 @@ pub struct ByteRange {
     pub end: u64,
 }
 
-fn chunk_plaintext_len(plaintext_size: u64, index: u64) -> u64 {
+fn chunk_plaintext_len(length: u64, index: u64) -> u64 {
     let start = index.saturating_mul(CHUNK_BYTES);
-    if start >= plaintext_size {
+    if start >= length {
         0
     } else {
-        CHUNK_BYTES.min(plaintext_size - start)
+        CHUNK_BYTES.min(length - start)
     }
 }
 
-/// How many plaintext bytes chunk `index` carries.
+/// How many bytes of the file chunk `index` carries: what to read from the
+/// file for [`chunk_encrypt`], and what [`chunk_decrypt`] gives back. Under
+/// suite 3 a chunk may carry fewer (the rest is padding), or none at all.
+///
+/// ```
+/// use hushos_core::chunk_length;
+/// let chunk = 8 * 1024 * 1024;
+/// assert_eq!(chunk_length(chunk + 10, 0), chunk);
+/// assert_eq!(chunk_length(chunk + 10, 1), 10);
+/// assert_eq!(chunk_length(chunk, 1), 0, "a chunk of padding alone holds none of the file");
+/// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn chunk_length(plaintext_size: u64, index: u64) -> u64 {
     chunk_plaintext_len(plaintext_size, index)
 }
 
 /// The bytes to fetch for chunk `index`, to hand to [`chunk_decrypt`]. The
-/// last chunk runs on to the end of the object, thumbnail trailer and all: a
-/// range that stopped where the trailer begins would hand the store the
-/// trailer's length and so the file's exact size.
+/// last chunk runs on to the end of the object, padding and thumbnail trailer
+/// and all: a range that stopped where the trailer or the padding begins would
+/// hand the store where the file ends.
 ///
 /// ```
 /// use hushos_core::{chunk_range, ByteRange};
 /// let chunk = 8 * 1024 * 1024;
-/// assert_eq!(chunk_range(chunk + 10, 0, 0), ByteRange { start: 0, end: chunk + 16 - 1 });
-/// assert_eq!(chunk_range(chunk + 10, 0, 1), ByteRange { start: chunk + 16, end: chunk + 16 + 10 + 16 - 1 });
+/// assert_eq!(chunk_range(2, chunk + 10, 0, 0)?, ByteRange { start: 0, end: chunk + 16 - 1 });
+/// assert_eq!(chunk_range(2, chunk + 10, 0, 1)?, ByteRange { start: chunk + 16, end: chunk + 16 + 10 + 16 - 1 });
 /// // With a 2000-byte thumbnail the last chunk's range ends where the object does.
-/// assert_eq!(chunk_range(chunk + 10, 2000, 1).end, chunk + 16 + 10 + 16 + 2000 + 16 - 1);
+/// assert_eq!(chunk_range(2, chunk + 10, 2000, 1)?.end, chunk + 16 + 10 + 16 + 2000 + 16 - 1);
+/// // Suite 3: the last range runs through the padding to the object's end.
+/// let layout = hushos_core::content_layout(3, chunk + 10, 2000)?;
+/// assert_eq!(chunk_range(3, chunk + 10, 2000, 1)?.end, layout.ciphertext_size - 1);
+/// assert!(chunk_range(3, chunk + 10, 2000, 2).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn chunk_range(plaintext_size: u64, thumbnail_bytes: u32, index: u64) -> ByteRange {
-    let start = index * (CHUNK_BYTES + TAG_BYTES as u64);
-    let layout = content_layout(plaintext_size, thumbnail_bytes);
-    if index + 1 == layout.chunk_count {
-        return ByteRange { start, end: layout.ciphertext_size - 1 };
+pub fn chunk_range(
+    suite: u32,
+    plaintext_size: u64,
+    thumbnail_bytes: u32,
+    index: u64,
+) -> CoreResult<ByteRange> {
+    let layout = content_layout(suite, plaintext_size, thumbnail_bytes)?;
+    if index >= layout.chunk_count {
+        return Err(input("chunk index is past the end"));
     }
-    ByteRange { start, end: start + chunk_plaintext_len(plaintext_size, index) + TAG_BYTES as u64 - 1 }
+    let start = index * (CHUNK_BYTES + TAG_BYTES as u64);
+    if index + 1 == layout.chunk_count {
+        return Ok(ByteRange { start, end: layout.ciphertext_size - 1 });
+    }
+    Ok(ByteRange { start, end: start + CHUNK_BYTES + TAG_BYTES as u64 - 1 })
 }
 
 /// The bytes to fetch for a thumbnail: always the object's last 64 KiB and a
@@ -628,22 +764,28 @@ pub fn chunk_range(plaintext_size: u64, thumbnail_bytes: u32, index: u64) -> Byt
 ///
 /// ```
 /// use hushos_core::{thumbnail_range, ByteRange};
-/// // 100 bytes of content and a 2000-byte thumbnail: 2132 bytes, all of it fetched.
-/// assert_eq!(thumbnail_range(100, 2000), ByteRange { start: 0, end: 116 + 2000 + 16 - 1 });
+/// // Suite 2, 100 bytes of content and a 2000-byte thumbnail: 2132 bytes, all of it fetched.
+/// assert_eq!(thumbnail_range(2, 100, 2000)?, ByteRange { start: 0, end: 116 + 2000 + 16 - 1 });
 /// // Ten MB of content: the same window length for any thumbnail size.
-/// let a = thumbnail_range(10_000_000, 2000);
-/// let b = thumbnail_range(10_000_000, 60_000);
+/// let a = thumbnail_range(3, 10_000_000, 2000)?;
+/// let b = thumbnail_range(3, 10_000_000, 60_000)?;
 /// assert_eq!(a.end - a.start, b.end - b.start);
+/// assert!(thumbnail_range(3, 100, 0).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn thumbnail_range(plaintext_size: u64, thumbnail_bytes: u32) -> ByteRange {
-    let total = content_layout(plaintext_size, thumbnail_bytes).ciphertext_size;
+pub fn thumbnail_range(suite: u32, plaintext_size: u64, thumbnail_bytes: u32) -> CoreResult<ByteRange> {
+    if thumbnail_bytes == 0 {
+        return Err(input("This version has no thumbnail."));
+    }
+    let total = content_layout(suite, plaintext_size, thumbnail_bytes)?.ciphertext_size;
     let window = THUMBNAIL_MAX_BYTES as u64 + TAG_BYTES as u64;
-    ByteRange { start: total.saturating_sub(window), end: total - 1 }
+    Ok(ByteRange { start: total.saturating_sub(window), end: total - 1 })
 }
 
 /// Everything a chunk's seal is bound to. `nonce` is the 16-byte content nonce
-/// the version row carries; the chunk index completes it.
+/// the version row carries; the chunk index completes it. `suite` is the
+/// object's (`contentSuite` on the version), which fixes the layout.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Content {
@@ -691,60 +833,73 @@ fn chunk_context(content: &Content, index: u64, chunk_count: u64) -> Vec<u8> {
     ])
 }
 
-/// One chunk sealed; `plaintext` must be exactly the chunk's length for its
-/// index ([`chunk_length`]). The nonce is the content nonce with the index
-/// appended, so the same key and nonce never seal two different chunks.
+fn layout_of(content: &Content) -> CoreResult<ContentLayout> {
+    content_layout(content.suite, content.plaintext_size, content.thumbnail_bytes)
+}
+
+/// One chunk sealed. `plaintext` is the file's bytes for the index, exactly
+/// [`chunk_length`] of them; under suite 3 the core appends the zeros the
+/// layout calls for, so an app never builds padding itself. The nonce is the
+/// content nonce with the index appended, so the same key and nonce never seal
+/// two different chunks.
 ///
 /// ```
-/// use hushos_core::{chunk_decrypt, chunk_encrypt, random_bytes, Content};
+/// use hushos_core::{chunk_decrypt, chunk_encrypt, content_layout, random_bytes, Content};
 /// let content = Content {
-///     workspace_id: "ws".into(), object_id: "obj".into(), suite: 2,
+///     workspace_id: "ws".into(), object_id: "obj".into(), suite: 3,
 ///     key: random_bytes(32)?, nonce: random_bytes(16)?, plaintext_size: 5, thumbnail_bytes: 0,
 /// };
 /// let sealed = chunk_encrypt(content.clone(), 0, b"hello".to_vec())?;
-/// assert_eq!(sealed.len(), 5 + 16);
-/// assert_eq!(chunk_decrypt(content, 0, sealed)?, b"hello");
+/// assert_eq!(sealed.len(), 256 + 16, "padded to the smallest bucket");
+/// assert_eq!(sealed.len() as u64, content_layout(3, 5, 0)?.ciphertext_size);
+/// assert_eq!(chunk_decrypt(content, 0, sealed)?, b"hello", "the padding is dropped");
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn chunk_encrypt(content: Content, index: u64, plaintext: Vec<u8>) -> CoreResult<Vec<u8>> {
-    let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
+    let layout = layout_of(&content)?;
     if index >= layout.chunk_count {
         return Err(input("chunk index is past the end"));
     }
     if plaintext.len() as u64 != chunk_plaintext_len(content.plaintext_size, index) {
         return Err(input("the chunk does not have the length its index requires"));
     }
+    let mut padded = Zeroizing::new(plaintext);
+    padded.resize(chunk_plaintext_len(layout.content_length, index) as usize, 0);
     let nonce = chunk_nonce(&content, index)?;
-    seal_with_nonce(&content.key, &nonce, &plaintext, &chunk_context(&content, index, layout.chunk_count))
+    seal_with_nonce(&content.key, &nonce, &padded, &chunk_context(&content, index, layout.chunk_count))
 }
 
-/// One chunk opened; `ciphertext` is the bytes of `chunk_range`.
+/// One chunk opened: the file's bytes in it, padding dropped (none, for a
+/// chunk wholly past the file's end). `ciphertext` is the bytes of
+/// [`chunk_range`]; the last chunk's may carry the trailer behind it.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn chunk_decrypt(content: Content, index: u64, ciphertext: Vec<u8>) -> CoreResult<Vec<u8>> {
-    let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
+    let layout = layout_of(&content)?;
     if index >= layout.chunk_count {
         return Err(input("chunk index is past the end"));
     }
     // The last chunk may come with the trailer behind it (see chunk_range); every other must be exact.
-    let length = (chunk_plaintext_len(content.plaintext_size, index) + TAG_BYTES as u64) as usize;
+    let length = (chunk_plaintext_len(layout.content_length, index) + TAG_BYTES as u64) as usize;
     let last = index + 1 == layout.chunk_count;
     if if last { ciphertext.len() < length } else { ciphertext.len() != length } {
         return Err(CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()));
     }
     let nonce = chunk_nonce(&content, index)?;
-    open_with_nonce(
+    let mut plaintext = open_with_nonce(
         &content.key,
         &nonce,
         &ciphertext[..length],
         &chunk_context(&content, index, layout.chunk_count),
     )
-    .map_err(|_| CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()))
+    .map_err(|_| CoreError::Sealed("This file could not be decrypted. It may be damaged.".into()))?;
+    plaintext.truncate(chunk_plaintext_len(content.plaintext_size, index) as usize);
+    Ok(plaintext)
 }
 
 fn thumbnail_key(content: &Content) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
-    if content.suite != CONTENT_SUITE {
-        return Err(input("Only content suite 2 carries a thumbnail."));
+    if check_suite(content.suite)? == LEGACY_CONTENT_SUITE {
+        return Err(input("Content suite 1 carries no thumbnail."));
     }
     derive_subkey(&content.key, THUMBNAIL_KDF_SUBKEY, THUMBNAIL_KDF_CONTEXT)
 }
@@ -752,14 +907,15 @@ fn thumbnail_key(content: &Content) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
 fn thumbnail_context(content: &Content) -> Vec<u8> {
     context(&[
         json!("hushos/drive/thumbnail"),
-        json!(CONTENT_SUITE),
+        json!(content.suite),
         json!(content.workspace_id),
         json!(content.object_id),
         json!(content.thumbnail_bytes),
     ])
 }
 
-/// The thumbnail trailer sealed under its own derived key, after the last chunk.
+/// The thumbnail trailer sealed under its own derived key, its nonce index the
+/// one after the last chunk's (the padded count under suite 3).
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn thumbnail_encrypt(content: Content, thumbnail: Vec<u8>) -> CoreResult<Vec<u8>> {
     if thumbnail.is_empty()
@@ -768,9 +924,9 @@ pub fn thumbnail_encrypt(content: Content, thumbnail: Vec<u8>) -> CoreResult<Vec
     {
         return Err(input("the thumbnail does not have the length the version was sealed with"));
     }
-    let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
-    let nonce = chunk_nonce(&content, layout.chunk_count)?;
-    seal_with_nonce(thumbnail_key(&content)?.as_slice(), &nonce, &thumbnail, &thumbnail_context(&content))
+    let key = thumbnail_key(&content)?;
+    let nonce = chunk_nonce(&content, layout_of(&content)?.chunk_count)?;
+    seal_with_nonce(key.as_slice(), &nonce, &thumbnail, &thumbnail_context(&content))
 }
 
 /// The thumbnail opened; `fetched` is the bytes of `thumbnail_range`, whose
@@ -780,14 +936,14 @@ pub fn thumbnail_decrypt(content: Content, fetched: Vec<u8>) -> CoreResult<Vec<u
     if content.thumbnail_bytes == 0 {
         return Err(input("This version has no thumbnail."));
     }
-    let trailer = content.thumbnail_bytes as usize + TAG_BYTES;
+    let key = thumbnail_key(&content)?;
+    let trailer = trailer_len(content.thumbnail_bytes)? as usize;
     if fetched.len() < trailer {
         return Err(CoreError::Sealed("This thumbnail could not be decrypted.".into()));
     }
     let ciphertext = &fetched[fetched.len() - trailer..];
-    let layout = content_layout(content.plaintext_size, content.thumbnail_bytes);
-    let nonce = chunk_nonce(&content, layout.chunk_count)?;
-    open_with_nonce(thumbnail_key(&content)?.as_slice(), &nonce, ciphertext, &thumbnail_context(&content))
+    let nonce = chunk_nonce(&content, layout_of(&content)?.chunk_count)?;
+    open_with_nonce(key.as_slice(), &nonce, ciphertext, &thumbnail_context(&content))
         .map_err(|_| CoreError::Sealed("This thumbnail could not be decrypted.".into()))
 }
 
@@ -1020,13 +1176,15 @@ mod tests {
         let sealed =
             version_seal(version_ctx(), node_key.clone(), content_key.clone(), 20_000_000, 3000).unwrap();
         assert_eq!(sealed.envelope.len(), VERSION_ENVELOPE_BYTES);
+        // 20,003,016 bytes of file and trailer pad to the 20,447,232 bucket.
         assert_eq!(
             sealed.layout,
             ContentLayout {
                 chunk_count: 3,
                 chunk_bytes: CHUNK_BYTES,
                 tag_bytes: 16,
-                ciphertext_size: 20_000_000 + 48 + 3016
+                ciphertext_size: 20_447_232 + 48,
+                content_length: 20_447_232 - 3016,
             }
         );
         let opened =
@@ -1042,7 +1200,18 @@ mod tests {
             version_open(other, CONTENT_SUITE, node_key.clone(), sealed.envelope.clone(), None),
             Err(CoreError::Sealed(_))
         ));
-        // A suite 2 envelope is 84 bytes, never a suite 1 one.
+        // The same record under suite 2 would be read unpadded: the suite is in the context.
+        assert!(matches!(
+            version_open(
+                version_ctx(),
+                UNPADDED_CONTENT_SUITE,
+                node_key.clone(),
+                sealed.envelope.clone(),
+                None
+            ),
+            Err(CoreError::Sealed(_))
+        ));
+        // A suite 3 envelope is 84 bytes, never a suite 1 one.
         assert!(matches!(
             version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), sealed.envelope, Some(1)),
             Err(CoreError::Input(_))
@@ -1062,7 +1231,7 @@ mod tests {
         assert_eq!(envelope.len(), KEY_ENVELOPE_BYTES);
         let opened = version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key, envelope, Some(77)).unwrap();
         assert_eq!(opened.key, content.key);
-        assert!(matches!(version_reseal(version_ctx(), 3, random(32), content), Err(CoreError::Input(_))));
+        assert!(matches!(version_reseal(version_ctx(), 4, random(32), content), Err(CoreError::Input(_))));
     }
 
     #[test]
@@ -1079,12 +1248,16 @@ mod tests {
             version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), envelope.clone(), None),
             Err(CoreError::Input(_))
         ));
-        assert!(matches!(version_open(version_ctx(), 3, node_key, envelope, None), Err(CoreError::Input(_))));
+        assert!(matches!(version_open(version_ctx(), 4, node_key, envelope, None), Err(CoreError::Input(_))));
+    }
+
+    fn unpadded(plaintext_size: u64, thumbnail_bytes: u32) -> Content {
+        Content { suite: UNPADDED_CONTENT_SUITE, ..content(plaintext_size, thumbnail_bytes) }
     }
 
     #[test]
     fn chunks_are_bound_to_their_index_and_count() {
-        let content = content(CHUNK_BYTES + 3, 0);
+        let content = unpadded(CHUNK_BYTES + 3, 0);
         let first = chunk_encrypt(content.clone(), 0, vec![1u8; CHUNK_BYTES as usize]).unwrap();
         let last = chunk_encrypt(content.clone(), 1, vec![2, 3, 4]).unwrap();
         assert_eq!(last.len(), 3 + TAG_BYTES);
@@ -1106,24 +1279,137 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_file_is_one_tagged_empty_chunk() {
-        let content = content(0, 0);
-        let sealed = chunk_encrypt(content.clone(), 0, vec![]).unwrap();
+    fn an_empty_file_is_one_tagged_chunk() {
+        let bare = unpadded(0, 0);
+        let sealed = chunk_encrypt(bare.clone(), 0, vec![]).unwrap();
         assert_eq!(sealed.len(), TAG_BYTES);
-        assert_eq!(chunk_range(0, 0, 0), ByteRange { start: 0, end: 15 });
-        assert_eq!(chunk_decrypt(content, 0, sealed).unwrap(), Vec::<u8>::new());
+        assert_eq!(chunk_range(UNPADDED_CONTENT_SUITE, 0, 0, 0).unwrap(), ByteRange { start: 0, end: 15 });
+        assert_eq!(chunk_decrypt(bare, 0, sealed).unwrap(), Vec::<u8>::new());
+        // Under suite 3 it is the smallest bucket of zeros, and still opens to nothing.
+        let padded = content(0, 0);
+        let sealed = chunk_encrypt(padded.clone(), 0, vec![]).unwrap();
+        assert_eq!(sealed.len(), 256 + TAG_BYTES);
+        assert_eq!(chunk_decrypt(padded, 0, sealed).unwrap(), Vec::<u8>::new());
     }
 
     #[test]
     fn the_last_chunk_opens_from_a_range_that_runs_on_through_the_trailer() {
-        let content = content(100, 2000);
-        let sealed = chunk_encrypt(content.clone(), 0, vec![3; 100]).unwrap();
-        // What chunk_range asks for: the chunk and the trailer behind it, to the object's end.
-        assert_eq!(chunk_range(100, 2000, 0), ByteRange { start: 0, end: 116 + 2016 - 1 });
-        let mut fetched = sealed.clone();
-        fetched.extend_from_slice(&[0u8; 2016]);
-        assert_eq!(chunk_decrypt(content.clone(), 0, fetched).unwrap(), vec![3; 100]);
-        assert!(matches!(chunk_decrypt(content, 0, sealed[1..].to_vec()), Err(CoreError::Sealed(_))));
+        for content in [unpadded(100, 2000), content(100, 2000)] {
+            let sealed = chunk_encrypt(content.clone(), 0, vec![3; 100]).unwrap();
+            // What chunk_range asks for: the chunk and the trailer behind it, to the object's end.
+            let range = chunk_range(content.suite, 100, 2000, 0).unwrap();
+            assert_eq!(range, ByteRange { start: 0, end: sealed.len() as u64 + 2016 - 1 });
+            let mut fetched = sealed.clone();
+            fetched.extend_from_slice(&[0u8; 2016]);
+            assert_eq!(chunk_decrypt(content.clone(), 0, fetched).unwrap(), vec![3; 100]);
+            assert!(matches!(chunk_decrypt(content, 0, sealed[1..].to_vec()), Err(CoreError::Sealed(_))));
+        }
+    }
+
+    #[test]
+    fn padded_length_is_padme_never_smaller_idempotent_monotonic_and_bounded() {
+        let known = [
+            (0, 256),
+            (256, 256),
+            (257, 272),
+            (1000, 1024),
+            (65_537, 67_584),
+            ((1 << 20) + 1, 1_081_344),
+            ((1 << 32) + 1, 4_362_076_160),
+            (10_000_000_000, 10_066_329_600),
+            (1 << 40, 1 << 40),
+        ];
+        for (length, bucket) in known {
+            assert_eq!(padded_length(length).unwrap(), bucket, "{length}");
+        }
+        let mut previous = 0;
+        for length in
+            (250..5000).chain([CHUNK_BYTES - 1, CHUNK_BYTES, CHUNK_BYTES + 1, MAX_SAFE_INTEGER / 16])
+        {
+            let bucket = padded_length(length).unwrap();
+            assert!(bucket >= length && bucket >= previous, "{length}");
+            assert_eq!(padded_length(bucket).unwrap(), bucket);
+            if length > 256 {
+                let e = 63 - length.leading_zeros() as u64;
+                let s = 64 - e.leading_zeros() as u64;
+                assert!((bucket - length) << s < length, "{length}: padding past 2^-{s}");
+            }
+            previous = bucket;
+        }
+        assert!(padded_length(MAX_SAFE_INTEGER + 1).is_err());
+    }
+
+    #[test]
+    fn a_suite_3_object_is_a_bucket_with_or_without_a_thumbnail() {
+        for size in [0, 1, 255, 257, 4000, 70_000, CHUNK_BYTES - 300, CHUNK_BYTES, 500_000_000] {
+            for thumbnail in [0, 1, 2000, THUMBNAIL_MAX_BYTES] {
+                let layout = content_layout(CONTENT_SUITE, size, thumbnail).unwrap();
+                let seen = layout.ciphertext_size - TAG_BYTES as u64 * layout.chunk_count;
+                let trailer = if thumbnail > 0 { thumbnail as u64 + 16 } else { 0 };
+                assert_eq!(seen, padded_length(size + trailer).unwrap(), "{size} {thumbnail}");
+                assert_eq!(layout.content_length + trailer, seen);
+                assert!(layout.content_length >= size);
+                assert_eq!(layout.chunk_count, layout.content_length.div_ceil(CHUNK_BYTES).max(1));
+            }
+        }
+    }
+
+    #[test]
+    fn suite_3_chunks_carry_the_file_then_zeros_and_open_to_the_file_alone() {
+        let size = CHUNK_BYTES + 3;
+        let content = content(size, 500);
+        let layout = content_layout(CONTENT_SUITE, size, 500).unwrap();
+        assert_eq!(layout.chunk_count, 2);
+        let first = chunk_encrypt(content.clone(), 0, vec![1u8; CHUNK_BYTES as usize]).unwrap();
+        let last = chunk_encrypt(content.clone(), 1, vec![2, 3, 4]).unwrap();
+        let trailer = thumbnail_encrypt(content.clone(), vec![9; 500]).unwrap();
+        assert_eq!((first.len() + last.len() + trailer.len()) as u64, layout.ciphertext_size);
+        // Under the raw cipher the last chunk is the file's three bytes, then zeros.
+        let raw = open_with_nonce(
+            &content.key,
+            &chunk_nonce(&content, 1).unwrap(),
+            &last,
+            &chunk_context(&content, 1, 2),
+        )
+        .unwrap();
+        assert_eq!(&raw[..3], &[2, 3, 4]);
+        assert!(raw.len() > 3 && raw[3..].iter().all(|b| *b == 0));
+        // The reader gets the file back and nothing more, from the range chunk_range names.
+        let mut object = first.clone();
+        object.extend_from_slice(&last);
+        object.extend_from_slice(&trailer);
+        let range = chunk_range(CONTENT_SUITE, size, 500, 1).unwrap();
+        assert_eq!(range.end + 1, object.len() as u64);
+        let tail = object[range.start as usize..].to_vec();
+        assert_eq!(chunk_decrypt(content.clone(), 1, tail.clone()).unwrap(), vec![2, 3, 4]);
+        let window = thumbnail_range(CONTENT_SUITE, size, 500).unwrap();
+        assert_eq!(
+            thumbnail_decrypt(content.clone(), object[window.start as usize..].to_vec()).unwrap(),
+            vec![9; 500]
+        );
+        // Opened as suite 2, as another thumbnail length (another padding), or another size: refused.
+        for wrong in [
+            Content { suite: UNPADDED_CONTENT_SUITE, ..content.clone() },
+            Content { thumbnail_bytes: 0, ..content.clone() },
+            Content { plaintext_size: size + 1, ..content.clone() },
+        ] {
+            assert!(chunk_decrypt(wrong, 1, tail.clone()).is_err());
+        }
+        // The app hands over the file's bytes only; padding it itself is refused.
+        assert!(matches!(chunk_encrypt(content.clone(), 1, raw), Err(CoreError::Input(_))));
+        assert!(matches!(chunk_encrypt(content, 2, vec![]), Err(CoreError::Input(_))));
+    }
+
+    #[test]
+    fn a_chunk_of_padding_alone_opens_to_nothing() {
+        // 8 MiB exactly plus a trailer pads past the chunk boundary into a second chunk of zeros.
+        let content = content(CHUNK_BYTES, 60_000);
+        let layout = content_layout(CONTENT_SUITE, CHUNK_BYTES, 60_000).unwrap();
+        assert_eq!(layout.chunk_count, 2);
+        assert_eq!(chunk_length(CHUNK_BYTES, 1), 0);
+        let sealed = chunk_encrypt(content.clone(), 1, vec![]).unwrap();
+        assert!(sealed.len() > TAG_BYTES);
+        assert_eq!(chunk_decrypt(content, 1, sealed).unwrap(), Vec::<u8>::new());
     }
 
     #[test]
@@ -1153,7 +1439,11 @@ mod tests {
         assert!(matches!(thumbnail_encrypt(content.clone(), vec![9; 4]), Err(CoreError::Input(_))));
         let mut legacy = content.clone();
         legacy.suite = LEGACY_CONTENT_SUITE;
-        assert!(matches!(thumbnail_decrypt(legacy, sealed), Err(CoreError::Input(_))));
+        assert!(matches!(thumbnail_decrypt(legacy, sealed.clone()), Err(CoreError::Input(_))));
+        // A suite 3 trailer is not a suite 2 one: the suite is in its context.
+        let mut unpadded = content.clone();
+        unpadded.suite = UNPADDED_CONTENT_SUITE;
+        assert!(matches!(thumbnail_decrypt(unpadded, sealed), Err(CoreError::Sealed(_))));
         let mut none = content;
         none.thumbnail_bytes = 0;
         assert!(matches!(thumbnail_decrypt(none, vec![0; 16]), Err(CoreError::Input(_))));

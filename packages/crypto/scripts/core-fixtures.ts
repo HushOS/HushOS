@@ -2,21 +2,26 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { encryptKey } from '../src/aead';
 import { rememberAccountKey } from '../src/device';
 import {
+    CHUNK_SIZE,
     CONTENT_SUITE,
     chunkCount,
+    chunkPlaintextLength,
+    ciphertextSize,
+    contentLength,
     encryptChunk,
     encryptThumbnail,
     LEGACY_CONTENT_SUITE,
     sealDocument,
     sealMetadata,
     sealVersion,
+    UNPADDED_CONTENT_SUITE,
     wrapContentKey,
     wrapNodeKey,
 } from '../src/drive';
 import sodium from 'libsodium-wrappers';
 import { createIdentity } from '../src/identity';
 import { decode, encode, wrappingKey } from '../src/keys';
-import { sealShareKey } from '../src/shares';
+import { sealShareKey, shareContext } from '../src/shares';
 import {
     generateLinkSecret,
     generateLinkSalt,
@@ -93,7 +98,8 @@ const workspace = {
     workspaceKey: encode(workspaceKey),
 };
 
-// A node under the root, its metadata, a suite 2 version with a thumbnail, and a suite 1 version.
+// A node under the root, its metadata, suite 3 versions with and without a thumbnail, a suite 2
+// version and a suite 1 version.
 const nodeId = uuid();
 const nodeKey = random(32);
 const nodeCtx = { workspaceId, nodeId, parentId: uuid(), parentKeyEpoch: 4, keyEpoch: 9 };
@@ -106,21 +112,67 @@ const metadata = {
 const metadataCtx = { workspaceId, nodeId, metadataVersion: 3 };
 const contentKey = random(32);
 const contentNonce = random(16);
-const objectId = uuid();
-const versionId = uuid();
-const plaintextSize = 8 * 1024 * 1024 + 5;
-const thumbnail = bytes(300, 5);
-const versionCtx = { workspaceId, nodeId, versionId, objectId, suite: CONTENT_SUITE };
-const lastChunk = bytes(5, 9);
-const chunkCtx = {
-    workspaceId,
-    objectId,
-    suite: CONTENT_SUITE,
-    index: 1,
-    chunkCount: chunkCount(plaintextSize),
-    plaintextSize,
-};
-const emptyObjectId = uuid();
+
+/*
+ * One version of `plaintextSize` bytes in `suite`, sealed under the node key,
+ * keeping only chunk `index` (the file's bytes for it, padded under suite 3 as
+ * the uploader pads them) and the thumbnail trailer when there is one.
+ */
+async function version(
+    suite: number,
+    plaintextSize: number,
+    thumbnail: Uint8Array | null,
+    index: number,
+) {
+    const objectId = uuid();
+    const versionId = uuid();
+    const thumbnailBytes = thumbnail?.length ?? 0;
+    const ctx = { workspaceId, nodeId, versionId, objectId, suite };
+    const length = contentLength(suite, plaintextSize, thumbnailBytes);
+    const file = bytes(Math.max(0, Math.min(CHUNK_SIZE, plaintextSize - index * CHUNK_SIZE)), 9);
+    const padded = new Uint8Array(chunkPlaintextLength(length, index));
+    padded.set(file);
+    return {
+        ctx,
+        contentKey: encode(contentKey),
+        contentNonce: encode(contentNonce),
+        plaintextSize,
+        thumbnailBytes,
+        envelope: encode(
+            await sealVersion({ contentKey, plaintextSize, thumbnailBytes }, nodeKey, ctx),
+        ),
+        // The chunk opens to the file's bytes for its index; the padding is dropped.
+        chunk: {
+            index,
+            chunkCount: chunkCount(length),
+            plaintext: encode(file),
+            ciphertext: encode(
+                await encryptChunk(padded, contentKey, contentNonce, {
+                    workspaceId,
+                    objectId,
+                    suite,
+                    index,
+                    chunkCount: chunkCount(length),
+                    plaintextSize,
+                    thumbnailBytes,
+                }),
+            ),
+        },
+        thumbnail: thumbnail
+            ? {
+                  plaintext: encode(thumbnail),
+                  ciphertext: encode(
+                      await encryptThumbnail(thumbnail, contentKey, contentNonce, {
+                          workspaceId,
+                          objectId,
+                          suite,
+                          plaintextSize,
+                      }),
+                  ),
+              }
+            : null,
+    };
+}
 const legacyVersionId = uuid();
 const legacyObjectId = uuid();
 const node = {
@@ -131,49 +183,13 @@ const node = {
     metadata,
     metadataCtx,
     metadataEnvelope: encode(await sealMetadata(metadata, nodeKey, metadataCtx)),
-    version: {
-        ctx: versionCtx,
-        contentKey: encode(contentKey),
-        contentNonce: encode(contentNonce),
-        plaintextSize,
-        thumbnailBytes: thumbnail.length,
-        envelope: encode(
-            await sealVersion(
-                { contentKey, plaintextSize, thumbnailBytes: thumbnail.length },
-                nodeKey,
-                versionCtx,
-            ),
-        ),
-        // Only the last, five-byte chunk is kept: it still binds index 1 of 2 and the full size.
-        lastChunk: {
-            index: 1,
-            plaintext: encode(lastChunk),
-            ciphertext: encode(await encryptChunk(lastChunk, contentKey, contentNonce, chunkCtx)),
-        },
-        thumbnail: {
-            plaintext: encode(thumbnail),
-            ciphertext: encode(
-                await encryptThumbnail(thumbnail, contentKey, contentNonce, {
-                    workspaceId,
-                    objectId,
-                    plaintextSize,
-                }),
-            ),
-        },
-    },
-    emptyFile: {
-        objectId: emptyObjectId,
-        ciphertext: encode(
-            await encryptChunk(new Uint8Array(0), contentKey, contentNonce, {
-                workspaceId,
-                objectId: emptyObjectId,
-                suite: CONTENT_SUITE,
-                index: 0,
-                chunkCount: 1,
-                plaintextSize: 0,
-            }),
-        ),
-    },
+    // Suite 3 with a thumbnail, one chunk of file and zeros.
+    version: await version(CONTENT_SUITE, 1000, bytes(300, 5), 0),
+    // Suite 3 without one; and an empty file, the smallest bucket.
+    bareVersion: await version(CONTENT_SUITE, 5, null, 0),
+    emptyVersion: await version(CONTENT_SUITE, 0, null, 0),
+    // Suite 2, read and never written: its last, five-byte chunk binds index 1 of 2 and the size.
+    unpaddedVersion: await version(UNPADDED_CONTENT_SUITE, CHUNK_SIZE + 5, bytes(300, 5), 1),
     legacyVersion: {
         ctx: {
             workspaceId,
@@ -194,6 +210,25 @@ const node = {
         ),
     },
 };
+
+// The layout arithmetic both sides must agree on, at sizes too large to seal here.
+const layouts = [0, 1, 256, 257, 1000, CHUNK_SIZE - 20, CHUNK_SIZE, CHUNK_SIZE + 1, 3e9, 2 ** 40]
+    .flatMap((plaintextSize) =>
+        [0, 300, 65_536].map((thumbnailBytes) => [plaintextSize, thumbnailBytes]),
+    )
+    .flatMap(([plaintextSize, thumbnailBytes]) =>
+        [UNPADDED_CONTENT_SUITE, CONTENT_SUITE].map((suite) => {
+            const length = contentLength(suite, plaintextSize!, thumbnailBytes!);
+            return {
+                suite,
+                plaintextSize: plaintextSize!,
+                thumbnailBytes: thumbnailBytes!,
+                contentLength: length,
+                chunkCount: chunkCount(length),
+                ciphertextSize: ciphertextSize(suite, plaintextSize!, thumbnailBytes!),
+            };
+        }),
+    );
 
 // The tags registry, a workspace document sealed under the workspace key.
 const registry = {
@@ -232,13 +267,17 @@ const share = {
     granterPublicKey: encode(granter.publicKey),
     ctx: shareCtx,
     nodeKey: encode(sharedNodeKey),
+    // Suite 1, as clients made them before shares went hybrid: none is made now, but they still open.
     classic: encode(
-        await sealShareKey(
-            sharedNodeKey,
-            { ...grantee, kemPublicKey: null },
-            granter.privateKey,
-            shareCtx,
-        ),
+        await (async () => {
+            const pair = sodium.crypto_box_beforenm(
+                grantee.encryptionPublicKey,
+                granter.privateKey,
+            );
+            const nonce = random(24);
+            const body = await encryptKey(sharedNodeKey, pair, nonce, shareContext(shareCtx, 1));
+            return new Uint8Array([...nonce, ...body]);
+        })(),
     ),
     hybrid: encode(await sealShareKey(sharedNodeKey, grantee, granter.privateKey, shareCtx)),
 };
@@ -308,6 +347,7 @@ await writeFile(
             device,
             workspace,
             node,
+            layouts,
             document,
             share,
             link,

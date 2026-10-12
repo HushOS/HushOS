@@ -112,60 +112,81 @@ fn version_ctx(ctx: &Value) -> VersionContext {
     }
 }
 
-#[test]
-fn a_suite_2_version_its_last_chunk_and_its_thumbnail_open() {
-    let node = &fixture()["node"];
-    let version = &node["version"];
+/* Opens one version the web sealed, its kept chunk to the file's bytes, and its thumbnail if any. */
+fn open_version(node: &Value, version: &Value) {
     let ctx = &version["ctx"];
-    let opened = version_open(
-        version_ctx(ctx),
-        n(ctx, "suite") as u32,
-        b(node, "nodeKey"),
-        b(version, "envelope"),
-        None,
-    )
-    .unwrap();
+    let suite = n(ctx, "suite") as u32;
+    let opened =
+        version_open(version_ctx(ctx), suite, b(node, "nodeKey"), b(version, "envelope"), None).unwrap();
     assert_eq!(opened.key, b(version, "contentKey"));
     assert_eq!(opened.plaintext_size, n(version, "plaintextSize"));
     assert_eq!(opened.thumbnail_bytes as u64, n(version, "thumbnailBytes"));
+    if suite == 3 {
+        assert!(
+            version_open(version_ctx(ctx), 2, b(node, "nodeKey"), b(version, "envelope"), None).is_err(),
+            "a suite 3 record is not a suite 2 one"
+        );
+    }
     let content = Content {
         workspace_id: s(ctx, "workspaceId"),
         object_id: s(ctx, "objectId"),
-        suite: n(ctx, "suite") as u32,
+        suite,
         key: opened.key,
         nonce: b(version, "contentNonce"),
         plaintext_size: opened.plaintext_size,
         thumbnail_bytes: opened.thumbnail_bytes,
     };
-    assert_eq!(content_layout(content.plaintext_size, content.thumbnail_bytes).chunk_count, 2);
-    let chunk = &version["lastChunk"];
-    assert_eq!(
-        chunk_decrypt(content.clone(), n(chunk, "index"), b(chunk, "ciphertext")).unwrap(),
-        b(chunk, "plaintext")
-    );
-    assert!(
-        chunk_decrypt(content.clone(), 0, b(chunk, "ciphertext")).is_err(),
-        "the index is in the context"
-    );
-    let thumbnail = &version["thumbnail"];
-    assert_eq!(thumbnail_decrypt(content, b(thumbnail, "ciphertext")).unwrap(), b(thumbnail, "plaintext"));
+    let chunk = &version["chunk"];
+    let layout = content_layout(suite, content.plaintext_size, content.thumbnail_bytes).unwrap();
+    assert_eq!(layout.chunk_count, n(chunk, "chunkCount"));
+    let index = n(chunk, "index");
+    assert_eq!(chunk_decrypt(content.clone(), index, b(chunk, "ciphertext")).unwrap(), b(chunk, "plaintext"));
+    if layout.chunk_count > 1 {
+        assert!(
+            chunk_decrypt(content.clone(), index ^ 1, b(chunk, "ciphertext")).is_err(),
+            "the index is bound"
+        );
+    }
+    if version["thumbnail"].is_object() {
+        let thumbnail = &version["thumbnail"];
+        assert_eq!(
+            thumbnail_decrypt(content, b(thumbnail, "ciphertext")).unwrap(),
+            b(thumbnail, "plaintext")
+        );
+    }
 }
 
 #[test]
-fn an_empty_file_sealed_by_the_web_opens() {
+fn suite_3_versions_with_and_without_a_thumbnail_open_to_the_file() {
     let node = &fixture()["node"];
-    let version = &node["version"];
-    let empty = &node["emptyFile"];
-    let content = Content {
-        workspace_id: s(&version["ctx"], "workspaceId"),
-        object_id: s(empty, "objectId"),
-        suite: 2,
-        key: b(version, "contentKey"),
-        nonce: b(version, "contentNonce"),
-        plaintext_size: 0,
-        thumbnail_bytes: 0,
-    };
-    assert_eq!(chunk_decrypt(content, 0, b(empty, "ciphertext")).unwrap(), Vec::<u8>::new());
+    for key in ["version", "bareVersion", "emptyVersion"] {
+        assert_eq!(n(&node[key]["ctx"], "suite"), 3, "{key}");
+        open_version(node, &node[key]);
+    }
+}
+
+#[test]
+fn a_suite_2_version_its_last_chunk_and_its_thumbnail_still_open() {
+    let node = &fixture()["node"];
+    assert_eq!(n(&node["unpaddedVersion"]["ctx"], "suite"), 2);
+    open_version(node, &node["unpaddedVersion"]);
+}
+
+#[test]
+fn the_layout_arithmetic_agrees_with_the_web() {
+    let layouts = fixture()["layouts"].as_array().unwrap().clone();
+    assert!(layouts.len() > 20);
+    for row in layouts {
+        let layout = content_layout(
+            n(&row, "suite") as u32,
+            n(&row, "plaintextSize"),
+            n(&row, "thumbnailBytes") as u32,
+        )
+        .unwrap();
+        assert_eq!(layout.content_length, n(&row, "contentLength"), "{row}");
+        assert_eq!(layout.chunk_count, n(&row, "chunkCount"), "{row}");
+        assert_eq!(layout.ciphertext_size, n(&row, "ciphertextSize"), "{row}");
+    }
 }
 
 #[test]
@@ -368,6 +389,14 @@ fn the_settings_document_the_web_sealed_opens_under_the_identity_key() {
         nonce: s(env, "nonce"),
         ciphertext: s(env, "ciphertext"),
     };
-    assert_eq!(settings_open(b(settings, "identityPrivateKey"), s(settings, "userId"), envelope.clone()).unwrap(), s(settings, "json"));
-    assert!(settings_open(base64url_decode(base64url_encode(vec![0u8; 32])).unwrap(), s(settings, "userId"), envelope).is_err());
+    assert_eq!(
+        settings_open(b(settings, "identityPrivateKey"), s(settings, "userId"), envelope.clone()).unwrap(),
+        s(settings, "json")
+    );
+    assert!(settings_open(
+        base64url_decode(base64url_encode(vec![0u8; 32])).unwrap(),
+        s(settings, "userId"),
+        envelope
+    )
+    .is_err());
 }

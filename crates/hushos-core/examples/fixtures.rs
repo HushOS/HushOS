@@ -56,41 +56,50 @@ fn main() {
 
     let content_key = random_bytes(32).unwrap();
     let content_nonce = random_bytes(16).unwrap();
-    let object_id = uuid();
-    let version_id = uuid();
-    let plaintext_size: u64 = 8 * 1024 * 1024 + 5;
-    let thumbnail = pattern(300, 5);
-    let version_ctx = VersionContext {
-        workspace_id: workspace_id.clone(),
-        node_id: node_id.clone(),
-        version_id: version_id.clone(),
-        object_id: object_id.clone(),
+    let chunk_bytes = content_layout(3, 0, 0).unwrap().chunk_bytes;
+    // One version of `size` bytes in `suite`, keeping chunk `index` and the thumbnail trailer if any.
+    let version = |suite: u32, size: u64, thumbnail: Option<Vec<u8>>, index: u64| {
+        let ctx = VersionContext {
+            workspace_id: workspace_id.clone(),
+            node_id: node_id.clone(),
+            version_id: uuid(),
+            object_id: uuid(),
+        };
+        let thumbnail_bytes = thumbnail.as_ref().map_or(0, |t| t.len() as u32);
+        let opened = ContentKey { key: content_key.clone(), plaintext_size: size, thumbnail_bytes };
+        let envelope = version_reseal(ctx.clone(), suite, node_key.clone(), opened).unwrap();
+        let content = Content {
+            workspace_id: workspace_id.clone(),
+            object_id: ctx.object_id.clone(),
+            suite,
+            key: content_key.clone(),
+            nonce: content_nonce.clone(),
+            plaintext_size: size,
+            thumbnail_bytes,
+        };
+        let file = pattern(chunk_length(size, index) as usize, 9);
+        let layout = content_layout(suite, size, thumbnail_bytes).unwrap();
+        json!({
+            "ctx": { "workspaceId": ctx.workspace_id, "nodeId": ctx.node_id, "versionId": ctx.version_id, "objectId": ctx.object_id, "suite": suite },
+            "contentKey": e(&content_key),
+            "contentNonce": e(&content_nonce),
+            "plaintextSize": size,
+            "thumbnailBytes": thumbnail_bytes,
+            "envelope": e(&envelope),
+            "chunk": { "index": index, "chunkCount": layout.chunk_count, "plaintext": e(&file), "ciphertext": e(&chunk_encrypt(content.clone(), index, file.clone()).unwrap()) },
+            "thumbnail": thumbnail.map(|t| json!({ "plaintext": e(&t), "ciphertext": e(&thumbnail_encrypt(content, t).unwrap()) })),
+        })
     };
-    let sealed = version_seal(
-        version_ctx.clone(),
-        node_key.clone(),
-        content_key.clone(),
-        plaintext_size,
-        thumbnail.len() as u32,
-    )
-    .unwrap();
-    let content = Content {
-        workspace_id: workspace_id.clone(),
-        object_id: object_id.clone(),
-        suite: 2,
-        key: content_key.clone(),
-        nonce: content_nonce.clone(),
-        plaintext_size,
-        thumbnail_bytes: thumbnail.len() as u32,
-    };
-    let last_chunk = pattern(5, 9);
-    let empty_object_id = uuid();
-    let empty = Content {
-        object_id: empty_object_id.clone(),
-        plaintext_size: 0,
-        thumbnail_bytes: 0,
-        ..content.clone()
-    };
+    let layouts: Vec<serde_json::Value> = [0, 1, 256, 257, 1000, chunk_bytes - 20, chunk_bytes, chunk_bytes + 1, 3_000_000_000, 1 << 40]
+        .into_iter()
+        .flat_map(|size| [0u32, 300, 65_536].into_iter().map(move |thumbnail| (size, thumbnail)))
+        .flat_map(|(size, thumbnail)| {
+            [2u32, 3].into_iter().map(move |suite| {
+                let layout = content_layout(suite, size, thumbnail).unwrap();
+                json!({ "suite": suite, "plaintextSize": size, "thumbnailBytes": thumbnail, "contentLength": layout.content_length, "chunkCount": layout.chunk_count, "ciphertextSize": layout.ciphertext_size })
+            })
+        })
+        .collect();
 
     let export_key = random_bytes(64).unwrap();
     let account_envelope =
@@ -180,7 +189,13 @@ fn main() {
         let secret: [u8; 32] = granter_secret.clone().try_into().unwrap();
         x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes().to_vec()
     };
-    let share_ctx = ShareContext { workspace_id: workspace_id.clone(), node_id: node_id.clone(), key_epoch: 9, grantee_user_id: web_user.clone(), granter_user_id: uuid() };
+    let share_ctx = ShareContext {
+        workspace_id: workspace_id.clone(),
+        node_id: node_id.clone(),
+        key_epoch: 9,
+        grantee_user_id: web_user.clone(),
+        granter_user_id: uuid(),
+    };
     let grantee_public = base64url_decode(str_of(web_identity, "encryptionPublicKey")).unwrap();
     let grantee_kem = base64url_decode(str_of(&web_identity["kem"], "publicKey")).unwrap();
     let share = json!({
@@ -191,7 +206,13 @@ fn main() {
     });
     let web_settings = &web["settings"];
     let settings_json = r#"{"version":1,"contacts":{}}"#;
-    let sealed_settings = settings_seal(base64url_decode(str_of(web_settings, "identityPrivateKey")).unwrap(), web_user.clone(), 5, settings_json.into()).unwrap();
+    let sealed_settings = settings_seal(
+        base64url_decode(str_of(web_settings, "identityPrivateKey")).unwrap(),
+        web_user.clone(),
+        5,
+        settings_json.into(),
+    )
+    .unwrap();
     let settings = json!({
         "userId": web_user,
         "json": settings_json,
@@ -278,18 +299,13 @@ fn main() {
             "metadata": { "name": metadata.name, "mime": metadata.mime, "size": metadata.size, "modified": metadata.modified },
             "metadataCtx": { "workspaceId": metadata_ctx.workspace_id, "nodeId": metadata_ctx.node_id, "metadataVersion": metadata_ctx.metadata_version },
             "metadataEnvelope": e(&metadata_envelope),
-            "version": {
-                "ctx": { "workspaceId": workspace_id, "nodeId": node_id, "versionId": version_id, "objectId": object_id, "suite": 2 },
-                "contentKey": e(&content_key),
-                "contentNonce": e(&content_nonce),
-                "plaintextSize": plaintext_size,
-                "thumbnailBytes": thumbnail.len(),
-                "envelope": e(&sealed.envelope),
-                "lastChunk": { "index": 1, "plaintext": e(&last_chunk), "ciphertext": e(&chunk_encrypt(content.clone(), 1, last_chunk.clone()).unwrap()) },
-                "thumbnail": { "plaintext": e(&thumbnail), "ciphertext": e(&thumbnail_encrypt(content.clone(), thumbnail.clone()).unwrap()) },
-            },
-            "emptyFile": { "objectId": empty_object_id, "ciphertext": e(&chunk_encrypt(empty, 0, vec![]).unwrap()) },
+            // Suite 3 with and without a thumbnail, an empty file, and suite 2's last chunk of two.
+            "version": version(3, 1000, Some(pattern(300, 5)), 0),
+            "bareVersion": version(3, 5, None, 0),
+            "emptyVersion": version(3, 0, None, 0),
+            "unpaddedVersion": version(2, chunk_bytes + 5, Some(pattern(300, 5)), 1),
         },
+        "layouts": layouts,
     });
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/crypto/src/__fixtures__/core.json");
