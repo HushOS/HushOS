@@ -1620,6 +1620,20 @@ async function limitLink(token: string, address: string) {
 }
 
 /* The linked node with what the visitor's device needs to open it; the secret stays in their URL. */
+/*
+ * What a link's visitor sees of a node: the signatures, never who wrote it. A
+ * visitor has no account and no pins, so a signer's name and email would tell
+ * an anonymous holder of the URL who owns and edits the files, and buy them
+ * nothing they could check.
+ */
+function visitorView(node: NodeView): NodeView {
+    return {
+        ...node,
+        metadataSigner: null,
+        currentVersion: node.currentVersion ? { ...node.currentVersion, signer: null } : null,
+    };
+}
+
 export async function openLink(token: string, address: string) {
     await limitLink(token, address);
     const resolved = await driveRepository.resolveLink(hashToken(token));
@@ -1636,7 +1650,7 @@ export async function openLink(token: string, address: string) {
             linkEnvelope: b64(resolved.link.linkEnvelope),
             expiresAt: resolved.link.expiresAt?.toISOString() ?? null,
         },
-        node: nodeView(resolved.node),
+        node: visitorView(nodeView(resolved.node)),
     };
 }
 
@@ -1657,9 +1671,9 @@ export async function linkChildren(
     });
     if (result.status !== 'ok') throw linkGone();
     return {
-        folder: nodeView(result.folder),
-        ancestors: result.ancestors.map(nodeView),
-        children: result.children.map(nodeView),
+        folder: visitorView(nodeView(result.folder)),
+        ancestors: result.ancestors.map((row) => visitorView(nodeView(row))),
+        children: result.children.map((row) => visitorView(nodeView(row))),
         nextCursor: result.nextCursor,
     };
 }
@@ -1670,7 +1684,12 @@ export async function linkDownloadUrl(token: string, address: string, versionId:
         versionId,
     ]);
     if (!workspaceId || !allowed.has(versionId)) throw linkGone();
-    return presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    const presigned = await presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    return {
+        ...presigned,
+        node: visitorView(presigned.node),
+        version: { ...presigned.version, signer: null },
+    };
 }
 
 export async function linkDownloadUrls(token: string, address: string, versionIds: string[]) {
