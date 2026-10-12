@@ -27,6 +27,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -45,7 +46,12 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { ownFingerprintQueryOptions, removeContact, settingsQueryOptions } from '@/lib/contacts';
+import {
+    ownFingerprintQueryOptions,
+    pinVerified,
+    removeContact,
+    settingsQueryOptions,
+} from '@/lib/contacts';
 import { formatWhen } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
@@ -71,9 +77,23 @@ function People() {
     const [checking, setChecking] = useState<ContactPin | null>(null);
     const [removing, setRemoving] = useState<ContactPin | null>(null);
     const [busy, setBusy] = useState(false);
+    const [rechecking, setRechecking] = useState<ContactPin | null>(null);
     const contacts = Object.values(settings.data?.settings.contacts ?? {}).sort((a, b) =>
         a.name.localeCompare(b.name),
     );
+    // Pins made before the words covered every key: nothing is shared through them until checked again.
+    const stale = useQuery({
+        queryKey: ['contacts', 'stale', userId, settings.dataUpdatedAt],
+        queryFn: async () => {
+            const checked = await Promise.all(
+                contacts.map(
+                    async (contact) => [contact.userId, await pinVerified(contact)] as const,
+                ),
+            );
+            return new Set(checked.filter(([, verified]) => !verified).map(([id]) => id));
+        },
+        enabled: settings.isSuccess,
+    });
 
     async function remove(contact: ContactPin) {
         setBusy(true);
@@ -148,9 +168,13 @@ function People() {
                                     {contact.email}
                                 </span>
                             </span>
-                            <span className="hidden text-[13px] text-muted-foreground sm:inline">
-                                Added {formatWhen(contact.pinnedAt, { lower: true })}
-                            </span>
+                            {stale.data?.has(contact.userId) ? (
+                                <Badge variant="warning">Check again</Badge>
+                            ) : (
+                                <span className="hidden text-[13px] text-muted-foreground sm:inline">
+                                    Added {formatWhen(contact.pinnedAt, { lower: true })}
+                                </span>
+                            )}
                             <DropdownMenu>
                                 <DropdownMenuTrigger
                                     render={
@@ -161,10 +185,19 @@ function People() {
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-56">
                                     <DropdownMenuGroup>
-                                        <DropdownMenuItem onClick={() => setChecking(contact)}>
-                                            <ShieldCheckIcon aria-hidden="true" />
-                                            Check it’s them
-                                        </DropdownMenuItem>
+                                        {stale.data?.has(contact.userId) ? (
+                                            <DropdownMenuItem
+                                                onClick={() => setRechecking(contact)}
+                                            >
+                                                <ShieldCheckIcon aria-hidden="true" />
+                                                Check their words again
+                                            </DropdownMenuItem>
+                                        ) : (
+                                            <DropdownMenuItem onClick={() => setChecking(contact)}>
+                                                <ShieldCheckIcon aria-hidden="true" />
+                                                Check it’s them
+                                            </DropdownMenuItem>
+                                        )}
                                     </DropdownMenuGroup>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuGroup>
@@ -201,6 +234,34 @@ function People() {
                             onAdded={(pin) => {
                                 setAdding(false);
                                 toast.add({ type: 'success', title: `${pin.name} added` });
+                            }}
+                        />
+                    )}
+                </DialogContent>
+            </Dialog>
+
+            <Dialog
+                open={rechecking !== null}
+                onOpenChange={(open) => !open && setRechecking(null)}
+            >
+                <DialogContent className="sm:max-w-[480px]">
+                    <DialogHeader>
+                        <DialogTitle>
+                            Check {rechecking ? firstName(rechecking.name) : ''} again
+                        </DialogTitle>
+                        <DialogDescription>
+                            Their twelve words now cover all of their keys. Read them together once
+                            more.
+                        </DialogDescription>
+                    </DialogHeader>
+                    {rechecking && (
+                        <CheckContact
+                            userId={userId}
+                            email={rechecking.email}
+                            onCancel={() => setRechecking(null)}
+                            onAdded={(pin) => {
+                                setRechecking(null);
+                                toast.add({ type: 'success', title: `${pin.name} checked` });
                             }}
                         />
                     )}

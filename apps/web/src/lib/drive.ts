@@ -8,7 +8,7 @@ import { ROOT_LABEL } from '@hushos/drive/protocol';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
-import { trustGrantee, trustGranter } from '@/lib/contacts';
+import { sharingLedger, trustGrantee, trustGranter } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 
 /*
@@ -27,6 +27,7 @@ export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     },
     linkApi,
     reportApi,
+    ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
 });
 
 export const driveKeys = {

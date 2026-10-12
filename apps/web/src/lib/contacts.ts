@@ -1,5 +1,12 @@
 import type { ContactIdentity, ContactPin, Settings } from '@hushos/auth/api';
-import { fingerprint, keyDigest, publicKeyBytes } from '@hushos/auth/client';
+import {
+    fingerprint,
+    keyDigest,
+    pinVerified,
+    publicKeyBytes,
+    settingsRolledBack,
+} from '@hushos/auth/client';
+import type { SharingLedger } from '@hushos/drive/client';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
 
@@ -73,11 +80,44 @@ export const contactKeys = {
 
 export type LoadedSettings = { settings: Settings; version: number };
 
+/*
+ * The newest settings version this device has seen, per account and identity.
+ * The server keeps the settings and could hand back an older copy, or none,
+ * to bring back a pin the person replaced or drop one they made; a device that
+ * has seen version n refuses anything older. A new identity starts its own count.
+ */
+export { pinVerified };
+
+const SEEN_PREFIX = 'hushos.settings-seen';
+function seenKey(userId: string, identityKey: string) {
+    return `${SEEN_PREFIX}:${userId}:${identityKey}`;
+}
+export function settingsSeen(userId: string, identityKey: string) {
+    try {
+        return Number(window.localStorage.getItem(seenKey(userId, identityKey)) ?? 0) || 0;
+    } catch {
+        return 0;
+    }
+}
+export function rememberSettingsSeen(userId: string, identityKey: string, version: number) {
+    try {
+        if (version > settingsSeen(userId, identityKey))
+            window.localStorage.setItem(seenKey(userId, identityKey), String(version));
+    } catch {
+        /* No storage: this device simply cannot tell an old copy from a new one. */
+    }
+}
+const ROLLED_BACK =
+    'The server sent older settings than this device has seen, so nothing was changed. Try again later, and tell your operator if it keeps happening.';
+
 async function loadSettings(userId: string): Promise<LoadedSettings> {
-    await openIdentity(userId);
+    const own = await openIdentity(userId);
     const { settings: envelope } = await authClient.settings();
+    const seen = settingsSeen(userId, own.encryptionPublicKey);
+    if (settingsRolledBack(envelope?.settingsVersion ?? null, seen)) throw new Error(ROLLED_BACK);
     if (!envelope) return { settings: EMPTY, version: 0 };
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
+    rememberSettingsSeen(userId, own.encryptionPublicKey, envelope.settingsVersion);
     return { settings, version: envelope.settingsVersion };
 }
 
@@ -127,6 +167,8 @@ export async function saveSettings(
                 nonce: envelope.nonce,
                 ciphertext: envelope.ciphertext,
             });
+            const own = await openIdentity(userId);
+            rememberSettingsSeen(userId, own.encryptionPublicKey, saved.settingsVersion);
             queryClient?.setQueryData(contactKeys.settings(userId), {
                 settings: next,
                 version: saved.settingsVersion,
@@ -154,6 +196,8 @@ export type Lookup = {
     pinned: ContactPin | null;
     /* The looked-up key differs from the pinned one: a warning, never a silent update. */
     changed: boolean;
+    /* The pin predates a words check over every key it holds: check again before it counts. */
+    stale: boolean;
     /* Their post-quantum key, when they have one: its digest, and whether their signing key vouches for it. */
     kem: { hash: string; valid: boolean } | null;
 };
@@ -194,7 +238,8 @@ export async function lookupContact(
         (pinned.encryptionPublicKey !== contact.encryptionPublicKey ||
             pinned.signingPublicKey !== contact.signingPublicKey ||
             (Boolean(pinned.kemPublicKeyHash) && (!kem || kem.hash !== pinned.kemPublicKeyHash)));
-    return { contact, fingerprint: print, pinned, changed, kem };
+    const stale = pinned !== null && !changed && !(await pinVerified(pinned));
+    return { contact, fingerprint: print, pinned, changed, stale, kem };
 }
 
 export function pinContact(queryClient: QueryClient, userId: string, lookup: Lookup) {
@@ -229,17 +274,20 @@ export async function trustGrantee(
     const loaded = await loadSettings(userId);
     const pinned = loaded.settings.contacts[granteeUserId];
     if (!pinned) throw new Error('This person is not in your contacts. Pin them before sharing.');
+    if (!(await pinVerified(pinned)))
+        throw new Error(
+            `Check ${pinned.name}’s words again in People you share with: this pin was made before the words covered all their keys. Nothing was shared.`,
+        );
     if (pinned.encryptionPublicKey !== served.encryptionPublicKey)
         throw new Error(
             `${pinned.name}’s key has changed since you pinned it. Check it’s them in People you share with before sharing.`,
         );
-    if (!served.kem) {
-        if (pinned.kemPublicKeyHash)
-            throw new Error(
-                `${pinned.name}’s post-quantum key is missing from what the server sent. Nothing was shared.`,
-            );
-        return { encryptionPublicKey: pinned.encryptionPublicKey, kemPublicKey: null };
-    }
+    // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target, and
+    // withholding the KEM key is all it would take a server to get one.
+    if (!served.kem)
+        throw new Error(
+            `${pinned.name} hasn’t got post-quantum keys yet, so nothing was shared. They get them the next time they sign in.`,
+        );
     const hash = await keyDigest(publicKeyBytes(served.kem.publicKey));
     if (pinned.kemPublicKeyHash) {
         if (pinned.kemPublicKeyHash !== hash)
@@ -313,7 +361,7 @@ export async function trustGranter(granter: {
     if (!userId) throw new Error('Unlock your account first.');
     const loaded = await loadSettings(userId);
     const pinned = loaded.settings.contacts[granter.id];
-    if (!pinned)
+    if (!pinned || !(await pinVerified(pinned)))
         throw new UnverifiedGranterError(
             `Add ${granter.name} in People you share with and check their words to open what they shared.`,
         );
@@ -322,4 +370,50 @@ export async function trustGranter(granter: {
             `${granter.name}’s key has changed since you pinned it. Check it’s them in People you share with before opening what they shared.`,
         );
     return pinned.encryptionPublicKey;
+}
+
+/*
+ * The sharing ledger (see SharingLedger in @hushos/drive/client), kept in the
+ * settings document so every device of the person reads the same one.
+ */
+function ledgerOf(settings: Settings) {
+    settings.sharing ??= { shares: {}, links: {} };
+    return settings.sharing;
+}
+export function sharingLedger(userId: () => string | null): SharingLedger {
+    const save = (change: (ledger: NonNullable<Settings['sharing']>) => void) => {
+        const id = userId();
+        if (!id) throw new Error('Unlock your account first.');
+        return saveSettings(boundQueryClient, id, (settings) => {
+            change(ledgerOf(settings));
+            return settings;
+        }).then(() => undefined);
+    };
+    return {
+        async read() {
+            const id = userId();
+            if (!id) return { shares: {}, links: {} };
+            const { settings } = await loadSettings(id);
+            return settings.sharing ?? { shares: {}, links: {} };
+        },
+        addShare: (nodeId, granteeUserId) =>
+            save((ledger) => {
+                const people = (ledger.shares[nodeId] ??= []);
+                if (!people.includes(granteeUserId)) people.push(granteeUserId);
+            }),
+        removeShare: (nodeId, granteeUserId) =>
+            save((ledger) => {
+                const people = (ledger.shares[nodeId] ?? []).filter((id) => id !== granteeUserId);
+                if (people.length) ledger.shares[nodeId] = people;
+                else delete ledger.shares[nodeId];
+            }),
+        addLink: (linkId, nodeId) =>
+            save((ledger) => {
+                ledger.links[linkId] = nodeId;
+            }),
+        removeLink: (linkId) =>
+            save((ledger) => {
+                delete ledger.links[linkId];
+            }),
+    };
 }

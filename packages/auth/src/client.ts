@@ -6,6 +6,7 @@ export {
     keyDigest,
     publicKeyBytes,
 } from '@hushos/crypto/fingerprint';
+export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityKem } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';

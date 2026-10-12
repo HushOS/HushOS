@@ -84,7 +84,7 @@ export function CheckContact({
     }
 
     const first = found ? (found.contact.name.trim().split(/\s+/)[0] ?? found.contact.name) : '';
-    const alreadyAdded = found !== null && found.pinned !== null && !found.changed;
+    const alreadyAdded = found !== null && found.pinned !== null && !found.changed && !found.stale;
     const unsignedKem = found?.kem !== null && found?.kem !== undefined && !found.kem.valid;
 
     if (!found)
@@ -154,6 +154,12 @@ export function CheckContact({
                         {formatDay(found.pinned!.pinnedAt)}. That can be a new phone or a reset, or
                         someone pretending. Check it’s them before you accept.
                     </span>
+                </p>
+            ) : found.stale ? (
+                <p className="text-sm leading-snug text-muted-foreground">
+                    You added {first} before the twelve words covered all of their keys. Read them
+                    together again, on a call or in person; until you do, nothing is shared with{' '}
+                    {first} and what they share with you stays shut.
                 </p>
             ) : (
                 <p className="text-sm leading-snug text-muted-foreground">
