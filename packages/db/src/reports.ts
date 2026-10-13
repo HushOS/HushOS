@@ -472,24 +472,49 @@ async function lockReport(tx: Tx, reportId: string) {
 
 /*
  * Deletes what lets anyone open a released report, and what it kept about
- * people: the anonymous reporter's address and email and the uploader's email.
- * Its evidence requests go too, and the worker purges the evidence copy.
- * The audit trail stays, and so does the snapshot in `drive_report_items`: the
- * evidence purge needs its object ids to find the copies it deletes, and the
- * envelopes in it open nothing without an operator key.
+ * people: who reported it (the account, or the anonymous reporter's address
+ * and email, and the share they saw it through, which names them too), their
+ * reason in their own words, and the uploader's email. Its evidence requests
+ * go too, and the worker purges the evidence copy. The snapshot in
+ * `drive_report_items` loses its envelopes, signatures and who wrote what;
+ * what stays is the tree's shape and the object ids the evidence purge needs
+ * to find the copies it deletes. The audit trail stays, without the reporter
+ * as the actor of the "reported" entry.
  */
 async function release(tx: Tx, reportId: string, now: Date) {
     await tx.delete(driveReportKeys).where(eq(driveReportKeys.reportId, reportId));
     // Pending ones would be answered with URLs to a copy the purge is about to delete.
     await tx.delete(driveReportRequests).where(eq(driveReportRequests.reportId, reportId));
+    await tx
+        .update(driveReportItems)
+        .set({
+            keyEnvelope: null,
+            metadataEnvelope: null,
+            contentKeyEnvelope: null,
+            contentNonce: null,
+            metadataSignerId: null,
+            metadataSignature: null,
+            versionSignerId: null,
+            versionSignature: null,
+        })
+        .where(eq(driveReportItems.reportId, reportId));
+    await tx
+        .update(driveReportEvents)
+        .set({ actorUserId: null })
+        .where(
+            and(eq(driveReportEvents.reportId, reportId), eq(driveReportEvents.action, 'reported')),
+        );
     const [report] = await tx
         .update(driveReports)
         .set({
             heldAt: null,
             releasedAt: now,
+            reason: null,
+            reporterUserId: null,
             reporterAddressHash: null,
             reporterEmail: null,
             uploaderEmail: null,
+            shareId: null,
             updatedAt: now,
         })
         .where(eq(driveReports.id, reportId))

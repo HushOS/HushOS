@@ -1854,6 +1854,8 @@ function evidenceRequestView(row: reportsRepository.EvidenceRequestRow) {
 }
 /* A snapshot row as the node the client already knows how to open. */
 function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: string): NodeView {
+    // A released report's snapshot keeps no envelopes; the routes refuse it before this.
+    if (!item.keyEnvelope || !item.metadataEnvelope) throw reportReleased();
     const version: VersionView | null =
         item.versionId && item.objectId && item.contentKeyEnvelope && item.contentNonce
             ? {

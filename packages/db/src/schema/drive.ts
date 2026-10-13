@@ -430,7 +430,9 @@ export const driveReports = pgTable(
         linkId: uuid('link_id'),
         shareId: uuid('share_id'),
         category: text().notNull().$type<ReportCategory>(),
-        reason: text().notNull(),
+        // The reporter's own words, and who they are: cleared, with the share they saw it
+        // through (which names them too), when the report is released.
+        reason: text(),
         reporterUserId: uuid('reporter_user_id'),
         reporterEmail: text('reporter_email'),
         reporterAddressHash: bytea('reporter_address_hash'),
@@ -467,7 +469,11 @@ export const driveReports = pgTable(
         ),
         check(
             'drive_reports_release_valid',
-            sql`${table.releasedAt} is null or (${table.status} <> 'open' and ${table.heldAt} is null)`,
+            sql`${table.releasedAt} is null or (${table.status} <> 'open' and ${table.heldAt} is null and ${table.reason} is null and ${table.reporterUserId} is null and ${table.reporterEmail} is null and ${table.reporterAddressHash} is null and ${table.uploaderEmail} is null and ${table.shareId} is null)`,
+        ),
+        check(
+            'drive_reports_reason_valid',
+            sql`${table.reason} is not null or ${table.releasedAt} is not null`,
         ),
         check(
             'drive_reports_evidence_valid',
@@ -475,7 +481,7 @@ export const driveReports = pgTable(
         ),
         check(
             'drive_reports_values_valid',
-            sql`${table.keyEpoch} >= 1 and char_length(${table.reason}) between 1 and 2000 and (${table.reporterEmail} is null or char_length(${table.reporterEmail}) <= 254) and (${table.reporterAddressHash} is null or octet_length(${table.reporterAddressHash}) = 32) and ${table.itemCount} >= 0 and (${table.filedWith} is null or char_length(${table.filedWith}) <= 200) and (${table.filedReference} is null or char_length(${table.filedReference}) <= 200)`,
+            sql`${table.keyEpoch} >= 1 and (${table.reason} is null or char_length(${table.reason}) between 1 and 2000) and (${table.reporterEmail} is null or char_length(${table.reporterEmail}) <= 254) and (${table.reporterAddressHash} is null or octet_length(${table.reporterAddressHash}) = 32) and ${table.itemCount} >= 0 and (${table.filedWith} is null or char_length(${table.filedWith}) <= 200) and (${table.filedReference} is null or char_length(${table.filedReference}) <= 200)`,
         ),
     ],
 );
@@ -506,7 +512,9 @@ export const driveReportKeys = pgTable(
  * beneath the reported one (bounded), with the envelopes and object framing
  * an operator needs to open it, kept here so the owner purging the tree does
  * not empty the report. The object keys name what the hold keeps and what the
- * worker copies to the evidence store.
+ * worker copies to the evidence store. A release clears the envelopes, the
+ * signatures and who wrote what, keeping the tree's shape and the object ids
+ * the evidence purge needs to find the copies it deletes.
  */
 export const driveReportItems = pgTable(
     'drive_report_items',
@@ -520,9 +528,9 @@ export const driveReportItems = pgTable(
         kind: text().notNull().$type<'folder' | 'file'>(),
         keyEpoch: integer('key_epoch').notNull(),
         parentKeyEpoch: integer('parent_key_epoch').notNull(),
-        keyEnvelope: bytea('key_envelope').notNull(),
+        keyEnvelope: bytea('key_envelope'),
         metadataVersion: integer('metadata_version').notNull(),
-        metadataEnvelope: bytea('metadata_envelope').notNull(),
+        metadataEnvelope: bytea('metadata_envelope'),
         versionId: uuid('version_id'),
         objectId: uuid('object_id'),
         objectKey: text('object_key'),
@@ -553,7 +561,12 @@ export const driveReportItems = pgTable(
         ),
         check(
             'drive_report_items_valid',
-            sql`${table.depth} >= 0 and ${table.keyEpoch} >= 1 and ${table.parentKeyEpoch} >= 1 and octet_length(${table.keyEnvelope}) = 72 and octet_length(${table.metadataEnvelope}) between 42 and 4136 and ((${table.kind} = 'folder' and ${table.versionId} is null) or (${table.kind} = 'file' and (${table.versionId} is null or (${table.objectId} is not null and ${table.objectKey} is not null and octet_length(${table.contentKeyEnvelope}) in (72, 84) and octet_length(${table.contentNonce}) = 16 and ${table.chunkSize} > 0 and ${table.chunkCount} >= 1 and (${table.plaintextSize} is null or ${table.plaintextSize} >= 0) and ${table.ciphertextSize} >= 0))))`,
+            sql`${table.depth} >= 0 and ${table.keyEpoch} >= 1 and ${table.parentKeyEpoch} >= 1 and ((${table.kind} = 'folder' and ${table.versionId} is null) or (${table.kind} = 'file' and (${table.versionId} is null or (${table.objectId} is not null and ${table.objectKey} is not null))))`,
+        ),
+        // As snapshotted, everything an operator needs to open it; once released, none of it.
+        check(
+            'drive_report_items_sealed_valid',
+            sql`(${table.keyEnvelope} is not null and octet_length(${table.keyEnvelope}) = 72 and ${table.metadataEnvelope} is not null and octet_length(${table.metadataEnvelope}) between 42 and 4136 and (${table.versionId} is null or (${table.contentKeyEnvelope} is not null and octet_length(${table.contentKeyEnvelope}) in (72, 84) and ${table.contentNonce} is not null and octet_length(${table.contentNonce}) = 16 and ${table.chunkSize} > 0 and ${table.chunkCount} >= 1 and (${table.plaintextSize} is null or ${table.plaintextSize} >= 0) and ${table.ciphertextSize} >= 0))) or (${table.keyEnvelope} is null and ${table.metadataEnvelope} is null and ${table.contentKeyEnvelope} is null and ${table.contentNonce} is null and ${table.metadataSignerId} is null and ${table.metadataSignature} is null and ${table.versionSignerId} is null and ${table.versionSignature} is null)`,
         ),
     ],
 );

@@ -570,7 +570,8 @@ export type ReportView = {
     keyEpoch: number;
     via: 'link' | 'share';
     category: ReportCategory;
-    reason: string;
+    /* The reporter's own words; null once released, when it is cleared with who reported it. */
+    reason: string | null;
     reporter: { userId: string | null; email: string | null };
     uploader: { userId: string | null; email: string | null; suspended: boolean };
     status: ReportStatus;
