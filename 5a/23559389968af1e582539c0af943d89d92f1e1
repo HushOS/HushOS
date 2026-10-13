@@ -1,0 +1,55 @@
+apps/web/src/lib/contacts.ts
+  s_7c0f424aad5a1e::t_1027a30540c8b1 232-235,607
+apps/web/src/lib/save-copy.ts
+  s_7c0f424aad5a1e::t_07f30ec3ca265e 58-59
+packages/crypto/src/contacts.test.ts
+  s_7c0f424aad5a1e::t_914da7ef5b6532 143,146,157-158,166,169-173,175-176,299,328-329,331-333,336
+packages/crypto/src/contacts.ts
+  s_7c0f424aad5a1e::t_034a18ff122ea5 16-17,26,156,205-207,210,213,220-237
+packages/crypto/src/core-fixtures.test.ts
+  s_7c0f424aad5a1e::t_fba097d5486208 298,309,403-405
+packages/crypto/src/index.ts
+  s_7c0f424aad5a1e::t_fffc2f7d2acad4 15
+packages/crypto/src/session.drive.test.ts
+  s_7c0f424aad5a1e::t_b3afcd99adb85c 332-334,345,347-361,364-365,494-495,1203,1264-1267,1322,1328,1331-1516
+packages/crypto/src/session.rotation.test.ts
+  s_7c0f424aad5a1e::t_f91635f03ea98a 9-16,96-103,161,173-176,184-185,219-220,232-239,242,247-253,284,296-297,433,445-446,455-563
+packages/crypto/src/session.ts
+  s_7c0f424aad5a1e::t_4074fe0d232f25 33,36,38,40,42,46-47,190-191,219-224,315-320,346-351,355,380-381,407-414,423-428,432-443,503-509,515-520,584-588,664-665,860-864,866-938,958-960,964,971,1123,1166-1167,1169-1208,1232,1266,1716,1763-1765,1963-1965,1969-1971,2067,2192,2195-2196,2198,2207-2208,2214-2215,2217,2227-2228,2302,2400,2409-2445,2489,2500
+packages/crypto/src/shares.test.ts
+  s_7c0f424aad5a1e::t_10d225358b1858 27-28,48-56,66,85,112-113,204,206,208-210,243-244,248-250,252-253,258-270,350
+packages/crypto/src/shares.ts
+  s_7c0f424aad5a1e::t_db8acf66d14565 4,16,27-29,32-33,39,63,69,163-166,170,175-176,181,185,189
+packages/crypto/src/signatures.test.ts
+  s_7c0f424aad5a1e::t_eae6d98fb632b3 4,8,10,14,16,183,187-207,209-213,216-270
+packages/crypto/src/signatures.ts
+  s_7c0f424aad5a1e::t_68da34923e5df3 24-30,33-36,38-52,103-109,112,121,123,134-184,266-274,277,279,282-283,285-300,302-303
+packages/crypto/src/succession.test.ts
+  s_7c0f424aad5a1e::t_2d530852e1d650 254,372-388,403
+packages/drive/src/client.test.ts
+  s_7c0f424aad5a1e::t_d0ef4e69ba9f93 4,64,66,163,176,186,212-223,246,256,345,349,354-375,380-381,387-420,449,452-453,458
+packages/drive/src/client.ts
+  s_7c0f424aad5a1e::t_31db8245780b3e 7,74-76,154-156,158,188-190,192,321-322,326,330,335-336,338,340-341,346-350,354-358,724-726,728-732,753,823,826-837,888-890,898-900,928-929,933,939,946,1315-1317,1343,1355-1356,1358-1361,1364-1365,1548-1563
+packages/drive/src/transfers.ts
+  s_7c0f424aad5a1e::t_f741485f494055 573-574,608,850,884,893
+packages/drive/src/trust.test.ts
+  s_7c0f424aad5a1e::t_2161ed8fbb83c7 48,51,136-141,146,160,172,197-222
+packages/drive/src/trust.ts
+  s_7c0f424aad5a1e::t_67404cf1d162d5 1,20-21,42-44,46-48,51-54,123-126,129,143-148,170-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5a23559389968af1e582539c0af943d89d92f1e1",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
