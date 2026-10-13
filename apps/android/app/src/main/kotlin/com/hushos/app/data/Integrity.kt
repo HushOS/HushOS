@@ -6,9 +6,11 @@ import com.hushos.core.NodeKind
 import com.hushos.core.TrustedKeys
 import com.hushos.core.VersionStatement
 import com.hushos.core.base64urlDecode
+import com.hushos.core.metadataCopySign
 import com.hushos.core.metadataIntegrity
 import com.hushos.core.metadataResealSign
 import com.hushos.core.metadataSign
+import com.hushos.core.versionCopySign
 import com.hushos.core.versionIntegrity
 import com.hushos.core.versionResealSign
 import com.hushos.core.versionSign
@@ -78,16 +80,23 @@ data class Unverified(val integrity: Integrity, val signerId: String?, val write
     }
 }
 
-/* Which verdict a row shows when its name and its content disagree: the clearest warning wins. */
+/*
+ * Which verdict a row shows when its name and its content disagree: the clearest warning wins. Saved from a link is
+ * no warning, but it says more than verified (Info names it), so it ranks just above.
+ */
 internal fun severity(integrity: Integrity) = when (integrity) {
     Integrity.VERIFIED -> 0
-    Integrity.RESEALED -> 1
-    Integrity.UNSIGNED -> 2
-    Integrity.RETIRED_KEY -> 3
-    Integrity.UNKNOWN_SIGNER -> 4
-    Integrity.UNCHECKED -> 5
-    Integrity.BAD_SIGNATURE -> 6
+    Integrity.SAVED_FROM_LINK -> 1
+    Integrity.RESEALED -> 2
+    Integrity.UNSIGNED -> 3
+    Integrity.RETIRED_KEY -> 4
+    Integrity.UNKNOWN_SIGNER -> 5
+    Integrity.UNCHECKED -> 6
+    Integrity.BAD_SIGNATURE -> 7
 }
+
+/* What carries no mark: a record that verified, and one this person or a checked contact saved from a link. */
+private fun unmarked(integrity: Integrity) = integrity == Integrity.VERIFIED || integrity == Integrity.SAVED_FROM_LINK
 
 /* Malformed base64 is no signature this device can check: verification fails on it as on any wrong one. */
 private fun signatureBytes(value: String?): ByteArray? = value?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
@@ -131,18 +140,44 @@ fun versionVerdict(node: NodeView, trust: Trust?): Integrity? = node.currentVers
 
 /*
  * A node's metadata and its current version, each checked against the keys trusted for the account the server names
- * as its writer. The worse of the two is what the row shows: a forged version under an honest name is as
- * untrustworthy as a forged name. Without a trust set every record is `Unchecked`: failing to load is never clean.
+ * as its writer, the worse of the two first: a forged version under an honest name is as untrustworthy as a forged
+ * name.
  */
-fun unverifiedOf(node: NodeView, trust: Trust?): Unverified? {
-    if (trust == null) return Unverified.unchecked(node.metadataSigner?.id)
+private fun worstOf(node: NodeView, trust: Trust): Unverified {
     val metadataId = node.metadataSigner?.id
     var worst = Unverified(metadataVerdict(node, trust), metadataId, trust.writer(metadataId))
     versionVerdict(node, trust)?.let { content ->
         val versionId = node.currentVersion?.signer?.id
         if (severity(content) > severity(worst.integrity)) worst = Unverified(content, versionId, trust.writer(versionId))
     }
-    return worst.takeIf { it.integrity != Integrity.VERIFIED }
+    return worst
+}
+
+/*
+ * The mark a row shows: the worse of its two records, or none when both verified or were saved from a link. Without
+ * a trust set every record is `Unchecked`: failing to load is never clean.
+ */
+fun unverifiedOf(node: NodeView, trust: Trust?): Unverified? {
+    if (trust == null) return Unverified.unchecked(node.metadataSigner?.id)
+    return worstOf(node, trust).takeIf { !unmarked(it.integrity) }
+}
+
+/*
+ * Who saved this item from a link, when that is the whole story (docs/integrity-design.md, "Saved copies, by where
+ * they came from"): no mark, and Info says so in a neutral line. Null for anything verified outright or unverified.
+ */
+fun savedFromLinkOf(node: NodeView, trust: Trust?): Writer? {
+    trust ?: return null
+    val worst = worstOf(node, trust)
+    return if (worst.integrity == Integrity.SAVED_FROM_LINK) worst.writer else null
+}
+
+/* Info's line for a copy saved from a link: who saved it, as this person can name them, and what that can't say. */
+fun savedFromLinkLine(writer: Writer): String = when (writer) {
+    Writer.You -> "Saved from a link by you. HushOS can’t confirm who made the original."
+    is Writer.Contact -> "Saved from a link by ${writer.name}. HushOS can’t confirm who made the original."
+    // A saved signature only checks under keys this person trusts, so the saver is always named; never guessed.
+    is Writer.Unknown -> "Saved from a link. HushOS can’t confirm who made the original."
 }
 
 private fun possessive(name: String) = if (name.endsWith("s")) "$name’" else "$name’s"
@@ -170,7 +205,8 @@ fun Unverified.explanation(): String = when (integrity) {
         is Writer.Contact -> "Signed with keys ${who.name} has since replaced."
         is Writer.Unknown -> "Signed with keys its writer has since replaced."
     }
-    Integrity.VERIFIED -> ""
+    // Neither carries a mark, so neither is explained as one.
+    Integrity.VERIFIED, Integrity.SAVED_FROM_LINK -> ""
 }
 
 /* Where "Check their words" makes sense: an unknown writer with an address to look up. */
@@ -201,13 +237,29 @@ fun markOf(node: NodeView, state: TrustState): Unverified? = when (state) {
 }
 
 /*
- * How a copy's records are signed: the source's metadata and version verdicts as they were (docs/integrity-design.md,
- * "Re-sealing never launders"). Only a verified one is signed with the ordinary statement; `RESEALED` signs both
- * re-sealed, for "Save a copy" of something shared or linked, whose writer this person never vouches for.
+ * What the system Files app shows under a row's name: nothing for a verified record or one saved from a link,
+ * otherwise that it is unverified, and when the check couldn't run, that too.
  */
-data class Prior(val metadata: Integrity, val version: Integrity) {
+fun providerSummary(node: NodeView, state: TrustState): String? {
+    val mark = markOf(node, state) ?: return null
+    return if (mark.integrity == Integrity.UNCHECKED) "Unverified: HushOS couldn’t check who wrote this" else "Unverified"
+}
+
+/* Info's saved-from-link line under `state`, or null: only once whom this person trusts has loaded. */
+fun savedLineOf(node: NodeView, state: TrustState): String? = (state as? TrustState.Ready)?.let { ready ->
+    runCatching { savedFromLinkOf(node, ready.trust) }.getOrNull()?.let(::savedFromLinkLine)
+}
+
+/*
+ * How a copy's records are signed, by where the copy came from (docs/integrity-design.md, "Saved copies, by where they
+ * came from"): from a link, the saved statements (a visitor never sees signatures, so there is no verdict to keep);
+ * otherwise the source's metadata and version verdicts as they were, checked here at copy time. A verified one is
+ * signed with the ordinary statement, one saved from a link stays saved, anything else is re-sealed.
+ */
+data class Prior(val metadata: Integrity, val version: Integrity, val fromLink: Boolean = false) {
     companion object {
-        val RESEALED = Prior(Integrity.RESEALED, Integrity.RESEALED)
+        /* "Save a copy" from a link: the file and every folder the save creates. */
+        val FROM_LINK = Prior(Integrity.UNCHECKED, Integrity.UNCHECKED, fromLink = true)
 
         /* A folder has no version: its slot is never signed, and a file without one is not copied. */
         fun of(node: NodeView, trust: Trust?) = Prior(metadataVerdict(node, trust), versionVerdict(node, trust) ?: Integrity.UNCHECKED)
@@ -216,9 +268,10 @@ data class Prior(val metadata: Integrity, val version: Integrity) {
 
 /*
  * The signature a write sends over a metadata envelope. `prior` null: this person wrote it (a new folder, a rename, an
- * upload) and signs the ordinary statement. Otherwise the envelope re-seals a record that existed before, and `prior`
- * is its verdict as it was: only `Verified` keeps the ordinary statement, anything else gets the re-sealed one, and a
- * record whose check did not run (`Unchecked`) is not re-signed at all.
+ * upload) and signs the ordinary statement. Otherwise the envelope re-seals a record that existed before (a rotation,
+ * a new version keeping a name), and `prior` is its verdict as it was: `Verified` keeps the ordinary statement,
+ * `SavedFromLink` the saved one, anything else gets the re-sealed one, and a record whose check did not run
+ * (`Unchecked`) is not re-signed at all. A copy signs with copyMetadataSignature.
  */
 fun metadataSignature(seed: ByteArray, statement: MetadataStatement, envelope: ByteArray, prior: Integrity?): ByteArray = when (prior) {
     null -> metadataSign(seed, statement, envelope)
@@ -231,6 +284,21 @@ fun versionSignature(seed: ByteArray, statement: VersionStatement, envelope: Byt
     null -> versionSign(seed, statement, envelope)
     Integrity.UNCHECKED -> throw TrustUnavailable()
     else -> versionResealSign(seed, prior, statement, envelope)
+}
+
+/*
+ * The signature a copy sends over its new metadata envelope, by `prior` (see Prior). A copy that isn't from a link and
+ * whose source could not be checked is not signed at all: nothing is copied without knowing whom this person trusts.
+ */
+fun copyMetadataSignature(seed: ByteArray, statement: MetadataStatement, envelope: ByteArray, prior: Prior): ByteArray {
+    if (!prior.fromLink && prior.metadata == Integrity.UNCHECKED) throw TrustUnavailable()
+    return metadataCopySign(seed, prior.metadata, prior.fromLink, statement, envelope)
+}
+
+/* The same for a copy's content-key envelope. */
+fun copyVersionSignature(seed: ByteArray, statement: VersionStatement, envelope: ByteArray, prior: Prior): ByteArray {
+    if (!prior.fromLink && prior.version == Integrity.UNCHECKED) throw TrustUnavailable()
+    return versionCopySign(seed, prior.version, prior.fromLink, statement, envelope)
 }
 
 /* Thrown where a write must not go ahead without knowing whom this person trusts (a rotation, a copy). */

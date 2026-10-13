@@ -88,11 +88,6 @@ class ResealTest {
     }
 
     @Test
-    fun aSavedCopyIsAlwaysReSealedEvenOfSomethingThatVerified() {
-        assertEquals(Integrity.RESEALED to Integrity.RESEALED, readBack(Prior.RESEALED))
-    }
-
-    @Test
     fun withoutTheTrustSetNothingIsReSigned() {
         val prior = Prior.of(sourceNode(me, mySeed), null)
         assertEquals(Prior(Integrity.UNCHECKED, Integrity.UNCHECKED), prior)
