@@ -286,6 +286,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal fun signVersion(workspaceId: String, nodeId: String, versionId: String, objectId: String, suite: UInt, envelope: ByteArray, prior: Integrity? = null): String =
         base64urlEncode(versionSignature(identityKeys().signingSeed, VersionStatement(workspaceId, nodeId, versionId, objectId, suite), envelope, prior))
 
+    /* A copy's signature over its new metadata envelope, by where it came from (Prior). */
+    private fun signCopiedMetadata(workspaceId: String, nodeId: String, kind: NodeKind, envelope: ByteArray, copy: Prior): String =
+        base64urlEncode(copyMetadataSignature(identityKeys().signingSeed, MetadataStatement(workspaceId, nodeId, kind, 1uL), envelope, copy))
+
+    /* A copy's signature over its new content-key envelope. */
+    private fun signCopiedVersion(workspaceId: String, nodeId: String, versionId: String, objectId: String, suite: UInt, envelope: ByteArray, copy: Prior): String =
+        base64urlEncode(copyVersionSignature(identityKeys().signingSeed, VersionStatement(workspaceId, nodeId, versionId, objectId, suite), envelope, copy))
+
     /* The links the owner made for this item. */
     fun links(item: Opened): List<LinkView> = api.links(item.id, item.node.workspaceId)
 
@@ -646,23 +654,21 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal fun workspaceKeyBytes(): ByteArray? = workspaceKey
 
     /*
-     * A copy into another workspace (a shared folder): the server keeps objects
-     * per workspace, so the file is fetched and uploaded again, thumbnail and
-     * all. Folders go node by node. The copy is signed as its source checked
-     * (Prior): ordinary only for what verified, re-sealed otherwise. A copy out
-     * of someone else's drive (a share) is a saved copy, signed re-sealed
-     * whatever it checked as, and so is everything with `resealed`; neither
-     * needs the trust set. Without one any other paste stops rather than
-     * vouching blind.
+     * A copy into another workspace (a shared folder, or "Save a copy" of
+     * something shared here): the server keeps objects per workspace, so the
+     * file is fetched and uploaded again, thumbnail and all. Folders go node by
+     * node. Each record is signed as its source checks here, now (Prior): a
+     * verified original, in this drive or a share from a checked contact, gets
+     * the ordinary statement; one saved from a link stays saved; anything else
+     * is re-sealed. Without the trust set nothing is copied.
      */
-    fun copyAcross(id: String, parentId: String, name: String? = null, resealed: Boolean = false, trust: Trust? = null, progress: (Float) -> Unit = {}): Opened {
+    fun copyAcross(id: String, parentId: String, name: String? = null, trust: Trust? = null, progress: (Float) -> Unit = {}): Opened {
         val source = resolve(id)
-        val saved = resealed || source.node.workspaceId != workspaceId
-        val checked = if (saved) null else trust ?: trustForWrite()
-        val prior = if (saved) Prior.RESEALED else Prior.of(source.node, checked)
+        val checked = trust ?: trustForWrite()
+        val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
-            val made = createFolder(parentId, name ?: source.name, prior.metadata)
-            for (child in listChildren(source.id)) copyAcross(child.id, made.id, null, saved, checked, progress)
+            val made = createFolder(parentId, name ?: source.name, prior)
+            for (child in listChildren(source.id)) copyAcross(child.id, made.id, null, checked, progress)
             return made
         }
         val directory = File(context.cacheDir, "copy-" + UUID.randomUUID())
@@ -1046,8 +1052,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     // Writes
 
-    /* `prior`: set when the name comes from a record that existed before (a copy), its verdict; see signMetadata. */
-    fun createFolder(parentId: String, name: String, prior: Integrity? = null): Opened {
+    /* `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior. */
+    fun createFolder(parentId: String, name: String, copy: Prior? = null): Opened {
         // Shared folders belong to the granter's workspace; an editor writes there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
@@ -1058,9 +1064,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val wrapped = nodeWrap(NodeKeyContext(ws, id, parent.id, parent.node.keyEpoch, epoch), parentKey, key)
         val metadata = NodeMetadata(checkName(name), null, null, null)
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
+        val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
         val node = api.createFolder(ws, JSONObject().put("id", id).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
             .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
-            .put("metadataSignature", signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed, prior)))
+            .put("metadataSignature", signature))
         return adoptWritten(node, key, metadata, ws, id)
     }
 
@@ -1094,7 +1101,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /*
      * A copy under `parentId`: the server keeps the object; the envelopes are resealed here under a fresh node key.
      * Folders go node by node. Each record is checked first, as a reading would: the copy is signed with the ordinary
-     * statement only where its source verified, re-sealed otherwise. Without a trust set nothing is copied.
+     * statement where its source verified, the saved one where it was saved from a link, re-sealed otherwise. Without
+     * a trust set nothing is copied.
      */
     fun copy(id: String, parentId: String, name: String? = null, trust: Trust? = null): Opened {
         val source = resolve(id)
@@ -1105,7 +1113,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val checked = trust ?: trustForWrite()
         val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
-            val made = createFolder(parent.id, newName, prior.metadata)
+            val made = createFolder(parent.id, newName, prior)
             for (child in listChildren(source.id)) copy(child.id, made.id, null, checked)
             return made
         }
@@ -1126,9 +1134,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val node = api.copy(source.id, ws, JSONObject().put("sourceVersionId", version.id)
             .put("node", JSONObject().put("id", newId).put("parentId", parent.id).put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEpoch", epoch.toLong())
                 .put("keyEnvelope", base64urlEncode(keyEnvelope)).put("metadataEnvelope", base64urlEncode(metadataEnvelope))
-                .put("metadataSignature", signMetadata(ws, newId, NodeKind.FILE, 1uL, metadataEnvelope, prior.metadata)))
+                .put("metadataSignature", signCopiedMetadata(ws, newId, NodeKind.FILE, metadataEnvelope, prior)))
             .put("versionId", versionId).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope))
-            .put("versionSignature", signVersion(ws, newId, versionId, version.objectId, version.contentSuite, contentKeyEnvelope, prior.version)))
+            .put("versionSignature", signCopiedVersion(ws, newId, versionId, version.objectId, version.contentSuite, contentKeyEnvelope, prior)))
         return adoptWritten(node, key, metadata, ws, newId)
     }
 
@@ -1189,9 +1197,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * How the metadata a new version re-signs is signed: it keeps the replaced record's name, so it is that record's
-     * verdict. Verified stays ordinary; anything else is re-sealed. Without the trust set it throws (the upload waits
-     * and is tried again) rather than vouching for a name nobody checked.
+     * How metadata re-signed over a record that existed is signed (a new version keeps its name; a rename keeps its
+     * type, size and date): as that record checks. Verified stays ordinary, saved from a link stays saved, anything
+     * else is re-sealed. Without the trust set it throws (an upload waits and is tried again) rather than vouching for
+     * what nobody checked.
      */
     private fun replacedNamePrior(replacing: Opened): Integrity {
         val verdict = metadataVerdict(replacing.node, trustForWrite())
@@ -1201,15 +1210,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /*
      * A file's bytes as a new node under `parentId`, or a new version of `replacing`; a thumbnail rides after the last
-     * chunk. `prior`: set when the bytes and name are a copy of a record that existed before (a copy across drives, a
-     * saved copy), whose verdicts decide how the new node is signed; see signMetadata.
+     * chunk. `copy`: set when the bytes and name are a copy of a record that existed before (a copy across drives, a
+     * save from a link), which decides how the new node is signed; see Prior.
      */
-    fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, prior: Prior? = null, progress: (Float) -> Unit = {}): Opened {
+    fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null, progress: (Float) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run.
-        val keptName = replacing?.let { prior?.metadata ?: replacedNamePrior(it) }
+        val keptName = replacing?.let { replacedNamePrior(it) }
         val size = file.length().toULong()
         val modified = Instant.ofEpochMilli(file.lastModified()).toString()
         val versionId = UUID.randomUUID().toString()
@@ -1237,18 +1246,21 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val wrapped = nodeWrap(NodeKeyContext(ws, nodeId, parent.id, parent.node.keyEpoch, epoch), parentKey, nodeKey)
             metadata = NodeMetadata(checkName(name), mime, size, modified)
             val sealed = metadataSeal(MetadataContext(ws, nodeId, 1uL), nodeKey, metadata)
+            val signature = if (copy != null) signCopiedMetadata(ws, nodeId, NodeKind.FILE, sealed, copy) else signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed)
             nodeInput = JSONObject().put("existing", false).put("id", nodeId).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
                 .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
-                .put("metadataSignature", signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed, prior?.metadata))
+                .put("metadataSignature", signature)
         }
         // Suite 3: the object is padded to a Padmé bucket, so its size says little about the file's; the core pads each chunk.
         val suite = contentSuite()
         val version = versionSeal(VersionContext(ws, nodeId, versionId, objectId), nodeKey, contentKey, size, thumbnailBytes)
         val content = Content(ws, objectId, suite, contentKey, contentNonce, size, thumbnailBytes)
         val layout = version.layout
+        val versionSignature = if (copy != null) signCopiedVersion(ws, nodeId, versionId, objectId, suite, version.envelope, copy)
+            else signVersion(ws, nodeId, versionId, objectId, suite, version.envelope)
         val begun = api.beginUpload(ws, JSONObject().put("node", nodeInput).put("versionId", versionId).put("objectId", objectId)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
-            .put("versionSignature", signVersion(ws, nodeId, versionId, objectId, suite, version.envelope, prior?.version))
+            .put("versionSignature", versionSignature)
             .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString()))
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url

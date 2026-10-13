@@ -1220,7 +1220,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /*
      * Save a copy to my Drive: something shared with this account is read through
      * the share's key and uploaded again under the account's own keys, into the top
-     * folder, under a name that is free there.
+     * folder, under a name that is free there. Signed as the original checks here:
+     * a verified one from a checked contact stays clean, anything else is re-sealed.
      */
     fun saveCopy(items: List<Opened>) = viewModelScope.launch {
         val root = state.value.rootId ?: io { it.rootId } ?: return@launch
@@ -1229,8 +1230,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val name = freeName(item.name, taken).also { taken.add(it.lowercase()) }
             val ticket = begin("copy", item.name)
             var reason: String? = null
-            // Always re-sealed: this person re-locks what someone else wrote and vouches for nothing more.
-            val ok = write(root, { reason = it }) { vault -> vault.copyAcross(item.id, root, name, resealed = true) { fraction -> progress(ticket, fraction) } }
+            val ok = write(root, { reason = it }) { vault -> vault.copyAcross(item.id, root, name) { fraction -> progress(ticket, fraction) } }
             finish(ticket, failed = !ok, message = reason)
         }
         if (items.size == 1) notify("Saving a copy of “${items[0].name}”. It shows up in Files as it copies.")
@@ -1247,10 +1247,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         finish(ticket, failed = !ok, message = reason)
     }
 
-    /* A visitor sees no signatures, so everything saved from a link is signed re-sealed: re-locked, not vouched for. */
+    /*
+     * A visitor sees no signatures, so everything saved from a link, every folder the save creates included, is signed
+     * with the saved statements: no mark, and Info says who saved it and that the original can't be confirmed.
+     */
     private fun copyFromLink(vault: Vault, link: com.hushos.app.data.LinkVault, item: Opened, parent: String, name: String) {
         if (item.isFolder) {
-            val made = vault.createFolder(parent, name, com.hushos.core.Integrity.RESEALED)
+            val made = vault.createFolder(parent, name, com.hushos.app.data.Prior.FROM_LINK)
             for (child in link.children(item.id)) copyFromLink(vault, link, child, made.id, child.name)
             return
         }
@@ -1258,7 +1261,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val file = File(directory, name)
             link.download(item, file)
-            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.RESEALED)
+            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.FROM_LINK)
         } finally {
             directory.deleteRecursively()
         }

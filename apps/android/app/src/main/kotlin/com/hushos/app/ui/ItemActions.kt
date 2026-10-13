@@ -94,6 +94,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hushos.app.data.Offline
 import com.hushos.app.data.Opened
+import com.hushos.app.data.savedLineOf
 import com.hushos.app.data.VersionListView
 import com.hushos.app.data.Vault
 import com.hushos.tokens.AlpineSpace
@@ -595,6 +596,9 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
                 Mark(item, bitmap, box = if (bitmap != null) 120.dp else 88.dp)
                 Text(item.name, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S3))
                 UnverifiedMark(model, state, item)
+                // A copy saved from a link: no mark, only who saved it and what that can't say, in plain muted words.
+                val saved = remember(item.node, state.trust) { savedLineOf(item.node, state.trust) }
+                saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
             }
             Fact("Kind", kindOf(item))
             item.size?.let { Fact("Size", formatBytes(it)) }

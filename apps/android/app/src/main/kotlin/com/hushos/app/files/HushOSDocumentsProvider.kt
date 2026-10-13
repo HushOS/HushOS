@@ -24,8 +24,7 @@ import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
 import com.hushos.app.data.TrustState
-import com.hushos.app.data.markOf
-import com.hushos.core.Integrity
+import com.hushos.app.data.providerSummary
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -105,11 +104,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return current.after(result).also { trust = it; trustAt = now }
     }
 
-    /* What Files shows under a row's name: nothing for a verified record, otherwise that it is unverified. */
-    private fun summaryOf(item: Opened, trust: TrustState): String? {
-        val mark = markOf(item.node, trust) ?: return null
-        return if (mark.integrity == Integrity.UNCHECKED) "Unverified: HushOS couldn’t check who wrote this" else "Unverified"
-    }
+    private fun summaryOf(item: Opened, trust: TrustState): String? = providerSummary(item.node, trust)
 
     private val rootColumns = arrayOf(Root.COLUMN_ROOT_ID, Root.COLUMN_FLAGS, Root.COLUMN_ICON, Root.COLUMN_TITLE, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_SUMMARY)
     private val documentColumns = arrayOf(
