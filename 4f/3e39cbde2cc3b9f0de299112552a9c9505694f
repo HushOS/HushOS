@@ -1,0 +1,21 @@
+packages/drive/src/server.grantees.test.ts
+  s_7c0f424aad5a1e::t_68e60eb3b8549f 1-219
+packages/drive/src/server.ts
+  s_7c0f424aad5a1e::t_a12ae3704a0ddf 628-640,694-697,1167-1170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f3e39cbde2cc3b9f0de299112552a9c9505694f",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
