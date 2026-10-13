@@ -239,17 +239,24 @@ extension Vault {
     func loadSettings() async throws -> Settings {
         let marks = SettingsMarks.shared
         let reply = try await Auth.settings()
-        try marks.check(userId: session.userId, served: reply.envelope?.settingsVersion)
-        guard let envelope = reply.envelope else { return Settings(keyEnvelope: reply.key) }
+        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included.
+        try marks.check(userId: session.userId, served: reply.version)
         var settings: Settings
-        if envelope.version == 2 {
-            guard let stored = reply.key else { throw ContactError.message("Your settings key is missing. Try again later.") }
-            settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: try openSettingsKey(stored))
+        if let envelope = reply.envelope {
+            guard envelope.settingsVersion == reply.version else { throw ContactError.message("Your settings didn’t add up. Try again later.") }
+            if envelope.version == 2 {
+                guard let stored = reply.key else { throw ContactError.message("Your settings key is missing. Try again later.") }
+                settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: try openSettingsKey(stored))
+            } else {
+                settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: nil)
+            }
         } else {
-            settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: nil)
+            // No row (0), or a version 1 row served as none: empty settings at its sequence, written over as version 2 at the next save.
+            settings = Settings(version: reply.version)
+            settings.envelopeVersion = reply.version == 0 ? 2 : 1
         }
         settings.keyEnvelope = reply.key
-        marks.record(userId: session.userId, version: envelope.settingsVersion)
+        marks.record(userId: session.userId, version: reply.version)
         lastPins = settings.contacts
         return settings
     }
@@ -266,16 +273,11 @@ extension Vault {
             var settings = try await loadSettings()
             try change(&settings)
             let settingsKey = try await ensureSettingsKey(settings.keyEnvelope)
-            var sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
+            // Named by the stored sequence (a version 1 row's too) and sealed one above it, where the server stores it.
+            let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
-                var stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
-                if stored != sealed.settingsVersion {
-                    // A version 1 document, served as none, is replaced above its old sequence, which the save could not
-                    // know: the version is bound into the seal, so what was stored doesn't open. Sealed again at once, over it.
-                    sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: stored + 1, json: try settings.json())
-                    stored = try await Auth.putSettings(expectedVersion: stored, envelope: sealed)
-                    guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
-                }
+                let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
+                guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
                 SettingsMarks.shared.record(userId: session.userId, version: stored)
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
@@ -287,7 +289,7 @@ extension Vault {
         }
     }
 
-    /* A version 1 document (read as empty) is written over as version 2 under the settings key, which outlives an identity. */
+    /* A version 1 row (read as empty) is written over as version 2 under the settings key, which outlives an identity. */
     func ensureSettingsKeyed() async throws {
         let settings = try await loadSettings()
         if settings.version == 0 || settings.envelopeVersion == 2 { return }

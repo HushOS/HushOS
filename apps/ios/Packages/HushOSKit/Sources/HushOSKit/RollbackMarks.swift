@@ -57,14 +57,11 @@ public struct SettingsMarks: Sendable {
     func mark(userId: String) -> UInt64 { marks.value(Self.key(userId: userId)) }
 
     /*
-     * A served document checked against the mark. None at all (nil) is not refused: the server
-     * serves a version 1 document, which no longer opens, as none, and refusing that would shut
-     * such an account out of its settings for good. It reads as empty settings, the mark stays
-     * where it is, and the save that follows replaces the old document above its sequence, so
-     * an older version served after that is still refused.
+     * The stored sequence the server reports, checked against the mark. It is reported with or
+     * without a document (a version 1 row is served as none at its sequence), so none at all is
+     * a rollback only when that sequence is below the mark.
      */
-    func check(userId: String, served: UInt64?) throws {
-        guard let served else { return }
+    func check(userId: String, served: UInt64) throws {
         guard served >= mark(userId: userId) else { throw ContactError.message(Self.rolledBack) }
     }
 

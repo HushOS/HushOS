@@ -5,10 +5,11 @@ import Testing
 
 extension OnFakeDrive {
     /*
-     * An account whose settings are still a version 1 document: the server serves it as none,
-     * and the first save (naming version 0) replaces it above its old sequence. The sequence is
-     * bound into the seal, so the save has to end up sealed at the version the server stored,
-     * or no device can open the account's settings again.
+     * An account whose settings are still a version 1 row: the server serves it as none at its
+     * stored sequence. It reads as empty (not a rollback), and the save names that sequence and
+     * is sealed one above it, where the server stores it: the sequence is bound into the seal,
+     * so anything else leaves settings no device can open. A sequence below this device's mark
+     * is still a rollback.
      */
     @Suite struct SettingsUpgradeTests {
         @Test func replacingAVersionOneDocumentLeavesSettingsThatOpen() async throws {
@@ -25,16 +26,31 @@ extension OnFakeDrive {
             let key = try settingsKeyCreate(userId: me, accountKey: try randomBytes(length: 32)).key
             await vault.adopt(settingsKey: key)
 
-            // Read as none (not a rollback), then saved with a share in the ledger.
-            #expect(try await vault.loadedSettingsVersion() == 0)
+            // Read as none at its sequence (not a rollback), then saved with a share in the ledger.
+            #expect(try await vault.loadedSettingsVersion() == 7)
             let savedVersion = try await vault.saveShare(node: "node-a", grantee: "someone")
 
-            // What the server holds opens, at the version it holds, with what was saved in it.
+            // One write, at the next sequence; what the server holds opens there, with what was saved in it.
             let stored = try #require(server.envelope)
-            #expect(stored.settingsVersion > 7 && savedVersion == stored.settingsVersion)
+            #expect(server.puts == 1 && stored.settingsVersion == 8 && savedVersion == 8)
             let reopened = try Settings.opened(userId: me, envelope: stored, settingsKey: key)
             #expect(reopened.ledger.holdsShare(node: "node-a", grantee: "someone"))
             #expect(try await vault.loadedSettingsHold(node: "node-a", grantee: "someone"))
+        }
+
+        @Test func aVersionOneRowBelowThisDevicesMarkIsARollback() async throws {
+            let me = UUID().uuidString.lowercased()
+            let session = SharedKeychain.Session(origin: "https://settings.test", token: "t", userId: me)
+            SettingsServer.current = SettingsServer(storedVersion: 7)
+            Auth.testSession = session
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [SettingsServerProtocol.self]
+            Auth.testTransport = configuration
+            defer { Auth.testSession = nil; Auth.testTransport = nil; SettingsServer.current = nil }
+            SettingsMarks.shared.record(userId: me, version: 9)
+            let vault = Vault(api: DriveAPI(session: session, configuration: configuration), session: session)
+            await #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { _ = try await vault.loadedSettingsVersion() }
+            #expect(SettingsServer.current?.puts == 0)
         }
     }
 }
@@ -48,12 +64,17 @@ extension Vault {
     }
 }
 
-/* The server's settings routes as fix/audit-3 has them: a version 1 row served as none, every save stored one past the old sequence. */
+/*
+ * The server's settings routes as the round 3 contract has them: GET reports the stored sequence
+ * always (a version 1 row's too) and the document only for a version 2 row; PUT takes only the
+ * stored sequence as expectedVersion and stores the document one above it, as sealed.
+ */
 final class SettingsServer: @unchecked Sendable {
     nonisolated(unsafe) static var current: SettingsServer?
     var storedVersion: UInt64
     var envelopeVersion: UInt32 = 1
     var envelope: SettingsEnvelope?
+    var puts = 0
 
     init(storedVersion: UInt64) { self.storedVersion = storedVersion }
 
@@ -62,15 +83,16 @@ final class SettingsServer: @unchecked Sendable {
         if request.httpMethod == "PUT" {
             let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             let expected = (json["expectedVersion"] as? NSNumber)?.uint64Value ?? 0
-            let visible = envelopeVersion == 2 ? storedVersion : 0
-            guard expected == visible else { return (409, ["message": "Settings changed."]) }
+            guard expected == storedVersion else { return (409, ["message": "Settings changed."]) }
+            puts += 1
             storedVersion += 1
             envelopeVersion = 2
             envelope = SettingsEnvelope(version: 2, settingsVersion: storedVersion, nonce: json["nonce"] as? String ?? "", ciphertext: json["ciphertext"] as? String ?? "")
             return (200, ["settingsVersion": storedVersion])
         }
-        guard let envelope, envelopeVersion == 2 else { return (200, ["settings": NSNull(), "settingsKey": key]) }
-        return (200, ["settings": ["version": 2, "settingsVersion": envelope.settingsVersion, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext], "settingsKey": key])
+        guard let envelope, envelopeVersion == 2 else { return (200, ["settings": NSNull(), "settingsKey": key, "settingsVersion": storedVersion]) }
+        return (200, ["settings": ["version": 2, "settingsVersion": envelope.settingsVersion, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext],
+                      "settingsKey": key, "settingsVersion": storedVersion])
     }
 }
 

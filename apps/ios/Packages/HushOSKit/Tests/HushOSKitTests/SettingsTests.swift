@@ -102,8 +102,8 @@ struct SettingsMarksTests {
 
     @Test func olderSettingsAfterANewerOneAreRefused() throws {
         defer { try? FileManager.default.removeItem(at: file) }
-        // Nothing seen yet: no document and any version are fine.
-        try marks.check(userId: "User-1", served: nil)
+        // Nothing seen yet: no row and any version are fine.
+        try marks.check(userId: "User-1", served: 0)
         try marks.check(userId: "User-1", served: 1)
         marks.record(userId: "User-1", version: 5)
         try marks.check(userId: "user-1", served: 5)
@@ -116,20 +116,17 @@ struct SettingsMarksTests {
     }
 
     /*
-     * The server serves a version 1 document (which no longer opens) as none. Refusing that would
-     * lock the account into "Couldn't check" for good; it reads as empty instead, and the mark it
-     * passed is not lowered by it, so an older document served afterwards is still refused.
+     * The server reports the stored sequence with or without a document: a version 1 row is
+     * served as none at its sequence. That is no rollback while the sequence is at the mark;
+     * none at a lower sequence (no row, say) after the mark is.
      */
-    @Test func noDocumentAfterOneWasSeenReadsAsEmptyWithoutLoweringTheMark() throws {
+    @Test func noDocumentIsARollbackOnlyBelowTheMark() throws {
         defer { try? FileManager.default.removeItem(at: file) }
         marks.record(userId: "user-1", version: 7)
-        try marks.check(userId: "user-1", served: nil)
+        try marks.check(userId: "user-1", served: 7)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 0) }
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
         #expect(marks.mark(userId: "user-1") == 7)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 1) }
-        // The save that replaces it lands above the old sequence, and from there the mark rises again.
-        try marks.check(userId: "user-1", served: 9)
-        marks.record(userId: "user-1", version: 9)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 8) }
     }
 
     @Test func theMarkSurvivesASuccessionAndTakesOverOneKeptPerIdentityKey() throws {
