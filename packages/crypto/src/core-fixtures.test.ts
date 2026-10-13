@@ -26,12 +26,16 @@ import {
 } from './identity';
 import {
     integrityOf,
+    metadataResealedStatement,
+    metadataSavedStatement,
     metadataStatement,
     metadataStatements,
     verifyStatement,
+    versionSavedStatement,
     versionStatement,
     versionStatements,
 } from './signatures';
+import { deriveId, type IdKind } from './ids';
 import { openWorkspaceKey } from './workspace';
 import { openShareKey } from './shares';
 import { openSettings, openSettingsKey } from './contacts';
@@ -384,6 +388,70 @@ describe('records sealed by the Rust core', () => {
                 key,
             ),
         ).toBe(false);
+    });
+
+    it('reads the core’s saved signatures as saved, and as no other form', async () => {
+        const { signatures } = core;
+        const key = decode(signatures.signingPublicKey, 32);
+        const metadata = {
+            ...signatures.metadata.statement,
+            kind: signatures.metadata.statement.kind as 'file',
+        };
+        const metadataEnvelope = decode(signatures.metadata.envelope);
+        const saved = decode(signatures.metadata.saved, 64);
+        expect(
+            await verifyStatement(
+                await metadataSavedStatement(metadata, metadataEnvelope),
+                saved,
+                key,
+            ),
+        ).toBe(true);
+        for (const other of [
+            await metadataStatement(metadata, metadataEnvelope),
+            await metadataResealedStatement(metadata, metadataEnvelope),
+        ])
+            expect(await verifyStatement(other, saved, key)).toBe(false);
+        expect(
+            await verifyStatement(
+                await metadataSavedStatement(metadata, metadataEnvelope),
+                decode(signatures.metadata.resealed, 64),
+                key,
+            ),
+        ).toBe(false);
+        const current = { current: key, retired: [] };
+        expect(
+            await integrityOf(() => metadataStatements(metadata, metadataEnvelope), saved, current),
+        ).toBe('saved-from-link');
+        const version = signatures.version.statement;
+        const versionEnvelope = decode(signatures.version.envelope, 84);
+        const versionSaved = decode(signatures.version.saved, 64);
+        expect(
+            await verifyStatement(
+                await versionSavedStatement(version, versionEnvelope),
+                versionSaved,
+                key,
+            ),
+        ).toBe(true);
+        expect(
+            await verifyStatement(
+                await versionStatement(version, versionEnvelope),
+                versionSaved,
+                key,
+            ),
+        ).toBe(false);
+        expect(
+            await integrityOf(
+                () => versionStatements(version, versionEnvelope),
+                versionSaved,
+                current,
+            ),
+        ).toBe('saved-from-link');
+    });
+
+    it('derives the core’s scoped ids from the same seeds and scopes', async () => {
+        expect(core.ids).toHaveLength(15);
+        for (const entry of core.ids)
+            expect(await deriveId(entry.kind as IdKind, entry.scopeId, entry.seed)).toBe(entry.id);
     });
 
     it('accepts the core’s succession of this identity, and opens the successor under the root', async () => {

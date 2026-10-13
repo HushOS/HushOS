@@ -32,18 +32,19 @@ import {
 } from './contacts';
 import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './shares';
 import {
+    copyForm,
     integrityOf,
-    metadataResealedStatement,
-    metadataStatement,
+    metadataStatementAs,
     metadataStatements,
+    resealForm,
     signStatement,
-    versionResealedStatement,
-    versionStatement,
+    versionStatementAs,
     versionStatements,
     type Integrity,
     type MetadataStatement,
     type NodeKind,
-    type StatementPair,
+    type SignatureForm,
+    type StatementForms,
     type TrustedSigner,
     type VersionStatement,
 } from './signatures';
@@ -863,14 +864,20 @@ export function createCryptoSession() {
         if (!identityKey) throw new CryptoError('Open your identity first.');
         return encode(await signStatement(statement, identityKey.signingKey));
     }
-    /* The ordinary statement, or with `resealed` the re-sealed one ("I re-locked this, nothing more"). */
-    async function signMetadata(ctx: MetadataStatement, envelope: Uint8Array, resealed = false) {
-        return sign(
-            await (resealed ? metadataResealedStatement : metadataStatement)(ctx, envelope),
-        );
+    /* The statement of `form` (see SignatureForm) over a record, signed by the open identity. */
+    async function signMetadata(
+        ctx: MetadataStatement,
+        envelope: Uint8Array,
+        form: SignatureForm = 'ordinary',
+    ) {
+        return sign(await metadataStatementAs(form, ctx, envelope));
     }
-    async function signVersion(ctx: VersionStatement, envelope: Uint8Array, resealed = false) {
-        return sign(await (resealed ? versionResealedStatement : versionStatement)(ctx, envelope));
+    async function signVersion(
+        ctx: VersionStatement,
+        envelope: Uint8Array,
+        form: SignatureForm = 'ordinary',
+    ) {
+        return sign(await versionStatementAs(form, ctx, envelope));
     }
     /*
      * The keys a check accepts: the caller's, and this account's own (its
@@ -909,7 +916,7 @@ export function createCryptoSession() {
      */
     async function checkRecord(
         trusted: Map<string, TrustedSigner>,
-        statements: () => Promise<StatementPair>,
+        statements: () => Promise<StatementForms>,
         signer: string | null,
         signature: string | null,
     ): Promise<Integrity> {
@@ -929,19 +936,6 @@ export function createCryptoSession() {
         } catch {
             return 'unchecked';
         }
-    }
-    /*
-     * How a rotation or copy signs a record it re-sealed: the ordinary
-     * statement only for one that verified, the re-sealed one for anything
-     * else, so re-locking never launders a record into one this person
-     * vouches for. A record whose check did not run is not re-signed at all.
-     */
-    function resealedUnless(integrity: Integrity) {
-        if (integrity === 'unchecked')
-            throw new CryptoError(
-                'HushOS couldn’t check who wrote this, so it was not locked again. Try again.',
-            );
-        return integrity !== 'verified';
     }
     /*
      * The identities a share sealed to this account may have been sealed to:
@@ -1172,7 +1166,7 @@ export function createCryptoSession() {
         // Everything re-sealed below is signed by the account running the rotation,
         // as it was checked first: what did not verify is signed re-sealed.
         if (!identityKey) throw new CryptoError('Open your identity first.');
-        const metadataResealed = resealedUnless(
+        const metadataForm = resealForm(
             await checkRecord(
                 trusted,
                 async () =>
@@ -1189,11 +1183,11 @@ export function createCryptoSession() {
                 node.metadataSignature,
             ),
         );
-        const versionsResealed = new Map<string, boolean>();
+        const versionForms = new Map<string, SignatureForm>();
         for (const version of node.versions)
-            versionsResealed.set(
+            versionForms.set(
                 version.id,
-                resealedUnless(
+                resealForm(
                     await checkRecord(
                         trusted,
                         async () =>
@@ -1235,7 +1229,7 @@ export function createCryptoSession() {
             const metadataSignature = await signMetadata(
                 { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
                 metadataEnvelope,
-                metadataResealed,
+                metadataForm,
             );
             const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
             for (const version of node.versions) {
@@ -1269,7 +1263,7 @@ export function createCryptoSession() {
                                 contentSuite: opened.suite,
                             },
                             envelope,
-                            versionsResealed.get(version.id) ?? true,
+                            versionForms.get(version.id) ?? 'resealed',
                         ),
                     });
                 } finally {
@@ -2070,7 +2064,7 @@ export function createCryptoSession() {
                                     metadataVersion: 1,
                                 },
                                 metadataEnvelope,
-                                node.resealed === true,
+                                node.resealed === true ? 'resealed' : 'ordinary',
                             ),
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
@@ -2190,7 +2184,7 @@ export function createCryptoSession() {
                     metadataSignature: await signMetadata(
                         { workspaceId, nodeId, kind, metadataVersion },
                         metadataEnvelope,
-                        message.input.resealed === true,
+                        message.input.resealed === true ? 'resealed' : 'ordinary',
                     ),
                 };
             }
@@ -2306,7 +2300,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
-                        message.input.resealed === true,
+                        message.input.resealed === true ? 'resealed' : 'ordinary',
                     ),
                     chunkCount: chunkCount(length),
                     ciphertextSize: ciphertextSize(CONTENT_SUITE, plaintextSize, thumbnailBytes),
@@ -2404,7 +2398,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
-                        message.input.resealed === true,
+                        message.input.resealed === true ? 'resealed' : 'ordinary',
                     ),
                 };
             }
@@ -2413,9 +2407,10 @@ export function createCryptoSession() {
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
-                // The source as a reading would check it: only what verified is vouched for again.
+                // The source as a reading would check it: only what verified is vouched for again,
+                // and a copy of something saved from a link stays saved.
                 const trusted = trustSet(message.input.signers);
-                const metadataResealed = resealedUnless(
+                const metadataForm = copyForm(
                     await checkRecord(
                         trusted,
                         async () =>
@@ -2431,8 +2426,9 @@ export function createCryptoSession() {
                         source.metadataSigner,
                         source.metadataSignature,
                     ),
+                    false,
                 );
-                const versionResealed = resealedUnless(
+                const versionForm = copyForm(
                     await checkRecord(
                         trusted,
                         async () =>
@@ -2449,6 +2445,7 @@ export function createCryptoSession() {
                         source.signer,
                         source.signature,
                     ),
+                    false,
                 );
                 const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
@@ -2493,7 +2490,7 @@ export function createCryptoSession() {
                         metadataSignature: await signMetadata(
                             { workspaceId, nodeId: node.id, kind: 'file', metadataVersion: 1 },
                             metadataEnvelope,
-                            metadataResealed,
+                            metadataForm,
                         ),
                         versionSignature: await signVersion(
                             {
@@ -2504,7 +2501,7 @@ export function createCryptoSession() {
                                 contentSuite: opened.suite,
                             },
                             contentKeyEnvelope,
-                            versionResealed,
+                            versionForm,
                         ),
                     };
                     rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);

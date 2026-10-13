@@ -40,11 +40,14 @@ import {
 } from '../src/identity';
 import {
     metadataResealedStatement,
+    metadataSavedStatement,
     metadataStatement,
     signStatement,
     versionResealedStatement,
+    versionSavedStatement,
     versionStatement,
 } from '../src/signatures';
+import { deriveId, type IdKind } from '../src/ids';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
 
@@ -437,6 +440,13 @@ const signatures = {
                 signingKey,
             ),
         ),
+        // And saved from a link by its signer.
+        saved: encode(
+            await signStatement(
+                await metadataSavedStatement(metadataSigned, decode(node.metadataEnvelope)),
+                signingKey,
+            ),
+        ),
     },
     version: {
         statement: versionSigned,
@@ -453,8 +463,29 @@ const signatures = {
                 signingKey,
             ),
         ),
+        saved: encode(
+            await signStatement(
+                await versionSavedStatement(versionSigned, decode(node.version.envelope)),
+                signingKey,
+            ),
+        ),
     },
 };
+
+// Scoped ids: fixed seeds and scopes, so the ids are known answers both sides must derive.
+const idScopes = [
+    '0b6f0e1c-6a52-4f37-9d0e-5f1f2a3b4c5d',
+    // Upper case: the scope is lowercased in the statement.
+    '0B6F0E1C-6A52-4F37-9D0E-5F1F2A3B4C5D',
+    'f4a7c2d9-1e3b-4c5a-8f6e-7d8c9b0a1e2f',
+];
+const idKinds: IdKind[] = ['node', 'version', 'object', 'link', 'report'];
+const ids = [];
+for (const [s, scopeId] of idScopes.entries())
+    for (const [k, kind] of idKinds.entries()) {
+        const seed = encode(bytes(16, 1 + s * idKinds.length + k));
+        ids.push({ kind, scopeId, seed, id: await deriveId(kind, scopeId, seed) });
+    }
 
 // The account's identity replaced by a successor at the next version, signed by the old key.
 const successor = await createSuccessor(accountKey, userId, identity, signingKey);
@@ -493,6 +524,7 @@ await writeFile(
             settings,
             signatures,
             succession,
+            ids,
         },
         null,
         2,

@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { createDeviceKey, rememberAccountKey } from './device';
-import { createIdentity } from './identity';
+import { createIdentity, openIdentitySigningKey } from './identity';
 import { generateKey, wrapContentKey } from './drive';
 import { openLinkKey } from './links';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode, encode } from './keys';
 import {
+    metadataSavedStatement,
     metadataStatement,
     signStatement,
     verifyStatement,
@@ -560,5 +561,105 @@ describe('rotation', () => {
                 decode(identity.signingPublicKey, 32),
             ),
         ).toBe(false);
+    }, 60_000);
+
+    test('a rotation keeps a copy saved from a link saved only when it verified as saved', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const grant = await createWorkspaceGrant(root, USER, WS, 1);
+        const identity = await createIdentity(root, USER);
+        const owner = await device(USER, root, 'owner');
+        await owner('driveOpenWorkspace', { userId: USER, grant });
+        await owner('identityOpen', { userId: USER, identity });
+        const created = (await owner('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('Saved from a link'),
+                },
+            ],
+        })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
+        const b = created.nodes[1]!;
+        const statement = {
+            workspaceId: WS,
+            nodeId: B,
+            kind: 'folder' as const,
+            metadataVersion: 1,
+        };
+        const signingKey = await openIdentitySigningKey(root, USER, identity);
+        const savedByOwner = encode(
+            await signStatement(
+                await metadataSavedStatement(statement, decode(b.metadataEnvelope)),
+                signingKey,
+            ),
+        );
+        await sodium.ready;
+        const stranger = sodium.crypto_sign_keypair();
+        const savedByStranger = encode(
+            await signStatement(
+                await metadataSavedStatement(statement, decode(b.metadataEnvelope)),
+                stranger.privateKey,
+            ),
+        );
+        const node = (signer: string, signature: string) => ({
+            id: B,
+            kind: 'folder' as const,
+            parentId: A,
+            parentKeyEpoch: 1,
+            keyEpoch: 2,
+            wrappedParentKeyEpoch: 1,
+            keyEnvelope: b.keyEnvelope,
+            metadataVersion: 1,
+            metadataEnvelope: b.metadataEnvelope,
+            metadataSigner: signer,
+            metadataSignature: signature,
+            versions: [],
+            shares: [],
+            links: [],
+        });
+        const STRANGER = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+        const verdictAfter = async (signer: string, signature: string, targetEpoch: number) => {
+            const rotated = (
+                (await owner('driveRotateNodes', {
+                    workspaceId: WS,
+                    targetEpoch,
+                    granterUserId: USER,
+                    signers: {},
+                    nodes: [node(signer, signature)],
+                })) as { nodes: { metadataEnvelope: string; metadataSignature: string }[] }
+            ).nodes[0]!;
+            const [after] = (
+                (await owner('driveVerify', {
+                    workspaceId: WS,
+                    signers: {},
+                    nodes: [
+                        {
+                            ...statement,
+                            id: B,
+                            metadataEnvelope: rotated.metadataEnvelope,
+                            metadataSigner: USER,
+                            metadataSignature: rotated.metadataSignature,
+                        },
+                    ],
+                })) as { nodes: { metadata: string }[] }
+            ).nodes;
+            return after!.metadata;
+        };
+        // Saved by the owner: it reads as saved before, and stays saved through the rotation.
+        expect(await verdictAfter(USER, savedByOwner, 7)).toBe('saved-from-link');
+        // "Saved" by someone the owner never checked: that is an unknown signer, so re-sealed.
+        expect(await verdictAfter(STRANGER, savedByStranger, 8)).toBe('resealed');
     }, 60_000);
 });

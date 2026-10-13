@@ -4,16 +4,24 @@ import { describe, expect, test } from 'vitest';
 import { CryptoError } from './errors';
 import { encode } from './keys';
 import {
+    copyForm,
     integrityOf,
     metadataResealedStatement,
+    metadataSavedStatement,
     metadataStatement,
+    metadataStatementAs,
     metadataStatements,
+    resealForm,
     signStatement,
     successionStatement,
     verifyStatement,
     versionResealedStatement,
+    versionSavedStatement,
     versionStatement,
+    versionStatementAs,
     versionStatements,
+    type Integrity,
+    type SignatureForm,
 } from './signatures';
 
 /*
@@ -269,5 +277,107 @@ describe('signatures', () => {
         expect(
             await integrityOf(() => versionStatements(version, other), asResealed, trusted),
         ).toBe('bad-signature');
+    });
+
+    test('a saved signature ends in "link", reads as saved-from-link, and no form passes for another', async () => {
+        const writer = await keyPair();
+        const earlier = await keyPair();
+        const envelope = crypto.getRandomValues(new Uint8Array(84));
+        const version = {
+            workspaceId: WS,
+            nodeId: NODE,
+            versionId: VERSION,
+            objectId: OBJECT,
+            contentSuite: 3,
+        };
+        expect(new TextDecoder().decode(await versionSavedStatement(version, envelope))).toBe(
+            `["hushos/drive/sig/version-saved",1,"${WS}","${NODE}","${VERSION}","${OBJECT}",3,"${sha(envelope)}","link"]`,
+        );
+        expect(new TextDecoder().decode(await metadataSavedStatement(ctx, envelope))).toBe(
+            `["hushos/drive/sig/metadata-saved",1,"${WS}","${NODE}","folder",2,"${sha(envelope)}","link"]`,
+        );
+        const forms: SignatureForm[] = ['ordinary', 'saved', 'resealed'];
+        // Every form's signature under every form's statement: only its own holds.
+        for (const signed of forms) {
+            const metadataSignature = await signStatement(
+                await metadataStatementAs(signed, ctx, envelope),
+                writer.privateKey,
+            );
+            const versionSignature = await signStatement(
+                await versionStatementAs(signed, version, envelope),
+                writer.privateKey,
+            );
+            for (const checked of forms) {
+                expect(
+                    await verifyStatement(
+                        await metadataStatementAs(checked, ctx, envelope),
+                        metadataSignature,
+                        writer.publicKey,
+                    ),
+                    `${signed} metadata under ${checked}`,
+                ).toBe(signed === checked);
+                expect(
+                    await verifyStatement(
+                        await versionStatementAs(checked, version, envelope),
+                        versionSignature,
+                        writer.publicKey,
+                    ),
+                    `${signed} version under ${checked}`,
+                ).toBe(signed === checked);
+            }
+        }
+        const saved = await signStatement(
+            await versionSavedStatement(version, envelope),
+            writer.privateKey,
+        );
+        const statements = () => versionStatements(version, envelope);
+        const trusted = { current: writer.publicKey, retired: [earlier.publicKey] };
+        expect(await integrityOf(statements, saved, trusted)).toBe('saved-from-link');
+        expect(
+            await integrityOf(
+                () => metadataStatements(ctx, envelope),
+                await signStatement(await metadataSavedStatement(ctx, envelope), writer.privateKey),
+                trusted,
+            ),
+        ).toBe('saved-from-link');
+        // Saved by a key since replaced is only a retired key; saved over another record holds for nothing.
+        const oldSaved = await signStatement(
+            await versionSavedStatement(version, envelope),
+            earlier.privateKey,
+        );
+        expect(await integrityOf(statements, oldSaved, trusted)).toBe('retired-key');
+        const other = crypto.getRandomValues(new Uint8Array(84));
+        expect(await integrityOf(() => versionStatements(version, other), saved, trusted)).toBe(
+            'bad-signature',
+        );
+        // By nobody this reader trusts, it is an unknown signer, not saved.
+        expect(await integrityOf(statements, saved, undefined)).toBe('unknown-signer');
+    });
+
+    test('a copy signs by where it came from; a reseal keeps saved only for what verified as saved', () => {
+        const priors: Integrity[] = [
+            'verified',
+            'saved-from-link',
+            'resealed',
+            'retired-key',
+            'unknown-signer',
+            'bad-signature',
+            'unsigned',
+        ];
+        const expected: Record<string, SignatureForm> = {
+            verified: 'ordinary',
+            'saved-from-link': 'saved',
+        };
+        for (const prior of priors) {
+            expect(resealForm(prior), prior).toBe(expected[prior] ?? 'resealed');
+            expect(copyForm(prior, false), prior).toBe(expected[prior] ?? 'resealed');
+            // From a link it is saved whatever the original's verdict: a visitor checks nothing.
+            expect(copyForm(prior, true), prior).toBe('saved');
+        }
+        expect(copyForm(null, true)).toBe('saved');
+        expect(copyForm('unchecked', true)).toBe('saved');
+        expect(() => resealForm('unchecked')).toThrow('couldn’t check');
+        expect(() => copyForm('unchecked', false)).toThrow('couldn’t check');
+        expect(() => copyForm(null, false)).toThrow('couldn’t check');
     });
 });

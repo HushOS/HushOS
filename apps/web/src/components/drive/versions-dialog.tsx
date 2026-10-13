@@ -57,7 +57,12 @@ function versionIssues(version: {
     integrity: Integrity | null;
     signer?: Signer | null;
 }): IntegrityIssue[] {
-    if (!version.integrity || version.integrity === 'verified') return [];
+    if (
+        !version.integrity ||
+        version.integrity === 'verified' ||
+        version.integrity === 'saved-from-link'
+    )
+        return [];
     return [{ record: 'version', integrity: version.integrity, signer: version.signer ?? null }];
 }
 

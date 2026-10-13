@@ -135,7 +135,7 @@ export type NodeIntegrity = { metadata: Integrity; version: Integrity | null };
 /* One record that did not verify, who the server says wrote it, and what it is. */
 export type IntegrityIssue = {
     record: 'metadata' | 'version';
-    integrity: Exclude<Integrity, 'verified'>;
+    integrity: Exclude<Integrity, 'verified' | 'saved-from-link'>;
     signer: Signer | null;
 };
 
@@ -143,8 +143,9 @@ export type IntegrityIssue = {
  * Why an item is shown as Unverified, worst first: a bad signature, then a
  * retired key, an unknown signer, no signature, a re-sealed record, and a
  * check that could not run. `unsigned` is an issue like any other (a stripped
- * signature and one never made read the same). Empty only when everything
- * verified, or when there was nothing to check (null integrity: a link view,
+ * signature and one never made read the same). A copy saved from a link
+ * (`saved-from-link`) is no issue: it carries no mark, only a neutral line in
+ * Info. Empty only when everything verified or was saved, or when there was nothing to check (null integrity: a link view,
  * an item that would not open). One mark per item, however many records failed.
  */
 export function integrityIssues(
@@ -155,16 +156,18 @@ export function integrityIssues(
 ): IntegrityIssue[] {
     if (!node.integrity) return [];
     const issues: IntegrityIssue[] = [];
-    if (node.integrity.metadata !== 'verified')
+    const metadata = node.integrity.metadata;
+    if (metadata !== 'verified' && metadata !== 'saved-from-link')
         issues.push({
             record: 'metadata',
-            integrity: node.integrity.metadata,
+            integrity: metadata,
             signer: node.metadataSigner ?? null,
         });
-    if (node.integrity.version !== null && node.integrity.version !== 'verified')
+    const version = node.integrity.version;
+    if (version !== null && version !== 'verified' && version !== 'saved-from-link')
         issues.push({
             record: 'version',
-            integrity: node.integrity.version,
+            integrity: version,
             signer: node.currentVersion?.signer ?? null,
         });
     const rank: Record<IntegrityIssue['integrity'], number> = {
