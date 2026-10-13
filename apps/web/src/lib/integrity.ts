@@ -1,72 +1,20 @@
 import type { Signer } from '@hushos/drive/api';
-import type { IntegrityIssue } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
-import { authClient } from '@/lib/auth-client';
-import { followServedKeys } from '@/lib/contacts';
+import { contactKeys, followServedKeys } from '@/lib/contacts';
 import { driveClient } from '@/lib/drive';
 
 /*
- * The words behind an Unverified mark, and what happens when the people a
- * person trusts change. See docs/integrity-design.md, "Reading".
+ * What happens when the people a person trusts change, and the ways out a
+ * mark offers. The words themselves are in integrity-lines.ts.
  */
-
-export type IssueLine = {
-    text: string;
-    /* The writer whose words can be checked to clear it: an unknown signer the server named. */
-    check: Signer | null;
-};
-
-// The server names a signer by account id alone; a name comes only from this person's pins.
-const who = (_signer: Signer) => 'someone';
-const first = (_signer: Signer) => 'the writer';
-
-function line(issue: IntegrityIssue): IssueLine {
-    const { signer, record, integrity } = issue;
-    const version = record === 'version';
-    if (integrity === 'unsigned')
-        return {
-            text: version
-                ? 'This version was added before HushOS signed changes.'
-                : 'Made before HushOS signed changes.',
-            check: null,
-        };
-    if (integrity === 'bad-signature')
-        return {
-            text: signer
-                ? version
-                    ? `This version was added by ${who(signer)}, but its signature doesn’t match ${first(signer)}’s keys. Don’t trust this item.`
-                    : `The signature doesn’t match ${first(signer)}’s keys. Don’t trust this item.`
-                : 'The signature doesn’t match its writer’s keys. Don’t trust this item.',
-            check: null,
-        };
-    return {
-        text: signer
-            ? version
-                ? `This version was added by ${who(signer)}, whom you haven’t checked yet.`
-                : `Added or last changed by ${who(signer)}, whom you haven’t checked yet.`
-            : version
-              ? 'This version was added by someone you haven’t checked yet.'
-              : 'Added or last changed by someone you haven’t checked yet.',
-        check: signer,
-    };
-}
-
-/*
- * One line per thing to say, worst first. The name and the version written by
- * the same unchecked person, or both made before signatures, say it once.
- */
-export function issueLines(issues: IntegrityIssue[]): IssueLine[] {
-    const [a, b] = issues;
-    if (
-        a &&
-        b &&
-        a.integrity === b.integrity &&
-        a.integrity !== 'bad-signature' &&
-        (a.signer?.id ?? null) === (b.signer?.id ?? null)
-    )
-        return [line(a.record === 'metadata' ? a : b)];
-    return issues.map(line);
-}
+export {
+    COULDNT_CHECK,
+    issueLines,
+    markLabel,
+    nameSigner,
+    type IssueLine,
+    type SignerNames,
+} from '@/lib/integrity-lines';
 
 /*
  * After the people this person trusts changed (someone checked, removed, or
@@ -81,21 +29,24 @@ export function afterTrustChanged(queryClient: QueryClient) {
 }
 
 /*
- * A bad signature from a contact may be their new keys, which this device has
- * not followed yet (a succession it has not seen). Once per writer and unlock,
- * their served keys are looked up and, when a signed chain leads to them, the
- * pin follows and everything is checked again. Anything else stays as it is.
+ * "Try again" on a check that could not run: what it rests on (the settings
+ * with the pins, the identity and its history) is read afresh, then every
+ * listing is checked again.
  */
-const reconsidered = new Set<string>();
-authClient.store.subscribe((state, previous) => {
-    if (state.unlockedUserId !== previous.unlockedUserId) reconsidered.clear();
-});
-export async function reconsiderSigner(queryClient: QueryClient, userId: string, signer: Signer) {
-    if (reconsidered.has(signer.id)) return;
-    reconsidered.add(signer.id);
-    try {
-        if (await followServedKeys(userId, signer)) afterTrustChanged(queryClient);
-    } catch {
-        /* Nothing followed: the mark stays as it is. */
-    }
+export async function retryChecks(queryClient: QueryClient, userId: string) {
+    await queryClient.invalidateQueries({ queryKey: contactKeys.settings(userId) });
+    afterTrustChanged(queryClient);
+}
+
+/*
+ * "Check again" on a checked contact's bad signature: their keys as the
+ * server serves them now are looked up and, when a chain signed by the keys
+ * the pin holds leads to them, the pin follows and everything is checked
+ * again. Only ever on the person's press: a device that looked contacts up by
+ * itself would tell the server whom it pins.
+ */
+export async function checkSignerAgain(queryClient: QueryClient, userId: string, signer: Signer) {
+    const outcome = await followServedKeys(userId, signer);
+    if (outcome === 'followed') afterTrustChanged(queryClient);
+    return outcome;
 }

@@ -26,6 +26,7 @@ import { cue } from '@/lib/sounds';
 export function CheckContact({
     userId,
     email: initialEmail = '',
+    writer,
     recheck = false,
     onAdded,
     onCancel,
@@ -33,6 +34,12 @@ export function CheckContact({
     userId: string;
     /* Looked up at once when given, as from the share dialog's field. */
     email?: string;
+    /*
+     * The account that wrote an Unverified item, from its mark: the server
+     * names writers by id alone, so the person types the address and an
+     * account that is not the writer is said to be so.
+     */
+    writer?: string;
     /* Comparing words again with someone already added: "They match" saves the check afresh. */
     recheck?: boolean;
     onAdded: (pin: ContactPin) => void;
@@ -96,6 +103,10 @@ export function CheckContact({
     const alreadyAdded =
         !recheck && found !== null && found.pinned !== null && !found.changed && !found.stale;
     const unsignedKem = found?.kem !== null && found?.kem !== undefined && !found.kem.valid;
+    const notWriter =
+        writer !== undefined &&
+        found !== null &&
+        found.contact.userId.toLowerCase() !== writer.toLowerCase();
 
     if (!found)
         return (
@@ -193,6 +204,12 @@ export function CheckContact({
                       ? 'Their newest key is signed by their account.'
                       : 'They get their newest key the next time they sign in.'}
             </p>
+            {notWriter && (
+                <p role="alert" className="text-[13px] text-destructive">
+                    This isn’t the account that wrote it. Check the address, then look them up
+                    again.
+                </p>
+            )}
             {mismatch && (
                 <p role="alert" className="text-[13px] text-destructive">
                     Don’t share with this account. Check the email address with {first}, then try
@@ -225,7 +242,7 @@ export function CheckContact({
                         </Button>
                         <Button
                             variant={found.changed ? 'destructive' : 'default'}
-                            disabled={adding || unsignedKem || mismatch}
+                            disabled={adding || unsignedKem || mismatch || notWriter}
                             onClick={() => void add()}
                         >
                             <ShieldCheckIcon />

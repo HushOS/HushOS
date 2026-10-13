@@ -1,15 +1,18 @@
 import { contentSize, tagsOf, type DriveNode } from '@hushos/drive/client';
-import { integrityIssues } from '@hushos/drive/trust';
+import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
+import { useStore } from 'zustand';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
+import { UnverifiedMark, useSignerNames } from '@/components/drive/unverified-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
+import { authClient } from '@/lib/auth-client';
+import { nameSigner } from '@/lib/integrity-lines';
 import { driveClient, driveError, formatBytes, formatWhen } from '@/lib/drive';
 import { extensionOf } from '@/lib/previews';
 import { saveSealedCopy } from '@/lib/sealed-copy';
@@ -297,6 +300,25 @@ function OwnCopy({ node }: { node: DriveNode }) {
     );
 }
 
+/* Who wrote what did not verify, as this person can name them: from their own pins only. */
+function ChangedBy({ issue }: { issue: IntegrityIssue }) {
+    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const named = nameSigner(issue.signer, useSignerNames(userId, true));
+    return (
+        <span>
+            {issue.integrity === 'unchecked'
+                ? 'Not checked'
+                : named.kind === 'you'
+                  ? 'You'
+                  : named.kind === 'contact'
+                    ? named.name
+                    : issue.signer
+                      ? 'Someone you haven’t checked'
+                      : 'Unknown'}
+        </span>
+    );
+}
+
 export function ItemDetails({
     node,
     heading,
@@ -356,11 +378,7 @@ export function ItemDetails({
                 {unverified.length > 0 && (
                     <Fact label="Changed by">
                         <span className="inline-flex flex-wrap items-center gap-2">
-                            <span>
-                                {(unverified[0]!.signer ?? node.metadataSigner)
-                                    ? 'Someone you haven’t checked'
-                                    : 'Unknown'}
-                            </span>
+                            <ChangedBy issue={unverified[0]!} />
                             <UnverifiedMark node={node} />
                         </span>
                     </Fact>
