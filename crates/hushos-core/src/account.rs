@@ -2,7 +2,7 @@
 //! remembered on the device under a fresh AES-256-GCM key that the app keeps
 //! in the platform keychain, and restored from that memory on later launches.
 
-use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, SecretBytes, KEY_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use aes_gcm::aead::{Aead as _, Payload};
@@ -135,7 +135,7 @@ pub struct RememberedDevice {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeviceMemory {
     /// Keep in the platform keychain, never beside the bundle in plain storage.
-    pub device_key: Vec<u8>,
+    pub device_key: SecretBytes,
     pub bundle: RememberedDevice,
 }
 
@@ -164,7 +164,7 @@ fn device_context(bundle: &RememberedDevice) -> Vec<u8> {
 /// let account_key = random_bytes(32)?;
 /// let memory = device_remember("User-1".into(), account_key.clone(), 1, 1, "device-a".into())?;
 /// // `memory.device_key` goes to the keychain; `memory.bundle` can sit in plain storage.
-/// assert_eq!(device_restore(memory.bundle, memory.device_key)?, account_key);
+/// assert_eq!(device_restore(memory.bundle, memory.device_key.to_vec())?, account_key);
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -195,7 +195,7 @@ pub fn device_remember(
         .encrypt(Nonce::from_slice(&nonce), Payload { msg: &account_key, aad: &device_context(&bundle) })
         .map_err(|_| CoreError::Sealed("encryption failed".into()))?;
     bundle.encrypted_key = encode(&sealed);
-    Ok(DeviceMemory { device_key, bundle })
+    Ok(DeviceMemory { device_key: device_key.into(), bundle })
 }
 
 /// The inverse of [`device_remember`]: the account key from the bundle and the device key.
@@ -332,14 +332,17 @@ mod tests {
             memory.bundle.user_id, "User-1",
             "the bundle keeps the id as given; the context lowercases it"
         );
-        assert_eq!(device_restore(memory.bundle.clone(), memory.device_key.clone()).unwrap(), account_key);
+        assert_eq!(device_restore(memory.bundle.clone(), memory.device_key.to_vec()).unwrap(), account_key);
         assert!(matches!(device_restore(memory.bundle.clone(), random(32)), Err(CoreError::Sealed(_))));
         let mut other_device = memory.bundle.clone();
         other_device.device_key_id = "device-b".into();
-        assert!(matches!(device_restore(other_device, memory.device_key.clone()), Err(CoreError::Sealed(_))));
+        assert!(matches!(
+            device_restore(other_device, memory.device_key.to_vec()),
+            Err(CoreError::Sealed(_))
+        ));
         let mut other_user = memory.bundle;
         other_user.user_id = "user-2".into();
-        assert!(matches!(device_restore(other_user, memory.device_key), Err(CoreError::Sealed(_))));
+        assert!(matches!(device_restore(other_user, memory.device_key.to_vec()), Err(CoreError::Sealed(_))));
     }
 
     #[test]

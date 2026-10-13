@@ -7,7 +7,9 @@
 //! sealed under the node key, so the URL can be shown again and the link
 //! survives a rotation without the password.
 
-use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
+use crate::bytes::{
+    decode, encode, expect_len, random, Redacted, SecretBytes, KEY_BYTES, NONCE_BYTES, TAG_BYTES,
+};
 use crate::envelope::{context, open, seal};
 use crate::error::{input, CoreError, CoreResult};
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -159,11 +161,11 @@ pub fn link_open(
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LinkSecret {
     /// The URL fragment, 32 bytes.
-    pub secret: Vec<u8>,
+    pub secret: SecretBytes,
     /// The path token, 32 bytes.
     pub token: Vec<u8>,
     /// The stretched password key; absent on envelopes from before it was kept.
-    pub from_password: Option<Vec<u8>>,
+    pub from_password: Option<SecretBytes>,
 }
 
 /* Debug by hand: the secret opens the node, and the token with it finds the link. */
@@ -212,10 +214,10 @@ pub fn link_secret_open(ctx: LinkContext, node_key: Vec<u8>, envelope: Vec<u8>) 
     }
     let plaintext =
         Zeroizing::new(open(&node_key, &envelope, &link_context(&ctx, "hushos/drive/link-secret"))?);
-    let secret = plaintext[..LINK_SECRET_BYTES].to_vec();
+    let secret = plaintext[..LINK_SECRET_BYTES].to_vec().into();
     let token = plaintext[LINK_SECRET_BYTES..LINK_SECRET_BYTES + LINK_TOKEN_BYTES].to_vec();
     let rest = &plaintext[LINK_SECRET_BYTES + LINK_TOKEN_BYTES..];
-    let from_password = if rest.is_empty() { None } else { Some(rest.to_vec()) };
+    let from_password = if rest.is_empty() { None } else { Some(rest.to_vec().into()) };
     Ok(LinkSecret { secret, token, from_password })
 }
 
@@ -296,9 +298,9 @@ pub fn link_reseal(
     let has_password = password.is_some();
     let from_password = Zeroizing::new(link_password_key(password, salt.clone())?);
     let link_envelope =
-        link_seal(ctx.clone(), node_key.clone(), owned.secret.clone(), from_password.to_vec())?;
+        link_seal(ctx.clone(), node_key.clone(), owned.secret.to_vec(), from_password.to_vec())?;
     let secret_envelope =
-        link_secret_seal(ctx, node_key, owned.secret.clone(), owned.token.clone(), from_password.to_vec())?;
+        link_secret_seal(ctx, node_key, owned.secret.to_vec(), owned.token.clone(), from_password.to_vec())?;
     Ok(CreatedLink {
         token: encode(&owned.token),
         secret: encode(&owned.secret),
@@ -431,7 +433,7 @@ mod tests {
             link_open(
                 ctx(),
                 base64url_decode(resealed.link_envelope).unwrap(),
-                owned.secret,
+                owned.secret.to_vec(),
                 None,
                 base64url_decode(resealed.link_salt).unwrap()
             )
@@ -468,7 +470,7 @@ mod tests {
             seal(&node_key, &plaintext, &link_context(&ctx(), "hushos/drive/link-secret")).unwrap();
         assert_eq!(envelope.len(), SECRET_ENVELOPE_LEGACY_BYTES);
         let owned = link_secret_open(ctx(), node_key, envelope).unwrap();
-        assert_eq!((owned.secret, owned.token, owned.from_password), (secret, token, None));
+        assert_eq!((owned.secret.to_vec(), owned.token, owned.from_password), (secret, token, None));
     }
 
     #[test]

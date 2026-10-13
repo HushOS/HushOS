@@ -10,7 +10,6 @@ use crate::bytes::{decode, expect_len, random, KEY_BYTES, NONCE_BYTES};
 use crate::envelope::{context, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use crate::identity::{kem_encapsulate, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES};
-use crate::shares::pair_key;
 #[cfg(test)]
 use blake2::digest::consts::U24;
 use blake2::digest::consts::U32;
@@ -21,16 +20,35 @@ use crypto_secretbox::aead::{AeadInPlace as _, KeyInit as _};
 use crypto_secretbox::XSalsa20Poly1305;
 use ed25519_dalek::{Signature, VerifyingKey};
 use hkdf::Hkdf;
+use salsa20::cipher::consts::U10;
+use salsa20::hsalsa;
 use serde_json::json;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 const REPORT_KEY_INFO: &[u8] = b"hushos/drive/report-key/v2";
 /* Suite 1, a libsodium sealed box: still opened by the web's operator page, no longer made. */
 #[cfg(test)]
 const SEALED_BOX_BYTES: usize = 32 + 16 + KEY_BYTES + 32; // 112
 const HYBRID_BYTES: usize = 32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES + KEY_BYTES + 32 + 16; // 1224
+
+/* libsodium's crypto_box_beforenm: X25519, then HSalsa20 with a zero nonce. */
+fn pair_key(their_public: &[u8], my_private: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
+    expect_len("identity public key", their_public, 32).map_err(|_| input("Invalid identity key."))?;
+    expect_len("identity private key", my_private, 32).map_err(|_| input("Invalid identity key."))?;
+    let public: [u8; 32] = their_public.try_into().expect("32 bytes");
+    let secret = Zeroizing::new(<[u8; 32]>::try_from(my_private).expect("32 bytes"));
+    let shared = StaticSecret::from(*secret).diffie_hellman(&PublicKey::from(public));
+    if !shared.was_contributory() {
+        return Err(input("Invalid identity key."));
+    }
+    // HSalsa20 (20 rounds, ten double rounds) as libsodium's crypto_core_hsalsa20.
+    let mut key = hsalsa::<U10>(shared.as_bytes().into(), &[0u8; 16].into());
+    let out = Zeroizing::new(key.into());
+    key.as_mut_slice().zeroize();
+    Ok(out)
+}
 
 /// What binds a sealed report key to one report and one operator.
 #[derive(Debug, Clone)]
@@ -324,5 +342,17 @@ pub(crate) mod tests {
             kem.public_key,
             kem.signature
         ));
+    }
+
+    #[test]
+    fn pair_key_matches_libsodium_crypto_box_beforenm() {
+        // libsodium: crypto_box_beforenm(pk = scalarmult_base(1..32), sk = 32..64) for known bytes.
+        let sk: Vec<u8> = (1..=32).collect();
+        let their_pk = PublicKey::from(&StaticSecret::from(
+            <[u8; 32]>::try_from((33..=64).collect::<Vec<u8>>()).unwrap(),
+        ))
+        .to_bytes();
+        let key = pair_key(&their_pk, &sk).unwrap();
+        assert_eq!(crate::bytes::encode(key.as_slice()), "7Ij24Tsiv58E1IDg2FJcCKx-L0jiEnQry8r6EEp0sI0");
     }
 }

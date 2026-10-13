@@ -24,7 +24,14 @@ import {
     verifySuccessionChain,
     verifySuccessionLink,
 } from './identity';
-import { metadataStatement, verifyStatement, versionStatement } from './signatures';
+import {
+    integrityOf,
+    metadataStatement,
+    metadataStatements,
+    verifyStatement,
+    versionStatement,
+    versionStatements,
+} from './signatures';
 import { openWorkspaceKey } from './workspace';
 import { openShareKey } from './shares';
 import { openSettings, openSettingsKey } from './contacts';
@@ -350,6 +357,30 @@ describe('records sealed by the Rust core', () => {
             await verifyStatement(
                 await versionStatement({ ...version, contentSuite: 2 }, versionEnvelope),
                 versionSignature,
+                key,
+            ),
+        ).toBe(false);
+        // The verdicts agree: ordinary is verified under the current key, re-sealed is only
+        // re-sealed, and either under a key since replaced is a retired key.
+        const current = { current: key, retired: [] };
+        const replaced = {
+            current: decode(web.share.identity.signingPublicKey, 32),
+            retired: [key],
+        };
+        const metadataPair = () => metadataStatements(metadata, metadataEnvelope);
+        const versionPair = () => versionStatements(version, versionEnvelope);
+        const resealed = decode(signatures.metadata.resealed, 64);
+        const versionResealed = decode(signatures.version.resealed, 64);
+        expect(await integrityOf(metadataPair, signature, current)).toBe('verified');
+        expect(await integrityOf(metadataPair, resealed, current)).toBe('resealed');
+        expect(await integrityOf(versionPair, versionSignature, current)).toBe('verified');
+        expect(await integrityOf(versionPair, versionResealed, current)).toBe('resealed');
+        expect(await integrityOf(metadataPair, signature, replaced)).toBe('retired-key');
+        expect(await integrityOf(versionPair, versionResealed, replaced)).toBe('retired-key');
+        expect(
+            await verifyStatement(
+                await metadataStatement(metadata, metadataEnvelope),
+                resealed,
                 key,
             ),
         ).toBe(false);

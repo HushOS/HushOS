@@ -66,13 +66,13 @@ fn main() {
             object_id: uuid(),
         };
         let thumbnail_bytes = thumbnail.as_ref().map_or(0, |t| t.len() as u32);
-        let opened = ContentKey { key: content_key.clone(), plaintext_size: size, thumbnail_bytes };
+        let opened = ContentKey { key: content_key.clone().into(), plaintext_size: size, thumbnail_bytes };
         let envelope = version_reseal(ctx.clone(), suite, node_key.clone(), opened).unwrap();
         let content = Content {
             workspace_id: workspace_id.clone(),
             object_id: ctx.object_id.clone(),
             suite,
-            key: content_key.clone(),
+            key: content_key.clone().into(),
             nonce: content_nonce.clone(),
             plaintext_size: size,
             thumbnail_bytes,
@@ -256,12 +256,14 @@ fn main() {
         "metadata": {
             "statement": { "workspaceId": signed_metadata.workspace_id, "nodeId": signed_metadata.node_id, "kind": "file", "metadataVersion": 3 },
             "envelope": e(&metadata_envelope),
-            "signature": e(&metadata_sign(granter.signing_seed.clone(), signed_metadata, metadata_envelope.clone()).unwrap()),
+            "signature": e(&metadata_sign(granter.signing_seed.to_vec(), signed_metadata.clone(), metadata_envelope.clone()).unwrap()),
+            "resealed": e(&metadata_resealed_sign(granter.signing_seed.to_vec(), signed_metadata, metadata_envelope.clone()).unwrap()),
         },
         "version": {
             "statement": { "workspaceId": signed_version.workspace_id, "nodeId": signed_version.node_id, "versionId": signed_version.version_id, "objectId": signed_version.object_id, "contentSuite": signed_version.content_suite },
             "envelope": e(&signed_version_envelope),
-            "signature": e(&version_sign(granter.signing_seed.clone(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
+            "signature": e(&version_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
+            "resealed": e(&version_resealed_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
         },
     });
 

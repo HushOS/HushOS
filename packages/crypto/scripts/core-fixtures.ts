@@ -38,7 +38,13 @@ import {
     openIdentityEncryptionKey,
     openIdentitySigningKey,
 } from '../src/identity';
-import { metadataStatement, signStatement, versionStatement } from '../src/signatures';
+import {
+    metadataResealedStatement,
+    metadataStatement,
+    signStatement,
+    versionResealedStatement,
+    versionStatement,
+} from '../src/signatures';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import { createWorkspaceGrant, openWorkspaceKey } from '../src/workspace';
 
@@ -276,7 +282,7 @@ const share = {
     granterPublicKey: encode(granter.publicKey),
     ctx: shareCtx,
     nodeKey: encode(sharedNodeKey),
-    // Suite 1, as clients made them before shares went hybrid: none is made now, but they still open.
+    // Suite 1, as clients made them before shares went hybrid: genuine, and refused everywhere now.
     classic: encode(
         await (async () => {
             const pair = sodium.crypto_box_beforenm(
@@ -288,7 +294,7 @@ const share = {
             return new Uint8Array([...nonce, ...body]);
         })(),
     ),
-    // Suite 2, the static pair key with ML-KEM beside it, as made before shares were signed.
+    // Suite 2, the static pair key with ML-KEM beside it, as made before shares were signed: refused too.
     hybrid: encode(
         await (async () => {
             const pair = sodium.crypto_box_beforenm(
@@ -343,7 +349,8 @@ const recovery = {
 };
 
 // The settings document (contact pins): version 2 under the settings key wrapped under the root, and
-// version 1, as sealed before the settings key, under a key off the identity's private key.
+// version 1, as sealed before the settings key, under a key off the identity's private key, which
+// no longer opens anywhere (it reads as no settings).
 const identityPrivateKey = await openIdentityEncryptionKey(accountKey, userId, identity);
 const settingsJson = {
     version: 1 as const,
@@ -423,6 +430,13 @@ const signatures = {
                 signingKey,
             ),
         ),
+        // The same record re-sealed by its signer: "re-locked, not vouched for".
+        resealed: encode(
+            await signStatement(
+                await metadataResealedStatement(metadataSigned, decode(node.metadataEnvelope)),
+                signingKey,
+            ),
+        ),
     },
     version: {
         statement: versionSigned,
@@ -430,6 +444,12 @@ const signatures = {
         signature: encode(
             await signStatement(
                 await versionStatement(versionSigned, decode(node.version.envelope)),
+                signingKey,
+            ),
+        ),
+        resealed: encode(
+            await signStatement(
+                await versionResealedStatement(versionSigned, decode(node.version.envelope)),
                 signingKey,
             ),
         ),

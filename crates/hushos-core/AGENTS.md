@@ -38,3 +38,10 @@ Run `bun run core:check` (fmt, clippy with warnings denied, tests) before declar
 - `shares.rs` seals suite 3 only (`share_seal` takes the granter's `IdentityKeys`); `share_open` takes a `ShareGranter` (signing key for suite 3, X25519 for 1 and 2).
 - `identity.rs`: `identity_create`, `identity_succeed`, `succession_verify`, `succession_chain_verify` (continuity by keys, not version numbers); `identity_rewrap` keeps the identity's key version.
 - `contacts.rs`: settings key (`settings_key_create/open/rewrap`), settings envelope version 2 (`settings_seal(user_id, settings_key, …)`); `settings_open` reads 1 and 2.
+
+## Added on 2026-10-13 (round 3)
+
+- `signatures.rs`: re-sealed statements (`metadata_resealed_sign/verify`, `version_resealed_sign/verify`, domains `hushos/drive/sig/{metadata,version}-resealed`); `Integrity` gains `Resealed`, `RetiredKey` and `Unchecked` (never returned by the core; apps use it when a check cannot run); `*_integrity` take `Option<TrustedKeys>` (`current` verifies, `retired` only ever gives `RetiredKey`); `metadata_reseal_sign`/`version_reseal_sign` sign a rotated or copied record ordinary only when its prior verdict is `Verified`, and refuse `Unchecked`.
+- `shares.rs` opens suite 3 only, against the granter's current signing key (`share_open(envelope, granter_signing_public_key, grantee, ctx)`); `ShareGranter` and suites 1/2 are gone. `pair_key` lives in `reports.rs`, the only user left.
+- `contacts.rs`: `settings_open(user_id, settings_key, envelope) -> Option<String>`, `None` for a version 1 envelope.
+- `SecretBytes` (`bytes.rs`) wipes itself on drop and crosses UniFFI as bytes; `IdentityKeys`, `ContentKey`, `Content`, `CreatedSettingsKey`, `LinkSecret`, `DeviceMemory`, `LoginStart`/`LoginFinish`/`RegistrationStart`/`RegistrationFinish` hold their secrets in it. Records cannot implement `Drop` (UniFFI moves fields out), so the field type does the wiping.

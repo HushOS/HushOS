@@ -4,7 +4,7 @@
 //! identifier and the argon2id parameters from `packages/crypto/protocol.ts`)
 //! is built in; there is no way to call this with another.
 
-use crate::bytes::{decode, encode, Redacted};
+use crate::bytes::{decode, encode, Redacted, SecretBytes};
 use crate::error::{CoreError, CoreResult};
 use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use generic_array::{ArrayLength, GenericArray};
@@ -83,7 +83,7 @@ fn identifiers() -> Identifiers<'static> {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct LoginStart {
     /// Keep in memory only; it holds the blinded password.
-    pub state: Vec<u8>,
+    pub state: SecretBytes,
     /// Send as `startLoginRequest`.
     pub request: String,
 }
@@ -94,16 +94,16 @@ pub struct LoginStart {
 pub struct LoginFinish {
     /// Send as `finishLoginRequest`.
     pub request: String,
-    pub session_key: Vec<u8>,
+    pub session_key: SecretBytes,
     /// Unwraps the account key; see `account_unlock`.
-    pub export_key: Vec<u8>,
+    pub export_key: SecretBytes,
     pub server_static_public_key: String,
 }
 
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegistrationStart {
-    pub state: Vec<u8>,
+    pub state: SecretBytes,
     /// Send as `registrationRequest`.
     pub request: String,
 }
@@ -113,12 +113,12 @@ pub struct RegistrationStart {
 pub struct RegistrationFinish {
     /// Send as `registrationRecord`.
     pub record: String,
-    pub export_key: Vec<u8>,
+    pub export_key: SecretBytes,
     pub server_static_public_key: String,
 }
 
 /* Debug by hand: the states hold the blinded password, the keys open the account. UniFFI records
- * cannot implement Drop, so these are not wiped; the apps drop them as soon as they are used. */
+ * cannot implement Drop, so their secret fields are SecretBytes, which wipe themselves. */
 impl fmt::Debug for LoginStart {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoginStart").field("state", &Redacted).field("request", &self.request).finish()
@@ -167,7 +167,7 @@ fn normalized(password: String) -> Zeroizing<String> {
 /// use hushos_core::{opaque_start_login, opaque_finish_login};
 /// let start = opaque_start_login("correct horse".into())?;
 /// let login_response = post("/api/auth/login/start", &start.request);
-/// match opaque_finish_login("correct horse".into(), start.state, login_response)? {
+/// match opaque_finish_login("correct horse".into(), start.state.to_vec(), login_response)? {
 ///     Some(finish) => { post("/api/auth/login/finish", &finish.request); }
 ///     None => eprintln!("wrong password"),
 /// }
@@ -178,7 +178,10 @@ pub fn opaque_start_login(password: String) -> CoreResult<LoginStart> {
     let password = normalized(password);
     let start = ClientLogin::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client login"))?;
-    Ok(LoginStart { state: start.state.serialize().to_vec(), request: encode(&start.message.serialize()) })
+    Ok(LoginStart {
+        state: start.state.serialize().to_vec().into(),
+        request: encode(&start.message.serialize()),
+    })
 }
 
 /// `None` is a wrong password (the client detects it before the server does),
@@ -202,8 +205,8 @@ pub fn opaque_finish_login(
     };
     Ok(Some(LoginFinish {
         request: encode(&finish.message.serialize()),
-        session_key: finish.session_key.to_vec(),
-        export_key: finish.export_key.to_vec(),
+        session_key: finish.session_key.to_vec().into(),
+        export_key: finish.export_key.to_vec().into(),
         server_static_public_key: encode(&finish.server_s_pk.serialize()),
     }))
 }
@@ -215,7 +218,7 @@ pub fn opaque_start_registration(password: String) -> CoreResult<RegistrationSta
     let start = ClientRegistration::<Suite>::start(&mut OsRng, password.as_bytes())
         .map_err(protocol("start client registration"))?;
     Ok(RegistrationStart {
-        state: start.state.serialize().to_vec(),
+        state: start.state.serialize().to_vec().into(),
         request: encode(&start.message.serialize()),
     })
 }
@@ -242,7 +245,7 @@ pub fn opaque_finish_registration(
         .map_err(protocol("finish client registration"))?;
     Ok(RegistrationFinish {
         record: encode(&finish.message.serialize()),
-        export_key: finish.export_key.to_vec(),
+        export_key: finish.export_key.to_vec().into(),
         server_static_public_key: encode(&finish.server_s_pk.serialize()),
     })
 }
@@ -275,7 +278,7 @@ mod tests {
                 ServerRegistration::<Suite>::start(&self.setup, request, b"user@example.com").unwrap();
             let finish = opaque_finish_registration(
                 password.into(),
-                start.state,
+                start.state.to_vec(),
                 encode(&response.message.serialize()),
             )
             .unwrap();
@@ -300,9 +303,12 @@ mod tests {
                 parameters(),
             )
             .unwrap();
-            let finish =
-                opaque_finish_login(password.into(), start.state, encode(&response.message.serialize()))
-                    .unwrap()?;
+            let finish = opaque_finish_login(
+                password.into(),
+                start.state.to_vec(),
+                encode(&response.message.serialize()),
+            )
+            .unwrap()?;
             let finalization =
                 CredentialFinalization::deserialize(&decode("f", &finish.request, None).unwrap()).unwrap();
             let server = response.state.finish(finalization, parameters()).unwrap();
@@ -371,11 +377,11 @@ mod tests {
     fn malformed_wire_messages_are_input_or_opaque_errors() {
         let start = opaque_start_login("pw".into()).unwrap();
         assert!(matches!(
-            opaque_finish_login("pw".into(), start.state.clone(), "not base64!".into()),
+            opaque_finish_login("pw".into(), start.state.to_vec(), "not base64!".into()),
             Err(CoreError::Input(_))
         ));
         assert!(matches!(
-            opaque_finish_login("pw".into(), start.state, "AAAA".into()),
+            opaque_finish_login("pw".into(), start.state.to_vec(), "AAAA".into()),
             Err(CoreError::Opaque(_))
         ));
         assert!(matches!(

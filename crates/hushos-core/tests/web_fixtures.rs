@@ -245,7 +245,7 @@ fn identity(value: &Value) -> IdentityEnvelope {
 }
 
 #[test]
-fn the_identity_opens_and_shares_in_every_suite_open_with_it() {
+fn the_identity_opens_a_suite_3_share_and_refuses_suites_1_and_2() {
     let fixture = fixture();
     let account = &fixture["account"];
     let share = &fixture["share"];
@@ -260,21 +260,22 @@ fn the_identity_opens_and_shares_in_every_suite_open_with_it() {
         grantee_user_id: s(ctx, "granteeUserId"),
         granter_user_id: s(ctx, "granterUserId"),
     };
-    let granter = ShareGranter {
-        encryption_public_key: Some(b(share, "granterPublicKey")),
-        signing_public_key: Some(b(share, "granterSigningPublicKey")),
-    };
-    for suite in ["classic", "hybrid", "signed"] {
-        assert_eq!(
-            share_open(b(share, suite), granter.clone(), keys.clone(), ctx.clone()).unwrap(),
-            b(share, "nodeKey"),
+    let granter = b(share, "granterSigningPublicKey");
+    assert_eq!(
+        share_open(b(share, "signed"), granter.clone(), keys.clone(), ctx.clone()).unwrap(),
+        b(share, "nodeKey")
+    );
+    assert_eq!(b(share, "signed").len(), 1256);
+    // Genuine suite 1 and 2 shares the web made: refused, whatever key is offered.
+    for suite in ["classic", "hybrid"] {
+        assert!(share_open(b(share, suite), granter.clone(), keys.clone(), ctx.clone()).is_err(), "{suite}");
+        assert!(
+            share_open(b(share, suite), b(share, "granterPublicKey"), keys.clone(), ctx.clone()).is_err(),
             "{suite}"
         );
     }
-    assert_eq!(b(share, "signed").len(), 1256);
     // Suite 3 needs the granter's signing key, and the right one.
-    let unsigned = ShareGranter { signing_public_key: Some(vec![7; 32]), ..granter };
-    assert!(share_open(b(share, "signed"), unsigned, keys, ctx).is_err());
+    assert!(share_open(b(share, "signed"), vec![7; 32], keys, ctx).is_err());
 }
 
 #[test]
@@ -300,15 +301,36 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(metadata, "envelope"),
         b(metadata, "signature")
     ));
-    assert_eq!(
+    let current = TrustedKeys { current: public.clone(), retired: vec![] };
+    // The web's successor key as current, the signer's key only as retired.
+    let replaced = TrustedKeys {
+        current: base64url_decode(s(&fixture()["succession"]["identity"], "signingPublicKey")).unwrap(),
+        retired: vec![public.clone()],
+    };
+    let verdict = |trusted: &TrustedKeys, signature: &str| {
         metadata_integrity(
-            vec![public.clone()],
-            statement,
+            Some(trusted.clone()),
+            statement.clone(),
             b(metadata, "envelope"),
-            Some(b(metadata, "signature"))
-        ),
-        Integrity::Verified
-    );
+            Some(b(metadata, signature)),
+        )
+    };
+    assert_eq!(verdict(&current, "signature"), Integrity::Verified);
+    assert_eq!(verdict(&current, "resealed"), Integrity::Resealed);
+    assert_eq!(verdict(&replaced, "signature"), Integrity::RetiredKey);
+    assert_eq!(verdict(&replaced, "resealed"), Integrity::RetiredKey);
+    assert!(!metadata_verify(
+        public.clone(),
+        statement.clone(),
+        b(metadata, "envelope"),
+        b(metadata, "resealed")
+    ));
+    assert!(metadata_resealed_verify(
+        public.clone(),
+        statement.clone(),
+        b(metadata, "envelope"),
+        b(metadata, "resealed")
+    ));
     let version = &signatures["version"];
     let statement = VersionStatement {
         workspace_id: s(&version["statement"], "workspaceId"),
@@ -324,11 +346,25 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(version, "signature")
     ));
     assert!(!version_verify(
-        public,
-        VersionStatement { content_suite: 2, ..statement },
+        public.clone(),
+        VersionStatement { content_suite: 2, ..statement.clone() },
         b(version, "envelope"),
         b(version, "signature")
     ));
+    let current = TrustedKeys { current: public, retired: vec![] };
+    assert_eq!(
+        version_integrity(
+            Some(current.clone()),
+            statement.clone(),
+            b(version, "envelope"),
+            Some(b(version, "resealed"))
+        ),
+        Integrity::Resealed
+    );
+    assert_eq!(
+        version_integrity(Some(current), statement, b(version, "envelope"), Some(b(version, "signature"))),
+        Integrity::Verified
+    );
 }
 
 fn link(value: &Value) -> SuccessionLink {
@@ -391,7 +427,7 @@ fn a_password_link_opens_for_the_visitor_and_its_owner_copy_for_the_owner() {
     assert_eq!(opened, b(link, "nodeKey"));
     assert!(link_open(ctx.clone(), b(link, "envelope"), b(link, "secret"), None, b(link, "salt")).is_err());
     let owned = link_secret_open(ctx.clone(), b(link, "nodeKey"), b(link, "secretEnvelope")).unwrap();
-    assert_eq!((owned.secret, owned.token), (b(link, "secret"), b(link, "token")));
+    assert_eq!((owned.secret.to_vec(), owned.token), (b(link, "secret"), b(link, "token")));
     let stretched = owned.from_password.expect("the web keeps the password key");
     assert_eq!(
         stretched,
@@ -480,7 +516,7 @@ fn the_identity_kem_binding_the_web_signed_verifies_and_a_swapped_key_does_not()
 }
 
 #[test]
-fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_as_version_1_under_the_identity() {
+fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_version_1_reads_as_none() {
     let settings = &fixture()["settings"];
     let user = s(settings, "userId");
     let envelope = |value: &Value| SettingsEnvelope {
@@ -497,13 +533,15 @@ fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_as_version_1_
     assert_eq!(key, b(settings, "settingsKeyRaw"));
     let v2 = envelope(&settings["v2"]);
     assert_eq!(v2.version, 2);
-    assert_eq!(settings_open(user.clone(), Some(key), None, v2.clone()).unwrap(), s(settings, "json"));
-    assert!(settings_open(user.clone(), None, Some(b(settings, "identityPrivateKey")), v2).is_err());
+    assert_eq!(
+        settings_open(user.clone(), Some(key.clone()), v2.clone()).unwrap(),
+        Some(s(settings, "json"))
+    );
+    // The identity's private key is no settings key.
+    assert!(settings_open(user.clone(), Some(b(settings, "identityPrivateKey")), v2).is_err());
+    // A genuine version 1 document the web sealed under the identity's key: never opened.
     let v1 = envelope(&settings["envelope"]);
     assert_eq!(v1.version, 1);
-    assert_eq!(
-        settings_open(user.clone(), None, Some(b(settings, "identityPrivateKey")), v1.clone()).unwrap(),
-        s(settings, "json")
-    );
-    assert!(settings_open(user, None, Some(vec![0u8; 32]), v1).is_err());
+    assert_eq!(settings_open(user.clone(), Some(key), v1.clone()).unwrap(), None);
+    assert_eq!(settings_open(user, Some(b(settings, "identityPrivateKey")), v1).unwrap(), None);
 }

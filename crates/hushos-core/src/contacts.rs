@@ -1,11 +1,12 @@
 //! Contacts: the fingerprint two people compare before trusting a key, and
 //! the account settings document that keeps the pins, exactly as
 //! `packages/crypto/contacts.ts` writes it. Version 2 is sealed under a random
-//! settings key wrapped under the account root; version 1, under a key off the
-//! identity's X25519 private key, is read once and never written. The server
-//! stores the envelope and a version for compare-and-set.
+//! settings key wrapped under the account root. Version 1, under a key off the
+//! identity's X25519 private key (which a stolen identity key opened), is
+//! neither written nor read: it opens as no settings. The server stores the
+//! envelope and a version for compare-and-set.
 
-use crate::bytes::{decode, encode, expect_len, random, KEY_BYTES, NONCE_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, SecretBytes, KEY_BYTES, NONCE_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use hkdf::Hkdf;
@@ -68,13 +69,6 @@ fn hkdf(ikm: &[u8], info: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     Ok(key)
 }
 
-/* Version 1's key, off the identity's X25519 private key: read once, never sealed under again. */
-fn legacy_settings_key(identity_private_key: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
-    expect_len("identity private key", identity_private_key, 32)
-        .map_err(|_| input("Invalid identity key."))?;
-    hkdf(identity_private_key, b"hushos/settings/v1")
-}
-
 /// The settings key as the server keeps it: wrapped under the account root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -89,7 +83,7 @@ pub struct SettingsKeyEnvelope {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CreatedSettingsKey {
-    pub key: Vec<u8>,
+    pub key: SecretBytes,
     /// Store once with `PUT /api/auth/settings-key`; on 409 open the stored one instead.
     pub envelope: SettingsKeyEnvelope,
 }
@@ -125,7 +119,7 @@ fn wrap_settings_key(user_id: &str, account_key: &[u8], key: &[u8]) -> CoreResul
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn settings_key_create(user_id: String, account_key: Vec<u8>) -> CoreResult<CreatedSettingsKey> {
     let key = random(KEY_BYTES);
-    Ok(CreatedSettingsKey { envelope: wrap_settings_key(&user_id, &account_key, &key)?, key })
+    Ok(CreatedSettingsKey { envelope: wrap_settings_key(&user_id, &account_key, &key)?, key: key.into() })
 }
 
 /// The settings key out of its envelope, under the account key.
@@ -192,7 +186,7 @@ fn settings_context(user_id: &str, version: u32, settings_version: u64) -> Vec<u
 /// let key = vec![9u8; 32];
 /// let sealed = settings_seal("User-1".into(), key.clone(), 3, r#"{"version":1,"contacts":{}}"#.into())?;
 /// assert_eq!((sealed.version, sealed.settings_version), (2, 3));
-/// assert_eq!(settings_open("user-1".into(), Some(key), None, sealed)?, r#"{"version":1,"contacts":{}}"#);
+/// assert_eq!(settings_open("user-1".into(), Some(key), sealed)?.as_deref(), Some(r#"{"version":1,"contacts":{}}"#));
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -234,34 +228,34 @@ fn seal_settings(
     Ok(SettingsEnvelope { version, settings_version, nonce: encode(&nonce), ciphertext: encode(&sealed) })
 }
 
-/// The settings JSON out of its envelope: version 2 with the settings key,
-/// version 1 (once, to be sealed again as version 2) with the identity's
-/// X25519 private key. A version whose key is not given refuses.
+/// The settings JSON out of a version 2 envelope, under the settings key.
+/// A version 1 envelope is `None`: it is not opened (a stolen identity key
+/// opened those), and the app treats it as no settings, subject to its own
+/// rollback mark. Any other version, or version 2 without the key, refuses.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn settings_open(
     user_id: String,
     settings_key: Option<Vec<u8>>,
-    identity_private_key: Option<Vec<u8>>,
     envelope: SettingsEnvelope,
-) -> CoreResult<String> {
+) -> CoreResult<Option<String>> {
     if envelope.settings_version < 1 {
         return Err(input("Unsupported settings envelope."));
     }
     let key: Zeroizing<[u8; KEY_BYTES]> = match envelope.version {
-        1 => legacy_settings_key(&identity_private_key.ok_or_else(|| input("Open your identity first."))?)?,
+        1 => return Ok(None),
         2 => {
-            let key = settings_key.ok_or_else(|| input("Open your settings key first."))?;
+            let key = Zeroizing::new(settings_key.ok_or_else(|| input("Open your settings key first."))?);
             Zeroizing::new(key.as_slice().try_into().map_err(|_| input("Invalid settings key."))?)
         }
         _ => return Err(input("Unsupported settings envelope.")),
     };
-    let plaintext = open_with_nonce(
+    let plaintext = Zeroizing::new(open_with_nonce(
         key.as_slice(),
         &decode("nonce", &envelope.nonce, Some(NONCE_BYTES))?,
         &decode("ciphertext", &envelope.ciphertext, None)?,
         &settings_context(&user_id, envelope.version, envelope.settings_version),
-    )?;
-    let mut text = String::from_utf8(plaintext)
+    )?);
+    let mut text = String::from_utf8(plaintext.to_vec())
         .map_err(|_| CoreError::Sealed("Unsupported settings document.".into()))?;
     text.truncate(text.trim_end_matches(' ').len());
     let parsed: serde_json::Value = serde_json::from_str(&text)
@@ -269,7 +263,7 @@ pub fn settings_open(
     if parsed["version"] != json!(1) || !parsed["contacts"].is_object() {
         return Err(CoreError::Sealed("Unsupported settings document.".into()));
     }
-    Ok(text)
+    Ok(Some(text))
 }
 
 #[cfg(test)]
@@ -302,43 +296,39 @@ mod tests {
             settings_seal("u".into(), key.clone(), 2, r#"{"version":1,"contacts":{"x":{}}}"#.into()).unwrap();
         assert_eq!(sealed.version, 2);
         assert!(matches!(
-            settings_open("u".into(), Some(random(32)), None, sealed.clone()),
+            settings_open("u".into(), Some(random(32)), sealed.clone()),
             Err(CoreError::Sealed(_))
         ));
         assert!(matches!(
-            settings_open("v".into(), Some(key.clone()), None, sealed.clone()),
+            settings_open("v".into(), Some(key.clone()), sealed.clone()),
             Err(CoreError::Sealed(_))
         ));
         let mut bumped = sealed.clone();
         bumped.settings_version = 3;
-        assert!(matches!(
-            settings_open("u".into(), Some(key.clone()), None, bumped),
-            Err(CoreError::Sealed(_))
-        ));
-        // The same bytes presented as version 1 do not open under a key off the identity.
+        assert!(matches!(settings_open("u".into(), Some(key.clone()), bumped), Err(CoreError::Sealed(_))));
+        // The same bytes presented as version 1 are not opened at all: no settings.
         let as_legacy = SettingsEnvelope { version: 1, ..sealed.clone() };
-        assert!(settings_open("u".into(), Some(key.clone()), Some(random(32)), as_legacy).is_err());
-        assert!(matches!(
-            settings_open("u".into(), None, Some(random(32)), sealed.clone()),
-            Err(CoreError::Input(_))
-        ));
+        assert_eq!(settings_open("u".into(), Some(key.clone()), as_legacy).unwrap(), None);
+        assert!(matches!(settings_open("u".into(), None, sealed.clone()), Err(CoreError::Input(_))));
+        let as_three = SettingsEnvelope { version: 3, ..sealed.clone() };
+        assert!(matches!(settings_open("u".into(), Some(key.clone()), as_three), Err(CoreError::Input(_))));
         assert_eq!(
-            settings_open("U".into(), Some(key), None, sealed).unwrap(),
-            r#"{"version":1,"contacts":{"x":{}}}"#
+            settings_open("U".into(), Some(key), sealed).unwrap().as_deref(),
+            Some(r#"{"version":1,"contacts":{"x":{}}}"#)
         );
     }
 
     #[test]
-    fn version_1_still_opens_with_the_identity_key_and_nothing_else() {
+    fn version_1_no_longer_opens_and_reads_as_no_settings() {
+        // A genuine version 1 document, under the key a stolen identity key derives.
         let identity = random(32);
-        let legacy =
-            seal_settings(legacy_settings_key(&identity).unwrap().as_slice(), "u", 1, 4, EMPTY).unwrap();
-        assert_eq!(settings_open("u".into(), None, Some(identity.clone()), legacy.clone()).unwrap(), EMPTY);
-        assert!(matches!(
-            settings_open("u".into(), Some(random(32)), None, legacy.clone()),
-            Err(CoreError::Input(_))
-        ));
-        assert!(settings_open("u".into(), None, Some(random(32)), legacy).is_err());
+        let legacy_key = hkdf(&identity, b"hushos/settings/v1").unwrap();
+        let legacy = seal_settings(legacy_key.as_slice(), "u", 1, 4, EMPTY).unwrap();
+        assert_eq!(settings_open("u".into(), None, legacy.clone()).unwrap(), None);
+        assert_eq!(settings_open("u".into(), Some(legacy_key.to_vec()), legacy.clone()).unwrap(), None);
+        // Relabelled as version 2 it is refused, never read under the identity's key.
+        let relabelled = SettingsEnvelope { version: 2, ..legacy };
+        assert!(settings_open("u".into(), Some(legacy_key.to_vec()), relabelled).is_err());
     }
 
     #[test]
@@ -368,7 +358,7 @@ mod tests {
             let sealed = settings_seal("u".into(), key.clone(), 1, json.into()).unwrap();
             let body = decode("ciphertext", &sealed.ciphertext, None).unwrap().len() - TAG_BYTES;
             assert_eq!(body % SETTINGS_PAD_STEP, 0, "{body} bytes is not a whole step");
-            assert_eq!(settings_open("u".into(), Some(key.clone()), None, sealed).unwrap(), json);
+            assert_eq!(settings_open("u".into(), Some(key.clone()), sealed).unwrap().as_deref(), Some(json));
         }
         let a = settings_seal("u".into(), key.clone(), 1, EMPTY.into()).unwrap();
         let b =

@@ -4,7 +4,9 @@
 //! suite 3 pads every object to a Padmé bucket, and only this module knows
 //! where the file ends inside one.
 
-use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
+use crate::bytes::{
+    decode, encode, expect_len, random, Redacted, SecretBytes, KEY_BYTES, NONCE_BYTES, TAG_BYTES,
+};
 use crate::envelope::{context, open, open_key, open_with_nonce, seal, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use blake2::digest::consts::U32;
@@ -420,7 +422,7 @@ fn version_context(ctx: &VersionContext, suite: u32) -> Vec<u8> {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ContentKey {
-    pub key: Vec<u8>,
+    pub key: SecretBytes,
     pub plaintext_size: u64,
     pub thumbnail_bytes: u32,
 }
@@ -453,7 +455,7 @@ pub fn version_open(
             expect_len("envelope", &envelope, KEY_ENVELOPE_BYTES)?;
             let key = open_key(&node_key, &envelope, &aad, "content key")?;
             let plaintext_size = row_size.ok_or_else(|| input("This file has no size on record."))?;
-            Ok(ContentKey { key, plaintext_size, thumbnail_bytes: 0 })
+            Ok(ContentKey { key: key.into(), plaintext_size, thumbnail_bytes: 0 })
         }
         UNPADDED_CONTENT_SUITE | CONTENT_SUITE => {
             expect_len("envelope", &envelope, VERSION_ENVELOPE_BYTES)?;
@@ -467,7 +469,7 @@ pub fn version_open(
             if plaintext_size > MAX_SAFE_INTEGER || thumbnail_bytes > THUMBNAIL_MAX_BYTES {
                 return Err(CoreError::Sealed("Invalid version envelope.".into()));
             }
-            Ok(ContentKey { key: record[..KEY_BYTES].to_vec(), plaintext_size, thumbnail_bytes })
+            Ok(ContentKey { key: record[..KEY_BYTES].to_vec().into(), plaintext_size, thumbnail_bytes })
         }
         other => Err(input(format!("Unsupported content suite {other}."))),
     }
@@ -792,7 +794,8 @@ pub struct Content {
     pub workspace_id: String,
     pub object_id: String,
     pub suite: u32,
-    pub key: Vec<u8>,
+    /// The content key: wiped when the record is dropped.
+    pub key: SecretBytes,
     pub nonce: Vec<u8>,
     pub plaintext_size: u64,
     pub thumbnail_bytes: u32,
@@ -847,7 +850,7 @@ fn layout_of(content: &Content) -> CoreResult<ContentLayout> {
 /// use hushos_core::{chunk_decrypt, chunk_encrypt, content_layout, random_bytes, Content};
 /// let content = Content {
 ///     workspace_id: "ws".into(), object_id: "obj".into(), suite: 3,
-///     key: random_bytes(32)?, nonce: random_bytes(16)?, plaintext_size: 5, thumbnail_bytes: 0,
+///     key: random_bytes(32)?.into(), nonce: random_bytes(16)?, plaintext_size: 5, thumbnail_bytes: 0,
 /// };
 /// let sealed = chunk_encrypt(content.clone(), 0, b"hello".to_vec())?;
 /// assert_eq!(sealed.len(), 256 + 16, "padded to the smallest bucket");
@@ -1022,7 +1025,7 @@ mod tests {
         let printed = format!("{content:?}");
         assert!(!shows(&printed, &content.key), "{printed}");
         assert!(printed.contains("plaintext_size: 100"));
-        let key = ContentKey { key: random(32), plaintext_size: 5, thumbnail_bytes: 0 };
+        let key = ContentKey { key: random(32).into(), plaintext_size: 5, thumbnail_bytes: 0 };
         assert!(!shows(&format!("{key:?}"), &key.key));
         let grant = WorkspaceGrant {
             version: 1,
@@ -1044,7 +1047,7 @@ mod tests {
             workspace_id: "ws".into(),
             object_id: "obj".into(),
             suite: CONTENT_SUITE,
-            key: random(32),
+            key: random(32).into(),
             nonce: random(16),
             plaintext_size,
             thumbnail_bytes,
@@ -1225,7 +1228,7 @@ mod tests {
     #[test]
     fn a_legacy_version_reseals_as_a_72_byte_key_envelope() {
         let node_key = random(32);
-        let content = ContentKey { key: random(32), plaintext_size: 77, thumbnail_bytes: 0 };
+        let content = ContentKey { key: random(32).into(), plaintext_size: 77, thumbnail_bytes: 0 };
         let envelope =
             version_reseal(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), content.clone()).unwrap();
         assert_eq!(envelope.len(), KEY_ENVELOPE_BYTES);
@@ -1243,7 +1246,10 @@ mod tests {
         let opened =
             version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), envelope.clone(), Some(77))
                 .unwrap();
-        assert_eq!((opened.key, opened.plaintext_size, opened.thumbnail_bytes), (content_key, 77, 0));
+        assert_eq!(
+            (opened.key.to_vec(), opened.plaintext_size, opened.thumbnail_bytes),
+            (content_key, 77, 0)
+        );
         assert!(matches!(
             version_open(version_ctx(), LEGACY_CONTENT_SUITE, node_key.clone(), envelope.clone(), None),
             Err(CoreError::Input(_))

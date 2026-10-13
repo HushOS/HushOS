@@ -6,7 +6,7 @@
 //! session. An identity is replaced by a succession: the next one, minted at
 //! the next key version and vouched for by the old signing key.
 
-use crate::bytes::{decode, encode, expect_len, random, Redacted, KEY_BYTES};
+use crate::bytes::{decode, encode, expect_len, random, Redacted, SecretBytes, KEY_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
 use ed25519_dalek::SigningKey;
@@ -50,7 +50,8 @@ pub struct IdentityEnvelope {
 }
 
 /// The private halves, opened: what opens a share sealed to this account and
-/// signs what it writes.
+/// signs what it writes. Each private half is [`SecretBytes`]: wiped when the
+/// record is dropped.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct IdentityKeys {
@@ -58,13 +59,13 @@ pub struct IdentityKeys {
     pub key_version: u64,
     pub encryption_public_key: String,
     /// X25519, 32 bytes.
-    pub encryption_private_key: Vec<u8>,
+    pub encryption_private_key: SecretBytes,
     /// Ed25519, checked against the signing seed: what this account's fingerprint covers beside the X25519 key.
     pub signing_public_key: String,
     /// The Ed25519 seed, 32 bytes: signs metadata, versions, shares and a succession.
-    pub signing_seed: Vec<u8>,
+    pub signing_seed: SecretBytes,
     /// The ML-KEM-768 seed, 64 bytes; empty for an identity without a KEM key yet.
-    pub kem_seed: Vec<u8>,
+    pub kem_seed: SecretBytes,
     pub kem_public_key: Option<String>,
 }
 
@@ -153,10 +154,10 @@ pub fn identity_open(
     account_key: Vec<u8>,
     envelope: IdentityEnvelope,
 ) -> CoreResult<IdentityKeys> {
+    let account_key = Zeroizing::new(account_key);
     if envelope.version != 1 || envelope.key_version < 1 {
         return Err(input("Unsupported identity envelope."));
     }
-    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     let salt = decode("wrappingSalt", &envelope.wrapping_salt, Some(32))?;
     let wrap = wrapping_key(&account_key, &salt, "encryption-private-wrap")?;
@@ -194,10 +195,10 @@ pub fn identity_open(
     let mut keys = IdentityKeys {
         key_version: envelope.key_version,
         encryption_public_key: envelope.encryption_public_key.clone(),
-        encryption_private_key: private_key.to_vec(),
+        encryption_private_key: private_key.to_vec().into(),
         signing_public_key: envelope.signing_public_key.clone(),
-        signing_seed: signing_seed.to_vec(),
-        kem_seed: Vec::new(),
+        signing_seed: signing_seed.to_vec().into(),
+        kem_seed: SecretBytes::default(),
         kem_public_key: None,
     };
     if let Some(kem) = envelope.kem {
@@ -212,7 +213,7 @@ pub fn identity_open(
         if encode(&kem_public_key_from_seed(&seed)?) != kem.public_key {
             return Err(CoreError::Sealed("Identity keys do not match.".into()));
         }
-        keys.kem_seed = seed.to_vec();
+        keys.kem_seed = seed.to_vec().into();
         keys.kem_public_key = Some(kem.public_key);
     }
     Ok(keys)
@@ -364,10 +365,10 @@ pub fn identity_create(
     account_key: Vec<u8>,
     key_version: u64,
 ) -> CoreResult<IdentityEnvelope> {
+    let account_key = Zeroizing::new(account_key);
     if key_version < 1 {
         return Err(input("Invalid key version."));
     }
-    let account_key = Zeroizing::new(account_key);
     expect_len("accountKey", &account_key, KEY_BYTES)?;
     let secret = Zeroizing::new(<[u8; 32]>::try_from(random(32).as_slice()).expect("32 bytes"));
     let signing_seed = Zeroizing::new(<[u8; 32]>::try_from(random(32).as_slice()).expect("32 bytes"));
@@ -512,13 +513,13 @@ pub fn identity_succeed(
     account_key: Vec<u8>,
     current: IdentityEnvelope,
 ) -> CoreResult<IdentitySuccession> {
-    let keys = identity_open(user_id.clone(), account_key.clone(), current.clone())?;
-    let signing_seed = Zeroizing::new(keys.signing_seed.clone());
-    let mut opened = keys;
-    opened.encryption_private_key.zeroize();
-    opened.signing_seed.zeroize();
-    opened.kem_seed.zeroize();
-    let identity = identity_create(user_id.clone(), account_key, current.key_version + 1)?;
+    // Every copy of the account key is wiped: this one on return, each callee's own on theirs.
+    let account_key = Zeroizing::new(account_key);
+    // The opened keys wipe themselves when dropped; only the signing seed is needed.
+    let keys = identity_open(user_id.clone(), account_key.to_vec(), current.clone())?;
+    let signing_seed = keys.signing_seed.clone();
+    drop(keys);
+    let identity = identity_create(user_id.clone(), account_key.to_vec(), current.key_version + 1)?;
     let link = SuccessionLink {
         old_key_version: current.key_version,
         new_key_version: identity.key_version,
@@ -662,8 +663,8 @@ pub(crate) mod tests {
         let root = random(32);
         let (envelope, secret, kem_seed) = make_identity("User-1", &root);
         let keys = identity_open("user-1".into(), root.clone(), envelope.clone()).unwrap();
-        assert_eq!(keys.encryption_private_key, secret.to_vec());
-        assert_eq!(keys.kem_seed, kem_seed);
+        assert_eq!(keys.encryption_private_key.to_vec(), secret.to_vec());
+        assert_eq!(keys.kem_seed.to_vec(), kem_seed);
         assert_eq!(keys.kem_public_key.as_deref(), envelope.kem.as_ref().map(|k| k.public_key.as_str()));
         assert!(matches!(
             identity_open("user-2".into(), root.clone(), envelope.clone()),
@@ -716,7 +717,10 @@ pub(crate) mod tests {
         assert_eq!(rewrapped.kem.as_ref().unwrap().public_key, envelope.kem.as_ref().unwrap().public_key);
         assert_ne!(rewrapped.wrapping_salt, envelope.wrapping_salt);
         let keys = identity_open("user-1".into(), new_root.clone(), rewrapped.clone()).unwrap();
-        assert_eq!((keys.encryption_private_key, keys.kem_seed), (secret.to_vec(), kem_seed));
+        assert_eq!(
+            (keys.encryption_private_key.to_vec(), keys.kem_seed.to_vec()),
+            (secret.to_vec(), kem_seed)
+        );
         assert!(matches!(
             identity_open("user-1".into(), old_root.clone(), rewrapped),
             Err(CoreError::Sealed(_))
@@ -766,7 +770,7 @@ pub(crate) mod tests {
         assert_eq!(keys.key_version, 4);
         assert_eq!(keys.signing_seed.len(), 32);
         assert_eq!(
-            encode(&crate::signatures::signing_public_key(keys.signing_seed.clone()).unwrap()),
+            encode(&crate::signatures::signing_public_key(keys.signing_seed.to_vec()).unwrap()),
             envelope.signing_public_key
         );
         let kem = envelope.kem.clone().unwrap();
