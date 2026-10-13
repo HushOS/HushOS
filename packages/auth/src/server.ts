@@ -657,10 +657,11 @@ export async function getSettings(sessionToken: string | null) {
         authRepository.getSettings(user.id),
         authRepository.getSettingsKey(user.id),
     ]);
+    // A version 1 document is served as none: clients open version 2 only, and the next save replaces it.
     return {
         settings: stored
             ? {
-                  version: (stored.version === 2 ? 2 : 1) as 1 | 2,
+                  version: 2 as const,
                   settingsVersion: stored.settingsVersion,
                   nonce: stored.nonce.toString('base64url'),
                   ciphertext: stored.ciphertext.toString('base64url'),
@@ -688,13 +689,17 @@ export async function putSettings(
     sessionToken: string | null,
     input: {
         expectedVersion: number;
-        /* 2: sealed under the settings key; 1, the identity-derived key, until every client moves. */
-        version?: 1 | 2;
+        /* 2, sealed under the settings key, is the only version taken; an older client hears 409. */
+        version?: number;
         nonce: string;
         ciphertext: string;
     },
 ) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
+    // Settings sealed the old way (version 1, under a key derived from the identity) no longer
+    // open on any client: refused before anything else, so an old client is told to update.
+    if ((input.version ?? 1) !== 2)
+        throw new AuthError('Update HushOS to save your settings.', 409);
     // Every client pads settings to 1 KiB steps (see @hushos/crypto/contacts); an unpadded one
     // would tell the server how many people are pinned, so it is refused rather than stored.
     const body = Buffer.from(input.ciphertext, 'base64url').length - 16;
@@ -714,6 +719,8 @@ export async function putSettings(
         );
     if (result.status === 'no-key')
         throw new AuthError('Save your settings key before settings sealed under it.', 409);
+    if (result.status === 'unsupported')
+        throw new AuthError('Update HushOS to save your settings.', 409);
     return { settingsVersion: result.settingsVersion };
 }
 

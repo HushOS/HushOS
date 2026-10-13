@@ -587,8 +587,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
         {
             body: t.Object({
                 expectedVersion: t.Integer({ minimum: 0, maximum: 2147483646 }),
-                // 2 is sealed under the settings key; 1 under the identity, from older clients.
-                version: t.Optional(t.Union([t.Literal(1), t.Literal(2)])),
+                // 2 is sealed under the settings key and the only version taken; anything
+                // else (1, from a client that predates it) is refused with 409, not a bare 400.
+                version: t.Optional(t.Integer({ minimum: 1, maximum: 255 })),
                 nonce: t.String({ minLength: 32, maxLength: 32, pattern: '^[A-Za-z0-9_-]+$' }),
                 ciphertext: t.String({
                     minLength: 22,

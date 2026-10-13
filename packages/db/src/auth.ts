@@ -1183,6 +1183,11 @@ export async function addIdentityKem(input: {
     return row !== undefined;
 }
 
+/*
+ * The person's settings, when they are sealed the only way clients open now:
+ * version 2, under the settings key. A version 1 document (under a key derived
+ * from the identity) is as good as none; the next save replaces it.
+ */
 export async function getSettings(userId: string) {
     const [row] = await db
         .select({
@@ -1193,40 +1198,48 @@ export async function getSettings(userId: string) {
         })
         .from(userSettings)
         .where(eq(userSettings.userId, userId));
-    return row ?? null;
+    return row && row.version === 2 ? row : null;
 }
 
 /*
  * Compare-and-set: the new document names the version it was built from, and
  * lands only if that is still the stored one (or none exists and it names 0).
+ * Only envelope version 2 is taken, and only once the settings key it is
+ * sealed under is stored. A version 1 document counts as none, so the save
+ * that names 0 replaces it; the sequence still rises past it, so no device's
+ * high-water mark is left above the new document.
  */
 export async function putSettings(input: {
     userId: string;
     expectedVersion: number;
-    /* The envelope's version: 1 under the identity-derived key, 2 under the settings key. */
-    version?: 1 | 2;
+    /* The envelope's version: 2, sealed under the settings key, is the only one taken. */
+    version: number;
     nonce: Buffer;
     ciphertext: Buffer;
 }) {
-    const version = input.version ?? 1;
+    if (input.version !== 2) return { status: 'unsupported' as const, settingsVersion: null };
     return db.transaction(async (tx) => {
         const [current] = await tx
-            .select({ settingsVersion: userSettings.settingsVersion })
+            .select({
+                version: userSettings.version,
+                settingsVersion: userSettings.settingsVersion,
+            })
             .from(userSettings)
             .where(eq(userSettings.userId, input.userId))
             .for('update');
         const stored = current?.settingsVersion ?? 0;
-        if (stored !== input.expectedVersion)
-            return { status: 'conflict' as const, settingsVersion: stored };
+        const visible = current?.version === 2 ? stored : 0;
+        if (visible !== input.expectedVersion)
+            return { status: 'conflict' as const, settingsVersion: visible };
         // Sealed under a settings key the server does not have: no device could open it again.
-        if (version === 2 && !(await getSettingsKey(input.userId, tx)))
-            return { status: 'no-key' as const, settingsVersion: stored };
+        if (!(await getSettingsKey(input.userId, tx)))
+            return { status: 'no-key' as const, settingsVersion: visible };
         const settingsVersion = stored + 1;
         await tx
             .insert(userSettings)
             .values({
                 userId: input.userId,
-                version,
+                version: 2,
                 settingsVersion,
                 nonce: input.nonce,
                 ciphertext: input.ciphertext,
@@ -1234,7 +1247,7 @@ export async function putSettings(input: {
             .onConflictDoUpdate({
                 target: userSettings.userId,
                 set: {
-                    version,
+                    version: 2,
                     settingsVersion,
                     nonce: input.nonce,
                     ciphertext: input.ciphertext,
