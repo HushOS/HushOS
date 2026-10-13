@@ -282,3 +282,20 @@ Every create sends each id with its seed. The server recomputes the id from the 
 - Each create body that carries a client-chosen id carries its seed beside it: `idSeed` for a node id (root, folders, upload begin, copy), `versionIdSeed` and `objectIdSeed` (upload begin, copy file), `linkIdSeed` (create link), `reportIdSeed` (create report). Base64url, 16 bytes.
 - The server derives and compares before any other check that could depend on whether the id exists; a missing or wrong seed answers 400 `invalid` "This id was not made for this workspace".
 - TS (`@hushos/crypto`) and Rust (`hushos-core`, exported to iOS and Android) expose `deriveId(kind, scopeId, seed)` and `newId(kind, scopeId) -> { id, seed }`, pinned by shared fixtures.
+
+## Saved copies, by where they came from
+
+Round 3 signed every saved copy with the re-sealed statement, so every copy a person deliberately kept showed Unverified. A warning on something chosen on purpose is noise, and noise teaches people to ignore the mark. A copy is now signed according to its source, checked on the copier's device at copy time:
+
+- **A verified original** (in one's own drive or a share from a checked contact): the ordinary statements, signed by the copier. The original was checked when copied, so nothing is laundered; the copy shows no mark.
+- **From a link**: a visitor has nothing to check the original against, and saving from a link is like downloading a file someone sent. The copy is signed with the **saved** statements:
+
+  ```
+  metadata: ["hushos/drive/sig/metadata-saved", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope), "link"]
+  version:  ["hushos/drive/sig/version-saved", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope), "link"]
+  ```
+
+  A valid saved signature by the reader or a checked contact yields `saved-from-link`: no mark on the row, and a neutral line in Info and the viewer ("Saved from a link by you. HushOS can't confirm who made the original."; "by Maya" for a checked contact). Folders a save from a link creates are signed the same way.
+- **An original that isn't verified** (Unverified, Couldn't check, re-sealed, retired key): the re-sealed statements, as before, so the copy keeps its warning.
+
+Readers try the ordinary statement, then the saved one, then the re-sealed one. The server accepts any of the three on every signed write. Rotation and rename never produce a saved statement: a saved copy that is later rotated or renamed keeps `saved-from-link` only if the re-signing device re-signs it with the saved statement after checking it verified as saved; otherwise it becomes re-sealed.
