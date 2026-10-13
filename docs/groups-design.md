@@ -6,16 +6,20 @@ Nothing here changes what the server can read. It learns who is in which group, 
 
 ## 1. Model
 
-| Table                   | Holds                                                                                                                                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `groups`                | `id` (client-derived), `kind` (`family` or `org`), `name` (plaintext, see Privacy), `group_key_version`, `roster_version`, `created_by`, `created_at`                                           |
-| `group_memberships`     | `(group_id, user_id)`, `state` (`invited` → `accepted` → `active`; `left`, `removed`), `capabilities` (`members`, `billing`; companies add `data_admin`, `recovery`), `admitted_by`, timestamps |
-| `group_keys`            | One row per holder of the group signing key: `(group_id, group_key_version, user_id)`, the sealed seed (see 2.2), `sealed_by`                                                                   |
-| `group_key_successions` | `(group_id, old_version, new_version)`, both public keys, the old key's signature                                                                                                               |
-| `group_rosters`         | `(group_id, version)`, the roster document and its signature; the latest is served, earlier ones kept for clients catching up                                                                   |
-| `group_invitations`     | `id`, `group_id`, `normalized_email`, `token_hash` (as `account_enrollments`), `capabilities`, `invited_by`, `expires_at`, `state`                                                              |
-| `area_grants`           | `(workspace_id, workspace_key_version, user_id)`, the sealed area key (see 2.5), `granted_by`                                                                                                   |
-| `group_storage`         | `group_id`, pooled `quota_bytes` from the plan and entitlements                                                                                                                                 |
+| Table                     | Holds                                                                                                                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `groups`                  | `id` (client-derived), `kind` (`family` or `org`), `name` (plaintext, see Privacy), `group_key_version`, `roster_version`, `created_by`, `created_at`                                           |
+| `group_memberships`       | `(group_id, user_id)`, `state` (`invited` → `accepted` → `active`; `left`, `removed`), `capabilities` (`members`, `billing`; companies add `data_admin`, `recovery`), `admitted_by`, timestamps |
+| `group_keys`              | One row per holder of the group signing key: `(group_id, group_key_version, user_id)`, the sealed seed (see 2.2), `sealed_by`                                                                   |
+| `group_key_successions`   | `(group_id, old_version, new_version)`, both public keys, the old key's signature                                                                                                               |
+| `group_rosters`           | `(group_id, version)`, the roster document and its signature; the latest is served, earlier ones kept for clients catching up                                                                   |
+| `group_invitations`       | `id`, `group_id`, `normalized_email`, `token_hash` (as `account_enrollments`), `capabilities`, `invited_by`, `expires_at`, `state`                                                              |
+| `area_grants`             | `(workspace_id, workspace_key_version, user_id)`, the sealed area key (see 2.5), `granted_by`                                                                                                   |
+| `group_storage`           | `group_id`, pooled `quota_bytes` from the plan and entitlements                                                                                                                                 |
+| `account_guardians`       | `(child_user_id, guardian_user_id)`, the child's account root sealed to the guardian (see 2.8), `created_at`; deleted on conversion or release                                                  |
+| `account_guardian_events` | Each time a guardian's device fetches a guardian seal, recorded by the server and shown to the child                                                                                            |
+
+`users` gains `account_kind` (`adult` or `child`) and `adult_from`, the date a child account may convert; HushOS stores that date, never a birth date.
 
 `workspaces` gains `owner_kind` (`personal` or `group`), `group_id` and `area_kind` (`shared` now; `employee` for companies later). A group's shared area is a workspace like any other: tree, rotation, versions, trash, change feed and quota code run unchanged on it.
 
@@ -90,6 +94,16 @@ Verdicts gain three values in TS and Rust:
 
 A personal check wins over the roster when they agree; the roster never overrides a disagreeing pin silently.
 
+### 2.8 Guardian seals (child accounts)
+
+A child account's root key is also sealed to each guardian, with the suite 3 construction, sealed by the child's own device at sign-up:
+
+```
+["hushos/account/guardian-seal",1,childUserId,childRootVersion,guardianUserId,guardianKeyVersion,sealerUserId,sha256(sealed)]
+```
+
+The child's device seals only to a guardian it verified on the family roster, after the family's words were checked at sign-up (3.6), so the server cannot slip in its own key as a guardian. Opening the seal gives the guardian the child's account root and, through it, the child's personal space and recovery.
+
 ## 3. Flows
 
 ### 3.1 Creating a family
@@ -124,6 +138,19 @@ The organizer's client derives the group id, makes the group key, signs roster v
 - **Optional per-member limits:** the organizer may cap how much of the pool a member's personal space uses; off by default. A member at their cap or with a full pool can still read, download and delete; only uploads are refused.
 - The payer is a billing customer keyed by owner kind and id. Polar products carry `hushos_plan`, `quota_bytes`, and new `hushos_group_kind` and `included_members` metadata; members beyond those included are billed per member with no upper limit, and companies have a minimum seat count.
 - Seats are counted at admission, never at invitation; a seat cut blocks new admissions and never removes anyone.
+
+### 3.6 Child accounts
+
+Built after the family core. A child account is a separate account type; a family stays without any browse of its adult members.
+
+1. **Created only as child accounts.** A guardian starts "Add a child" in the family; the child signs up on their own device (or the guardian's) through a link, choosing a password. An existing account can never become a child account.
+2. **Ages.** Teens 13 to 17 first: `adult_from` must fall within five years of sign-up. Accounts for children under 13 come later, once verifiable parental consent, the terms and the privacy policy are in place (COPPA in the US, GDPR in the EU).
+3. **The family check comes first.** The child's sign-up compares the family's words with the guardian, as a newcomer's join does; only then does the child's device seal its root to the guardians on the roster and join the family. Registration of a child account without guardian seals is refused.
+4. **What a guardian can do:** reset the child's password (the guardian's device re-wraps the child's root under the new password's key); open the child's personal space; loosen the child's sharing defaults. Each guardian session is recorded from the seal fetches the server observes, and the child can see that record.
+5. **Defaults:** no public links and no shares outside the family, enforced by the server, until a guardian allows them.
+6. **Always disclosed.** The child sees a permanent notice: "Your parent can see your files."
+7. **Adulthood.** Access does not end on its own. From `adult_from`, the account holder may convert to an adult account at any time: their device replaces the account root (the master-key rotation flow) and the server deletes every guardian seal in the same transaction; guardians are told. A guardian cannot block, delay or undo it. The person is prompted on `adult_from`, the notice then also says how to make the account fully theirs, and they stay in the family plan as an adult member.
+8. **Earlier release.** A guardian may release a child before `adult_from`; the seals are deleted and the child's device replaces the root on its next sign-in, since the guardian once held it.
 
 ## 4. API contract
 
@@ -166,6 +193,19 @@ Base64url without padding everywhere; ids lowercase UUIDs. All routes need a ses
 | `POST /api/groups/:id/areas/:workspaceId/grants` **members** | `{ grants }`                                                                                           |                                                                        |
 | `POST /api/drive/workspaces/:id/key-rotations`               | `{ fromVersion, toVersion, rootKeyEnvelope, grants }`                                                  | Any member holding the area key may rotate it; 409 `stale`             |
 
+### Child accounts
+
+| Route                                       | Body → response                                                                                                     | Notes                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `POST /api/groups/:id/children` **members** | `{ adultFrom }` → `{ link }`                                                                                        | Starts a child sign-up; the link carries a one-time token in its fragment |
+| `POST /api/auth/register/child`             | As adult registration, plus `{ token, groupId, guardianSeals: [{ guardianUserId, guardianKeyVersion, envelope }] }` | Refused without a seal for every guardian on the roster                   |
+| `GET /api/children/:userId/guardian-seal`   | → `{ childRootVersion, envelope }`                                                                                  | Guardians only; each fetch is an `account_guardian_events` entry          |
+| `GET /api/auth/guardian-events`             | → the record of guardian sessions                                                                                   | The child's own view                                                      |
+| `POST /api/children/:userId/reset`          | As a password change, wrapped by the guardian                                                                       | Guardians only                                                            |
+| `PATCH /api/children/:userId/policies`      | `{ publicLinks, sharesOutsideFamily }`                                                                              | Guardians only                                                            |
+| `POST /api/auth/convert`                    | The master-key rotation body                                                                                        | The account holder only, from `adultFrom`; deletes every guardian seal    |
+| `DELETE /api/children/:userId/guardians`    |                                                                                                                     | A guardian releases the child early                                       |
+
 Every grant, seal and roster is checked by the server for shape and signature before it is stored, and refused with one uniform 400 otherwise; clients verify again and never rely on that.
 
 ## 5. Clients
@@ -176,7 +216,7 @@ Every grant, seal and roster is checked by the server for shape and signature be
 
 ## 6. What the server learns
 
-Who is in which group, their capabilities, who invited and admitted whom and when, invitation addresses until accepted or expired, how many areas a group has and their padded sizes, and the group's name. The roster carries only public keys, which the server already serves.
+Who is in which group, their capabilities, which accounts are child accounts with their `adult_from` dates and guardians, when guardians open a child's seal, who invited and admitted whom and when, invitation addresses until accepted or expired, how many areas a group has and their padded sizes, and the group's name. The roster carries only public keys, which the server already serves.
 
 The group name is plaintext because it appears in invitation emails and on bills. A group that does not want its name known can choose a neutral one.
 
@@ -190,6 +230,7 @@ Each fails on a defect a person would notice (see AGENTS.md):
 - Leaving and removal: the server stops serving grants at once; rotation produces new grants only for remaining members; a removed `members` holder forces a succession.
 - Grants: a grant for another workspace, epoch or grantee, or from an untrusted granter, does not open.
 - Storage: a free-tier member's personal uploads count against the pool; a member who kept their own plan uploads against it, never the pool; a per-member cap refuses uploads only; after leaving, uploads count against the member's own plan and, over it, are refused while nothing is deleted.
+- Child accounts: registration without a seal for every guardian is refused; a seal to a key not on the verified roster is never made; conversion before `adult_from` is refused and after it cannot be blocked by a guardian; after conversion or release no guardian seal opens the new root; every seal fetch appears in the child's record; an existing adult account cannot become a child account.
 - Ids: a group or area id not derived from its seed and scope is refused.
 
 ## 8. Open questions
