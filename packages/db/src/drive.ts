@@ -1,7 +1,12 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import { heldObjectCondition } from './reports';
-import { metadataStatement, verifySignature, versionStatement } from './signatures';
+import {
+    metadataSigned as metadataSignedStatement,
+    verifySigned,
+    versionSigned as versionSignedStatement,
+    type SignedStatement,
+} from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -326,19 +331,19 @@ export async function selectNodes(tx: Tx, ids: string[]) {
 
 /*
  * Whether every statement carries a valid signature by `userId`'s current
- * identity signing key. Checked inside the writing transaction, before any
- * row changes, so a write either lands signed or not at all.
+ * identity signing key, in either form (ordinary, or re-sealed for a record
+ * the writer re-locked without vouching for it). Checked inside the writing
+ * transaction, before any row changes, so a write either lands signed or not
+ * at all.
  */
-export type SignedStatement = { message: Buffer; signature: Buffer };
+export type { SignedStatement };
 export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
     const [identity] = await tx
         .select({ signingPublicKey: accountIdentities.signingPublicKey })
         .from(accountIdentities)
         .where(eq(accountIdentities.userId, userId));
     if (!identity) return false;
-    return statements.every((statement) =>
-        verifySignature(identity.signingPublicKey, statement.message, statement.signature),
-    );
+    return statements.every((statement) => verifySigned(identity.signingPublicKey, statement));
 }
 /* The metadata statement for a node's envelope as it is about to be stored. */
 function metadataSigned(
@@ -348,16 +353,16 @@ function metadataSigned(
     metadataVersion: number,
     envelopes: { metadataEnvelope: Buffer; metadataSignature: Buffer },
 ): SignedStatement {
-    return {
-        message: metadataStatement({
+    return metadataSignedStatement(
+        {
             workspaceId,
             nodeId,
             kind,
             metadataVersion,
             metadataEnvelope: envelopes.metadataEnvelope,
-        }),
-        signature: envelopes.metadataSignature,
-    };
+        },
+        envelopes.metadataSignature,
+    );
 }
 function versionSigned(input: {
     workspaceId: string;
@@ -369,7 +374,7 @@ function versionSigned(input: {
     signature: Buffer;
 }): SignedStatement {
     const { signature, ...statement } = input;
-    return { message: versionStatement(statement), signature };
+    return versionSignedStatement(statement, signature);
 }
 
 /* The user's personal workspace and their grant to its key, for opening Drive. */

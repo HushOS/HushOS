@@ -14,7 +14,7 @@ import {
     type Tx,
     type VersionRow,
 } from './drive';
-import { metadataStatement, versionStatement } from './signatures';
+import { metadataSigned, versionSigned } from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -374,31 +374,33 @@ export async function rotateNodes(input: {
                       )
                 : [];
             const statements: SignedStatement[] = [
-                {
-                    message: metadataStatement({
+                metadataSigned(
+                    {
                         workspaceId: input.workspaceId,
                         nodeId: item.id,
                         kind: node.kind,
                         metadataVersion: node.metadataVersion,
                         metadataEnvelope: rotated.metadataEnvelope,
-                    }),
-                    signature: rotated.metadataSignature,
-                },
+                    },
+                    rotated.metadataSignature,
+                ),
             ];
             for (const version of rotated.versions) {
                 const row = stored.find((v) => v.id === version.id);
                 if (!row?.objectId) continue;
-                statements.push({
-                    message: versionStatement({
-                        workspaceId: input.workspaceId,
-                        nodeId: item.id,
-                        versionId: version.id,
-                        objectId: row.objectId,
-                        contentSuite: row.contentSuite,
-                        contentKeyEnvelope: version.contentKeyEnvelope,
-                    }),
-                    signature: version.signature,
-                });
+                statements.push(
+                    versionSigned(
+                        {
+                            workspaceId: input.workspaceId,
+                            nodeId: item.id,
+                            versionId: version.id,
+                            objectId: row.objectId,
+                            contentSuite: row.contentSuite,
+                            contentKeyEnvelope: version.contentKeyEnvelope,
+                        },
+                        version.signature,
+                    ),
+                );
             }
             if (!(await signedBy(tx, input.userId, statements))) return 'bad-signature';
             await tx

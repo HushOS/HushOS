@@ -253,6 +253,78 @@ describe('creating', () => {
     });
 });
 
+describe('re-sealed statements', () => {
+    function signResealed(signer: TestSigner) {
+        return {
+            metadata: (nodeId: string, envelope: Buffer) =>
+                signer.sign(
+                    metadataStatement(
+                        {
+                            workspaceId: owner.workspaceId,
+                            nodeId,
+                            kind: 'file',
+                            metadataVersion: 1,
+                            metadataEnvelope: envelope,
+                        },
+                        'resealed',
+                    ),
+                ),
+            version: (ids: { nodeId: string; versionId: string; objectId: string }, e: Buffer) =>
+                signer.sign(
+                    versionStatement(
+                        {
+                            workspaceId: owner.workspaceId,
+                            ...ids,
+                            contentSuite: 3,
+                            contentKeyEnvelope: e,
+                        },
+                        'resealed',
+                    ),
+                ),
+        };
+    }
+
+    test('a write signed with the re-sealed statements by the writer lands, signed', async () => {
+        const { result, nodeId, versionId } = await beginWith(signResealed(ownerKey));
+        expect(result.status).toBe('ok');
+        expect((await nodeRow(nodeId))?.metadataSignerId).toBe(owner.userId);
+        const [version] = await db
+            .select({ signerId: fileVersions.signerId })
+            .from(fileVersions)
+            .where(eq(fileVersions.id, versionId));
+        expect(version?.signerId).toBe(owner.userId);
+    });
+
+    test('a re-sealed statement signed by someone else is refused and reserves nothing', async () => {
+        const before = await storage();
+        const { result, nodeId } = await beginWith(signResealed(otherKey));
+        expect(result.status).toBe('bad-signature');
+        expect(await nodeRow(nodeId)).toBeNull();
+        expect(await storage()).toEqual(before);
+    });
+
+    test('a statement under a label of neither form is refused', async () => {
+        const { result, nodeId } = await beginWith({
+            metadata: (id, envelope) =>
+                ownerKey.sign(
+                    Buffer.from(
+                        metadataStatement({
+                            workspaceId: owner.workspaceId,
+                            nodeId: id,
+                            kind: 'file',
+                            metadataVersion: 1,
+                            metadataEnvelope: envelope,
+                        })
+                            .toString('utf8')
+                            .replace('sig/metadata"', 'sig/metadata-copied"'),
+                    ),
+                ),
+        });
+        expect(result.status).toBe('bad-signature');
+        expect(await nodeRow(nodeId)).toBeNull();
+    });
+});
+
 describe('renaming', () => {
     test('is signed over the version it creates: the previous signature does not replay', async () => {
         const id = randomUUID();

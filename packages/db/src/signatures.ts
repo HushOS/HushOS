@@ -12,6 +12,15 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 
 export const SIGNATURE_BYTES = 64;
 
+/*
+ * Which statement a signature makes. `ordinary` vouches for who wrote the
+ * record; `resealed` says only "I re-locked this; I don't vouch for who wrote
+ * it", and is what rotation and copy sign over a record they could not check
+ * (docs/integrity-design.md, round 3). The server accepts either on every
+ * signed write; readers tell them apart.
+ */
+export type StatementForm = 'ordinary' | 'resealed';
+
 /* SHA-256, Base64url without padding. */
 export function digest(bytes: Uint8Array) {
     return createHash('sha256').update(bytes).digest('base64url');
@@ -21,15 +30,16 @@ function statement(parts: (string | number)[]) {
     return Buffer.from(JSON.stringify(parts), 'utf8');
 }
 
-export function metadataStatement(input: {
+export type MetadataStatementInput = {
     workspaceId: string;
     nodeId: string;
     kind: 'folder' | 'file';
     metadataVersion: number;
     metadataEnvelope: Uint8Array;
-}) {
+};
+export function metadataStatement(input: MetadataStatementInput, form: StatementForm = 'ordinary') {
     return statement([
-        'hushos/drive/sig/metadata',
+        form === 'resealed' ? 'hushos/drive/sig/metadata-resealed' : 'hushos/drive/sig/metadata',
         1,
         input.workspaceId.toLowerCase(),
         input.nodeId.toLowerCase(),
@@ -39,16 +49,17 @@ export function metadataStatement(input: {
     ]);
 }
 
-export function versionStatement(input: {
+export type VersionStatementInput = {
     workspaceId: string;
     nodeId: string;
     versionId: string;
     objectId: string;
     contentSuite: number;
     contentKeyEnvelope: Uint8Array;
-}) {
+};
+export function versionStatement(input: VersionStatementInput, form: StatementForm = 'ordinary') {
     return statement([
-        'hushos/drive/sig/version',
+        form === 'resealed' ? 'hushos/drive/sig/version-resealed' : 'hushos/drive/sig/version',
         1,
         input.workspaceId.toLowerCase(),
         input.nodeId.toLowerCase(),
@@ -97,4 +108,35 @@ export function verifySignature(publicKey: Uint8Array, message: Uint8Array, sign
     } catch {
         return false;
     }
+}
+
+/*
+ * A signature and the statements it may be over: the ordinary one first, then
+ * the re-sealed one. It holds when it verifies over any of them.
+ */
+export type SignedStatement = { messages: Buffer[]; signature: Uint8Array };
+
+export function metadataSigned(
+    input: MetadataStatementInput,
+    signature: Uint8Array,
+): SignedStatement {
+    return {
+        messages: [metadataStatement(input), metadataStatement(input, 'resealed')],
+        signature,
+    };
+}
+
+export function versionSigned(
+    input: VersionStatementInput,
+    signature: Uint8Array,
+): SignedStatement {
+    return {
+        messages: [versionStatement(input), versionStatement(input, 'resealed')],
+        signature,
+    };
+}
+
+/* Whether `signed` holds under the raw Ed25519 `publicKey`, in either form. */
+export function verifySigned(publicKey: Uint8Array, signed: SignedStatement) {
+    return signed.messages.some((message) => verifySignature(publicKey, message, signed.signature));
 }
