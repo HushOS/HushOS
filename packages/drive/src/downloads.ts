@@ -69,9 +69,10 @@ export type FileReader = {
      */
     watch?(listener: (fetched: number) => void): () => void;
     /*
-     * Fetches the object's padding past the file (suite 3), for a reader that
-     * read the whole file: the store then sees every byte fetched, as for a
-     * download, and learns nothing about where the file ends.
+     * Settles once the object's padding past the file (suite 3) is fetched: a
+     * read that touches the file's last chunk fetches it beside that chunk,
+     * so the store learns nothing about where the file ends, whether the
+     * viewer read everything (as a download does) or seeked to the end.
      */
     drain?(): Promise<void>;
 };
@@ -448,6 +449,26 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         });
         const cache = new Map<number, Promise<Uint8Array>>();
         let closed = false;
+        /*
+         * The padding after the file (suite 3), fetched whenever the file's last
+         * chunk is: a ranged read that stopped there would show the store where
+         * the file ends. One at a time and uncached: they decrypt to nothing.
+         */
+        let padding: Promise<void> | null = null;
+        function fetchPadding() {
+            if (source.total <= source.fileChunks) return Promise.resolve();
+            const pending = (async () => {
+                await source.open();
+                for (let index = source.fileChunks; index < source.total; index++) {
+                    if (closed) return;
+                    await source.fetchChunk(index);
+                }
+            })();
+            pending.catch(() => {
+                if (padding === pending) padding = null;
+            });
+            return pending;
+        }
         function chunk(index: number) {
             const cached = cache.get(index);
             if (cached) {
@@ -460,6 +481,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             fetched.catch(() => cache.delete(index));
             cache.set(index, fetched);
             while (cache.size > cacheChunks) cache.delete(cache.keys().next().value!);
+            // Fetched again after leaving the cache, the last chunk brings its padding again too.
+            if (index === source.fileChunks - 1) padding = fetchPadding();
             return fetched;
         }
         return {
@@ -486,10 +509,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             },
             async drain() {
                 if (closed) return;
-                await source.open();
-                // One at a time and uncached: they decrypt to nothing.
-                for (let index = source.fileChunks; index < source.total; index++)
-                    await source.fetchChunk(index);
+                // A read that reached the file's end already fetched the padding.
+                await (padding ??= fetchPadding());
             },
             async close() {
                 closed = true;
