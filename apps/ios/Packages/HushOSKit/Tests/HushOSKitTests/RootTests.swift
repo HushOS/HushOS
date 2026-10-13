@@ -50,6 +50,8 @@ struct RootTests {
         #expect(server.created.count == 1)
         let sent = try #require(server.created.first)
         let id = try #require(sent["id"] as? String)
+        // Sent with the seed that derives it for this workspace: the server refuses any other root id.
+        #expect(try deriveId(kind: .node, scopeId: workspace, seed: try #require(sent["idSeed"] as? String)) == id)
         #expect(sent["keyEpoch"] as? UInt64 == 41)
         #expect(sent["parentKeyEpoch"] as? UInt64 == 3)
         #expect(made.root?.id == id)

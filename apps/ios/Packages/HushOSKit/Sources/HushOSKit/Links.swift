@@ -161,10 +161,11 @@ extension Vault {
     /* Mints a link for an item this account holds the key of, and returns the URL to hand out. */
     public func createLink(for item: Opened, password: String?, expiresAt: Date?) async throws -> (link: LinkView, url: URL) {
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-        let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, linkId: UUID().uuidString.lowercased())
+        let made = try mint(.link, in: item.node.workspaceId)
+        let ctx = LinkContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, linkId: made.id)
         let created = try linkCreate(ctx: ctx, nodeKey: nodeKey, password: password)
         var body: [String: Any] = [
-            "workspaceId": item.node.workspaceId, "linkId": ctx.linkId, "token": created.token, "keyEpoch": item.node.keyEpoch,
+            "workspaceId": item.node.workspaceId, "linkId": ctx.linkId, "linkIdSeed": made.seed, "token": created.token, "keyEpoch": item.node.keyEpoch,
             "linkEnvelope": created.linkEnvelope, "linkSalt": created.linkSalt, "secretEnvelope": created.secretEnvelope,
             "hasPassword": created.hasPassword, "expiresAt": NSNull(),
         ]

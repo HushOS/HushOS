@@ -1,4 +1,5 @@
 import Foundation
+import HushOSCore
 
 /*
  * Writing to the Drive: folders, renames, moves, trash, restore and uploads.
@@ -6,7 +7,11 @@ import Foundation
  * the server only ever sees ciphertext and the shape of the tree.
  */
 extension Vault {
-    private func newId() -> String { UUID().uuidString.lowercased() }
+    /*
+     * A new id for what is made in `workspace`, and the seed it is derived from: the create
+     * sends both, and the server refuses an id the seed doesn't derive for that workspace.
+     */
+    func mint(_ kind: IdKind, in workspace: String) throws -> NewId { try HushOSCore.newId(kind: kind, scopeId: workspace) }
 
     /* A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name. */
     public func createFolder(in parentId: String, name: String, signing: Signing = .own) async throws -> Opened {
@@ -16,7 +21,8 @@ extension Vault {
         let workspace = Target(workspaceId: parent.node.workspaceId)
         guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
-        let id = newId()
+        let made = try mint(.node, in: workspace.workspaceId)
+        let id = made.id
         let key = try randomBytes(length: 32)
         let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: id, parentId: parent.node.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
         let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
@@ -24,7 +30,7 @@ extension Vault {
         let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
         let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
         let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
-            "id": id, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
+            "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
             "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
         ]])
         guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
@@ -103,8 +109,10 @@ extension Vault {
         guard let version = source.node.currentVersion else { throw DriveAPIError.notFound("This file has no content yet.") }
         let opened = try openVersion(source)
         let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
-        let id = newId()
-        let versionId = newId()
+        // The object stays the source's (the server shares it), so only the node and version are new.
+        let made = try mint(.node, in: workspace.workspaceId)
+        let madeVersion = try mint(.version, in: workspace.workspaceId)
+        let (id, versionId) = (made.id, madeVersion.id)
         let key = try randomBytes(length: 32)
         let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
         let keyEnvelope = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
@@ -123,10 +131,10 @@ extension Vault {
                                                      signing: .after(trusted.version(version, of: source.node)))
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
-            "node": ["id": id, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
+            "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
                      "keyEnvelope": base64urlEncode(bytes: keyEnvelope), "metadataEnvelope": base64urlEncode(bytes: metadataEnvelope),
                      "metadataSignature": metadataSignature],
-            "versionId": versionId,
+            "versionId": versionId, "versionIdSeed": madeVersion.seed,
             "contentKeyEnvelope": base64urlEncode(bytes: contentKeyEnvelope),
             "versionSignature": versionSignature,
         ])
@@ -209,8 +217,9 @@ extension Vault {
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let plaintextSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
         let modified = ISO8601DateFormatter().string(from: (attributes[.modificationDate] as? Date) ?? Date())
-        let versionId = newId()
-        let objectId = newId()
+        let madeVersion = try mint(.version, in: workspace.workspaceId)
+        let madeObject = try mint(.object, in: workspace.workspaceId)
+        let (versionId, objectId) = (madeVersion.id, madeObject.id)
         let contentKey = try randomBytes(length: 32)
         let contentNonce = try randomBytes(length: 16)
 
@@ -232,13 +241,14 @@ extension Vault {
             let parent = try await resolve(parentId)
             guard let parentKey = self.nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
             let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
-            nodeId = newId()
+            let made = try mint(.node, in: workspace.workspaceId)
+            nodeId = made.id
             nodeKey = try randomBytes(length: 32)
             let ctx = NodeKeyContext(workspaceId: workspace.workspaceId, nodeId: nodeId, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: epochs.from)
             let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: nodeKey)
             final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)
-            nodeInput = ["existing": false, "id": nodeId, "parentId": parent.id, "keyEpoch": epochs.from,
+            nodeInput = ["existing": false, "id": nodeId, "idSeed": made.seed, "parentId": parent.id, "keyEpoch": epochs.from,
                          "parentKeyEpoch": parent.node.keyEpoch, "keyEnvelope": base64urlEncode(bytes: wrapped),
                          "metadataEnvelope": base64urlEncode(bytes: sealed),
                          "metadataSignature": try await signMetadata(workspaceId: workspace.workspaceId, nodeId: nodeId, kind: .file, version: 1, envelope: sealed,
@@ -259,7 +269,7 @@ extension Vault {
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId,
                                                      suite: suite, envelope: version.envelope, signing: signing.version)
         let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: [
-            "node": nodeInput, "versionId": versionId, "objectId": objectId,
+            "node": nodeInput, "versionId": versionId, "versionIdSeed": madeVersion.seed, "objectId": objectId, "objectIdSeed": madeObject.seed,
             "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "versionSignature": versionSignature,
             "contentNonce": base64urlEncode(bytes: contentNonce),
             "contentSuite": Int(suite), "chunkCount": Int(layout.chunkCount), "ciphertextSize": String(layout.ciphertextSize),

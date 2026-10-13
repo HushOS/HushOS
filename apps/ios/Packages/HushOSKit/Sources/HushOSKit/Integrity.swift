@@ -200,6 +200,8 @@ public struct TrustedSigners: Sendable, Equatable {
         case .resealed: .resealed(writer(signer))
         case .retiredKey: .retiredKey(writer(signer))
         case .unchecked: .unchecked
+        // Kept on purpose from a link: no mark on a row.
+        case .savedFromLink: nil
         }
     }
 

@@ -44,7 +44,9 @@ public enum Reports {
         struct Operators: Decodable { let operators: [ReportOperator] }
         let operators = try await api.openOperators()
         guard !operators.isEmpty else { throw DriveAPIError.server(503, "This HushOS has no operators to report to.") }
-        let reportId = UUID().uuidString.lowercased()
+        // Scoped to the reported item's workspace, as the server derives it.
+        let made = try newId(kind: .report, scopeId: item.node.workspaceId)
+        let reportId = made.id
         let keys: [[String: Any]] = try operators.map { operator_ in
             let ctx = ReportContext(
                 workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch,
@@ -58,7 +60,7 @@ public enum Reports {
         }
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return [
-            "id": reportId, "workspaceId": item.node.workspaceId, "nodeId": item.id, "keyEpoch": item.node.keyEpoch,
+            "id": reportId, "reportIdSeed": made.seed, "workspaceId": item.node.workspaceId, "nodeId": item.id, "keyEpoch": item.node.keyEpoch,
             "category": category, "reason": reason, "via": via,
             "reporterEmail": trimmedEmail.isEmpty ? NSNull() : trimmedEmail, "keys": keys,
         ]

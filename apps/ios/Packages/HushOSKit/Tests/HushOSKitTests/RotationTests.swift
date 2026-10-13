@@ -193,6 +193,12 @@ final class FakeDrive: @unchecked Sendable {
     let g = UUID().uuidString.lowercased()
     var nodes: [String: NodeView] = [:]
     var failMoves = false
+    /* Every client-chosen id a create sent, with its kind and seed, in order: what the server derived and compared. */
+    var minted: [(kind: IdKind, id: String, seed: String)] = []
+    /* Upload begins as sent, and the uploads they started. */
+    var begins: [[String: Any]] = []
+    var uploads: [String: [String: Any]] = [:]
+    var completed: [String] = []
     private let lock = NSLock()
     private var target: UInt64 = 0
 
@@ -268,6 +274,80 @@ final class FakeDrive: @unchecked Sendable {
 
     private func json(_ value: some Encodable) throws -> Any { try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) }
 
+    /* As the server checks every create before anything else: the seed must derive the id for this workspace and kind. */
+    private func made(_ kind: IdKind, _ id: Any?, _ seed: Any?) -> Bool {
+        guard let id = id as? String, let seed = seed as? String,
+              let derived = try? deriveId(kind: kind, scopeId: workspace, seed: seed), derived == id else { return false }
+        minted.append((kind, id, seed))
+        return true
+    }
+
+    private static var notMade: (Int, Any) { (400, ["code": "invalid", "message": "This id was not made for this workspace"]) }
+
+    /* A new node as the server stores it from a create, signed by the owner. */
+    private func store(_ wire: [String: Any], id: String, kind: String, version: VersionView?) -> NodeView {
+        var node = NodeView(id: id, workspaceId: workspace, parentId: wire["parentId"] as? String, kind: kind,
+                            keyEpoch: (wire["keyEpoch"] as? NSNumber)?.uint64Value ?? 1, parentKeyEpoch: (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value ?? 1,
+                            keyEnvelope: wire["keyEnvelope"] as? String ?? "", metadataVersion: 1, metadataEnvelope: wire["metadataEnvelope"] as? String ?? "",
+                            currentVersion: version, trashedAt: nil, changeSeq: 1, createdAt: nil, updatedAt: nil)
+        node.metadataSigner = writer
+        node.metadataSignature = wire["metadataSignature"] as? String
+        nodes[id] = node
+        return node
+    }
+
+    /* Folders, upload begin, parts and completion: the creates that are not a node's own routes. */
+    private func answerCreate(_ request: URLRequest, parts: [String], body: Data?) throws -> (Int, Any)? {
+        let sent = (try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any]) ?? [:]
+        switch (request.httpMethod ?? "GET", Array(parts.dropFirst(2))) {
+        case ("POST", ["folders"]):
+            var made: [Any] = []
+            for wire in sent["folders"] as? [[String: Any]] ?? [] {
+                guard self.made(.node, wire["id"], wire["idSeed"]), let id = wire["id"] as? String else { return Self.notMade }
+                guard let kind = try statement(metadata: wire["metadataEnvelope"] as? String ?? "", signature: wire["metadataSignature"] as? String,
+                                               node: (workspace, id, "folder", 1))
+                else { return (400, ["message": "This change was not signed by your keys"]) }
+                statements[id] = kind
+                made.append(try json(store(wire, id: id, kind: "folder", version: nil)))
+            }
+            return (200, ["nodes": made])
+        case ("POST", ["uploads"]):
+            guard let wire = sent["node"] as? [String: Any], wire["existing"] as? Bool == false, let nodeId = wire["id"] as? String else { return (400, ["message": "Bad upload"]) }
+            guard made(.node, nodeId, wire["idSeed"]), made(.version, sent["versionId"], sent["versionIdSeed"]),
+                  made(.object, sent["objectId"], sent["objectIdSeed"]),
+                  let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
+            else { return Self.notMade }
+            let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
+            guard let metadataKind = try statement(metadata: wire["metadataEnvelope"] as? String ?? "", signature: wire["metadataSignature"] as? String,
+                                                   node: (workspace, nodeId, "file", 1)),
+                  let versionKind = try statement(version: sent["contentKeyEnvelope"] as? String ?? "", signature: sent["versionSignature"] as? String,
+                                                  statement: VersionStatement(workspaceId: workspace, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite))
+            else { return (400, ["message": "This change was not signed by your keys"]) }
+            statements[nodeId] = metadataKind
+            statements["version:" + versionId] = versionKind
+            begins.append(sent)
+            let uploadId = UUID().uuidString.lowercased()
+            uploads[uploadId] = sent
+            let count = (sent["chunkCount"] as? Int) ?? 1
+            let urls = (1 ... max(count, 1)).map { ["partNumber": $0, "length": 0, "url": "https://drive.test/store/\(uploadId)/\($0)"] as [String: Any] }
+            return (200, ["upload": ["id": uploadId, "nodeId": nodeId, "versionId": versionId, "status": "pending", "chunkCount": count],
+                          "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
+            guard let begun = uploads[rest[1]], let wire = begun["node"] as? [String: Any], let nodeId = wire["id"] as? String,
+                  let versionId = begun["versionId"] as? String, let objectId = begun["objectId"] as? String else { return (404, ["message": "No upload"]) }
+            if completed.contains(rest[1]) { return (409, ["message": "This upload is ready."]) }
+            completed.append(rest[1])
+            var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
+                                      contentSuite: (begun["contentSuite"] as? NSNumber)?.uint32Value ?? 0, chunkCount: (begun["chunkCount"] as? Int) ?? 1,
+                                      contentNonce: begun["contentNonce"] as? String ?? "", plaintextSize: nil, ciphertextSize: nil, readyAt: nil)
+            version.signer = writer
+            version.signature = begun["versionSignature"] as? String
+            return (200, ["status": "ready", "node": try json(store(wire, id: nodeId, kind: "file", version: version))])
+        default:
+            return nil
+        }
+    }
+
     private func ancestors(of id: String) -> [NodeView] {
         var out: [NodeView] = []
         var cursor = nodes[id]?.parentId
@@ -284,6 +364,8 @@ final class FakeDrive: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let parts = (request.url?.path ?? "").split(separator: "/").map(String.init) // api, drive, nodes, <id>, …
+        if parts.first == "store", request.httpMethod == "PUT" { return (200, [:]) }
+        if let answer = try answerCreate(request, parts: parts, body: body) { return answer }
         if parts.count == 5, parts[2] == "workspaces", parts[4] == "epochs" {
             target = max(target, 1) + 1
             return (200, ["from": target, "to": target])
@@ -312,6 +394,8 @@ final class FakeDrive: @unchecked Sendable {
         case ("POST", ["copy"]):
             // A copy: stored only under the owner's valid signature, ordinary or re-sealed, as the server checks it.
             let sent = try JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any] ?? [:]
+            guard made(.node, (sent["node"] as? [String: Any])?["id"], (sent["node"] as? [String: Any])?["idSeed"]),
+                  made(.version, sent["versionId"], sent["versionIdSeed"]) else { return Self.notMade }
             guard let source = nodes[id], let wire = sent["node"] as? [String: Any], let newId = wire["id"] as? String,
                   let sourceVersion = source.currentVersion, let versionId = sent["versionId"] as? String,
                   let contentKeyEnvelope = sent["contentKeyEnvelope"] as? String, let metadataEnvelope = wire["metadataEnvelope"] as? String
@@ -453,7 +537,9 @@ final class FakeDriveProtocol: URLProtocol {
             guard let server = FakeDrive.current else { throw URLError(.cannotConnectToHost) }
             let (status, reply) = try server.answer(request, body: body)
             let data = try JSONSerialization.data(withJSONObject: reply)
-            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+            // A part's PUT answers with the ETag completion needs.
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json", "ETag": "\"part\""])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
