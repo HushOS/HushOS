@@ -262,3 +262,23 @@ Padmé rounds the padded content up to a bucket that grows with the file: below 
 - **Ids:** a client-generated id (node, version, object, link, report) that already exists is 409 `conflict` whichever workspace holds it, and nothing of the refused write is kept.
 - **Reports:** after release, `ReportView.reason` and `reporter.userId` are null.
 - **Lookups:** `POST /api/auth/contacts/lookup` and `GET /api/auth/contacts/:userId/succession` are limited per account and per address.
+
+## Ids derived from a seed and a scope
+
+Clients choose the ids of what they create (nodes, versions, objects, links, reports) because the id is sealed into the envelope's associated data before the row exists. Ids are unique across the whole database, so until now a create naming an id that existed anywhere was refused, and that refusal told anyone (a former grantee or link visitor holding old ids) whether an item still existed in someone else's workspace.
+
+Now a client never names an id directly. It draws a random 16-byte seed and derives the id:
+
+```
+id = uuidv8(SHA-256(["hushos/id", 1, kind, scopeId, seed])[0..16])
+```
+
+The statement uses the same canonical JSON as associated data (lowercase ids, the seed as base64url without padding). `kind` is `"node"`, `"version"`, `"object"`, `"link"` or `"report"`; `scopeId` is the workspace the item is created in (for a report, the workspace of the reported item). The first 16 bytes of the digest become the UUID, with the version nibble set to 8 and the variant bits to `10`.
+
+Every create sends each id with its seed. The server recomputes the id from the seed, the kind and the workspace of the request and refuses a mismatch with one answer for every cause ("This id was not made for this workspace", 400). Nobody can find a seed that derives an id that already exists, so asking about someone else's id gets the same refusal as any malformed id, whether or not it exists. A conflict (409) can only come from a client replaying one of its own seeds in its own workspace. Ids stored before this change stay as they are; only new creates are checked.
+
+### API contract (scoped ids)
+
+- Each create body that carries a client-chosen id carries its seed beside it: `idSeed` for a node id (root, folders, upload begin, copy), `versionIdSeed` and `objectIdSeed` (upload begin, copy file), `linkIdSeed` (create link), `reportIdSeed` (create report). Base64url, 16 bytes.
+- The server derives and compares before any other check that could depend on whether the id exists; a missing or wrong seed answers 400 `invalid` "This id was not made for this workspace".
+- TS (`@hushos/crypto`) and Rust (`hushos-core`, exported to iOS and Android) expose `deriveId(kind, scopeId, seed)` and `newId(kind, scopeId) -> { id, seed }`, pinned by shared fixtures.
