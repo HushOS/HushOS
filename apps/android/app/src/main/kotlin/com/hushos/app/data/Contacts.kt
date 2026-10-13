@@ -237,6 +237,24 @@ class Settings(val json: JSONObject, val version: ULong) {
  * identity, which a stolen identity key opened) no longer opens: it is no settings at all, at the envelope's version,
  * so the next save (always version 2) goes over it and starts afresh.
  */
+/*
+ * The settings as served, held to this device's marks (SettingsMark.checkSettings) and opened. No document is empty
+ * settings at the stored sequence (0 for no row, above 0 for a version 1 row served as none), so the next save names
+ * that sequence as expectedVersion and seals at one above it, the version the server stores it at. A document's own
+ * sequence (bound into its seal) is what counts when there is one.
+ */
+fun readServedSettings(userId: String, envelope: SettingsEnvelope?, sequence: ULong, mark: SettingsMark, settingsKey: () -> ByteArray): Settings {
+    if (envelope == null) {
+        mark.checkSettings(userId, sequence, present = false)
+        if (sequence > 0uL) mark.recordSettings(userId, sequence, sealedV2 = false)
+        return Settings.empty(sequence)
+    }
+    mark.checkSettings(userId, envelope.settingsVersion, present = true)
+    val settings = openSettingsText(userId, if (envelope.version == 2u) settingsKey() else null, envelope)
+    mark.recordSettings(userId, envelope.settingsVersion, sealedV2 = envelope.version == 2u)
+    return settings
+}
+
 fun openSettingsText(userId: String, settingsKey: ByteArray?, envelope: SettingsEnvelope): Settings =
     settingsOpen(userId, settingsKey, envelope)?.let { Settings.parse(it, envelope.settingsVersion) } ?: Settings.empty(envelope.settingsVersion)
 

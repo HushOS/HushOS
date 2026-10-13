@@ -53,6 +53,37 @@ class SettingsKeyTest {
         assertEquals(read.text(), settingsOpen(userId, rawKey, saved))
     }
 
+    @get:org.junit.Rule val folder = org.junit.rules.TemporaryFolder()
+
+    @Test
+    fun aVersionOneRowServedAsNoneIsReadAtItsStoredSequenceSoTheSaveOverItOpensAgain() {
+        val mark = SettingsMark(folder.root.resolve("marks.json"))
+        // An earlier session saw the version 1 document at sequence 7; the server serves it as none, with sequence 7.
+        mark.recordSettings(userId, 7uL, sealedV2 = false)
+        val read = readServedSettings(userId, null, 7uL, mark) { rawKey }
+        assertTrue(read.contacts.isEmpty())
+        // The save names 7 and seals at 8, the version the server stores it at: read back at 8, it opens.
+        assertEquals(7uL, read.version)
+        read.pin(ContactPin("u-1", "ada@example.org", "Ada", "enc", "sig", "f", "2026-10-01T00:00:00Z", null))
+        val saved = settingsSeal(userId, rawKey, read.version + 1uL, read.text())
+        mark.recordSettings(userId, saved.settingsVersion, sealedV2 = true)
+        val again = readServedSettings(userId, saved, 8uL, mark) { rawKey }
+        assertEquals(8uL, again.version)
+        assertTrue(again.contacts.containsKey("u-1"))
+        // A document sealed at the old rule's 1 does not open where the server stores it.
+        val stale = settingsSeal(userId, rawKey, 1uL, read.text())
+        assertThrows(Exception::class.java) { settingsOpen(userId, rawKey, stale.copy(settingsVersion = 8uL)) }
+    }
+
+    @Test
+    fun noneBelowTheMarkOrAfterAVersionTwoDocumentIsARollback() {
+        val mark = SettingsMark(folder.root.resolve("marks.json"))
+        mark.recordSettings(userId, 7uL, sealedV2 = false)
+        assertThrows(SettingsRolledBack::class.java) { readServedSettings(userId, null, 5uL, mark) { rawKey } }
+        mark.recordSettings(userId, 8uL, sealedV2 = true)
+        assertThrows(SettingsRolledBack::class.java) { readServedSettings(userId, null, 8uL, mark) { rawKey } }
+    }
+
     @Test
     fun aSaveHereReadsBackOnTheNextDeviceWithEverythingInIt() {
         val made = settingsKeyCreate(userId, root)

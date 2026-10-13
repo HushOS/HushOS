@@ -273,11 +273,17 @@ object Auth {
     }
 
     /* The settings as stored, and the settings key wrapped under the root (null until a device stored one). */
-    data class StoredSettings(val envelope: com.hushos.core.SettingsEnvelope?, val key: com.hushos.core.SettingsKeyEnvelope?)
+    /*
+     * `sequence`: the stored settings sequence, served even when `envelope` is null (0 for no row; above 0 for a
+     * version 1 row, which is served as none). The next save names it as expectedVersion and seals at one above.
+     */
+    data class StoredSettings(val envelope: com.hushos.core.SettingsEnvelope?, val key: com.hushos.core.SettingsKeyEnvelope?, val sequence: ULong = envelope?.settingsVersion ?: 0uL)
 
     fun settings(context: Context): StoredSettings = call(context, "/api/auth/settings").let { body ->
-        StoredSettings(body.optJSONObject("settings")?.let(::settingsEnvelope),
-            body.optJSONObject("settingsKey")?.let { com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")) })
+        val envelope = body.optJSONObject("settings")?.let(::settingsEnvelope)
+        StoredSettings(envelope,
+            body.optJSONObject("settingsKey")?.let { com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")) },
+            body.optLong("settingsVersion", -1L).takeIf { it >= 0 }?.toULong() ?: envelope?.settingsVersion ?: 0uL)
     }
 
     /* Stores the wrapped settings key once; a 409 means another device stored one first (read it and use that). */

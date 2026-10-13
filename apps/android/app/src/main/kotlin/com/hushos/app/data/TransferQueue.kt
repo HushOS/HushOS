@@ -41,23 +41,13 @@ object TransferQueue {
     /* The notification's tap: MainActivity opens the transfers sheet. */
     const val OPEN_TRANSFERS = "com.hushos.app.OPEN_TRANSFERS"
     /* An upload refused because the account is out of room: Retry can't help; Make room can. */
+    /* How often an upload that couldn't check the name it keeps is tried again before it is said to have failed. */
+    const val TRUST_RETRIES = 5
     const val NO_ROOM = "Not enough room for this file."
 
     /* Whether a failure's words are the out-of-room refusal (the server's own sentence too). */
     fun isNoRoom(message: String?): Boolean =
         message != null && (message == NO_ROOM || message.contains("Not enough storage", ignoreCase = true) || message.contains("quota", ignoreCase = true))
-
-    /*
-     * A name short enough for a notification's line, cut in the middle so its start and its
-     * extension both show: "Quarterly report for the…final draft.pdf".
-     */
-    fun shortName(name: String, max: Int = 32): String {
-        if (name.length <= max) return name
-        val dot = name.lastIndexOf('.').takeIf { it > 0 && name.length - it <= 8 } ?: name.length
-        val tail = (name.length - dot) + minOf(6, dot)
-        val head = max - 1 - tail
-        return if (head < 4) name.take(max - 1) + "…" else name.take(head) + "…" + name.takeLast(tail)
-    }
 
     /* A failure's reason in words that say what to do: the transfers sheet's and the notification's. */
     fun reasonWords(message: String?): String {
@@ -167,30 +157,51 @@ object TransferQueue {
     /*
      * The ongoing notification Android requires while a job runs: the up arrow for uploads,
      * the down arrow for keeping a file on this phone, and a tap that opens the transfers sheet.
-     * No Cancel here: cancelling asks first, in the app. The title names the file, so it is kept off
-     * the lock screen altogether (VISIBILITY_SECRET: a private notification's public version is shown
-     * only when the person chose to hide sensitive content, and the default shows everything), and
+     * No Cancel here: cancelling asks first, in the app. It names no file (see ongoingText), and
      * nothing is bridged to a watch or another device.
      */
-    internal fun foreground(context: Context, id: Int, title: String, fraction: Float, keeping: Boolean = false, detail: String? = null): ForegroundInfo {
+    /*
+     * What the ongoing notification says, in every field: how many transfers of its kind are under way and how far
+     * this one is, never a file's name (lock screens showing all content and notification listeners read it all).
+     */
+    fun ongoingText(keeping: Boolean, count: Int, fraction: Float): NoticeText {
+        val n = count.coerceAtLeast(1)
+        val title = if (keeping) "Keeping $n ${if (n == 1) "item" else "items"} on this phone" else "Uploading $n ${if (n == 1) "file" else "files"}"
+        val text = if (fraction > 0f) "${(fraction * 100).toInt()}%" else null
+        return NoticeText(title, text, null, title)
+    }
+
+    /* Transfers of one kind queued or running now, for the ongoing notification's count. */
+    internal fun active(context: Context, kind: String): Int =
+        runCatching { WorkManager.getInstance(context).getWorkInfosByTag("kind:$kind").get().count { !it.state.isFinished } }.getOrDefault(1)
+
+    internal fun foreground(context: Context, id: Int, fraction: Float, keeping: Boolean = false): ForegroundInfo {
+        val words = ongoingText(keeping, active(context, if (keeping) KEEP else UPLOAD), fraction)
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL) == null)
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW).apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW))
         val open = android.app.PendingIntent.getActivity(
             context, 0,
             android.content.Intent(context, com.hushos.app.MainActivity::class.java).setAction(OPEN_TRANSFERS).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val icon = if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload
+        val public = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(icon)
+            .setContentTitle(words.publicTitle)
+            .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
+            .setLocalOnly(true)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(icon)
-            .setContentTitle(title)
-            .setContentText(detail ?: if (fraction > 0f) "${(fraction * 100).toInt()}%" else null)
+            .setContentTitle(words.title)
+            .setContentText(words.text)
             .setContentIntent(open)
             .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
             .setOngoing(true)
             .setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(public)
             .setLocalOnly(true)
             .build()
         return ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -206,6 +217,8 @@ private fun jobVault(context: Context): Vault? = Vault.fromShared(context)?.also
  */
 private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY): androidx.work.ListenableWorker.Result = when {
     Resumable.retryable(error) && error !is NotAuthenticated -> androidx.work.ListenableWorker.Result.retry()
+    // Whom this person trusts didn't load, so a replaced file's name couldn't be checked: tried again a few times, then said.
+    error is TrustUnavailable && runAttemptCount < TransferQueue.TRUST_RETRIES -> androidx.work.ListenableWorker.Result.retry()
     else -> failed(when {
         error is NotAuthenticated -> "Sign in again to finish this."
         error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM
@@ -231,7 +244,7 @@ private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data =
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     private val name get() = inputData.getString("name") ?: "File"
 
-    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading “${TransferQueue.shortName(name)}”", 0f)
+    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f)
 
     override suspend fun doWork(): Result {
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
@@ -250,7 +263,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
                         shown = percent
-                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), "Uploading “${TransferQueue.shortName(name)}”", fraction)) }
+                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
                     }
                 }
                 file.parentFile?.deleteRecursively()
@@ -267,7 +280,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     private val name get() = inputData.getString("name") ?: "File"
 
-    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), "Keeping “${TransferQueue.shortName(name)}” on this phone", 0f, keeping = true)
+    override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
     override suspend fun doWork(): Result {
         runCatching { setForeground(getForegroundInfo()) }
@@ -295,7 +308,7 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     val percent = (fraction * 100).toInt()
                     if (percent - shown >= 5) {
                         shown = percent
-                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, this@KeepWorker.id.hashCode(), "Keeping “${TransferQueue.shortName(name)}” on this phone", fraction, keeping = true)) }
+                        runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, this@KeepWorker.id.hashCode(), fraction, keeping = true)) }
                     }
                 }
                 if (item.isFolder) vault.keepFolder(item, shareRoot, report) else vault.keepDownloaded(item) { report(it, 0, 1) }
@@ -306,4 +319,12 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
         }
     }
+}
+
+/*
+ * Every text field a transfer notification sets: title, content text, big text, the public version's title, and the
+ * action labels. Built from counts and kinds only, so a test can hold all of them to naming no file.
+ */
+data class NoticeText(val title: String, val text: String?, val bigText: String?, val publicTitle: String, val actions: List<String> = emptyList()) {
+    val fields: List<String> get() = listOfNotNull(title, text, bigText, publicTitle) + actions
 }

@@ -349,9 +349,6 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     // Contacts and shares to people
 
-    /* This device's settings mark for the account (see SettingsMark): per user, so a succession keeps it. */
-    private fun settingsMarkKey(): String = SettingsMark.key(api.session.userId)
-
     /* The settings key the server holds, opened under the account key; null until some device stored one. */
     private fun openSettingsKey(stored: Auth.StoredSettings): ByteArray? {
         settingsKey?.let { return it }
@@ -379,24 +376,19 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * The settings as the server holds them, refused when older than this device has seen (or gone after it saw some).
+     * The settings as the server holds them, refused when older than this device has seen (see readServedSettings).
      * Version 2 opens under the settings key. Version 1 (sealed under a key off the identity, which a stolen identity
-     * key opened) no longer opens: it reads as no settings, and the next save starts version 2 over it.
+     * key opened) no longer opens: it reads as no settings at its stored sequence, and the next save goes over it.
      */
     fun loadSettings(): Settings {
         val mark = SettingsMark.of(context)
         val userId = api.session.userId
-        val markKey = settingsMarkKey()
         // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
         mark.settingsSeen(userId, identityKeys().encryptionPublicKey)
         val stored = Auth.settings(context)
-        val envelope = stored.envelope
-        mark.check(markKey, envelope?.settingsVersion)
-        if (envelope == null) return Settings.empty()
-        val key = if (envelope.version == 2u) openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.") else null
-        val settings = openSettingsText(userId, key, envelope)
-        mark.record(markKey, envelope.settingsVersion)
-        return settings
+        return readServedSettings(userId, stored.envelope, stored.sequence, mark) {
+            openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
+        }
     }
 
     /*
@@ -413,9 +405,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val next = settings.version + 1uL
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
-                val saved = Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
-                SettingsMark.of(context).record(settingsMarkKey(), maxOf(saved, next))
-                return Settings(settings.json, saved)
+                // Named over the stored sequence and sealed at one above it, the version the server stores it at.
+                Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
+                // Always version 2: from here on, no document at all is a rollback.
+                SettingsMark.of(context).recordSettings(api.session.userId, next, sealedV2 = true)
+                return Settings(settings.json, next)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error
             }
@@ -1195,6 +1189,17 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
+     * How the metadata a new version re-signs is signed: it keeps the replaced record's name, so it is that record's
+     * verdict. Verified stays ordinary; anything else is re-sealed. Without the trust set it throws (the upload waits
+     * and is tried again) rather than vouching for a name nobody checked.
+     */
+    private fun replacedNamePrior(replacing: Opened): Integrity {
+        val verdict = metadataVerdict(replacing.node, trustForWrite())
+        if (verdict == Integrity.UNCHECKED) throw TrustUnavailable()
+        return verdict
+    }
+
+    /*
      * A file's bytes as a new node under `parentId`, or a new version of `replacing`; a thumbnail rides after the last
      * chunk. `prior`: set when the bytes and name are a copy of a record that existed before (a copy across drives, a
      * saved copy), whose verdicts decide how the new node is signed; see signMetadata.
@@ -1202,6 +1207,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, prior: Prior? = null, progress: (Float) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
+        // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
+        // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run.
+        val keptName = replacing?.let { prior?.metadata ?: replacedNamePrior(it) }
         val size = file.length().toULong()
         val modified = Instant.ofEpochMilli(file.lastModified()).toString()
         val versionId = UUID.randomUUID().toString()
@@ -1283,7 +1291,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
             val next = node.metadataVersion + 1uL
             val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
-            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed))
+            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed, keptName))
         }
         return adoptWritten(node, nodeKey, final, ws, nodeId)
     }
