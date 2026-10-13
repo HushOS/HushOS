@@ -5,20 +5,47 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/* A transfer's name is cut in the middle so the extension shows; the out-of-room refusal is told apart from other failures. */
+/*
+ * Transfer notifications name no file in any field: a lock screen showing all content, and every app allowed to read
+ * notifications, sees them whole. They count and say what kind; the transfers sheet in the app names the files. The
+ * out-of-room refusal is told apart from other failures.
+ */
 class TransferNamesTest {
-    @Test
-    fun aLongNameKeepsItsStartAndExtension() {
-        val short = TransferQueue.shortName("Quarterly report for the board, final draft v7.pdf", 32)
-        assertEquals(32, short.length)
-        assertTrue(short.startsWith("Quarterly report"))
-        assertTrue(short.endsWith("v7.pdf"))
-        assertTrue("…" in short)
+    private val names = listOf("Divorce papers.pdf", "Biopsy results.png", "Lisbon")
+
+    private fun assertNamesNothing(text: NoticeText) {
+        for (field in text.fields) {
+            for (name in names) assertFalse("“$field” names $name", field.contains(name, ignoreCase = true) || field.contains(name.substringBeforeLast('.'), ignoreCase = true))
+            assertFalse("“$field” quotes something", field.contains("“"))
+        }
     }
 
     @Test
-    fun aShortNameIsLeftAlone() {
-        assertEquals("notes.md", TransferQueue.shortName("notes.md", 32))
+    fun noFinishedOrFailedSummaryNamesAFileInAnyField() {
+        val cases = listOf(
+            listOf(TransferNotices.Outcome("1", names[0], upload = true)),
+            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("2", names[1], upload = true, reason = "It didn’t upload.")),
+            listOf(TransferNotices.Outcome("1", names[0], upload = true, reason = "Couldn’t reach HushOS."), TransferNotices.Outcome("2", names[1], upload = true, reason = "Not enough room for this file.")),
+            listOf(TransferNotices.Outcome("3", names[2], upload = false)),
+            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("3", names[2], upload = false)),
+        )
+        for (ended in cases) for (retry in listOf(false, true)) assertNamesNothing(TransferNotices.words(ended, retry))
+        // Still says what happened, and where to look.
+        assertEquals("1 file uploaded", TransferNotices.words(cases[0]).title)
+        val failed = TransferNotices.words(cases[1], retry = true)
+        assertEquals("1 upload didn’t finish", failed.title)
+        assertEquals("Open HushOS to see it and try again.", failed.text)
+        assertEquals(listOf(TransferNotices.RETRY_LABEL), failed.actions)
+        assertEquals("2 uploads didn’t finish", TransferNotices.words(cases[2]).title)
+        assertEquals("1 item kept on this phone", TransferNotices.words(cases[3]).title)
+    }
+
+    @Test
+    fun theOngoingNotificationCountsTransfersAndNamesNone() {
+        for (keeping in listOf(false, true)) for (count in listOf(0, 1, 3)) assertNamesNothing(TransferQueue.ongoingText(keeping, count, 0.4f))
+        assertEquals("Uploading 3 files", TransferQueue.ongoingText(false, 3, 0f).title)
+        assertEquals("Keeping 1 item on this phone", TransferQueue.ongoingText(true, 0, 0f).title)
+        assertEquals("40%", TransferQueue.ongoingText(false, 1, 0.4f).text)
     }
 
     @Test
@@ -27,26 +54,5 @@ class TransferNamesTest {
         assertTrue(TransferQueue.isNoRoom("Not enough storage for this file."))
         assertFalse(TransferQueue.isNoRoom("Couldn’t reach HushOS. Check your connection, then retry."))
         assertFalse(TransferQueue.isNoRoom(null))
-    }
-
-    @Test
-    fun theLockScreensCopiesNameNoFileAndStillSayWhatHappened() {
-        val names = listOf("Divorce papers.pdf", "Biopsy results.png", "Lisbon")
-        val cases = listOf(
-            listOf(TransferNotices.Outcome("1", names[0], upload = true)),
-            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("2", names[1], upload = true, reason = "It didn’t upload.")),
-            listOf(TransferNotices.Outcome("3", names[2], upload = false)),
-            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("3", names[2], upload = false)),
-        )
-        for (ended in cases) {
-            val shown = TransferNotices.publicWords(ended)
-            // The full summary does name them (behind the lock); its public copy never does.
-            assertTrue(names.any { TransferNotices.words(ended).toList().joinToString().contains(it) })
-            assertFalse("“$shown” names a file", names.any { shown.contains(it) } || shown.contains("“"))
-        }
-        assertEquals("1 file uploaded", TransferNotices.publicWords(cases[0]))
-        assertEquals("1 upload didn’t finish", TransferNotices.publicWords(cases[1]))
-        assertEquals("1 item kept on this phone", TransferNotices.publicWords(cases[2]))
-        assertFalse(TransferQueue.publicTitle(keeping = false).contains("“"))
     }
 }

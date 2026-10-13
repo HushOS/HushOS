@@ -22,8 +22,7 @@ import java.net.URLEncoder
  * queue has nothing left running (not once per file), on its own channel apart from the
  * ongoing progress notification, never while the app is on screen (the transfers sheet
  * says it there). Tapping it opens the transfers sheet; a failure that Retry can help
- * carries a Retry action. It is private: a lock screen that hides sensitive content shows its
- * public version, which counts what finished or didn't and names nothing.
+ * carries a Retry action. No field names a file (see words): it counts what finished or didn't.
  */
 object TransferNotices {
     private const val CHANNEL = "transfer-results"
@@ -41,45 +40,31 @@ object TransferNotices {
     data class Outcome(val id: String, val name: String, val upload: Boolean, val reason: String? = null, val folder: String? = null)
 
     /*
-     * The words. Finished: "3 files uploaded" naming them, or "“Lisbon” is on this phone";
-     * didn't: "1 upload didn’t finish" with the file and its reason. Mixed or several keeps
-     * use the transfers bar's own words.
+     * The words, in every field a notification has: counts and kinds only, never a file's name. A lock screen showing
+     * all content, and any app allowed to read notifications, sees every field; the transfers sheet in the app names
+     * the files. Finished: "3 files uploaded", "1 item kept on this phone"; didn't: "1 upload didn’t finish" with
+     * where to see which. `retry`: the notification carries a Retry action.
      */
-    fun words(ended: List<Outcome>): Pair<String, String?> {
-        val failed = ended.filter { it.reason != null }
-        if (failed.size == 1) {
-            val only = failed[0]
-            return (if (only.upload) "1 upload didn’t finish" else "1 transfer didn’t finish") to "“${only.name}”: ${only.reason}"
-        }
-        if (failed.isNotEmpty())
-            return "${failed.size} ${if (failed.all { it.upload }) "uploads" else "transfers"} didn’t finish" to names(failed)
-        if (ended.all { it.upload }) return "${ended.size} ${if (ended.size == 1) "file" else "files"} uploaded" to names(ended)
-        if (ended.size == 1) return "“${ended[0].name}” is on this phone" to null
-        return "${ended.size} transfers finished" to names(ended)
-    }
-
-    /* The lock screen's copy of the summary: how many finished or didn't, and of what kind, naming nothing. */
-    fun publicWords(ended: List<Outcome>): String {
+    fun words(ended: List<Outcome>, retry: Boolean = false): NoticeText {
         val failed = ended.count { it.reason != null }
         val uploads = ended.all { it.upload }
-        fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
-        return when {
+        val title = when {
             failed > 0 -> count(failed, if (uploads) "upload" else "transfer", if (uploads) "uploads" else "transfers") + " didn’t finish"
             uploads -> count(ended.size, "file", "files") + " uploaded"
             ended.none { it.upload } -> count(ended.size, "item", "items") + " kept on this phone"
             else -> count(ended.size, "transfer", "transfers") + " finished"
         }
+        val text = when {
+            failed == 1 -> "Open HushOS to see it and try again."
+            failed > 1 -> "Open HushOS to see which and try again."
+            else -> null
+        }
+        return NoticeText(title, text, text, title, if (retry) listOf(RETRY_LABEL) else emptyList())
     }
 
-    /* “a”, “a” and “b”, or “a”, “b” and 3 more. */
-    private fun names(list: List<Outcome>): String {
-        val quoted = list.map { "“${it.name}”" }
-        return when (quoted.size) {
-            1 -> quoted[0]
-            2 -> "${quoted[0]} and ${quoted[1]}"
-            else -> "${quoted[0]}, ${quoted[1]} and ${quoted.size - 2} more"
-        }
-    }
+    private fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+
+    const val RETRY_LABEL = "Retry"
 
     /*
      * Whether the app's own screen (the one with the transfers sheet) is showing. Save to
@@ -133,8 +118,10 @@ object TransferNotices {
         val system = context.getSystemService(NotificationManager::class.java)
         if (system.getNotificationChannel(CHANNEL) == null)
             system.createNotificationChannel(NotificationChannel(CHANNEL, "Finished transfers", NotificationManager.IMPORTANCE_DEFAULT))
-        val (title, body) = words(ended)
         val failed = ended.any { it.reason != null }
+        // Retry where it can work: the failures still on the record whose reason a retry can fix.
+        val retryable = FailedTransfers.of(context).all().filter { it.id in ended.map(Outcome::id) && canRetry(it) }.map { it.id }
+        val words = words(ended, retry = retryable.isNotEmpty())
         val id = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
         // A failure opens the transfers sheet, where its row waits with Retry. Finished rows leave
         // the sheet moments after the queue empties, so a finished summary opens where the files
@@ -153,28 +140,26 @@ object TransferNotices {
         )
         val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(body?.let { NotificationCompat.BigTextStyle().bigText(it) })
+            .setContentTitle(words.title)
+            .setContentText(words.text)
+            .setStyle(words.bigText?.let { NotificationCompat.BigTextStyle().bigText(it) })
             .setContentIntent(open)
             .setAutoCancel(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
-                .setContentTitle(publicWords(ended))
+                .setContentTitle(words.publicTitle)
                 .setLocalOnly(true)
                 .build())
             // File names stay on this phone: never bridged to a watch or another device.
             .setLocalOnly(true)
-        // Retry where it can work: the failures still on the record whose reason a retry can fix.
-        val retryable = FailedTransfers.of(context).all().filter { it.id in ended.map(Outcome::id) && canRetry(it) }.map { it.id }
         if (retryable.isNotEmpty()) {
             val retry = PendingIntent.getBroadcast(
                 context, id,
                 Intent(context, RetryReceiver::class.java).setAction(RETRY).putExtra("ids", retryable.toTypedArray()).putExtra("notification", id),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            builder.addAction(0, "Retry", retry)
+            builder.addAction(0, RETRY_LABEL, retry)
         }
         runCatching { manager.notify(id, builder.build()) }
     }
