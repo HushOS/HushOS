@@ -1,4 +1,5 @@
 import { DriveApiError, type DriveApi, type LinkApi, type ReportApi } from '@hushos/drive/api';
+import { LINK_TOKEN_HEADER } from '@hushos/drive/protocol';
 import { anonymousApiClient, apiClient } from '@/lib/api-client';
 
 const api = () => apiClient().drive;
@@ -231,8 +232,12 @@ export const driveApi: DriveApi = {
                 .workspaces({ id: workspaceId })
                 .changes.get({ query: limit ? { since, limit } : { since } }),
         ),
-    shareChanges: (shareId, since) =>
-        unwrapDrive(api().shares({ id: shareId }).changes.get({ query: { since } })),
+    shareChanges: (shareId, cursor) =>
+        unwrapDrive(
+            api()
+                .shares({ id: shareId })
+                .changes.get({ query: cursor ? { cursor } : {} }),
+        ),
     startRotation: (workspaceId, nodeId) =>
         unwrapDrive(api().nodes({ id: nodeId }).rotation.post({ workspaceId })),
     rotationWork: (workspaceId, nodeId, after) =>
@@ -247,26 +252,27 @@ export const driveApi: DriveApi = {
     report: (input) => unwrapDrive(api().reports.post(input)),
 };
 
-/* A link's visitor routes take no session, and are sent none. */
-const linkRoutes = () => anonymousApiClient().drive;
+/* A link's visitor routes take no session, and are sent none; the token goes in a header, never the path. */
+const linkRoutes = () => anonymousApiClient().drive.links;
+const linkHeaders = (token: string) => ({ headers: { [LINK_TOKEN_HEADER]: token } });
 export const linkApi: LinkApi = {
-    open: (token) => unwrapDrive(linkRoutes().links({ id: token }).open.get()),
+    open: (token) => unwrapDrive(linkRoutes().open.get(linkHeaders(token))),
     children: (token, parentId, after) =>
         unwrapDrive(
             linkRoutes()
-                .links({ id: token })
                 .nodes({ nodeId: parentId })
-                .children.get({ query: after ? { after } : {} }),
+                .children.get({ ...linkHeaders(token), query: after ? { after } : {} }),
         ),
     downloadUrl: (token, versionId) =>
-        unwrapDrive(linkRoutes().links({ id: token }).versions({ versionId }).url.get()),
+        unwrapDrive(linkRoutes().versions({ versionId }).url.get(linkHeaders(token))),
     downloadUrls: (token, versionIds) =>
-        unwrapDrive(linkRoutes().links({ id: token }).versions.urls.post({ versionIds })),
+        unwrapDrive(linkRoutes().versions.urls.post({ versionIds }, linkHeaders(token))),
     thumbnailUrls: (token, versionIds) =>
         unwrapDrive(
-            linkRoutes()
-                .links({ id: token })
-                .thumbnails.get({ query: { versions: versionIds.join(',') } }),
+            linkRoutes().thumbnails.get({
+                ...linkHeaders(token),
+                query: { versions: versionIds.join(',') },
+            }),
         ),
 };
 

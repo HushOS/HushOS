@@ -577,17 +577,36 @@ export async function getIdentityHistory(sessionToken: string | null) {
 }
 
 /*
+ * Lookups walk the directory, so they are bounded per account and per client
+ * address: someone with many accounts behind one address gets no more than a
+ * busy household would, and one account cannot spread across addresses either.
+ */
+async function limitLookups(kind: 'lookup' | 'succession', userId: string, address: string) {
+    if (
+        !(await authRepository.consumeRateLimit(hash(`contacts:${kind}:${userId}`), 60, 60_000)) ||
+        !(await authRepository.consumeRateLimit(
+            hash(`contacts:${kind}:address:${address}`),
+            120,
+            60_000,
+        ))
+    )
+        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+}
+
+/*
  * How an account's identity got from key version `from` to the current one:
  * each succession with the keys on both sides and the old signing key's
  * signature. A contact whose pin is at `from` checks every link before taking
- * the new keys. Bounded per person like a lookup.
+ * the new keys. Bounded per person and per address like a lookup.
  */
-export async function contactSuccession(sessionToken: string | null, userId: string, from: number) {
+export async function contactSuccession(
+    sessionToken: string | null,
+    userId: string,
+    from: number,
+    address: string,
+) {
     const { user } = await requireSession(sessionToken, 'Sign in to look up a contact.');
-    if (
-        !(await authRepository.consumeRateLimit(hash(`contacts:succession:${user.id}`), 60, 60_000))
-    )
-        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+    await limitLookups('succession', user.id, address);
     if (!Number.isSafeInteger(from) || from < 1)
         throw new AuthError('Ask from a key version of 1 or more.', 400);
     const chain = await authRepository.successionChain(userId, from);
@@ -608,14 +627,13 @@ export async function contactSuccession(sessionToken: string | null, userId: str
 }
 
 /*
- * Another person's public identity, by email. Bounded per person so the
- * directory cannot be walked; an unknown address and an account without an
- * identity are the same answer.
+ * Another person's public identity, by email. Bounded per person and per
+ * address so the directory cannot be walked; an unknown address and an
+ * account without an identity are the same answer.
  */
-export async function lookupContact(sessionToken: string | null, email: string) {
+export async function lookupContact(sessionToken: string | null, email: string, address: string) {
     const { user } = await requireSession(sessionToken, 'Sign in to look up a contact.');
-    if (!(await authRepository.consumeRateLimit(hash(`contacts:lookup:${user.id}`), 60, 60_000)))
-        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+    await limitLookups('lookup', user.id, address);
     const found = await authRepository.lookupIdentity(normalizeEmail(email));
     if (!found) throw new AuthError('No HushOS account with that email has finished setup.', 404);
     return {
@@ -657,10 +675,11 @@ export async function getSettings(sessionToken: string | null) {
         authRepository.getSettings(user.id),
         authRepository.getSettingsKey(user.id),
     ]);
+    // A version 1 document is served as none: clients open version 2 only, and the next save replaces it.
     return {
         settings: stored
             ? {
-                  version: (stored.version === 2 ? 2 : 1) as 1 | 2,
+                  version: 2 as const,
                   settingsVersion: stored.settingsVersion,
                   nonce: stored.nonce.toString('base64url'),
                   ciphertext: stored.ciphertext.toString('base64url'),
@@ -688,13 +707,17 @@ export async function putSettings(
     sessionToken: string | null,
     input: {
         expectedVersion: number;
-        /* 2: sealed under the settings key; 1, the identity-derived key, until every client moves. */
-        version?: 1 | 2;
+        /* 2, sealed under the settings key, is the only version taken; an older client hears 409. */
+        version?: number;
         nonce: string;
         ciphertext: string;
     },
 ) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
+    // Settings sealed the old way (version 1, under a key derived from the identity) no longer
+    // open on any client: refused before anything else, so an old client is told to update.
+    if ((input.version ?? 1) !== 2)
+        throw new AuthError('Update HushOS to save your settings.', 409);
     // Every client pads settings to 1 KiB steps (see @hushos/crypto/contacts); an unpadded one
     // would tell the server how many people are pinned, so it is refused rather than stored.
     const body = Buffer.from(input.ciphertext, 'base64url').length - 16;
@@ -714,6 +737,8 @@ export async function putSettings(
         );
     if (result.status === 'no-key')
         throw new AuthError('Save your settings key before settings sealed under it.', 409);
+    if (result.status === 'unsupported')
+        throw new AuthError('Update HushOS to save your settings.', 409);
     return { settingsVersion: result.settingsVersion };
 }
 

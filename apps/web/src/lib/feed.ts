@@ -1,4 +1,4 @@
-import type { NodeChange } from '@hushos/drive/api';
+import type { NodeChange, ShareChange } from '@hushos/drive/api';
 import { DriveApiError } from '@hushos/drive/api';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
@@ -15,7 +15,7 @@ import { driveClient, driveKeys, sharedQueryOptions } from '@/lib/drive';
 export const FEED_INTERVAL_MS = 8_000;
 
 /* What a page of changes makes stale: the parents of changed nodes, the folders themselves, the trash. */
-function apply(queryClient: QueryClient, changes: NodeChange[]) {
+function apply(queryClient: QueryClient, changes: (NodeChange | ShareChange)[]) {
     const folders = new Set<string>();
     let trash = false;
     for (const change of changes) {
@@ -43,6 +43,8 @@ function apply(queryClient: QueryClient, changes: NodeChange[]) {
 }
 
 type Cursor = { since: number; failures: number };
+/* A share's feed position: opaque, sealed by the server. */
+type ShareCursor = { cursor: string; failures: number };
 
 /* Mounted once inside the Drive shell. */
 export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
@@ -50,7 +52,7 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
     // Only once Drive is open: mounting shares needs the account's identity in the worker.
     const shares = useQuery({ ...sharedQueryOptions, enabled: workspaceId !== null });
     const own = useRef<Cursor>({ since: initialSeq, failures: 0 });
-    const perShare = useRef(new Map<string, Cursor>());
+    const perShare = useRef(new Map<string, ShareCursor>());
     const mounted = shares.data;
 
     useEffect(() => {
@@ -88,15 +90,15 @@ export function useChangeFeed(workspaceId: string | null, initialSeq: number) {
                 const cursor =
                     perShare.current.get(mount.id) ??
                     perShare.current
-                        .set(mount.id, { since: mount.changeSeq, failures: 0 })
+                        .set(mount.id, { cursor: mount.cursor, failures: 0 })
                         .get(mount.id)!;
                 // Back off a failing share feed: one try per 2^failures ticks, capped.
                 if (cursor.failures && Math.random() > 1 / Math.min(2 ** cursor.failures, 16))
                     continue;
                 try {
-                    const page = await driveClient.shareChangesSince(mount.id, cursor.since);
+                    const page = await driveClient.shareChangesSince(mount.id, cursor.cursor);
                     apply(queryClient, page.changes);
-                    cursor.since = page.nextCursor;
+                    cursor.cursor = page.cursor;
                     cursor.failures = 0;
                 } catch (error) {
                     if (

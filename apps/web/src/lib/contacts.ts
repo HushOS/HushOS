@@ -370,7 +370,7 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
  * Looks up a pinned contact's served keys and follows a succession to them
  * when a signed chain holds. True when the pin moved on.
  */
-export async function followServedKeys(userId: string, signer: { id: string; email: string }) {
+export async function followServedKeys(userId: string, signer: { id: string }) {
     const { settings } = await loadSettings(userId);
     const held = settings.contacts[signer.id];
     if (!held) return false;

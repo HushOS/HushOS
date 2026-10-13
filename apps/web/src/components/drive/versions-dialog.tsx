@@ -55,10 +55,10 @@ const replacedWhen = (iso: string) =>
 /* A listed version's own check: who added it, as the server says, and whether that holds. */
 function versionIssues(version: {
     integrity: Integrity | null;
-    signer: Signer | null;
+    signer?: Signer | null;
 }): IntegrityIssue[] {
     if (!version.integrity || version.integrity === 'verified') return [];
-    return [{ record: 'version', integrity: version.integrity, signer: version.signer }];
+    return [{ record: 'version', integrity: version.integrity, signer: version.signer ?? null }];
 }
 
 export function VersionsDialog({

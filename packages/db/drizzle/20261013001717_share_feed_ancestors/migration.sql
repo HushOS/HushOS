@@ -1,0 +1,1 @@
+ALTER TABLE "drive_nodes" ADD COLUMN "purged_ancestor_ids" uuid[];

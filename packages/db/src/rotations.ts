@@ -2,11 +2,12 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     LINK_KDF_VERSION,
+    SHARE_ENVELOPE_BYTES,
     activeRotation,
     nextChangeSeq,
     selectNodes,
     signedBy,
-    signersById,
+    signerOf,
     walk,
     type NodeRow,
     type Signer,
@@ -14,7 +15,7 @@ import {
     type Tx,
     type VersionRow,
 } from './drive';
-import { metadataStatement, versionStatement } from './signatures';
+import { metadataSigned, versionSigned } from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -174,10 +175,6 @@ export async function listRotationWork(input: {
                   .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
                   .where(and(inArray(fileVersions.nodeId, ids), eq(fileVersions.status, 'ready')))
             : [];
-        const signers = await signersById(
-            tx,
-            versions.map((v) => v.signerId),
-        );
         const shares = ids.length
             ? await tx
                   .select({
@@ -223,7 +220,7 @@ export async function listRotationWork(input: {
                             contentKeyEnvelope: v.contentKeyEnvelope!,
                             contentSuite: v.contentSuite,
                             plaintextSize: v.plaintextSize,
-                            signer: v.signerId ? (signers.get(v.signerId) ?? null) : null,
+                            signer: signerOf(v.signerId),
                             signature: v.signature,
                         })),
                     shares: shares
@@ -374,31 +371,33 @@ export async function rotateNodes(input: {
                       )
                 : [];
             const statements: SignedStatement[] = [
-                {
-                    message: metadataStatement({
+                metadataSigned(
+                    {
                         workspaceId: input.workspaceId,
                         nodeId: item.id,
                         kind: node.kind,
                         metadataVersion: node.metadataVersion,
                         metadataEnvelope: rotated.metadataEnvelope,
-                    }),
-                    signature: rotated.metadataSignature,
-                },
+                    },
+                    rotated.metadataSignature,
+                ),
             ];
             for (const version of rotated.versions) {
                 const row = stored.find((v) => v.id === version.id);
                 if (!row?.objectId) continue;
-                statements.push({
-                    message: versionStatement({
-                        workspaceId: input.workspaceId,
-                        nodeId: item.id,
-                        versionId: version.id,
-                        objectId: row.objectId,
-                        contentSuite: row.contentSuite,
-                        contentKeyEnvelope: version.contentKeyEnvelope,
-                    }),
-                    signature: version.signature,
-                });
+                statements.push(
+                    versionSigned(
+                        {
+                            workspaceId: input.workspaceId,
+                            nodeId: item.id,
+                            versionId: version.id,
+                            objectId: row.objectId,
+                            contentSuite: row.contentSuite,
+                            contentKeyEnvelope: version.contentKeyEnvelope,
+                        },
+                        version.signature,
+                    ),
+                );
             }
             if (!(await signedBy(tx, input.userId, statements))) return 'bad-signature';
             await tx
@@ -427,7 +426,10 @@ export async function rotateNodes(input: {
                         signature: version.signature,
                     })
                     .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
-            for (const share of rotated.shares)
+            // Only suite 3 is written; anything else is left unsealed and revoked below.
+            for (const share of rotated.shares.filter(
+                (entry) => entry.shareEnvelope.length === SHARE_ENVELOPE_BYTES,
+            ))
                 await tx
                     .update(driveShares)
                     .set({

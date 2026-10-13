@@ -9,7 +9,9 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { workspaceKeys } from './schema';
+import { eq } from 'drizzle-orm';
+import { driveNodes, workspaceKeys } from './schema';
+import { sealShareCursor } from './share-cursor';
 
 /*
  * The change feed is a range over the workspace's sequence, tombstones
@@ -47,6 +49,30 @@ async function folder(parentId: string, parentKeyEpoch: number) {
     });
     if (created.status !== 'created') throw new Error(created.status);
     return created.nodes[0]!;
+}
+
+/* A suite 3 share of `node` to the guest, the only kind served; its id. */
+async function shareWithGuest(node: { id: string; keyEpoch: number }) {
+    const shared = await drive.createShare({
+        workspaceId: owner.workspaceId,
+        nodeId: node.id,
+        granterUserId: owner.userId,
+        granteeUserId: guest.userId,
+        role: 'viewer',
+        keyEpoch: node.keyEpoch,
+        shareEnvelope: randomBytes(1256),
+    });
+    if (shared.status !== 'ok') throw new Error(shared.status);
+    return shared.share.id;
+}
+/* Where a feed starts for a share listed now, as shared-with-me hands it out. */
+async function cursorNow(shareId: string) {
+    return sealShareCursor(shareId, (await drive.getPersonalWorkspace(owner.userId))!.changeSeq);
+}
+async function feedOf(shareId: string, cursor?: string) {
+    const page = await drive.listShareChanges({ shareId, granteeUserId: guest.userId, cursor });
+    if (page.status !== 'ok') throw new Error(page.status);
+    return page;
 }
 
 beforeEach(async () => {
@@ -137,30 +163,19 @@ describe('change feeds', () => {
     test('a share’s feed is the subtree only, with moves across the boundary as events, until the share ends', async () => {
         const project = await folder(rootId, rootEpoch);
         const outside = await folder(rootId, rootEpoch);
-        const shared = await drive.createShare({
-            workspaceId: owner.workspaceId,
-            nodeId: project.id,
-            granterUserId: owner.userId,
-            granteeUserId: guest.userId,
-            role: 'viewer',
-            keyEpoch: project.keyEpoch,
-            shareEnvelope: env(),
-        });
-        if (shared.status !== 'ok') throw new Error(shared.status);
-        const since = (await drive.getPersonalWorkspace(owner.userId))!.changeSeq;
+        const shareId = await shareWithGuest(project);
+        const start = await cursorNow(shareId);
         const inner = await folder(project.id, project.keyEpoch);
-        const elsewhere = await folder(outside.id, outside.keyEpoch);
-        const feed = await drive.listShareChanges({
-            shareId: shared.share.id,
-            granteeUserId: guest.userId,
-            since,
-        });
-        if (feed.status !== 'ok') throw new Error(feed.status);
+        await folder(outside.id, outside.keyEpoch);
+        const feed = await feedOf(shareId, start);
         expect(feed.changes.map((c) => (c.kind === 'node' ? c.node.id : c.kind))).toEqual([
             inner.id,
         ]);
         // The cursor advanced past the outside change too, so it is never re-examined.
-        expect(feed.nextCursor).toBe(elsewhere.changeSeq);
+        expect((await feedOf(shareId, feed.cursor)).changes).toEqual([]);
+        const elsewhere = await folder(outside.id, outside.keyEpoch);
+        const skipped = await feedOf(shareId, feed.cursor);
+        expect(skipped.changes).toEqual([]);
 
         // Move inner out: the grantee sees it leave. Move elsewhere in: it enters.
         await drive.moveNode({
@@ -177,12 +192,7 @@ describe('change feeds', () => {
             parentKeyEpoch: project.keyEpoch,
             keyEnvelope: env(),
         });
-        const moved = await drive.listShareChanges({
-            shareId: shared.share.id,
-            granteeUserId: guest.userId,
-            since: feed.nextCursor,
-        });
-        if (moved.status !== 'ok') throw new Error(moved.status);
+        const moved = await feedOf(shareId, skipped.cursor);
         expect(moved.changes.map((c) => [c.kind, 'nodeId' in c ? c.nodeId : c.node.id])).toEqual([
             ['left', inner.id],
             ['node', elsewhere.id],
@@ -198,12 +208,7 @@ describe('change feeds', () => {
             parentKeyEpoch: project.keyEpoch,
             keyEnvelope: env(),
         });
-        const within = await drive.listShareChanges({
-            shareId: shared.share.id,
-            granteeUserId: guest.userId,
-            since: moved.nextCursor,
-        });
-        if (within.status !== 'ok') throw new Error(within.status);
+        const within = await feedOf(shareId, moved.cursor);
         expect(within.changes.map((c) => [c.kind, 'nodeId' in c ? c.nodeId : c.node.id])).toEqual([
             ['node', deeper.id],
         ]);
@@ -213,23 +218,87 @@ describe('change feeds', () => {
 
         // Someone else's share id, or a revoked share, gets nothing.
         expect(
-            (
-                await drive.listShareChanges({
-                    shareId: shared.share.id,
-                    granteeUserId: owner.userId,
-                    since: 0,
-                })
-            ).status,
+            (await drive.listShareChanges({ shareId, granteeUserId: owner.userId })).status,
         ).toBe('not-found');
-        await drive.revokeShare(owner.workspaceId, shared.share.id);
+        await drive.revokeShare(owner.workspaceId, shareId);
+        expect(
+            (await drive.listShareChanges({ shareId, granteeUserId: guest.userId })).status,
+        ).toBe('revoked');
+    });
+
+    test('deletions show only inside the share, however they were purged; older tombstones never', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const outside = await folder(rootId, rootEpoch);
+        const sub = await folder(project.id, project.keyEpoch);
+        const leaf = await folder(sub.id, sub.keyEpoch);
+        const gone = await folder(outside.id, outside.keyEpoch);
+        const shareId = await shareWithGuest(project);
+        const start = await cursorNow(shareId);
+        // Inside: a folder deleted forever, and its child purged after it by the fan-out.
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: sub.id });
+        await drive.purgeNode({ workspaceId: owner.workspaceId, nodeId: sub.id });
+        expect(await drive.purgeDescendants()).toBe(1);
+        // Outside: a deletion elsewhere in the owner's drive.
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: gone.id });
+        await drive.purgeNode({ workspaceId: owner.workspaceId, nodeId: gone.id });
+        const feed = await feedOf(shareId, start);
+        const tombstones = feed.changes.filter((c) => c.kind === 'tombstone');
+        expect(tombstones).toEqual([
+            { kind: 'tombstone', nodeId: sub.id, parentId: project.id },
+            { kind: 'tombstone', nodeId: leaf.id, parentId: sub.id },
+        ]);
+        // Nothing about the outside folder, in any form: not its trashing, not its tombstone.
+        expect(JSON.stringify(feed.changes)).not.toContain(gone.id);
+        // The owner's own feed still has every deletion.
+        const own = await drive.listChanges({ workspaceId: owner.workspaceId, since: 0 });
+        expect(own.changes.filter((c) => c.kind === 'tombstone').map((c) => c.nodeId)).toEqual(
+            expect.arrayContaining([sub.id, leaf.id, gone.id]),
+        );
+
+        // A tombstone from before ancestors were recorded is never shown to a grantee.
+        const old = await folder(project.id, project.keyEpoch);
+        const before = await feedOf(shareId, feed.cursor);
+        await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: old.id });
+        await drive.purgeNode({ workspaceId: owner.workspaceId, nodeId: old.id });
+        await db
+            .update(driveNodes)
+            .set({ purgedAncestorIds: null })
+            .where(eq(driveNodes.id, old.id));
+        const after = await feedOf(shareId, before.cursor);
+        expect(after.changes.filter((c) => c.kind === 'tombstone')).toEqual([]);
+    });
+
+    test('the cursor is sealed: no sequence numbers, a fresh value each poll, refused when tampered or moved', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const other = await folder(rootId, rootEpoch);
+        const shareId = await shareWithGuest(project);
+        const otherShareId = await shareWithGuest(other);
+        await folder(project.id, project.keyEpoch);
+        const first = await feedOf(shareId);
+        expect(first.changes.length).toBeGreaterThan(0);
+        // Changes are in order but carry no sequence of the owner's.
+        for (const change of first.changes) expect(change).not.toHaveProperty('changeSeq');
+        // The same position seals to a different string every time.
+        const again = await feedOf(shareId, first.cursor);
+        const third = await feedOf(shareId, again.cursor);
+        expect(again.changes).toEqual([]);
+        expect(third.cursor).not.toBe(again.cursor);
+        // One flipped character, a truncated cursor, or another share's cursor is refused.
+        const flipped = `${first.cursor.slice(0, 10)}${first.cursor[10] === 'A' ? 'B' : 'A'}${first.cursor.slice(11)}`;
+        for (const cursor of [flipped, first.cursor.slice(1), 'not a cursor'])
+            expect(
+                (await drive.listShareChanges({ shareId, granteeUserId: guest.userId, cursor }))
+                    .status,
+            ).toBe('bad-cursor');
+        const foreign = await feedOf(otherShareId);
         expect(
             (
                 await drive.listShareChanges({
-                    shareId: shared.share.id,
+                    shareId,
                     granteeUserId: guest.userId,
-                    since: 0,
+                    cursor: foreign.cursor,
                 })
             ).status,
-        ).toBe('revoked');
+        ).toBe('bad-cursor');
     });
 });

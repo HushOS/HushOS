@@ -11,7 +11,13 @@ import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import * as reports from './reports';
-import { driveObjectDeletions, driveReports, users, workspaceKeys } from './schema';
+import {
+    driveObjectDeletions,
+    driveReportItems,
+    driveReports,
+    users,
+    workspaceKeys,
+} from './schema';
 
 /*
  * A report freezes what was reported, holds its bytes for as long as it is
@@ -186,11 +192,7 @@ describe('filing a report', () => {
         expect(deep?.children[0]?.versionSignature?.equals(live!.currentVersion!.signature!)).toBe(
             true,
         );
-        expect(deep?.children[0]?.metadataSigner).toEqual({
-            id: owner.userId,
-            name: 'Test',
-            email: owner.email,
-        });
+        expect(deep?.children[0]?.metadataSigner).toEqual({ id: owner.userId });
         expect(deep?.children[0]?.versionSigner?.id).toBe(owner.userId);
         expect(await reports.listReportChildren(made.report.id, rootId)).toBeNull();
         expect(await reports.getReportKey(made.report.id, operator.userId)).toHaveLength(112);
@@ -445,7 +447,7 @@ describe('removal', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: project.keyEpoch,
-            shareEnvelope: keyEnvelope(),
+            shareEnvelope: randomBytes(1256),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const linked = await drive.createLink({
@@ -596,10 +598,17 @@ describe('evidence requests', () => {
         await reports.setEvidenceStatus(made.report.id, 'copied');
         const created = await reports.createEvidenceRequest(made.report.id, operator.userId);
         if (created.status !== 'ok') throw new Error(created.status);
-        // As if written by a build from before releases deleted requests.
+        // As if written by a build from before releases deleted requests, clearing what
+        // the database now holds every release to.
         await db
             .update(driveReports)
-            .set({ status: 'dismissed', releasedAt: new Date() })
+            .set({
+                status: 'dismissed',
+                releasedAt: new Date(),
+                reason: null,
+                reporterAddressHash: null,
+                uploaderEmail: null,
+            })
             .where(eq(driveReports.id, made.report.id));
         expect(await reports.listPendingEvidenceRequests()).toEqual([]);
         expect(
@@ -698,6 +707,90 @@ describe('release', () => {
         expect(reports.isReleased(kept)).toBe(false);
         expect(kept.reporterAddressHash).toHaveLength(32);
         expect(kept.uploaderEmail).toBe(owner.email);
+    });
+
+    test('a release clears who reported it, through which share, their reason and the snapshot’s envelopes; the purge still finds the copies', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const doc = await file(project.id, project.keyEpoch);
+        await identityFor(guest.userId);
+        const shared = await drive.createShare({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            granterUserId: owner.userId,
+            granteeUserId: guest.userId,
+            role: 'viewer',
+            keyEpoch: project.keyEpoch,
+            shareEnvelope: randomBytes(1256),
+        });
+        if (shared.status !== 'ok') throw new Error(shared.status);
+        const byGuest = {
+            reporterUserId: guest.userId,
+            reporterAddressHash: null,
+            shareId: shared.share.id,
+            reason: 'Someone I know, without asking.',
+        };
+        const released = await report(project, byGuest);
+        const held = await report(doc, byGuest);
+        if (released.status !== 'ok' || held.status !== 'ok') throw new Error('not filed');
+        for (const made of [released, held]) {
+            for (const object of await reports.listReportObjectsToCopy(made.report.id))
+                await reports.markReportItemCopied(made.report.id, object.nodeId);
+            await reports.setEvidenceStatus(made.report.id, 'copied');
+        }
+        await reports.resolveReport(released.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: false,
+        });
+        await reports.resolveReport(held.report.id, operator.userId, {
+            status: 'dismissed',
+            hold: true,
+        });
+
+        const gone = (await reports.getReport(released.report.id))!;
+        expect(gone.report).toMatchObject({ reporterUserId: null, shareId: null, reason: null });
+        expect(gone.events.map((e) => [e.action, e.actorUserId])).toEqual([
+            ['reported', null],
+            ['dismissed', operator.userId],
+        ]);
+        const items = await db
+            .select()
+            .from(driveReportItems)
+            .where(eq(driveReportItems.reportId, released.report.id));
+        expect(items.map((item) => item.nodeId).sort()).toEqual([project.id, doc.id].sort());
+        for (const item of items)
+            expect(item).toMatchObject({
+                keyEnvelope: null,
+                metadataEnvelope: null,
+                contentKeyEnvelope: null,
+                contentNonce: null,
+                metadataSignerId: null,
+                metadataSignature: null,
+                versionSignerId: null,
+                versionSignature: null,
+            });
+        // What the evidence purge needs is still there: the copied object, by id.
+        expect((await reports.listReportsForEvidencePurge()).map((r) => r.id)).toEqual([
+            released.report.id,
+        ]);
+        expect(await reports.listReportObjectsCopied(released.report.id)).toEqual([
+            {
+                nodeId: doc.id,
+                objectId: doc.currentVersion!.objectId,
+                versionId: doc.currentVersionId,
+            },
+        ]);
+        // Held, nothing goes: the operator still needs to open it and know who reported it.
+        const kept = (await reports.getReport(held.report.id))!;
+        expect(kept.report).toMatchObject({
+            reporterUserId: guest.userId,
+            shareId: shared.share.id,
+            reason: byGuest.reason,
+        });
+        expect(kept.events[0]).toMatchObject({ action: 'reported', actorUserId: guest.userId });
+        const item = await reports.getReportItem(held.report.id, doc.id);
+        expect(item?.keyEnvelope).toHaveLength(72);
+        expect(item?.contentKeyEnvelope).toHaveLength(72);
+        expect(item?.versionSignature).toHaveLength(64);
     });
 
     test('a released report refuses every way back: resolve, hold, reopen', async () => {

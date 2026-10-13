@@ -110,7 +110,7 @@ export function UnverifiedMark({
                         onClick={(event) => event.stopPropagation()}
                     >
                         <DialogHeader>
-                            <DialogTitle>Check it’s {checking?.name ?? 'them'}</DialogTitle>
+                            <DialogTitle>Check who wrote this</DialogTitle>
                             <DialogDescription>
                                 Once their words match, what they add and change shows as verified.
                             </DialogDescription>
@@ -118,7 +118,6 @@ export function UnverifiedMark({
                         {checking && (
                             <CheckContact
                                 userId={userId}
-                                email={checking.email}
                                 onCancel={() => setChecking(null)}
                                 onAdded={(pin) => {
                                     setChecking(null);

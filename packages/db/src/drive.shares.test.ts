@@ -10,7 +10,7 @@ import {
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
-import { accountIdentities, workspaceKeys } from './schema';
+import { accountIdentities, driveShares, workspaceKeys } from './schema';
 
 /*
  * Authorization is the walk. A member owns everything; a grantee holds the
@@ -103,7 +103,7 @@ async function share(
         granteeUserId,
         role,
         keyEpoch: node.keyEpoch,
-        shareEnvelope: keyEnvelope(),
+        shareEnvelope: randomBytes(1256),
         ...overrides,
     });
 }
@@ -251,7 +251,10 @@ describe('shares', () => {
         expect(mine[0]!.workspaceId).toBe(owner.workspaceId);
         expect(mine[0]!.granter.id).toBe(owner.userId);
         expect(mine[0]!.granter.encryptionPublicKey).toHaveLength(32);
-        expect(mine[0]!.shareEnvelope).toHaveLength(72);
+        expect(mine[0]!.shareEnvelope).toHaveLength(1256);
+        // Where the share's feed starts, sealed: no sequence number of the owner's.
+        expect(mine[0]!.feedCursor).toMatch(/^[A-Za-z0-9_-]{48}$/);
+        expect(mine[0]).not.toHaveProperty('changeSeq');
 
         // A trashed node cannot be shared, and an existing share on it is not listed.
         await drive.trashNode({ workspaceId: owner.workspaceId, nodeId: project.id });
@@ -338,35 +341,25 @@ describe('shares and the trash', () => {
     });
 });
 
-describe('hybrid envelopes and re-sealing', () => {
-    test('a share takes a suite 1 or suite 2 envelope and nothing in between', async () => {
+describe('suite 3 only', () => {
+    test('a share takes a 1256-byte envelope and nothing else, not even an older suite', async () => {
         const project = await folder(rootId, rootEpoch);
-        expect(
-            (await share(project, guest.userId, 'viewer', { shareEnvelope: randomBytes(1160) }))
-                .status,
-        ).toBe('ok');
-        await expect(
-            share(project, stranger.userId, 'viewer', { shareEnvelope: randomBytes(100) }),
-        ).rejects.toThrow();
-    });
-
-    test('a suite 3 envelope is stored and listed as suite 3 beside the older suites', async () => {
-        const project = await folder(rootId, rootEpoch);
+        for (const length of [72, 1160, 1255, 1257])
+            expect(
+                (
+                    await share(project, guest.userId, 'viewer', {
+                        shareEnvelope: randomBytes(length),
+                    })
+                ).status,
+            ).toBe('unsupported');
+        expect(await drive.listNodeShares(owner.workspaceId, project.id)).toEqual([]);
         const signedShare = randomBytes(1256);
         expect(
             (await share(project, guest.userId, 'editor', { shareEnvelope: signedShare })).status,
         ).toBe('ok');
         expect(
-            (await share(project, stranger.userId, 'viewer', { shareEnvelope: randomBytes(72) }))
-                .status,
-        ).toBe('ok');
-        const suites = Object.fromEntries(
-            (await drive.listNodeShares(owner.workspaceId, project.id)).map((row) => [
-                row.grantee.id,
-                row.suite,
-            ]),
-        );
-        expect(suites).toEqual({ [guest.userId]: 3, [stranger.userId]: 1 });
+            (await drive.listNodeShares(owner.workspaceId, project.id)).map((row) => row.suite),
+        ).toEqual([3]);
         // The grantee gets the envelope and the granter's current identity to check its signature.
         const received = await drive.listSharesForGrantee(guest.userId);
         expect(received[0]?.shareEnvelope.equals(signedShare)).toBe(true);
@@ -378,13 +371,64 @@ describe('hybrid envelopes and re-sealing', () => {
             true,
         );
         expect(received[0]?.granter.keyVersion).toBe(ownerIdentity!.keyVersion);
-        // One byte off is no suite at all.
-        await expect(
-            share(project, guest.userId, 'viewer', { shareEnvelope: randomBytes(1255) }),
-        ).rejects.toThrow();
     });
 
-    test('the granter re-seals a live share under the current epoch only', async () => {
+    test('a suite 1 or 2 row left from before grants nothing and is served to nobody but its granter', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const child = await folder(project.id, project.keyEpoch);
+        const legacy = async (granteeUserId: string, length: number, role: 'viewer' | 'editor') => {
+            const [row] = await db
+                .insert(driveShares)
+                .values({
+                    workspaceId: owner.workspaceId,
+                    nodeId: project.id,
+                    granterUserId: owner.userId,
+                    granteeUserId,
+                    role,
+                    keyEpoch: project.keyEpoch,
+                    shareEnvelope: randomBytes(length),
+                })
+                .returning({ id: driveShares.id });
+            return row!.id;
+        };
+        const old = await legacy(guest.userId, 72, 'editor');
+        await legacy(stranger.userId, 1160, 'viewer');
+        for (const person of [guest, stranger]) {
+            expect(await drive.listSharesForGrantee(person.userId)).toEqual([]);
+            expect(await drive.authorize(person.userId, owner.workspaceId, project.id)).toBeNull();
+            expect(await drive.authorize(person.userId, owner.workspaceId, child.id)).toBeNull();
+        }
+        expect(await drive.hasEditorShare(guest.userId, owner.workspaceId)).toBe(false);
+        expect(
+            (await drive.listShareChanges({ shareId: old, granteeUserId: guest.userId })).status,
+        ).toBe('not-found');
+        // The granter still sees both, by suite, to re-seal or revoke them.
+        expect(
+            (await drive.listNodeShares(owner.workspaceId, project.id))
+                .map((row) => row.suite)
+                .sort((a, b) => a - b),
+        ).toEqual([1, 2]);
+        // Re-sealed in suite 3, the share works again.
+        expect(
+            (
+                await drive.resealShare({
+                    workspaceId: owner.workspaceId,
+                    shareId: old,
+                    granterUserId: owner.userId,
+                    keyEpoch: project.keyEpoch,
+                    shareEnvelope: randomBytes(1256),
+                })
+            ).status,
+        ).toBe('ok');
+        expect((await drive.listSharesForGrantee(guest.userId)).map((row) => row.id)).toEqual([
+            old,
+        ]);
+        expect((await drive.authorize(guest.userId, owner.workspaceId, child.id))?.role).toBe(
+            'editor',
+        );
+    });
+
+    test('the granter re-seals a live share under the current epoch only, in suite 3 only', async () => {
         const project = await folder(rootId, rootEpoch);
         const made = await share(project, guest.userId);
         if (made.status !== 'ok') throw new Error(made.status);
@@ -394,15 +438,18 @@ describe('hybrid envelopes and re-sealing', () => {
                 shareId: made.share.id,
                 granterUserId: owner.userId,
                 keyEpoch: project.keyEpoch,
-                shareEnvelope: randomBytes(1160),
+                shareEnvelope: randomBytes(1256),
                 ...overrides,
             });
         expect((await reseal({ granterUserId: guest.userId })).status).toBe('not-found');
         expect((await reseal({ keyEpoch: project.keyEpoch + 1 })).status).toBe('stale');
-        const hybrid = randomBytes(1160);
-        expect((await reseal({ shareEnvelope: hybrid })).status).toBe('ok');
+        const before = (await drive.listSharesForGrantee(guest.userId))[0]!.shareEnvelope;
+        expect((await reseal({ shareEnvelope: randomBytes(1160) })).status).toBe('unsupported');
+        expect((await drive.listSharesForGrantee(guest.userId))[0]?.shareEnvelope).toEqual(before);
+        const fresh = randomBytes(1256);
+        expect((await reseal({ shareEnvelope: fresh })).status).toBe('ok');
         const listed = await drive.listSharesForGrantee(guest.userId);
-        expect(listed[0]?.shareEnvelope.equals(hybrid)).toBe(true);
+        expect(listed[0]?.shareEnvelope.equals(fresh)).toBe(true);
         // The owner's listing carries the grantee's served identity for the pin check.
         const mine = await drive.listSharesByGranter(owner.userId);
         expect(mine[0]?.granteeIdentity.encryptionPublicKey).toHaveLength(32);
