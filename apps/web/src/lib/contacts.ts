@@ -19,6 +19,14 @@ import {
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
 import { onStaleIdentity } from '@/lib/drive-api';
+import {
+    IDENTITY_ROLLED_BACK,
+    identityRolledBack,
+    identitySeen,
+    rememberIdentitySeen,
+    rememberSettingsSeen,
+    settingsSeen,
+} from '@/lib/rollback-marks';
 
 /*
  * Contacts are pins: a person's identity keys as they were when their words
@@ -100,6 +108,11 @@ export function openIdentity(userId: string, refresh = false) {
                         refresh: true,
                     });
                 }
+                // An older identity served as current is refused, as older settings are: it
+                // would bring back keys this account replaced, and records they signed.
+                if (identityRolledBack(result.keyVersion, identitySeen(userId)))
+                    throw new Error(IDENTITY_ROLLED_BACK);
+                rememberIdentitySeen(userId, result.keyVersion);
                 return {
                     keyVersion: result.keyVersion,
                     encryptionPublicKey: result.encryptionPublicKey,
@@ -152,33 +165,8 @@ export const contactKeys = {
     own: (userId: string) => ['contacts', 'own', userId] as const,
 };
 
-/*
- * The newest settings version this device has seen, per account and identity.
- * The server keeps the settings and could hand back an older copy, or none,
- * to bring back a pin the person replaced or drop one they made; a device that
- * has seen version n refuses anything older. A new identity starts its own count.
- */
 export { pinVerified };
 
-const SEEN_PREFIX = 'hushos.settings-seen';
-function seenKey(userId: string, identityKey: string) {
-    return `${SEEN_PREFIX}:${userId}:${identityKey}`;
-}
-export function settingsSeen(userId: string, identityKey: string) {
-    try {
-        return Number(window.localStorage.getItem(seenKey(userId, identityKey)) ?? 0) || 0;
-    } catch {
-        return 0;
-    }
-}
-export function rememberSettingsSeen(userId: string, identityKey: string, version: number) {
-    try {
-        if (version > settingsSeen(userId, identityKey))
-            window.localStorage.setItem(seenKey(userId, identityKey), String(version));
-    } catch {
-        /* No storage: this device simply cannot tell an old copy from a new one. */
-    }
-}
 const ROLLED_BACK =
     'The server sent older settings than this device has seen, so nothing was changed. Try again later, and tell your operator if it keeps happening.';
 
@@ -220,18 +208,22 @@ function requireUnlocked(userId: string) {
 
 async function readSettings(userId: string, create: boolean): Promise<LoadedSettings> {
     requireUnlocked(userId);
-    const own = await openIdentity(userId);
+    // The identity first, with its history: what this account signed is checked against it,
+    // and a failure here must fail the trust set rather than leave it half loaded.
+    await openIdentity(userId);
     requireUnlocked(userId);
     const { settings: envelope, settingsKey } = await authClient.settings();
     await settingsKeyReady(userId, settingsKey, create);
-    const seen = settingsSeen(userId, own.encryptionPublicKey);
-    if (settingsRolledBack(envelope?.settingsVersion ?? null, seen)) throw new Error(ROLLED_BACK);
+    if (settingsRolledBack(envelope?.settingsVersion ?? null, settingsSeen(userId)))
+        throw new Error(ROLLED_BACK);
+    // None stored, or a version 1 document the server serves as none: empty, and the next
+    // save names version 0, which replaces a version 1 row.
     if (!envelope) return { settings: EMPTY, version: 0 };
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
-    rememberSettingsSeen(userId, own.encryptionPublicKey, envelope.settingsVersion);
+    rememberSettingsSeen(userId, envelope.settingsVersion);
     // Version 1 (sealed under a key off the identity, which a stolen identity key opened)
-    // no longer opens: it reads as no settings, and the next save starts version 2 afresh.
-    if (!settings) return { settings: EMPTY, version: envelope.settingsVersion };
+    // no longer opens: it reads as no settings, saved over from version 0 as above.
+    if (!settings) return { settings: EMPTY, version: 0 };
     return { settings: settings as LoadedSettings['settings'], version: envelope.settingsVersion };
 }
 
@@ -286,8 +278,7 @@ export async function saveSettings(
                 nonce: envelope.nonce,
                 ciphertext: envelope.ciphertext,
             });
-            const own = await openIdentity(userId);
-            rememberSettingsSeen(userId, own.encryptionPublicKey, saved.settingsVersion);
+            rememberSettingsSeen(userId, saved.settingsVersion);
             queryClient?.setQueryData(contactKeys.settings(userId), {
                 settings: next,
                 version: saved.settingsVersion,
@@ -310,6 +301,12 @@ type Served = ServedKeys & { kem?: { publicKey: string; signature: string } | nu
  * the pinned keys leads to. Anything else (a changed key, a chain that does
  * not hold, none at all) is `changed`, and the pin is left as it was. A
  * followed pin is saved at once, so every device takes the same step.
+ *
+ * Only ever on the person's word (adding or checking someone, "Check again"
+ * on a mark), never on its own: a device that followed served keys whenever
+ * it met them would tell the server which contacts it pins. The chain is
+ * asked for whole, from the first key version, so the request does not say
+ * which version the pin is at either.
  */
 const following = new Map<
     string,
@@ -324,7 +321,7 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
         pending = (async () => {
             let links;
             try {
-                ({ links } = await authClient.contactSuccession(pin.userId, pin.keyVersion ?? 1));
+                ({ links } = await authClient.contactSuccession(pin.userId, 1));
             } catch {
                 return { pin, outcome: 'changed' as const };
             }
@@ -367,16 +364,35 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
 }
 
 /*
- * Looks up a pinned contact's served keys and follows a succession to them
- * when a signed chain holds. True when the pin moved on.
+ * "Check again": looks up a pinned contact's served keys and follows a
+ * succession to them when a signed chain holds. Says what came of it: the
+ * same keys, followed to new ones, keys that changed without a chain (a
+ * words check is the only way on), or nobody pinned by that id.
  */
-export async function followServedKeys(userId: string, signer: { id: string }) {
+export async function followServedKeys(
+    userId: string,
+    signer: { id: string },
+): Promise<'same' | 'followed' | 'changed' | 'not-pinned'> {
     const { settings } = await loadSettings(userId);
     const held = settings.contacts[signer.id];
-    if (!held) return false;
+    if (!held) return 'not-pinned';
     const { contact } = await authClient.lookupContact(held.email);
-    if (contact.userId !== held.userId) return false;
-    return (await bringUpToDate(userId, held, contact)).outcome === 'followed';
+    if (contact.userId !== held.userId) return 'changed';
+    return (await bringUpToDate(userId, held, contact)).outcome;
+}
+
+/*
+ * What sharing and opening do with keys the server serves that are not the
+ * pinned ones: nothing on their own. Newer keys may be a succession, but only
+ * the person's "Check again" follows one; until then, nothing is sealed to
+ * them or opened with them.
+ */
+async function servedMatchesPin(pin: Pin, served: Served) {
+    const comparison = await comparePin(pin, served);
+    if (comparison === 'same') return null;
+    return comparison === 'succession'
+        ? `${pin.name}’s sharing keys changed since you checked them. Check them again in People you share with`
+        : `${pin.name}’s keys have changed since you checked them. Check it’s them in People you share with`;
 }
 
 export type Lookup = {
@@ -504,11 +520,9 @@ export async function trustGrantee(
         throw new Error(
             `Check ${held.name}’s words again in People you share with: this pin was made before the words covered all their keys. Nothing was shared.`,
         );
-    const { pin: pinned, outcome } = await bringUpToDate(userId, held, served);
-    if (outcome === 'changed')
-        throw new Error(
-            `${pinned.name}’s keys have changed since you checked them. Check it’s them in People you share with before sharing.`,
-        );
+    const pinned = held;
+    const moved = await servedMatchesPin(held, served);
+    if (moved) throw new Error(`${moved} before sharing. Nothing was shared.`);
     // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target, and
     // withholding the KEM key is all it would take a server to get one.
     if (!served.kem)
@@ -590,13 +604,14 @@ export async function trustGranter(granter: {
         throw new UnverifiedGranterError(
             `Add ${granter.name} in People you share with and check their words to open what they shared.`,
         );
-    // The share listing serves no KEM key: only a chain can name one, and opening needs none.
-    const { pin, outcome } = await bringUpToDate(userId, held, { ...granter, kem: undefined });
-    if (outcome === 'changed')
-        throw new Error(
-            `${granter.name}’s keys have changed since you checked them. Check it’s them in People you share with before opening what they shared.`,
-        );
-    return granterKeysOf(pin);
+    // The share listing serves no KEM key, and opening needs none.
+    const moved = await servedMatchesPin(held, { ...granter, kem: undefined });
+    if (moved) throw new Error(`${moved} to open what they shared.`);
+    return {
+        ...granterKeysOf(held),
+        // Keys the pin followed a succession from open nothing: a share sealed under one waits.
+        ...(held.previousSigningKeys?.length ? { replaced: { name: held.name } } : {}),
+    };
 }
 
 /*

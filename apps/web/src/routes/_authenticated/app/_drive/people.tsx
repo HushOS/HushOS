@@ -32,7 +32,6 @@ import {
     Dialog,
     DialogContent,
     DialogDescription,
-    DialogFooter,
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
@@ -315,6 +314,10 @@ function People() {
                 </DialogContent>
             </Dialog>
 
+            {/*
+             * Checking someone looks up the keys the server serves for them now, and only here
+             * (or on a mark's Check again) does a pin follow a signed succession: never on its own.
+             */}
             <Dialog open={checking !== null} onOpenChange={(open) => !open && setChecking(null)}>
                 <DialogContent className="sm:max-w-[480px]">
                     <DialogHeader>
@@ -322,21 +325,21 @@ function People() {
                             Check it’s {checking ? firstName(checking.name) : ''}
                         </DialogTitle>
                         <DialogDescription>
-                            Ask {checking ? firstName(checking.name) : 'them'} to open People you
-                            share with in HushOS and read you their twelve words, on a call or in
-                            person. If they match these, it’s really them.
+                            If their words don’t match, don’t share anything new with them. Remove
+                            them, and add them again once they’ve signed in.
                         </DialogDescription>
                     </DialogHeader>
-                    {checking && <FingerprintWords fingerprint={checking.fingerprint} />}
-                    <p className="text-[13px] text-muted-foreground">
-                        If they don’t match, don’t share anything new with them. Remove them, and
-                        add them again once they’ve signed in.
-                    </p>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setChecking(null)}>
-                            Done
-                        </Button>
-                    </DialogFooter>
+                    {checking && (
+                        <CheckContact
+                            userId={userId}
+                            email={checking.email}
+                            onCancel={() => setChecking(null)}
+                            onAdded={() => {
+                                setChecking(null);
+                                afterTrustChanged(queryClient);
+                            }}
+                        />
+                    )}
                 </DialogContent>
             </Dialog>
 
