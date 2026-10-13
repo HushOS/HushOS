@@ -143,7 +143,7 @@ export async function buildEvidencePacket(
             : `Filed with: nobody yet`,
         ``,
         `Reason given by the reporter:`,
-        report.reason,
+        report.reason ?? 'Cleared when the report was released.',
         ``,
         `Files (${hashed.length})`,
         ...hashed.flatMap((file) => [
