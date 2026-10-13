@@ -194,23 +194,30 @@ test('a signed-in visitor keeps a copy under their own keys', async ({ browser }
     const keeper = await context.newPage();
     await keeper.goto('/app/drive');
     await expect(row(keeper, 'Public')).toBeVisible({ timeout: 90_000 });
-    // Nothing vouched for who wrote what was behind the link: the copy is re-locked, not theirs.
-    await expect(row(keeper, 'Public').locator('[data-integrity]')).toHaveAttribute(
-        'data-integrity',
-        'resealed',
-        { timeout: 60_000 },
-    );
+    // Saved on purpose from a link: no Unverified mark, on the folder or what is in it,
+    // and Info says plainly who saved it and that the original's writer is unknown.
+    const saved = 'Saved from a link by you. HushOS can’t confirm who made the original.';
+    const info = keeper.locator('[data-details]');
+    const select = async (name: string) => {
+        const box = (await row(keeper, name).boundingBox())!;
+        await keeper.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+        await expect(row(keeper, name)).toHaveAttribute('aria-selected', 'true');
+    };
+    await select('Public');
+    await keeper.keyboard.press('i');
+    await expect(info.locator('[data-integrity-saved]')).toHaveText(saved, { timeout: 60_000 });
+    await expect(row(keeper, 'Public').locator('[data-integrity]')).toHaveCount(0);
+    await keeper.keyboard.press('i');
     await row(keeper, 'Public').getByRole('link', { name: 'Public' }).click();
     await expect(row(keeper, 'payload.bin')).toBeVisible({ timeout: 90_000 });
     await expect(row(keeper, 'inner')).toBeVisible();
-    const copied = row(keeper, 'payload.bin').locator('[data-integrity]');
-    await expect(copied).toHaveAttribute('data-integrity', 'resealed', { timeout: 60_000 });
-    await expect(copied).toHaveText('Unverified');
-    await copied.hover();
-    await expect(keeper.locator('[data-integrity-details]')).toContainText(
-        'Re-locked by you; HushOS couldn’t confirm who wrote it before.',
-    );
-    await keeper.mouse.move(0, 0);
+    await select('payload.bin');
+    await keeper.keyboard.press('i');
+    await expect(info.locator('[data-integrity-saved]')).toHaveText(saved, { timeout: 60_000 });
+    await expect(info.locator('[data-integrity]')).toHaveCount(0);
+    await expect(row(keeper, 'payload.bin').locator('[data-integrity]')).toHaveCount(0);
+    await expect(row(keeper, 'inner').locator('[data-integrity]')).toHaveCount(0);
+    await keeper.keyboard.press('i');
     // The copy is theirs: it shares no key with the link, so it downloads the same bytes through their own account.
     await row(keeper, 'payload.bin').locator('button').first().click(grip);
     const [download] = await Promise.all([

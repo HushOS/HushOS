@@ -21,6 +21,15 @@ export type JournalPart = { digest: string; etag?: string; bytes?: number };
 /* Where an upload's bytes came from: a file the person holds, or a copy of something shared. */
 export type UploadOrigin = 'file' | 'copy';
 
+/* The statements an upload's new metadata and version are signed with (see signatureFormFor). */
+export type UploadSignatures = {
+    metadata: 'ordinary' | 'saved' | 'resealed';
+    version: 'ordinary' | 'saved' | 'resealed';
+};
+
+/* The seeds an upload's ids were derived from (`node` null for a new version of a file). */
+export type IdSeeds = { node: string | null; version: string; object: string };
+
 export type JournalEntry = {
     id: string;
     workspaceId: string;
@@ -28,6 +37,8 @@ export type JournalEntry = {
     nodeId: string;
     versionId: string;
     objectId: string;
+    /* The seeds of those ids, so a begin sent again names them as the server derives them; absent on older rows. */
+    idSeeds?: IdSeeds;
     parentId: string;
     parentName: string;
     parentKeyEpoch: number;
@@ -56,6 +67,8 @@ export type JournalEntry = {
     handle: FileSystemFileHandle | null;
     /* Absent on rows written before copies were journaled: a file the person holds. */
     origin?: UploadOrigin;
+    /* How a copy signs; absent on older rows, where a copy signs re-sealed. */
+    signAs?: UploadSignatures;
     /* The stash holding this upload's bytes on this device, when it has one. */
     stash?: string | null;
     parts: Record<string, JournalPart>;
@@ -76,6 +89,8 @@ export type QueuedEntry = {
     file: { name: string; size: number; lastModified: number; type: string };
     handle: FileSystemFileHandle | null;
     origin: UploadOrigin;
+    /* How a copy signs; absent on older rows, where a copy signs re-sealed. */
+    signAs?: UploadSignatures;
     stash: string | null;
     createdAt: number;
     updatedAt: number;

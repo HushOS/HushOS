@@ -279,7 +279,7 @@ Every create sends each id with its seed. The server recomputes the id from the 
 
 ### API contract (scoped ids)
 
-- Each create body that carries a client-chosen id carries its seed beside it: `idSeed` for a node id (root, folders, upload begin, copy), `versionIdSeed` and `objectIdSeed` (upload begin, copy file), `linkIdSeed` (create link), `reportIdSeed` (create report). Base64url, 16 bytes.
+- Each create body that carries a client-chosen id carries its seed beside it: `idSeed` for a node id (root, folders, upload begin for a new file, copy, and the sibling node of a conflicted upload's attach), `versionIdSeed` (upload begin, copy file) and `objectIdSeed` (upload begin; a copy shares its source's object and names none), `linkIdSeed` (create link), `reportIdSeed` (create report). Base64url, 16 bytes.
 - The server derives and compares before any other check that could depend on whether the id exists; a missing or wrong seed answers 400 `invalid` "This id was not made for this workspace".
 - TS (`@hushos/crypto`) and Rust (`hushos-core`, exported to iOS and Android) expose `deriveId(kind, scopeId, seed)` and `newId(kind, scopeId) -> { id, seed }`, pinned by shared fixtures.
 

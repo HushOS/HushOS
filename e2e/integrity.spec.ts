@@ -183,6 +183,40 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await expect(mark(maya, 'module.ts')).toHaveCount(0, { timeout: 30_000 });
 });
 
+test('a copy Sam saves of what Maya shared, which he checked, carries no mark', async () => {
+    await maya.goto('/app/drive');
+    await openFolder(maya, 'Together');
+    await maya.locator('input[type=file]').first().setInputFiles([samples.files.text]);
+    await expect(row(maya, 'README')).toBeVisible({ timeout: 60_000 });
+
+    await sam.goto('/app/shared');
+    await sam
+        .locator('[data-shared="Together"]')
+        .getByRole('link', { name: 'Together' })
+        .click({ timeout: 60_000 });
+    await expect(row(sam, 'README')).toBeVisible({ timeout: 60_000 });
+    await expect(mark(sam, 'README')).toHaveCount(0);
+    await row(sam, 'README')
+        .locator('button')
+        .first()
+        .click({ position: { x: 16, y: 12 }, button: 'right' });
+    await sam.getByRole('menuitem', { name: 'Save a copy to my files' }).click();
+    await expect(sam.getByText(/to your files/)).toBeVisible({ timeout: 60_000 });
+    await sam.goto('/app/drive');
+    await expect(row(sam, 'README')).toBeVisible({ timeout: 90_000 });
+    // Checked when copied, so signed as his own: no mark, and no saved-from-a-link line.
+    await expect(mark(sam, 'README')).toHaveCount(0);
+    await sam.reload();
+    await expect(row(sam, 'README')).toBeVisible({ timeout: 60_000 });
+    await expect(mark(sam, 'README')).toHaveCount(0);
+    const box = (await row(sam, 'README').boundingBox())!;
+    await sam.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+    await sam.keyboard.press('i');
+    await expect(sam.locator('[data-details] [data-info="details"]')).toBeVisible();
+    await expect(sam.locator('[data-details] [data-integrity-saved]')).toHaveCount(0);
+    await sam.keyboard.press('i');
+});
+
 test('after Sam replaces his sharing keys, Maya follows only when she checks, and his old keys vouch for nothing', async () => {
     // Something of Sam's shared with Maya, sealed and signed under his first keys.
     await sam.goto('/app/drive');
@@ -289,6 +323,31 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
     await expect(again).toContainText('Sam replaced their sharing keys');
     await again.getByRole('button', { name: 'They match' }).click();
     await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
+});
+
+test('a copy of what no longer verifies keeps its Unverified mark', async () => {
+    // Signed with keys Sam has since replaced: Maya copies it beside itself.
+    await maya.goto('/app/drive');
+    await openFolder(maya, 'Together');
+    await expect(mark(maya, 'module.ts')).toHaveAttribute('data-integrity', 'retired-key', {
+        timeout: 60_000,
+    });
+    await row(maya, 'module.ts')
+        .locator('button')
+        .first()
+        .click({ position: { x: 16, y: 12 } });
+    await maya.keyboard.press('c');
+    await expect(dialog(maya)).toContainText('Copy “module.ts”');
+    // The picker opens on My files: the copy lands there.
+    await maya.getByRole('button', { name: 'Copy here' }).click();
+    await expect(dialog(maya)).toHaveCount(0, { timeout: 60_000 });
+    await maya.goto('/app/drive');
+    await expect(row(maya, 'module.ts')).toBeVisible({ timeout: 60_000 });
+    // Re-locked by her, never vouched for: the copy is as Unverified as the original.
+    await expect(mark(maya, 'module.ts')).toHaveAttribute('data-integrity', 'resealed', {
+        timeout: 60_000,
+    });
+    await expect(mark(maya, 'module.ts')).toHaveText('Unverified');
 });
 
 test('rotating Sam’s account key carries his earlier keys and his settings key over', async () => {

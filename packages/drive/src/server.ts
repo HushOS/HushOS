@@ -3,8 +3,10 @@ import {
     authRepository,
     driveRepository,
     keyedHash,
+    madeFor,
     reportsRepository,
     rotationsRepository,
+    type IdKind,
     type NodeRow,
     type UploadRow,
     type VersionRow,
@@ -260,6 +262,25 @@ const documentEnvelope = (value: string) =>
     paddedEnvelope(value, DOCUMENT_ENVELOPE_MAX_BYTES, documentPadStep);
 const DOCUMENT_KIND = /^[a-z][a-z0-9-]{0,31}$/;
 
+/*
+ * Every id a client makes comes with the seed it was derived from, and the
+ * server derives it again with the kind and the workspace of the request
+ * before anything that could depend on whether the id exists. A missing seed,
+ * a wrong one and an id made for another workspace get the one answer, so a
+ * create cannot be used to ask whether an id is in use anywhere: nobody can
+ * find a seed that derives someone else's id, and a 409 can only follow a
+ * client replaying its own seed in its own workspace.
+ */
+export const ID_NOT_MADE_HERE = 'This id was not made for this workspace.';
+function requireMadeFor(
+    workspaceId: string,
+    ids: { kind: IdKind; id: string; seed: string | undefined }[],
+) {
+    for (const { kind, id, seed } of ids)
+        if (!madeFor(kind, workspaceId, id, seed))
+            throw new DriveError('invalid', ID_NOT_MADE_HERE);
+}
+
 async function requireMember(userId: string, workspaceId: string) {
     if (!(await driveRepository.isMember(userId, workspaceId)))
         throw new DriveError('not-found', 'This workspace does not exist.', 404);
@@ -403,8 +424,9 @@ function envelopes(input: NodeEnvelopesInput) {
 export async function createRoot(
     userId: string,
     workspaceId: string,
-    input: { id: string } & NodeEnvelopesInput,
+    input: { id: string; idSeed?: string } & NodeEnvelopesInput,
 ) {
+    requireMadeFor(workspaceId, [{ kind: 'node', id: input.id, seed: input.idSeed }]);
     await requireMember(userId, workspaceId);
     const result = await driveRepository.createRoot({
         workspaceId,
@@ -444,8 +466,12 @@ export async function listChildren(
 export async function createFolders(
     userId: string,
     workspaceId: string,
-    folders: ({ id: string; parentId: string } & NodeEnvelopesInput)[],
+    folders: ({ id: string; idSeed?: string; parentId: string } & NodeEnvelopesInput)[],
 ) {
+    requireMadeFor(
+        workspaceId,
+        folders.map((folder) => ({ kind: 'node', id: folder.id, seed: folder.idSeed })),
+    );
     const batchIds = new Set(folders.map((folder) => folder.id));
     for (const parentId of new Set(folders.map((folder) => folder.parentId)))
         if (!batchIds.has(parentId)) await requireAccess(userId, workspaceId, parentId, 'editor');
@@ -645,8 +671,9 @@ const unavailable = () =>
 
 export type CopyInput = {
     sourceVersionId: string;
-    node: { id: string; parentId: string } & NodeEnvelopesInput;
+    node: { id: string; idSeed?: string; parentId: string } & NodeEnvelopesInput;
     versionId: string;
+    versionIdSeed?: string;
     contentKeyEnvelope: string;
     /* Over the copy's node and version and the source's object and suite. */
     versionSignature: string;
@@ -663,6 +690,10 @@ export async function copyNode(
     sourceNodeId: string,
     input: CopyInput,
 ) {
+    requireMadeFor(workspaceId, [
+        { kind: 'node', id: input.node.id, seed: input.node.idSeed },
+        { kind: 'version', id: input.versionId, seed: input.versionIdSeed },
+    ]);
     await requireAccess(userId, workspaceId, sourceNodeId, 'viewer');
     await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
     const result = await driveRepository.copyFile({
@@ -995,10 +1026,12 @@ export async function listTrash(userId: string, workspaceId: string, after?: str
 
 export type UploadBeginInput = {
     node:
-        | ({ existing: false; id: string; parentId: string } & NodeEnvelopesInput)
+        | ({ existing: false; id: string; idSeed?: string; parentId: string } & NodeEnvelopesInput)
         | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
     versionId: string;
+    versionIdSeed?: string;
     objectId: string;
+    objectIdSeed?: string;
     contentKeyEnvelope: string;
     /* The writer's signature over the version statement. */
     versionSignature: string;
@@ -1116,6 +1149,13 @@ async function presignParts(upload: UploadRow, from: number, count: number) {
  * are written in one transaction; a refusal there aborts the multipart upload.
  */
 export async function beginUpload(userId: string, workspaceId: string, input: UploadBeginInput) {
+    requireMadeFor(workspaceId, [
+        ...(input.node.existing
+            ? []
+            : [{ kind: 'node' as const, id: input.node.id, seed: input.node.idSeed }]),
+        { kind: 'version', id: input.versionId, seed: input.versionIdSeed },
+        { kind: 'object', id: input.objectId, seed: input.objectIdSeed },
+    ]);
     if (input.node.existing) await requireAccess(userId, workspaceId, input.node.id, 'editor');
     else await requireAccess(userId, workspaceId, input.node.parentId, 'editor');
     // Suite 3 alone is written: an older suite would hand the server the file's exact size.
@@ -1306,7 +1346,7 @@ export type UploadAttachInput =
     | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string; versionSignature: string }
     | {
           mode: 'sibling';
-          node: { id: string; parentId: string } & NodeEnvelopesInput;
+          node: { id: string; idSeed?: string; parentId: string } & NodeEnvelopesInput;
           contentKeyEnvelope: string;
           versionSignature: string;
       };
@@ -1322,6 +1362,8 @@ export async function attachUpload(
     uploadId: string,
     input: UploadAttachInput,
 ) {
+    if (input.mode === 'sibling')
+        requireMadeFor(workspaceId, [{ kind: 'node', id: input.node.id, seed: input.node.idSeed }]);
     await requireUploadAccess(userId, workspaceId, uploadId);
     const result = await driveRepository.attachUpload(
         workspaceId,
@@ -1528,6 +1570,7 @@ export async function createLink(
     nodeId: string,
     input: {
         linkId: string;
+        linkIdSeed?: string;
         token: string;
         keyEpoch: number;
         linkEnvelope: string;
@@ -1537,6 +1580,7 @@ export async function createLink(
         expiresAt: string | null;
     },
 ) {
+    requireMadeFor(workspaceId, [{ kind: 'link', id: input.linkId, seed: input.linkIdSeed }]);
     await requireMember(userId, workspaceId);
     if (!TOKEN_PATTERN.test(input.token)) throw new DriveError('invalid', 'Invalid link token.');
     const result = await driveRepository.createLink({
@@ -1938,6 +1982,7 @@ export async function fileReport(
     actor: { userId: string | null; address: string },
     input: {
         id: string;
+        reportIdSeed?: string;
         workspaceId: string;
         nodeId: string;
         keyEpoch: number;
@@ -1948,6 +1993,8 @@ export async function fileReport(
         keys: { operatorUserId: string; keyEnvelope: string }[];
     },
 ) {
+    // Derived in the reported item's workspace, which the access checks below hold the request to.
+    requireMadeFor(input.workspaceId, [{ kind: 'report', id: input.id, seed: input.reportIdSeed }]);
     const limits = [hashToken(`report:address:${actor.address}`)];
     if (actor.userId) limits.push(hashToken(`report:user:${actor.userId}`));
     for (const key of limits)

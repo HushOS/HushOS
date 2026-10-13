@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { metadataStatement, versionStatement } from '../../db/src/signatures';
 import {
@@ -8,7 +8,7 @@ import {
     resetDatabase,
     signerFor,
 } from '../../db/test/helpers';
-import { epoch, file, folder, member, root, share, type Account } from '../test/fixtures';
+import { epoch, file, folder, member, minted, root, share, type Account } from '../test/fixtures';
 import * as server from './server';
 
 /*
@@ -54,9 +54,10 @@ afterAll(closeDatabase);
 
 /* A new file's begin as `writer` signs it, into the shared folder. */
 async function beginAs(writer: Account, size: bigint) {
-    const nodeId = randomUUID();
-    const versionId = randomUUID();
-    const objectId = randomUUID();
+    const node = minted('node', owner.workspaceId);
+    const version = minted('version', owner.workspaceId);
+    const object = minted('object', owner.workspaceId);
+    const [nodeId, versionId, objectId] = [node.id, version.id, object.id];
     const metadata = paddedMetadata();
     const content = randomBytes(84);
     const sign = signerFor(writer.userId).sign;
@@ -64,6 +65,7 @@ async function beginAs(writer: Account, size: bigint) {
         node: {
             existing: false,
             id: nodeId,
+            idSeed: node.seed,
             parentId: project.id,
             keyEpoch: await epoch(owner.workspaceId),
             parentKeyEpoch: project.keyEpoch,
@@ -82,7 +84,9 @@ async function beginAs(writer: Account, size: bigint) {
             ),
         },
         versionId,
+        versionIdSeed: version.seed,
         objectId,
+        objectIdSeed: object.seed,
         contentKeyEnvelope: b64(content),
         versionSignature: b64(
             sign(
@@ -105,8 +109,9 @@ async function beginAs(writer: Account, size: bigint) {
 
 /* A copy of `source` into the shared folder as `writer` signs it. */
 async function copyAs(writer: Account, source: Awaited<ReturnType<typeof file>>) {
-    const nodeId = randomUUID();
-    const versionId = randomUUID();
+    const node = minted('node', owner.workspaceId);
+    const version = minted('version', owner.workspaceId);
+    const [nodeId, versionId] = [node.id, version.id];
     const metadata = paddedMetadata();
     const content = randomBytes(84);
     const sign = signerFor(writer.userId).sign;
@@ -114,6 +119,7 @@ async function copyAs(writer: Account, source: Awaited<ReturnType<typeof file>>)
         sourceVersionId: source.currentVersion!.id,
         node: {
             id: nodeId,
+            idSeed: node.seed,
             parentId: project.id,
             keyEpoch: await epoch(owner.workspaceId),
             parentKeyEpoch: project.keyEpoch,
@@ -132,6 +138,7 @@ async function copyAs(writer: Account, source: Awaited<ReturnType<typeof file>>)
             ),
         },
         versionId,
+        versionIdSeed: version.seed,
         contentKeyEnvelope: b64(content),
         versionSignature: b64(
             sign(

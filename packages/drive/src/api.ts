@@ -216,8 +216,15 @@ export class DriveApiError extends Error {
     }
 }
 
+/*
+ * Every id a client makes travels with the seed it was derived from
+ * (`newId` in @hushos/crypto): the server derives it again with the kind and
+ * the workspace of the request and refuses anything else with one answer, 400
+ * "This id was not made for this workspace" (docs/integrity-design.md, "Ids
+ * derived from a seed and a scope"). Seeds are 16 bytes, Base64url.
+ */
 export type UploadNodeInput =
-    | ({ existing: false; id: string; parentId: string } & NodeEnvelopes)
+    | ({ existing: false; id: string; idSeed: string; parentId: string } & NodeEnvelopes)
     | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
 
 /* Either way a fresh envelope, signed over the version where it lands (the sibling's id, if so). */
@@ -225,7 +232,7 @@ export type UploadAttachInput =
     | { mode: 'same-node'; keyEpoch: number; contentKeyEnvelope: string; versionSignature: string }
     | {
           mode: 'sibling';
-          node: { id: string; parentId: string } & NodeEnvelopes;
+          node: { id: string; idSeed: string; parentId: string } & NodeEnvelopes;
           contentKeyEnvelope: string;
           versionSignature: string;
       };
@@ -249,8 +256,9 @@ export type VersionListView = VersionView & {
 
 export type CopyInput = {
     sourceVersionId: string;
-    node: { id: string; parentId: string } & NodeEnvelopes;
+    node: { id: string; idSeed: string; parentId: string } & NodeEnvelopes;
     versionId: string;
+    versionIdSeed: string;
     contentKeyEnvelope: string;
     /* Over the copy's node and version, the source version's object and its content suite. */
     versionSignature: string;
@@ -374,7 +382,9 @@ export interface DriveApi {
         input: {
             node: UploadNodeInput;
             versionId: string;
+            versionIdSeed: string;
             objectId: string;
+            objectIdSeed: string;
             contentKeyEnvelope: string;
             /* The writer's signature over the version statement; the suite in it is 3. */
             versionSignature: string;
@@ -420,12 +430,12 @@ export interface DriveApi {
     allocateEpochs(workspaceId: string, count: number): Promise<{ from: number; to: number }>;
     createRoot(
         workspaceId: string,
-        input: { id: string } & NodeEnvelopes,
+        input: { id: string; idSeed: string } & NodeEnvelopes,
     ): Promise<{ created: boolean; root: NodeView }>;
     children(workspaceId: string, parentId: string, after?: string): Promise<Listing>;
     createFolders(
         workspaceId: string,
-        folders: ({ id: string; parentId: string } & NodeEnvelopes)[],
+        folders: ({ id: string; idSeed: string; parentId: string } & NodeEnvelopes)[],
     ): Promise<{ nodes: NodeView[]; changeSeq: number }>;
     rename(
         workspaceId: string,
@@ -477,6 +487,7 @@ export interface DriveApi {
         nodeId: string,
         input: {
             linkId: string;
+            linkIdSeed: string;
             token: string;
             keyEpoch: number;
             linkEnvelope: string;
@@ -551,6 +562,8 @@ export type ReportOperator = ServedIdentity & { userId: string };
 
 export type ReportInput = {
     id: string;
+    /* Derived in the reported item's workspace. */
+    reportIdSeed: string;
     workspaceId: string;
     nodeId: string;
     keyEpoch: number;

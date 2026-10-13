@@ -185,7 +185,7 @@ function WithMe() {
     async function saveToMine(node: DriveNode) {
         try {
             const root = (await queryClient.fetchQuery(folderQueryOptions(rootId))).folder;
-            await saveCopy(queryClient, [node], root);
+            await saveCopy(queryClient, [node], root, 'drive');
             cue('droplet');
             toast.add({
                 type: 'success',

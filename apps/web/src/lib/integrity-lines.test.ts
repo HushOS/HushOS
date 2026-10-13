@@ -1,6 +1,12 @@
 import type { IntegrityIssue } from '@hushos/drive/trust';
 import { describe, expect, test } from 'vitest';
-import { COULDNT_CHECK, issueLines, markLabel, type SignerNames } from './integrity-lines';
+import {
+    COULDNT_CHECK,
+    issueLines,
+    markLabel,
+    savedLine,
+    type SignerNames,
+} from './integrity-lines';
 
 /*
  * What a mark says is steered by what the server serves: who it names as the
@@ -71,5 +77,44 @@ describe('integrity lines', () => {
         expect(markLabel([issue('bad-signature', MAYA), issue('unchecked', MAYA, 'version')])).toBe(
             'Unverified',
         );
+    });
+});
+
+describe('a copy saved from a link', () => {
+    const saved = (
+        metadata: IntegrityIssue['integrity'] | 'verified' | 'saved-from-link',
+        version: IntegrityIssue['integrity'] | 'verified' | 'saved-from-link' | null,
+        signer: string | null = ME,
+    ) => ({
+        integrity: { metadata, version },
+        metadataSigner: signer ? { id: signer } : null,
+        currentVersion: version === null ? null : { signer: signer ? { id: signer } : null },
+    });
+
+    test('says who saved it, from this person’s pins, and that the original is unknown', () => {
+        expect(savedLine(saved('saved-from-link', 'saved-from-link'), names)).toBe(
+            'Saved from a link by you. HushOS can’t confirm who made the original.',
+        );
+        expect(savedLine(saved('saved-from-link', 'saved-from-link', MAYA), names)).toBe(
+            'Saved from a link by Maya Lindqvist. HushOS can’t confirm who made the original.',
+        );
+        // A saved folder has no version.
+        expect(savedLine(saved('saved-from-link', null), names)).toMatch(
+            /^Saved from a link by you/,
+        );
+    });
+
+    test('gives way to the mark when any record did not verify, and is absent for anything else', () => {
+        // The name saved, but the content not: the Unverified mark speaks, not this line.
+        expect(savedLine(saved('saved-from-link', 'resealed'), names)).toBeNull();
+        expect(savedLine(saved('unknown-signer', 'saved-from-link'), names)).toBeNull();
+        expect(savedLine(saved('saved-from-link', 'unchecked'), names)).toBeNull();
+        // Verified records, or none checked (a link visitor's view), say nothing.
+        expect(savedLine(saved('verified', 'verified'), names)).toBeNull();
+        expect(
+            savedLine({ integrity: null, metadataSigner: { id: ME }, currentVersion: null }, names),
+        ).toBeNull();
+        // Never names someone this person has not checked.
+        expect(savedLine(saved('saved-from-link', 'saved-from-link', STRANGER), names)).toBeNull();
     });
 });

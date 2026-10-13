@@ -12,6 +12,7 @@ export {
     issueLines,
     markLabel,
     nameSigner,
+    savedLine,
     type IssueLine,
     type SignerNames,
 } from '@/lib/integrity-lines';

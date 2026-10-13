@@ -115,6 +115,40 @@ describe('statements', () => {
         );
     });
 
+    test('saved metadata and version: their own labels, the same fields, then "link"', () => {
+        const metadataEnvelope = Buffer.from('sealed metadata');
+        expect(
+            metadataStatement(
+                {
+                    workspaceId: WORKSPACE,
+                    nodeId: NODE,
+                    kind: 'file',
+                    metadataVersion: 1,
+                    metadataEnvelope,
+                },
+                'saved',
+            ).toString('utf8'),
+        ).toBe(
+            `["hushos/drive/sig/metadata-saved",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","file",1,"${sha(metadataEnvelope)}","link"]`,
+        );
+        const contentKeyEnvelope = Buffer.alloc(84, 7);
+        expect(
+            versionStatement(
+                {
+                    workspaceId: WORKSPACE,
+                    nodeId: NODE,
+                    versionId: VERSION,
+                    objectId: OBJECT,
+                    contentSuite: 3,
+                    contentKeyEnvelope,
+                },
+                'saved',
+            ).toString('utf8'),
+        ).toBe(
+            `["hushos/drive/sig/version-saved",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b","3f2504e0-4f89-41d3-9a0c-0305e82c3301",3,"${sha(contentKeyEnvelope)}","link"]`,
+        );
+    });
+
     test('succession: both key versions, the four public keys in Base64url, the new KEM key by digest', () => {
         const kem = Buffer.alloc(1184, 9);
         const key = (fill: number) => Buffer.alloc(32, fill);
@@ -184,7 +218,7 @@ describe('verification', () => {
         ).toBe(false);
     });
 
-    test('either form verifies; a label of neither form or another key does not', () => {
+    test('any of the three forms verifies; another label, another source or another key does not', () => {
         const signer = signingKeyFromSeed(RFC_1.seed);
         const other = signingKeyFromSeed(Buffer.alloc(32, 5));
         const metadata = {
@@ -202,7 +236,7 @@ describe('verification', () => {
             contentSuite: 3,
             contentKeyEnvelope: Buffer.alloc(84, 1),
         };
-        for (const form of ['ordinary', 'resealed'] as const) {
+        for (const form of ['ordinary', 'saved', 'resealed'] as const) {
             expect(
                 verifySigned(
                     signer.publicKey,
@@ -232,6 +266,24 @@ describe('verification', () => {
         expect(verifySigned(signer.publicKey, metadataSigned(metadata, signer.sign(forged)))).toBe(
             false,
         );
+        // A saved statement naming any source but a link, or none, is a forgery too.
+        for (const source of ['share', 'drive', ''])
+            expect(
+                verifySigned(
+                    signer.publicKey,
+                    metadataSigned(
+                        metadata,
+                        signer.sign(
+                            Buffer.from(
+                                metadataStatement(metadata, 'saved')
+                                    .toString('utf8')
+                                    .replace(/,"link"\]$/, source ? `,"${source}"]` : ']'),
+                            ),
+                        ),
+                    ),
+                ),
+                source,
+            ).toBe(false);
         // Nor does a metadata signature carry over to the version statement in re-sealed form.
         expect(
             verifySigned(

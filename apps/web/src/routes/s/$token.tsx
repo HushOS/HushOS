@@ -647,7 +647,7 @@ function SaveToDrive({ opened }: { opened: Opened }) {
             const folder = (await queryClient.fetchQuery(folderQueryOptions(root.id))).folder;
             // The copy uploads from this page; leaving it early is what the guard asks about.
             guardUnloadWhileUploading();
-            const made = await saveCopy(queryClient, [node], folder);
+            const made = await saveCopy(queryClient, [node], folder, 'link');
             toast.add({
                 type: 'success',
                 title:

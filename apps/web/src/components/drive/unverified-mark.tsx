@@ -24,6 +24,7 @@ import {
     issueLines,
     markLabel,
     retryChecks,
+    savedLine,
     type SignerNames,
 } from '@/lib/integrity';
 
@@ -50,6 +51,32 @@ export function useSignerNames(userId: string | null, enabled: boolean): SignerN
         staleTime: Infinity,
     });
     return { userId, checked: checked.data ?? {} };
+}
+
+/*
+ * The neutral line in Info and the viewer for a copy saved from a link: who
+ * saved it and that the original's writer is unknown. No mark, no warning
+ * colour; nothing at all when the item carries a mark or was not saved.
+ */
+export function SavedFromLinkLine({
+    node,
+    className,
+}: {
+    node: Pick<DriveNode, 'metadataSigner' | 'currentVersion' | 'integrity'>;
+    className?: string;
+}) {
+    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const saved =
+        node.integrity?.metadata === 'saved-from-link' ||
+        node.integrity?.version === 'saved-from-link';
+    const names = useSignerNames(userId, saved);
+    const text = saved ? savedLine(node, names) : null;
+    if (!text) return null;
+    return (
+        <p data-integrity-saved className={cn('text-[13px] text-muted-foreground', className)}>
+            {text}
+        </p>
+    );
 }
 
 /*

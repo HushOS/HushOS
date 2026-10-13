@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, UploadPartResult } from '@hushos/crypto';
 import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
+import { scopedId } from '../../db/src/ids';
 import { createMemoryJournal } from './journal';
 import { backoffDelay, createTransferManager, type UploadStash } from './transfers';
 
@@ -92,6 +93,8 @@ function harness(
 ) {
     const journal = options.journal ?? createMemoryJournal();
     const calls: string[] = [];
+    /* The statement each signing call was asked for, in order. */
+    const signed: { operation: string; signAs: string | undefined }[] = [];
     /* The key epoch every created node was given. */
     const givenEpochs: number[] = [];
     let inFlight = 0;
@@ -105,8 +108,10 @@ function harness(
         calls.push(operation);
         switch (operation) {
             case 'driveCreateNodes':
-                for (const n of (input as CryptoRequests['driveCreateNodes']).nodes)
+                for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
+                    signed.push({ operation, signAs: n.signAs });
+                }
                 return {
                     nodes: (input as CryptoRequests['driveCreateNodes']).nodes.map((n) => ({
                         id: n.id,
@@ -117,6 +122,11 @@ function harness(
             case 'driveUploadPrepare':
             case 'driveUploadReopen': {
                 const { plaintextSize } = input as CryptoRequests['driveUploadPrepare'];
+                if (operation === 'driveUploadPrepare')
+                    signed.push({
+                        operation,
+                        signAs: (input as CryptoRequests['driveUploadPrepare']).signAs,
+                    });
                 const chunks = Math.max(1, Math.ceil(plaintextSize / CHUNK));
                 return {
                     contentNonce: 'n',
@@ -177,7 +187,8 @@ function harness(
             case 'driveUploadForget':
                 return { forgotten: true } as CryptoResults[K];
             case 'driveUploadRewrap': {
-                const { nodeId } = input as CryptoRequests['driveUploadRewrap'];
+                const { nodeId, signAs } = input as CryptoRequests['driveUploadRewrap'];
+                signed.push({ operation, signAs });
                 return { contentKeyEnvelope: `rewrapped-under-${nodeId}` } as CryptoResults[K];
             }
             default:
@@ -194,6 +205,8 @@ function harness(
         attached: [] as { id: string; input: unknown }[],
         /* How many epochs each allocation asked for. */
         epochs: [] as number[],
+        /* Every begin as sent, ids and seeds included. */
+        begins: [] as Parameters<DriveApi['beginUpload']>[1][],
     };
     let nextUpload = 0;
     let nextEpoch = 5;
@@ -204,7 +217,8 @@ function harness(
             nextEpoch += count;
             return { from, to: from + count - 1 };
         },
-        beginUpload: async (_ws: string, input: { chunkCount: number }) => {
+        beginUpload: async (_ws: string, input: Parameters<DriveApi['beginUpload']>[1]) => {
+            server.begins.push(input);
             const id = `up-${++nextUpload}`;
             const expiresAt = new Date(Date.now() + 3600_000).toISOString();
             server.uploads.set(id, { parts: new Map(), status: 'open', expiresAt });
@@ -298,6 +312,14 @@ function harness(
         offline: options.offline,
         openNodes: async () => ({ parent: node('root', null) }),
         onPublished: (n) => published.push(n.id),
+        // Ids as the server derives them, minted without Web Crypto's real-time digest,
+        // which fake timers would never let resolve.
+        newId: async (kind, workspaceId) => {
+            const seed = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString(
+                'base64url',
+            );
+            return { id: scopedId(kind, workspaceId, seed)!, seed };
+        },
         maxPartsInFlight: 3,
         maxActiveFiles: 2,
         maxAttempts: 3,
@@ -316,6 +338,7 @@ function harness(
         manager,
         api: api as { beginUpload: DriveApi['beginUpload'] },
         calls,
+        signed,
         givenEpochs,
         server,
         journal,
@@ -643,6 +666,30 @@ describe('journal and restore', () => {
         expect(second.server.completed.at(-1)!.parts).toEqual([1, 2, 3, 4, 5, 6]);
     });
 
+    test('every new id goes to begin with the seed that derives it there; starting over mints new ones', async () => {
+        const { id, second, entry } = await interrupted();
+        // Nothing has begun on the reloaded side yet.
+        expect(second.server.begins).toEqual([]);
+        // The journal kept the seeds the first begin sent, beside the ids they derive.
+        expect(entry.idSeeds).toBeDefined();
+        expect(scopedId('node', 'ws', entry.idSeeds!.node!)).toBe(entry.nodeId);
+        expect(scopedId('version', 'ws', entry.idSeeds!.version)).toBe(entry.versionId);
+        expect(scopedId('object', 'ws', entry.idSeeds!.object)).toBe(entry.objectId);
+        await second.manager.restore('ws');
+        await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'other.mp4'));
+        await settle(2_000);
+        const [again] = second.server.begins;
+        expect(again).toBeDefined();
+        if (again!.node.existing) throw new Error('a new file begins a new node');
+        expect(scopedId('node', 'ws', again!.node.idSeed)).toBe(again!.node.id);
+        expect(scopedId('version', 'ws', again!.versionIdSeed)).toBe(again!.versionId);
+        expect(scopedId('object', 'ws', again!.objectIdSeed)).toBe(again!.objectId);
+        // Fresh material for a fresh object: none of the abandoned ids or seeds comes back.
+        expect(again!.node.id).not.toBe(entry.nodeId);
+        expect(again!.objectId).not.toBe(entry.objectId);
+        expect(again!.versionIdSeed).not.toBe(entry.idSeeds!.version);
+    });
+
     test('a file with the same identity but different bytes also starts over', async () => {
         const { id, second, entry } = await interrupted();
         // Forge the journal so a landed chunk's digest no longer matches the file's bytes.
@@ -800,6 +847,83 @@ describe('queued rows and stashed copies', () => {
         expect(second.calls).toContain('driveUploadPrepare');
         expect(second.journal.queued.has(ids[2]!)).toBe(false);
         expect(second.journal.entries.has(ids[2]!)).toBe(false);
+    });
+
+    test('a new version names only its version and object: the node is the file it replaces', async () => {
+        const h = harness();
+        const file = { ...node('doc'), kind: 'file' as const };
+        h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'doc'), parent: node('root', null), replaces: file },
+        ]);
+        await settle(2_000);
+        const [begun] = h.server.begins;
+        expect(begun!.node).toMatchObject({ existing: true, id: 'doc' });
+        expect(begun!.node).not.toHaveProperty('idSeed');
+        expect(scopedId('version', 'ws', begun!.versionIdSeed)).toBe(begun!.versionId);
+    });
+
+    test('a copy signs as it was told, through a conflict copy too; an older journaled copy signs re-sealed', async () => {
+        const h = harness({ conflict: true });
+        h.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'saved.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                signAs: { metadata: 'saved', version: 'saved' },
+            },
+        ]);
+        await settle(2_000);
+        // Its node, its version, and the sibling a conflict made, all saved.
+        expect(h.signed).toEqual([
+            { operation: 'driveCreateNodes', signAs: 'saved' },
+            { operation: 'driveUploadPrepare', signAs: 'saved' },
+            { operation: 'driveCreateNodes', signAs: 'saved' },
+            { operation: 'driveUploadRewrap', signAs: 'saved' },
+        ]);
+        const sibling = h.server.attached[0]!.input as { node: { id: string; idSeed: string } };
+        expect(scopedId('node', 'ws', sibling.node.idSeed)).toBe(sibling.node.id);
+
+        // A verified original's name with content that did not verify: chosen apart.
+        const mixed = harness();
+        mixed.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'mixed.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                signAs: { metadata: 'ordinary', version: 'resealed' },
+            },
+        ]);
+        await settle(2_000);
+        expect(mixed.signed.map((call) => call.signAs)).toEqual(['ordinary', 'resealed']);
+
+        // A file the person holds is theirs: ordinary.
+        const own = harness();
+        own.manager.enqueue([{ file: fakeFile(CHUNK, 'own.bin'), parent: node('root', null) }]);
+        await settle(2_000);
+        expect(own.signed.map((call) => call.signAs)).toEqual(['ordinary', 'ordinary']);
+
+        // A copy queued before copies said how to sign, restored: re-sealed, as copies were then.
+        const journal = createMemoryJournal();
+        const stash = fakeStash();
+        stash.files.set('old-copy', fakeFile(CHUNK, 'old.bin'));
+        await journal.putQueued({
+            id: 'q-old',
+            workspaceId: 'ws',
+            parentId: 'root',
+            parentName: 'root',
+            name: 'old.bin',
+            replacesId: null,
+            file: { name: 'old.bin', size: CHUNK, lastModified: 0, type: '' },
+            handle: null,
+            origin: 'copy',
+            stash: 'old-copy',
+            createdAt: 0,
+            updatedAt: 0,
+        });
+        const restored = harness({ journal, stash });
+        await restored.manager.restore('ws');
+        await settle(2_000);
+        expect(restored.signed.map((call) => call.signAs)).toEqual(['resealed', 'resealed']);
     });
 
     test('a copy comes back from its stash and finishes without being asked', async () => {

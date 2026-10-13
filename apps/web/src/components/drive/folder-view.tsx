@@ -306,7 +306,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         if (!nodes.length) return;
         try {
             const root = (await queryClient.fetchQuery(folderQueryOptions(rootId))).folder;
-            const made = await saveCopy(queryClient, nodes, root);
+            const made = await saveCopy(queryClient, nodes, root, 'drive');
             cue('droplet');
             toast.add({
                 type: 'success',

@@ -6,7 +6,11 @@ import { useState, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
-import { UnverifiedMark, useSignerNames } from '@/components/drive/unverified-mark';
+import {
+    SavedFromLinkLine,
+    UnverifiedMark,
+    useSignerNames,
+} from '@/components/drive/unverified-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
@@ -422,6 +426,7 @@ export function ItemDetails({
                     )}
                 </dd>
             </dl>
+            <SavedFromLinkLine node={node} />
             <div className="rounded-xl border border-rule">
                 <Fold title="Keep your own copy" name="own-copy">
                     <OwnCopy key={node.id} node={node} />
