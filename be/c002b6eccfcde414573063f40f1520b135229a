@@ -1,0 +1,32 @@
+crates/hushos-core/src/ids.rs
+  s_7c0f424aad5a1e::t_e95a5973dd6d05 1-170
+  s_7c0f424aad5a1e::t_4e845e58debd0b 171-194
+crates/hushos-core/AGENTS.md
+  s_7c0f424aad5a1e::t_ff4c2fd3a1075b 48-52
+crates/hushos-core/examples/fixtures.rs
+  s_7c0f424aad5a1e::t_2aa7b61d0c09e7 260-261,268,272-293,391
+crates/hushos-core/fixtures/web.json
+  s_7c0f424aad5a1e::t_65876d942c996c 4-5,10-12,14,18,21,23-24,26-27,30-31,34,37-39,41,45-47,51-53,61-62,65,68-71,74-75,78,83,87,92-95,98-99,102,107,113-116,119-120,123,128,134-137,140-141,144,149,153,158-161,164,166,653,657-659,665-667,669-672,674-677,679,681-682,684-691,695-696,698,700-703,705-706,709-710,715-722,725-728,732-733,736-737,739,743-744,748,751-752,756-759,763-766,769-772,776-777,781-783,785-788,790-793,798-803,805-897
+crates/hushos-core/src/lib.rs
+  s_7c0f424aad5a1e::t_a52e360516991c 4,20,34
+crates/hushos-core/src/signatures.rs
+  s_7c0f424aad5a1e::t_3eab6836d0beaf 7-8,11,40-42,66-69,119-122,124-142,150-154,157-167,176-180,184,188,192,196-204,227-233,237-240,244,253,256,259-262,265-269,275-280,283-288,292-294,296,298-299,303-310,312-330,436-484,486-490,512,515,524-570,578-579,823-975
+crates/hushos-core/tests/web_fixtures.rs
+  s_7c0f424aad5a1e::t_f1fe22fd506df7 548-622
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bec002b6eccfcde414573063f40f1520b135229a",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
