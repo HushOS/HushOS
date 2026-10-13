@@ -1,0 +1,27 @@
+docs/integrity-design.md
+  s_7c0f424aad5a1e::t_992dc8c606763e 260
+packages/auth/src/api.ts
+  s_7c0f424aad5a1e::t_d32710e03cdd17 111-115,119,121-125
+packages/auth/src/server.ts
+  s_7c0f424aad5a1e::t_45b478dff44e1a 678-680,682,685-687,691
+packages/db/src/auth.settings.test.ts
+  s_7c0f424aad5a1e::t_7cb828336e122f 36,65-66,86-87,89,139,141,144,146,150,154-155,157,163,165-175
+packages/db/src/auth.ts
+  s_7c0f424aad5a1e::t_94d891cabd17cf 1187-1191,1203-1206,1210-1215,1228,1233-1234,1237-1238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38bd01bef73d3e72baba8293da4de33e30f1c918",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
