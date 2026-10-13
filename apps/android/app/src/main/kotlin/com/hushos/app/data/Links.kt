@@ -27,7 +27,6 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 
 /* A link as the owner sees it: what `GET /api/drive/nodes/:id/links` lists. */
 data class LinkView(
@@ -93,11 +92,13 @@ object Reports {
     /*
      * The report body: the node key sealed to every operator with the
      * report's context bound in, so the server, holding public keys only,
-     * cannot open it, and an operator can open only this report.
+     * cannot open it, and an operator can open only this report. Its id is
+     * minted in the reported item's workspace and sent with its seed.
      */
     fun body(operators: List<ReportOperator>, item: Opened, nodeKey: ByteArray, category: String, reason: String, email: String?, via: JSONObject): JSONObject {
         if (operators.isEmpty()) throw ApiError(503, "This HushOS has no operators to report to.")
-        val reportId = UUID.randomUUID().toString()
+        val made = IdField.REPORT.mint(item.node.workspaceId)
+        val reportId = made.id
         val keys = JSONArray()
         for (operator in operators) {
             val ctx = ReportContext(item.node.workspaceId, item.id, item.node.keyEpoch, reportId, operator.userId)
@@ -105,7 +106,7 @@ object Reports {
             keys.put(JSONObject().put("operatorUserId", operator.userId).put("keyEnvelope", base64urlEncode(sealed)))
         }
         val trimmed = email?.trim().orEmpty()
-        return JSONObject().put("id", reportId).put("workspaceId", item.node.workspaceId).put("nodeId", item.id)
+        return JSONObject().putId(made).put("workspaceId", item.node.workspaceId).put("nodeId", item.id)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("category", category).put("reason", reason).put("via", via)
             .put("reporterEmail", if (trimmed.isEmpty()) JSONObject.NULL else trimmed).put("keys", keys)
     }

@@ -327,9 +327,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
         send("/workspaces/$workspaceId/epochs", JSONObject().put("count", 1)).getLong("from").toULong()
 
     override fun createRoot(workspaceId: String, root: RootInput): NodeView =
-        NodeView.from(send("/workspaces/$workspaceId/root", JSONObject().put("id", root.id).put("keyEpoch", root.keyEpoch.toLong())
-            .put("parentKeyEpoch", root.parentKeyEpoch.toLong()).put("keyEnvelope", root.keyEnvelope).put("metadataEnvelope", root.metadataEnvelope)
-            .put("metadataSignature", root.metadataSignature)).getJSONObject("root"))
+        NodeView.from(send("/workspaces/$workspaceId/root", root.body()).getJSONObject("root"))
 
     fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
         NodeView.from(send("/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
