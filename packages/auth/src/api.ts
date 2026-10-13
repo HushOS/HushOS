@@ -108,11 +108,21 @@ export interface AuthApi {
     /* Gives an identity made before hybrid sharing its KEM key, once; 409 when it already has one. */
     addIdentityKem(kem: IdentityKem): Promise<{ ok: true }>;
     lookupContact(email: string): Promise<{ contact: ContactIdentity }>;
+    /*
+     * `settingsVersion` is the stored sequence whatever is stored (0 for
+     * nothing); `settings` is null when nothing is stored or the stored
+     * document is version 1, which no client opens.
+     */
     settings(): Promise<{
         settings: StoredSettingsEnvelope | null;
         settingsKey: SettingsKeyEnvelope | null;
+        settingsVersion: number;
     }>;
-    /* Version 2 is refused with 409 until the settings key is stored. */
+    /*
+     * `expectedVersion` is the stored sequence read; the document must be
+     * sealed at that plus one, the sequence it is stored at. Version 2 only,
+     * refused with 409 until the settings key is stored.
+     */
     saveSettings(input: {
         expectedVersion: number;
         version?: 1 | 2;
