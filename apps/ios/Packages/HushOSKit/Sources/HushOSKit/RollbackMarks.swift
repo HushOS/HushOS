@@ -56,11 +56,16 @@ public struct SettingsMarks: Sendable {
 
     func mark(userId: String) -> UInt64 { marks.value(Self.key(userId: userId)) }
 
-    /* A served document (nil when the server says there is none) checked against the mark. */
+    /*
+     * A served document checked against the mark. None at all (nil) is not refused: the server
+     * serves a version 1 document, which no longer opens, as none, and refusing that would shut
+     * such an account out of its settings for good. It reads as empty settings, the mark stays
+     * where it is, and the save that follows replaces the old document above its sequence, so
+     * an older version served after that is still refused.
+     */
     func check(userId: String, served: UInt64?) throws {
-        let seen = mark(userId: userId)
-        guard seen > 0 else { return }
-        guard let served, served >= seen else { throw ContactError.message(Self.rolledBack) }
+        guard let served else { return }
+        guard served >= mark(userId: userId) else { throw ContactError.message(Self.rolledBack) }
     }
 
     func record(userId: String, version: UInt64) { marks.raise(Self.key(userId: userId), to: version) }

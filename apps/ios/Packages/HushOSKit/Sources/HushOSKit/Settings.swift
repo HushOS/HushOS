@@ -266,11 +266,18 @@ extension Vault {
             var settings = try await loadSettings()
             try change(&settings)
             let settingsKey = try await ensureSettingsKey(settings.keyEnvelope)
-            let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
+            var sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
-                try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
-                SettingsMarks.shared.record(userId: session.userId, version: settings.version + 1)
-                settings.version += 1
+                var stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
+                if stored != sealed.settingsVersion {
+                    // A version 1 document, served as none, is replaced above its old sequence, which the save could not
+                    // know: the version is bound into the seal, so what was stored doesn't open. Sealed again at once, over it.
+                    sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: stored + 1, json: try settings.json())
+                    stored = try await Auth.putSettings(expectedVersion: stored, envelope: sealed)
+                    guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
+                }
+                SettingsMarks.shared.record(userId: session.userId, version: stored)
+                settings.version = stored
                 settings.envelopeVersion = sealed.version
                 trustedSigners = nil
                 return settings

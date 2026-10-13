@@ -129,10 +129,13 @@ extension Auth {
 
     static func json(_ key: SettingsKeyEnvelope) -> [String: Any] { ["nonce": key.nonce, "ciphertext": key.ciphertext] }
 
-    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope) async throws {
-        _ = try await call("/api/auth/settings", method: "PUT", body: [
+    /* The settings version the server stored the document as. */
+    @discardableResult
+    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope) async throws -> UInt64 {
+        let reply = try await call("/api/auth/settings", method: "PUT", body: [
             "expectedVersion": expectedVersion, "version": envelope.version, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext,
         ])
+        return (reply["settingsVersion"] as? NSNumber)?.uint64Value ?? envelope.settingsVersion
     }
 
     /* Stored once; 409 (`AuthError.conflict`) when another device stored one first. */
