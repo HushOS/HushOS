@@ -15,10 +15,10 @@ import {
 /*
  * Who wrote what, end to end as two people (docs/integrity-design.md): what
  * the owner adds carries no mark; what someone they have not checked adds is
- * marked Unverified and says who, until they check that person's words; and
- * when one of them replaces their sharing keys, the other is told the change
- * is signed, nothing they wrote before turns Unverified, and what each shares
- * with the other still opens.
+ * marked Unverified, until they check that person's words; a check that cannot
+ * run shows Couldn't check, never no mark; and when one of them replaces their
+ * sharing keys, the other follows only when they check again, what the old keys
+ * signed turns Unverified, and what each shares with the other opens again.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -67,6 +67,40 @@ test('what the owner adds shows no mark', async () => {
     await maya.reload();
     await expect(row(maya, 'notes.md')).toBeVisible({ timeout: 60_000 });
     await expect(mark(maya, 'notes.md')).toHaveCount(0);
+});
+
+test('when the people she trusts can’t load, every row says Couldn’t check, and Try again clears it', async () => {
+    // The settings with her pins fail to load: nothing may be shown as clean.
+    const refuse = (url: URL) => url.pathname === '/api/auth/settings';
+    await maya.route(refuse, (route) =>
+        route.request().method() === 'GET'
+            ? route.fulfill({ status: 500, json: { message: 'Something went wrong.' } })
+            : route.continue(),
+    );
+    await maya.reload();
+    await expect(row(maya, 'notes.md')).toBeVisible({ timeout: 60_000 });
+    await expect(mark(maya, 'notes.md')).toHaveAttribute('data-integrity', 'unchecked', {
+        timeout: 60_000,
+    });
+    await expect(mark(maya, 'notes.md')).toHaveText('Couldn’t check');
+    // Info says the same, beside who wrote it.
+    const box = (await row(maya, 'notes.md').boundingBox())!;
+    await maya.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+    await expect(row(maya, 'notes.md')).toHaveAttribute('aria-selected', 'true');
+    await maya.keyboard.press('i');
+    const info = maya.locator('[data-details] [data-info="details"]');
+    await expect(info).toContainText('Not checked');
+    await expect(info.locator('[data-integrity]')).toHaveAttribute('data-integrity', 'unchecked');
+    await mark(maya, 'notes.md').hover();
+    const details = maya.locator('[data-integrity-details]');
+    await expect(details).toContainText('HushOS couldn’t check who wrote this. Try again later.');
+    // Once they load again, a retry checks again and her own file is clean.
+    await maya.unroute(refuse);
+    await mark(maya, 'notes.md').click();
+    await details.getByRole('button', { name: 'Try again' }).click();
+    await expect(mark(maya, 'notes.md')).toHaveCount(0, { timeout: 60_000 });
+    await expect(info.locator('[data-integrity]')).toHaveCount(0);
+    await maya.keyboard.press('i');
 });
 
 test('a file from someone not checked is Unverified, says who, and clears once checked', async () => {
@@ -121,19 +155,35 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await expect(mark(maya, 'notes.md')).toHaveCount(0);
     await mark(maya, 'module.ts').hover();
     const details = maya.locator('[data-integrity-details]');
+    // The server names the writer by account id alone: no name or address it could make up.
     await expect(details).toContainText(
-        `Added or last changed by Sam Okafor (${samEmail}), whom you haven’t checked yet.`,
+        'HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked.',
     );
+    await expect(details).not.toContainText('Sam');
     await mark(maya, 'module.ts').click();
     await details.getByRole('button', { name: 'Check their words' }).click();
-    const check = dialog(maya).filter({ hasText: 'Check it’s Sam Okafor' });
+    const check = dialog(maya).filter({ hasText: 'Check who wrote this' });
+    // Someone other than the writer is said not to be them, and cannot be checked from here.
+    await check.getByLabel('Email').fill(mayaEmail);
+    await check.getByRole('button', { name: 'Look up' }).click();
+    await expect(
+        check.getByText('This isn’t the account that wrote it.', { exact: false }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(check.getByRole('button', { name: 'They match' })).toBeDisabled();
+    await check.getByRole('button', { name: 'They don’t match' }).click();
+    await check.getByRole('button', { name: 'Back' }).click();
+    await expect(check).toHaveCount(0);
+    await mark(maya, 'module.ts').click();
+    await details.getByRole('button', { name: 'Check their words' }).click();
+    await check.getByLabel('Email').fill(samEmail);
+    await check.getByRole('button', { name: 'Look up' }).click();
     await expect(check.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
     await check.getByRole('button', { name: 'They match' }).click();
     await expect(check).toHaveCount(0);
     await expect(mark(maya, 'module.ts')).toHaveCount(0, { timeout: 30_000 });
 });
 
-test('after Sam replaces his sharing keys, Maya follows the signed change and shares still open both ways', async () => {
+test('after Sam replaces his sharing keys, Maya follows only when she checks, and his old keys vouch for nothing', async () => {
     // Something of Sam's shared with Maya, sealed and signed under his first keys.
     await sam.goto('/app/drive');
     await newFolder(sam);
@@ -159,12 +209,26 @@ test('after Sam replaces his sharing keys, Maya follows the signed change and sh
     await expect(sam.getByText('Sharing keys replaced')).toBeVisible({ timeout: 60_000 });
     await expect(dialog(sam)).toHaveCount(0);
 
-    // Maya's device follows the succession signed by the keys she checked, and says so.
+    // Maya's device does not follow his new keys by itself: his share waits for her to check.
     await maya.goto('/app/shared');
-    await expect(
-        maya.locator('[data-shared="From Sam"]').getByRole('link', { name: 'From Sam' }),
-    ).toBeVisible({ timeout: 60_000 });
+    await expect(maya.locator('[data-shared="Shared folder"]').getByRole('alert')).toContainText(
+        'Sam Okafor’s sharing keys changed since you checked them. Check them again in People you share with',
+        { timeout: 60_000 },
+    );
     await maya.goto('/app/people');
+    await expect(maya.locator(`[data-contact="${samEmail}"]`)).toBeVisible({ timeout: 60_000 });
+    await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
+
+    // Checking him looks his keys up and follows the succession signed by the keys she checked.
+    await maya.getByRole('button', { name: 'More for Sam Okafor' }).click();
+    await maya.getByRole('menuitem', { name: 'Check it’s them' }).click();
+    const checking = dialog(maya).filter({ hasText: 'Check it’s Sam' });
+    await expect(checking).toContainText(
+        'Sam replaced their sharing keys; the change is signed by their previous keys.',
+        { timeout: 60_000 },
+    );
+    await checking.getByRole('button', { name: 'Already in your contacts' }).click();
+    await expect(checking).toHaveCount(0);
     const notice = maya.locator(`[data-succession="${samEmail}"]`);
     await expect(notice).toContainText(
         'Sam Okafor replaced their sharing keys; the change is signed by their previous keys.',
@@ -173,11 +237,24 @@ test('after Sam replaces his sharing keys, Maya follows the signed change and sh
     // His contact counts as checked: nothing to check again.
     await expect(maya.locator(`[data-contact="${samEmail}"]`)).not.toContainText('Check again');
 
-    // What he wrote under his first keys still verifies.
+    // His share, sealed again under his new keys when he replaced them, opens.
+    await maya.goto('/app/shared');
+    await expect(
+        maya.locator('[data-shared="From Sam"]').getByRole('link', { name: 'From Sam' }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    // What he wrote under his first keys no longer verifies: keys replaced vouch for nothing.
     await maya.goto('/app/drive');
     await openFolder(maya, 'Together');
     await expect(row(maya, 'module.ts')).toBeVisible({ timeout: 60_000 });
-    await expect(mark(maya, 'module.ts')).toHaveCount(0);
+    await expect(mark(maya, 'module.ts')).toHaveAttribute('data-integrity', 'retired-key', {
+        timeout: 60_000,
+    });
+    await mark(maya, 'module.ts').hover();
+    await expect(maya.locator('[data-integrity-details]')).toContainText(
+        'Signed with keys Sam Okafor has since replaced.',
+    );
+    await expect(mark(maya, 'notes.md')).toHaveCount(0);
 
     // What Maya shared with him still opens on his side, though sealed to his first keys.
     await sam.goto('/app/shared');
