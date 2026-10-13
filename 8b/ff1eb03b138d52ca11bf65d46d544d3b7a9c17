@@ -1,0 +1,61 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_7c0f424aad5a1e::t_816e242b7e66d7 210-231
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FilesOwnerTests.swift
+  s_7c0f424aad5a1e::t_5f821b5d8ca113 1-198
+  s_7c0f424aad5a1e::t_9f6941674fb0cd 199-200
+apps/ios/Files/FileProviderExtension.swift
+  s_7c0f424aad5a1e::t_d67a96ea48f43e 42-44
+  s_14456ca7fad741::t_b7330de3eaa822 16-26,73-75,78,272-273
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountOwner.swift
+  s_7c0f424aad5a1e::t_ea8659db33e80e 1-50
+apps/ios/App/AppModel.swift
+  s_7c0f424aad5a1e::t_535df016ea4621 94
+  s_14456ca7fad741::t_7ce53f34f25923 9-11,28-29,83-85,106,110-121,128-130,132-147,160,174,187,218
+apps/ios/App/HushOSApp.swift
+  s_7c0f424aad5a1e::t_1f8b45904136f7 33-39
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FilesDomain.swift
+  s_7c0f424aad5a1e::t_76b901539da212 4-76,78-103,108-118,120-134,144-146,148-151,153,157
+  s_7c0f424aad5a1e::t_3100796f266e8a 152,154-156,158-159
+apps/ios/AGENTS.md
+  s_7c0f424aad5a1e::t_a0e981c4d0c4a8 20,22,48,66
+apps/ios/App/BackgroundTransfers.swift
+  s_7c0f424aad5a1e::t_d825ca0f5456a6 58-59,139-140,157-159,178,214-217,282,287,362,456,458-467,469,485-520,631,633
+apps/ios/Files/FileProviderEnumerator.swift
+  s_7c0f424aad5a1e::t_cad1058c8d3509 7,10,12,14,23,50,70
+apps/ios/FilesUI/FileProviderUIController.swift
+  s_7c0f424aad5a1e::t_cee16ca80777c1 135-137
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_7c0f424aad5a1e::t_b09d0732c8c8b8 9-12,38-55,59-61,65-66,68,72-87,101,103
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_7c0f424aad5a1e::t_5bcd56e7f5dafb 123
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_7c0f424aad5a1e::t_50b4649f4237a0 31-32,36,43
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_7c0f424aad5a1e::t_79b86a7387e933 61-63,65,67,70,75,77,85,90,101,103,105,115-116,120-155
+apps/ios/Share/SaveModel.swift
+  s_7c0f424aad5a1e::t_f1590fd889fb75 227-228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8bff1eb03b138d52ca11bf65d46d544d3b7a9c17",
+  "prompts": {},
+  "sessions": {
+    "s_14456ca7fad741": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a1c11deb7950f18a8",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
