@@ -1,0 +1,35 @@
+apps/ios/AGENTS.md
+  s_7c0f424aad5a1e::t_0c5098b7bedc99 89-92
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Integrity.swift
+  s_7c0f424aad5a1e::t_a8485a6312703f 203-204
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_7c0f424aad5a1e::t_517c97d3ddc2fb 164-165,168
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Reports.swift
+  s_7c0f424aad5a1e::t_a2a0bc7e2f5a56 47-49,63
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_7c0f424aad5a1e::t_3a21873abc5903 2,10-14,24-25,33,112-115,134,137,220-222,244-245,251,272
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_7c0f424aad5a1e::t_b23a504c5d21f4 215-216,227
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RootTests.swift
+  s_7c0f424aad5a1e::t_32bb8e02f70efb 53-54
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_7c0f424aad5a1e::t_4dbd0abeeb462c 196-201,277-350,367-368,397-398,540-542
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ScopedIdTests.swift
+  s_7c0f424aad5a1e::t_b0380dd4b0629b 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c48b6649b314cd99b2f9a103590620071eee7c9",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
