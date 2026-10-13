@@ -71,9 +71,12 @@ test('what the owner adds shows no mark', async () => {
 
 test('when the people she trusts can’t load, every row says Couldn’t check, and Try again clears it', async () => {
     // The settings with her pins fail to load: nothing may be shown as clean.
+    // Failing until the test says so, not until unrouted: the app retries the load by
+    // itself, and a retry that lands before Try again would clear the mark first.
+    let failing = true;
     const refuse = (url: URL) => url.pathname === '/api/auth/settings';
     await maya.route(refuse, (route) =>
-        route.request().method() === 'GET'
+        failing && route.request().method() === 'GET'
             ? route.fulfill({ status: 500, json: { message: 'Something went wrong.' } })
             : route.continue(),
     );
@@ -95,13 +98,17 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     await mark(maya, 'notes.md').hover();
     const details = maya.locator('[data-integrity-details]');
     await expect(details).toContainText('HushOS couldn’t check who wrote this. Try again later.');
-    // Once they load again, a retry checks again and her own file is clean.
-    await maya.unroute(refuse);
+    // Once they load again, a retry checks again and her own file is clean. The details
+    // stay open on a click, so Try again is in reach before the load is let through.
     await mark(maya, 'notes.md').click();
-    await details.getByRole('button', { name: 'Try again' }).click();
+    const again = details.getByRole('button', { name: 'Try again' });
+    await expect(again).toBeVisible();
+    failing = false;
+    await again.click();
     await expect(mark(maya, 'notes.md')).toHaveCount(0, { timeout: 60_000 });
     await expect(info.locator('[data-integrity]')).toHaveCount(0);
     await maya.keyboard.press('i');
+    await maya.unroute(refuse);
 });
 
 test('a file from someone not checked is Unverified, says who, and clears once checked', async () => {
@@ -203,6 +210,15 @@ test('a copy Sam saves of what Maya shared, which he checked, carries no mark', 
         .click({ position: { x: 16, y: 12 }, button: 'right' });
     await sam.getByRole('menuitem', { name: 'Save a copy to my files' }).click();
     await expect(sam.getByText(/to your files/)).toBeVisible({ timeout: 60_000 });
+    // That says it started. The copy uploads from this page, and a browser that cannot
+    // stash the bytes (WebKit) loses it to a navigation, so wait for it to land.
+    await expect(
+        sam
+            .locator('section[aria-label=Transfers]')
+            .getByRole('listitem')
+            .filter({ hasText: 'README' })
+            .last(),
+    ).toContainText('Uploaded', { timeout: 60_000 });
     await sam.goto('/app/drive');
     await expect(row(sam, 'README')).toBeVisible({ timeout: 90_000 });
     // Checked when copied, so signed as his own: no mark, and no saved-from-a-link line.
