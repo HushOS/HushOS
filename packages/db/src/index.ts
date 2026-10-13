@@ -5,6 +5,7 @@ export * as billingRepository from './billing';
 export * as driveRepository from './drive';
 export * as growthRepository from './growth';
 export { keyedHash, serverHashKey } from './hash-key';
+export { madeFor, scopedId, type IdKind } from './ids';
 export * as reportsRepository from './reports';
 export * as rotationsRepository from './rotations';
 export type { NodeRow, UploadRow, VersionRow } from './drive';

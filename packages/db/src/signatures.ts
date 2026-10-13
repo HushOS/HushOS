@@ -14,12 +14,18 @@ export const SIGNATURE_BYTES = 64;
 
 /*
  * Which statement a signature makes. `ordinary` vouches for who wrote the
- * record; `resealed` says only "I re-locked this; I don't vouch for who wrote
- * it", and is what rotation and copy sign over a record they could not check
- * (docs/integrity-design.md, round 3). The server accepts either on every
- * signed write; readers tell them apart.
+ * record; `saved` says "I saved this from a link" (a trailing "link" names
+ * the source), and is what a save from a link signs over everything it
+ * creates; `resealed` says only "I re-locked this; I don't vouch for who
+ * wrote it", and is what rotation and copy sign over a record they could not
+ * check (docs/integrity-design.md, round 3 and "Saved copies"). The server
+ * accepts any of the three on every signed write; readers tell them apart.
  */
-export type StatementForm = 'ordinary' | 'resealed';
+export type StatementForm = 'ordinary' | 'saved' | 'resealed';
+const FORMS: readonly StatementForm[] = ['ordinary', 'saved', 'resealed'];
+const SAVED_FROM_LINK = 'link';
+const label = (record: 'metadata' | 'version', form: StatementForm) =>
+    form === 'ordinary' ? `hushos/drive/sig/${record}` : `hushos/drive/sig/${record}-${form}`;
 
 /* SHA-256, Base64url without padding. */
 export function digest(bytes: Uint8Array) {
@@ -39,13 +45,14 @@ export type MetadataStatementInput = {
 };
 export function metadataStatement(input: MetadataStatementInput, form: StatementForm = 'ordinary') {
     return statement([
-        form === 'resealed' ? 'hushos/drive/sig/metadata-resealed' : 'hushos/drive/sig/metadata',
+        label('metadata', form),
         1,
         input.workspaceId.toLowerCase(),
         input.nodeId.toLowerCase(),
         input.kind,
         input.metadataVersion,
         digest(input.metadataEnvelope),
+        ...(form === 'saved' ? [SAVED_FROM_LINK] : []),
     ]);
 }
 
@@ -59,7 +66,7 @@ export type VersionStatementInput = {
 };
 export function versionStatement(input: VersionStatementInput, form: StatementForm = 'ordinary') {
     return statement([
-        form === 'resealed' ? 'hushos/drive/sig/version-resealed' : 'hushos/drive/sig/version',
+        label('version', form),
         1,
         input.workspaceId.toLowerCase(),
         input.nodeId.toLowerCase(),
@@ -67,6 +74,7 @@ export function versionStatement(input: VersionStatementInput, form: StatementFo
         input.objectId.toLowerCase(),
         input.contentSuite,
         digest(input.contentKeyEnvelope),
+        ...(form === 'saved' ? [SAVED_FROM_LINK] : []),
     ]);
 }
 
@@ -112,7 +120,7 @@ export function verifySignature(publicKey: Uint8Array, message: Uint8Array, sign
 
 /*
  * A signature and the statements it may be over: the ordinary one first, then
- * the re-sealed one. It holds when it verifies over any of them.
+ * the saved one, then the re-sealed one. It holds when it verifies over any of them.
  */
 export type SignedStatement = { messages: Buffer[]; signature: Uint8Array };
 
@@ -121,7 +129,7 @@ export function metadataSigned(
     signature: Uint8Array,
 ): SignedStatement {
     return {
-        messages: [metadataStatement(input), metadataStatement(input, 'resealed')],
+        messages: FORMS.map((form) => metadataStatement(input, form)),
         signature,
     };
 }
@@ -131,12 +139,12 @@ export function versionSigned(
     signature: Uint8Array,
 ): SignedStatement {
     return {
-        messages: [versionStatement(input), versionStatement(input, 'resealed')],
+        messages: FORMS.map((form) => versionStatement(input, form)),
         signature,
     };
 }
 
-/* Whether `signed` holds under the raw Ed25519 `publicKey`, in either form. */
+/* Whether `signed` holds under the raw Ed25519 `publicKey`, in any form. */
 export function verifySigned(publicKey: Uint8Array, signed: SignedStatement) {
     return signed.messages.some((message) => verifySignature(publicKey, message, signed.signature));
 }
