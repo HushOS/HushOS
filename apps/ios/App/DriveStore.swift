@@ -443,6 +443,15 @@ final class DriveStore {
         trust.provenance(of: version, in: item.node)
     }
 
+    /* Saved from a link: no mark, and this line in Info and the viewer. */
+    func savedCopy(of item: Opened) -> SavedCopy? {
+        trust.savedCopy(of: item.node)
+    }
+
+    func savedCopy(of version: VersionListView, in item: Opened) -> SavedCopy? {
+        trust.savedCopy(of: version, in: item.node)
+    }
+
     /* The nearest folder, from `folderId` up, that is shared: the one the access banner speaks for. */
     func sharedAncestor(from folderId: String) -> String? {
         var cursor: String? = folderId
@@ -741,8 +750,8 @@ final class DriveStore {
                     finish(ticket, failed: !ok, message: why)
                 } else {
                     // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                    // Out of someone's share it is a saved copy: re-sealed, never vouched for.
-                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder, resealed: !isOwn(item)) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                    // Signed by what the original verified as: someone's share is vouched for only from a checked contact.
+                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
                     if ok && cut { await trash(item) }
                 }
@@ -1098,7 +1107,7 @@ final class DriveStore {
                 across = true
                 let ticket = begin(.copy, item.name)
                 var why: String?
-                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder, resealed: !isOwn(item)) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                 finish(ticket, failed: !ok, message: why)
                 if ok, await perform(in: item.node.parentId, { try await vault.trash(item.id) }) { moved.append(item) }
             }
@@ -1133,8 +1142,8 @@ final class DriveStore {
         let ticket = begin(.copy, item.name)
         var why: String?
         let ok = await perform(in: root, failed: { why = $0 }) {
-            // Someone else's: re-sealed, whatever its signatures said, since this person never vouched for them.
-            _ = try await vault.copyAcross(item.id, to: root, name: name, resealed: true) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            // Signed by what it verified as: a checked contact's own work stays clean, anything else is re-sealed.
+            _ = try await vault.copyAcross(item.id, to: root, name: name) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
         }
         finish(ticket, failed: !ok, message: why)
     }
@@ -1156,8 +1165,8 @@ final class DriveStore {
         let taken = (try? await vault.children(of: parent))?.map(\.name) ?? []
         let name = Self.freeName(item.name, among: taken)
         if item.isFolder {
-            // A visitor sees no signatures: everything saved from a link is re-sealed, never vouched for.
-            let made = try await vault.createFolder(in: parent, name: name, signing: .resealed)
+            // A visitor sees no signatures: everything saved from a link says so (the saved statement), no more.
+            let made = try await vault.createFolder(in: parent, name: name, signing: .savedFromLink)
             for child in try await link.children(of: item.id) { try await copy(from: link, item: child, into: made.id, ticket: ticket) }
             return
         }
@@ -1168,7 +1177,7 @@ final class DriveStore {
         try await link.download(item, to: file) { fraction in Task { @MainActor in self.progress(ticket, fraction / 2) } }
         let thumbnail = try? await link.thumbnail(item)
         _ = try await vault.upload(fileURL: file, name: name, mime: item.metadata.mime, in: parent, replacing: nil, thumbnail: thumbnail,
-                                   signing: (.resealed, .resealed)) { fraction in
+                                   signing: (.savedFromLink, .savedFromLink)) { fraction in
             Task { @MainActor in self.progress(ticket, 0.5 + fraction / 2) }
         }
     }

@@ -468,3 +468,84 @@ extension OnFakeDrive {
         }
     }
 }
+
+/*
+ * A copy saved from a link carries no mark and says where it came from, but only when someone
+ * this person trusts signed the saved statement under their current key: the statement is
+ * not a way for anyone else to take a record's warning away.
+ */
+struct SavedCopyTests {
+    let workspace = UUID().uuidString.lowercased()
+    let me = UUID().uuidString.lowercased()
+    let maya = UUID().uuidString.lowercased()
+
+    /* A file `writer` signed with the saved statements; with `versionResealed` its version re-sealed instead. */
+    func savedFile(by writer: IdentityKeys, as signer: Signer, versionResealed: Bool = false) throws -> NodeView {
+        let id = UUID().uuidString.lowercased()
+        let versionId = UUID().uuidString.lowercased()
+        let objectId = UUID().uuidString.lowercased()
+        let metadata = try randomBytes(length: 64)
+        let contentKey = try randomBytes(length: 84)
+        let versionStatement = VersionStatement(workspaceId: workspace, nodeId: id, versionId: versionId, objectId: objectId, contentSuite: 3)
+        let versionSignature = versionResealed
+            ? try versionResealedSign(signingSeed: writer.signingSeed, statement: versionStatement, contentKeyEnvelope: contentKey)
+            : try versionSavedSign(signingSeed: writer.signingSeed, statement: versionStatement, contentKeyEnvelope: contentKey)
+        let version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: base64urlEncode(bytes: contentKey), status: "ready",
+                                  contentSuite: 3, chunkCount: 1, contentNonce: "", plaintextSize: nil, ciphertextSize: nil, readyAt: nil,
+                                  signer: signer, signature: base64urlEncode(bytes: versionSignature))
+        let metadataSignature = try metadataSavedSign(signingSeed: writer.signingSeed,
+                                                      statement: MetadataStatement(workspaceId: workspace, nodeId: id, kind: .file, metadataVersion: 1),
+                                                      metadataEnvelope: metadata)
+        return NodeView(id: id, workspaceId: workspace, parentId: "p", kind: "file", keyEpoch: 1, parentKeyEpoch: 1, keyEnvelope: "",
+                        metadataVersion: 1, metadataEnvelope: base64urlEncode(bytes: metadata), currentVersion: version, trashedAt: nil,
+                        changeSeq: 1, createdAt: nil, updatedAt: nil, metadataSigner: signer, metadataSignature: base64urlEncode(bytes: metadataSignature))
+    }
+
+    @Test func savedByThisPersonOrACheckedContactHasNoMarkAndSaysWhoSavedIt() throws {
+        let mine = try makeIdentity(me).keys
+        let mayas = try makeIdentity(maya).keys
+        let trusted = try TrustedSigners(userId: me, identities: [mine], pins: [try pinned(maya, mayas)])
+
+        let byMe = try savedFile(by: mine, as: Signer(id: me))
+        #expect(trusted.provenance(of: byMe) == nil)
+        #expect(trusted.savedCopy(of: byMe)?.line == "Saved from a link by you. HushOS can’t confirm who made the original.")
+
+        let byMaya = try savedFile(by: mayas, as: Signer(id: maya))
+        #expect(trusted.provenance(of: byMaya) == nil)
+        #expect(trusted.savedCopy(of: byMaya)?.line == "Saved from a link by Maya. HushOS can’t confirm who made the original.")
+    }
+
+    @Test func aSavedStatementBySomeoneUncheckedKeepsItsMark() throws {
+        let mine = try makeIdentity(me).keys
+        let stranger = UUID().uuidString.lowercased()
+        let trusted = try TrustedSigners(userId: me, identities: [mine], pins: [])
+        // A server or a stranger planting a record signed "saved" must not make it look kept on purpose.
+        let planted = try savedFile(by: try makeIdentity(stranger).keys, as: Signer(id: stranger))
+        #expect(trusted.provenance(of: planted) == .unknownSigner(signerId: stranger))
+        #expect(trusted.savedCopy(of: planted) == nil)
+        // Nor one in this person's name under someone else's key.
+        let forged = try savedFile(by: try makeIdentity(me).keys, as: Signer(id: me))
+        #expect(trusted.provenance(of: forged) == .badSignature(.you))
+        #expect(trusted.savedCopy(of: forged) == nil)
+    }
+
+    @Test func aMarkOnEitherRecordWinsOverSaved() throws {
+        let mine = try makeIdentity(me).keys
+        let trusted = try TrustedSigners(userId: me, identities: [mine], pins: [])
+        let mixed = try savedFile(by: mine, as: Signer(id: me), versionResealed: true)
+        #expect(trusted.provenance(of: mixed) == .resealed(.you))
+        #expect(trusted.savedCopy(of: mixed) == nil)
+    }
+
+    @Test func noLineUntilTheTrustSetLoadsAndCouldntCheckWhenItFails() throws {
+        let mine = try makeIdentity(me).keys
+        let node = try savedFile(by: mine, as: Signer(id: me))
+        var cache = VerdictCache()
+        #expect(TrustState.pending.savedCopy(of: node) == nil)
+        #expect(TrustState.failed("offline").savedCopy(of: node) == nil)
+        #expect(cache.provenance(of: node, under: .failed("offline")) == .unchecked)
+        let loaded = TrustState.loaded(try TrustedSigners(userId: me, identities: [mine], pins: []))
+        #expect(cache.provenance(of: node, under: loaded) == nil)
+        #expect(loaded.savedCopy(of: node) == SavedCopy(writer: .you))
+    }
+}

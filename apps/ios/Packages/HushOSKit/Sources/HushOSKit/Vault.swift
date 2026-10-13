@@ -212,7 +212,8 @@ public actor Vault {
     private func makeRoot(_ view: WorkspaceView) async throws -> WorkspaceView {
         guard let grant = view.grant, let workspaceKey else { throw DriveAPIError.server(404, "No workspace grant") }
         let epochs = try await api.allocateEpochs(workspaceId: view.workspaceId, count: 1)
-        let id = UUID().uuidString.lowercased()
+        let minted = try mint(.node, in: view.workspaceId)
+        let id = minted.id
         let key = try randomBytes(length: 32)
         let parentKeyEpoch = grant.workspaceKeyVersion
         let ctx = NodeKeyContext(workspaceId: view.workspaceId, nodeId: id, parentId: view.workspaceId, parentKeyEpoch: parentKeyEpoch, keyEpoch: epochs.from)
@@ -223,7 +224,7 @@ public actor Vault {
         )
         let signature = try await signMetadata(workspaceId: view.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
         let made = try await api.createRoot(workspaceId: view.workspaceId, root: [
-            "id": id, "keyEpoch": epochs.from, "parentKeyEpoch": parentKeyEpoch,
+            "id": id, "idSeed": minted.seed, "keyEpoch": epochs.from, "parentKeyEpoch": parentKeyEpoch,
             "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed),
             "metadataSignature": signature,
         ])

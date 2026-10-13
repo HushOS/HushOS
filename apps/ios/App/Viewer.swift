@@ -82,6 +82,10 @@ struct FileViewer: View {
                 if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
                     // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
                     UnverifiedMark(provenance: provenance).frame(minHeight: 16)
+                } else if let saved = version.map({ store.savedCopy(of: $0, in: current) }) ?? store.savedCopy(of: current) {
+                    // Saved from a link: where it came from, in the subtitle's place and colour.
+                    Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
                 }

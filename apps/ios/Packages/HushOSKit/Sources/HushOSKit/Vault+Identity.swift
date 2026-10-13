@@ -38,15 +38,21 @@ extension Auth {
 }
 
 /*
- * How a write signs an envelope it sealed. Content this person wrote is their own; a record
- * sealed again (rotation, a copy) is signed only after it was checked as it was, ordinary
- * when it verified and re-sealed otherwise; a copy saved from a link or someone's share is
- * always re-sealed, since its signatures were never this person's to vouch for.
+ * How a write signs an envelope it sealed. Content this person wrote is their own. A record
+ * sealed again in place (rotation, rename, a replacement's name) or copied is signed only
+ * after it was checked as it was: ordinary when it verified, saved when it verified as saved
+ * from a link, re-sealed otherwise, and refused when the check could not run. A copy saved
+ * from a link is signed with the saved statement whatever it was: a visitor sees no
+ * signatures, so it says where the copy came from and vouches for nothing more.
  */
 public enum Signing: Sendable, Equatable {
     case own
+    /* Sealed again in place; the record's verdict as it was. */
     case after(Integrity)
-    case resealed
+    /* A copy (in this drive, into another, or out of someone's share); the original's verdict. */
+    case copy(Integrity)
+    /* Saved from a link, and the folders such a save makes. */
+    case savedFromLink
 }
 
 /*
@@ -110,7 +116,8 @@ extension Vault {
         switch signing {
         case .own: signature = try metadataSign(signingSeed: seed, statement: statement, metadataEnvelope: envelope)
         case .after(let prior): signature = try metadataResealSign(signingSeed: seed, prior: prior, statement: statement, metadataEnvelope: envelope)
-        case .resealed: signature = try metadataResealedSign(signingSeed: seed, statement: statement, metadataEnvelope: envelope)
+        case .copy(let prior): signature = try metadataCopySign(signingSeed: seed, prior: prior, fromLink: false, statement: statement, metadataEnvelope: envelope)
+        case .savedFromLink: signature = try metadataCopySign(signingSeed: seed, prior: .unchecked, fromLink: true, statement: statement, metadataEnvelope: envelope)
         }
         return base64urlEncode(bytes: signature)
     }
@@ -123,7 +130,8 @@ extension Vault {
         switch signing {
         case .own: signature = try versionSign(signingSeed: seed, statement: statement, contentKeyEnvelope: envelope)
         case .after(let prior): signature = try versionResealSign(signingSeed: seed, prior: prior, statement: statement, contentKeyEnvelope: envelope)
-        case .resealed: signature = try versionResealedSign(signingSeed: seed, statement: statement, contentKeyEnvelope: envelope)
+        case .copy(let prior): signature = try versionCopySign(signingSeed: seed, prior: prior, fromLink: false, statement: statement, contentKeyEnvelope: envelope)
+        case .savedFromLink: signature = try versionCopySign(signingSeed: seed, prior: .unchecked, fromLink: true, statement: statement, contentKeyEnvelope: envelope)
         }
         return base64urlEncode(bytes: signature)
     }
