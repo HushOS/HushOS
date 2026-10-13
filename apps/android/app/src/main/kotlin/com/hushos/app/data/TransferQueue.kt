@@ -169,21 +169,30 @@ object TransferQueue {
     /*
      * The ongoing notification Android requires while a job runs: the up arrow for uploads,
      * the down arrow for keeping a file on this phone, and a tap that opens the transfers sheet.
-     * No Cancel here: cancelling asks first, in the app. The title names the file, so it is kept off
-     * the lock screen altogether (VISIBILITY_SECRET: a private notification's public version is shown
-     * only when the person chose to hide sensitive content, and the default shows everything), and
-     * nothing is bridged to a watch or another device.
+     * No Cancel here: cancelling asks first, in the app. The title names the file, so it is private:
+     * a lock screen that hides sensitive content shows the public version, which says only what kind
+     * of transfer is running and how far it is. Nothing is bridged to a watch or another device.
      */
+    /* The ongoing notification's lock-screen title: the kind of transfer, never what is moving. */
+    fun publicTitle(keeping: Boolean) = if (keeping) "Keeping files on this phone" else "Uploading files"
+
     internal fun foreground(context: Context, id: Int, title: String, fraction: Float, keeping: Boolean = false, detail: String? = null): ForegroundInfo {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL) == null)
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW).apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW))
         val open = android.app.PendingIntent.getActivity(
             context, 0,
             android.content.Intent(context, com.hushos.app.MainActivity::class.java).setAction(OPEN_TRANSFERS).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val icon = if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload
+        // No name in it: the lock screen's copy.
+        val public = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(icon)
+            .setContentTitle(publicTitle(keeping))
+            .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
+            .setLocalOnly(true)
+            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(icon)
             .setContentTitle(title)
@@ -192,7 +201,8 @@ object TransferQueue {
             .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
             .setOngoing(true)
             .setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(public)
             .setLocalOnly(true)
             .build()
         return ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)

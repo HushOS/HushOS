@@ -22,9 +22,8 @@ import java.net.URLEncoder
  * queue has nothing left running (not once per file), on its own channel apart from the
  * ongoing progress notification, never while the app is on screen (the transfers sheet
  * says it there). Tapping it opens the transfers sheet; a failure that Retry can help
- * carries a Retry action. Names stay off the lock screen: the notification is secret there
- * (a private one shows in full under the default lock-screen setting), so the lock screen
- * shows nothing of it and the names appear only once the phone is unlocked.
+ * carries a Retry action. It is private: a lock screen that hides sensitive content shows its
+ * public version, which counts what finished or didn't and names nothing.
  */
 object TransferNotices {
     private const val CHANNEL = "transfer-results"
@@ -57,6 +56,19 @@ object TransferNotices {
         if (ended.all { it.upload }) return "${ended.size} ${if (ended.size == 1) "file" else "files"} uploaded" to names(ended)
         if (ended.size == 1) return "“${ended[0].name}” is on this phone" to null
         return "${ended.size} transfers finished" to names(ended)
+    }
+
+    /* The lock screen's copy of the summary: how many finished or didn't, and of what kind, naming nothing. */
+    fun publicWords(ended: List<Outcome>): String {
+        val failed = ended.count { it.reason != null }
+        val uploads = ended.all { it.upload }
+        fun count(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+        return when {
+            failed > 0 -> count(failed, if (uploads) "upload" else "transfer", if (uploads) "uploads" else "transfers") + " didn’t finish"
+            uploads -> count(ended.size, "file", "files") + " uploaded"
+            ended.none { it.upload } -> count(ended.size, "item", "items") + " kept on this phone"
+            else -> count(ended.size, "transfer", "transfers") + " finished"
+        }
     }
 
     /* “a”, “a” and “b”, or “a”, “b” and 3 more. */
@@ -120,7 +132,7 @@ object TransferNotices {
             androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
         val system = context.getSystemService(NotificationManager::class.java)
         if (system.getNotificationChannel(CHANNEL) == null)
-            system.createNotificationChannel(NotificationChannel(CHANNEL, "Finished transfers", NotificationManager.IMPORTANCE_DEFAULT).apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
+            system.createNotificationChannel(NotificationChannel(CHANNEL, "Finished transfers", NotificationManager.IMPORTANCE_DEFAULT))
         val (title, body) = words(ended)
         val failed = ended.any { it.reason != null }
         val id = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
@@ -146,7 +158,12 @@ object TransferNotices {
             .setStyle(body?.let { NotificationCompat.BigTextStyle().bigText(it) })
             .setContentIntent(open)
             .setAutoCancel(true)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(NotificationCompat.Builder(context, CHANNEL)
+                .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
+                .setContentTitle(publicWords(ended))
+                .setLocalOnly(true)
+                .build())
             // File names stay on this phone: never bridged to a watch or another device.
             .setLocalOnly(true)
         // Retry where it can work: the failures still on the record whose reason a retry can fix.

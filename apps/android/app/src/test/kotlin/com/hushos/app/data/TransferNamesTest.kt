@@ -28,4 +28,25 @@ class TransferNamesTest {
         assertFalse(TransferQueue.isNoRoom("Couldn’t reach HushOS. Check your connection, then retry."))
         assertFalse(TransferQueue.isNoRoom(null))
     }
+
+    @Test
+    fun theLockScreensCopiesNameNoFileAndStillSayWhatHappened() {
+        val names = listOf("Divorce papers.pdf", "Biopsy results.png", "Lisbon")
+        val cases = listOf(
+            listOf(TransferNotices.Outcome("1", names[0], upload = true)),
+            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("2", names[1], upload = true, reason = "It didn’t upload.")),
+            listOf(TransferNotices.Outcome("3", names[2], upload = false)),
+            listOf(TransferNotices.Outcome("1", names[0], upload = true), TransferNotices.Outcome("3", names[2], upload = false)),
+        )
+        for (ended in cases) {
+            val shown = TransferNotices.publicWords(ended)
+            // The full summary does name them (behind the lock); its public copy never does.
+            assertTrue(names.any { TransferNotices.words(ended).toList().joinToString().contains(it) })
+            assertFalse("“$shown” names a file", names.any { shown.contains(it) } || shown.contains("“"))
+        }
+        assertEquals("1 file uploaded", TransferNotices.publicWords(cases[0]))
+        assertEquals("1 upload didn’t finish", TransferNotices.publicWords(cases[1]))
+        assertEquals("1 item kept on this phone", TransferNotices.publicWords(cases[2]))
+        assertFalse(TransferQueue.publicTitle(keeping = false).contains("“"))
+    }
 }
