@@ -248,7 +248,7 @@ Share suites 1 and 2 and settings envelope version 1 no longer open anywhere (TS
 
 ### Sizes, stated plainly
 
-Padmé rounds the padded content up to a bucket that grows with the file: below 256 bytes everything is 256; otherwise at most about 12% is added, so the server learns a file's size to within roughly 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB. The security page, privacy policy and llms.txt say this instead of "the size of each encrypted object".
+Padmé rounds the padded content up to a bucket that grows with the file: below 256 bytes everything is 256; otherwise at most 6.25% is added (the bucket is at most a sixteenth of the size, and smaller still above 64 KiB), so the server learns a file's size to within roughly 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB. The security page, privacy policy and llms.txt say this instead of "the size of each encrypted object".
 
 ### API contract (round 3)
 
