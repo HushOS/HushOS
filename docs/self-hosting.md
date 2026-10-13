@@ -331,12 +331,29 @@ Shares to accounts and links for anyone both keep the server out of the key:
 
 Nothing here needs configuration beyond `APP_ORIGIN` (the address in the email and in links) and the email adapter. Visitor routes under `/api/drive/links/` take no session and are bounded per address and per token, so a reverse proxy must pass the real client address the way it does for sign-in.
 
+### Link tokens and access logs
+
+A link's token names the link to the server, and whoever holds it can fetch the link's encrypted tree (the key to open it stays in the fragment). The API takes it only in the `x-link-token` request header, never in a path, so it does not land in a proxy's access log through the API. A proxy must pass that header through unchanged. A client from before this release used paths with the token in them; those paths now answer 410 "Update HushOS to open links".
+
+The page itself is still `/s/<token>`, so the token is in the path of that one request. The app's own logs record it as `/s/:token`. Keep `/s/` out of your reverse proxy's access logs too, or log those requests without the path. With nginx:
+
+```nginx
+location /s/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:5173;
+}
+```
+
+Caddy 2.8 and later: `log_skip /s/*` in the site block.
+
+A link page does not ask for the session until the visitor chooses to sign in or save a copy. The request for the page itself is a top-level navigation, so a visitor who is signed in to this instance sends their session cookie with it, and the server could tie that request to their account.
+
 ### Live folders
 
 Open folders stay current without a reload. While the tab is visible, the app polls every eight seconds:
 
 - the workspace's change feed, `GET /api/drive/workspaces/:id/changes?since=`;
-- the feed of every share it holds, `GET /api/drive/shares/:id/changes?since=`, which answers 410 once the share ends.
+- the feed of every share it holds, `GET /api/drive/shares/:id/changes?cursor=`, which answers 410 once the share ends. It carries only changes inside the share, deletions included, with an opaque cursor sealed by the server and bound to the share, so a grantee learns nothing of the rest of the owner's drive or how often it changes.
 
 Only the folders a change touched are refetched. A poll with nothing new costs one row.
 
@@ -377,7 +394,7 @@ The reporter's device seals the item's key to the identity key of every current 
 ### What a report holds
 
 - The category and the reporter's reason.
-- Who reported: the account, or an optional email and, for an anonymous visitor, an HMAC of their address, used to allow one open report per address and node. Both are deleted when the report is released.
+- Who reported: the account and the share they saw it through, or an optional email and, for an anonymous visitor, an HMAC of their address, used to allow one open report per address and node. All of it, and the reason, is deleted when the report is released.
 - Whose files they are, and how the reporter could see them.
 - No digest of the content. An operator who needs one (to file with an authority, say) works it out on their own device from the opened file, with SHA-256 on the report page, for files up to 64 MiB.
 - A snapshot of the reported subtree: every live node beneath the reported one, up to 2,000, with the envelopes and object framing needed to open it later. The snapshot is what makes a report outlive the owner's deletions.
@@ -405,10 +422,11 @@ While a report is open, and afterwards for as long as it is held, the deletion o
 
 - lets the bytes go to ordinary deletion;
 - deletes the operators' sealed copies of the item's key;
-- deletes the anonymous reporter's address HMAC and email, and the uploader's email;
+- deletes who reported it (the account and the share it was seen through, or the anonymous reporter's address HMAC and email), the reason in the reporter's words, and the uploader's email;
+- clears the snapshot's envelopes, signatures and signers;
 - deletes the report's evidence requests, and has the worker delete its evidence copy.
 
-The category, the reason, the record of who did what, and the snapshot stay. The snapshot's envelopes open nothing without the key, and the worker needs its object ids to find the evidence copies it deletes.
+The category, the record of what operators did (the "reported" entry loses its actor), and the snapshot's shape stay: the worker needs its object ids to find the evidence copies it deletes.
 
 The release ends the server's part, not what an operator kept. An operator who opened the report had the item's node key on their device and could have kept it; that key opens the item, every version, and everything the owner adds beneath it later, for anyone who also has the ciphertext. Whoever runs the instance should treat operator devices accordingly.
 
@@ -594,7 +612,7 @@ Nitro emits one evlog completion event for each request, including pre-parser au
 
 - Production output (`NODE_ENV=production`, which the images and `bun run start` set) is JSON; development output is readable text.
 - Redaction is enabled in both environments, with an auth-specific field allowlist.
-- Logs contain request IDs, routes, status, duration, and operation outcomes. They exclude auth bodies, cookies, keys, passwords, recovery phrases, and raw protocol/provider/database errors.
+- Logs contain request IDs, routes, status, duration, and operation outcomes. They exclude auth bodies, cookies, keys, passwords, recovery phrases, every field named for an envelope or a signature, the settings key, link tokens, and raw protocol/provider/database errors.
 - No external drain is configured.
 
 ### Allowances

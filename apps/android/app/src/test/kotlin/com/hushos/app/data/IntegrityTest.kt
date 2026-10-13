@@ -5,14 +5,18 @@ import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
 import com.hushos.core.identityFingerprint
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /*
- * What a row shows for who wrote it (docs/integrity-design.md, "Reading"). The node, its version and both
- * signatures are the web's fixture, signed by the fixture identity, so a verdict here is a verdict on the
- * web's bytes. The server only names the writer: a record is verified only under keys this device trusts
- * for that name, and a server that relabels, replays or rewrites a record gets it marked, never passed.
+ * What a row shows for who wrote it (docs/integrity-design.md, "Reading" and "Round 3"). The node, its version and
+ * their signatures (ordinary and re-sealed) are the web's fixture, signed by the fixture identity, so a verdict here
+ * is a verdict on the web's bytes. The server names the writer by account id alone: a record is verified only under
+ * the current key this device trusts for that id, a name comes only from a pin, and anything this device could not
+ * check is marked, never passed.
  */
 class IntegrityTest {
     private val fixture = WebFixture.json
@@ -23,8 +27,9 @@ class IntegrityTest {
     private val identity = fixture.getJSONObject("share").getJSONObject("identity")
     private val writerEncryption = identity.getString("encryptionPublicKey")
     private val me = "11111111-1111-4111-8111-111111111111"
-    private val maya = Signer("22222222-2222-4222-8222-222222222222", "Maya Lindqvist", "maya@example.org")
-    private val sam = Signer("33333333-3333-4333-8333-333333333333", "Sam", "sam@example.org")
+    private val maya = Signer("22222222-2222-4222-8222-222222222222")
+    private val sam = Signer("33333333-3333-4333-8333-333333333333")
+    private val otherKey = base64urlEncode(ByteArray(32) { 6 }.also { it[0] = 1 })
 
     private fun node(
         metadataSigner: Signer? = maya, metadataSignature: String? = metadata.getString("signature"),
@@ -40,11 +45,11 @@ class IntegrityTest {
         )
     }
 
-    private fun pin(userId: String, signing: String, encryption: String = writerEncryption, fingerprint: String? = null, previous: List<String> = emptyList()) =
-        ContactPin(userId, "x@example.org", "X", encryption, signing,
+    private fun pin(userId: String, signing: String, encryption: String = writerEncryption, fingerprint: String? = null, previous: List<String> = emptyList(), name: String = "Maya Lindqvist") =
+        ContactPin(userId, "x@example.org", name, encryption, signing,
             fingerprint ?: identityFingerprint(base64urlDecode(encryption), base64urlDecode(signing)), "2026-10-01T00:00:00Z", null, previousSigningKeys = previous)
 
-    private fun trust(vararg pins: ContactPin) = Trust.of(me, emptyList(), pins.associateBy { it.userId })
+    private fun trust(vararg pins: ContactPin) = Trust.of(me, ByteArray(32) { 9 }, emptyList(), pins.associateBy { it.userId })
 
     @Test
     fun aRecordSignedByAContactWhoseWordsWereCheckedShowsNothing() {
@@ -52,24 +57,57 @@ class IntegrityTest {
     }
 
     @Test
-    fun ownRecordsVerifyUnderOwnKeysCurrentOrEarlier() {
-        val mine = node(Signer(me, "Me", "me@example.org"), versionSigner = Signer(me, "Me", "me@example.org"))
-        assertNull(unverifiedOf(mine, Trust.of(me, listOf(ByteArray(32) { 9 }, base64urlDecode(writerKey)), emptyMap())))
-        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(mine, Trust.of(me, listOf(ByteArray(32) { 9 }), emptyMap()))?.integrity)
+    fun ownRecordsVerifyOnlyUnderTheCurrentKeyAndAnEarlierOneIsARetiredKey() {
+        val mine = node(Signer(me), versionSigner = Signer(me))
+        assertNull(unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyMap())))
+        // Replaced since: what the old key signed vouches for nothing any more.
+        val retired = unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, listOf(base64urlDecode(writerKey)), emptyMap()))!!
+        assertEquals(Integrity.RETIRED_KEY, retired.integrity)
+        assertEquals("Signed with keys you have since replaced.", retired.explanation())
+        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, emptyList(), emptyMap()))?.integrity)
     }
 
     @Test
-    fun someoneNotCheckedIsAnUnknownSignerNamedAsTheServerNamesThem() {
+    fun aKeyAContactReplacedYieldsARetiredKeyNeverAPass() {
+        // Their succession vouched for the old key; it still only says "signed with keys Maya has since replaced".
+        val retired = unverifiedOf(node(), trust(pin(maya.id, otherKey, previous = listOf(writerKey))))!!
+        assertEquals(Integrity.RETIRED_KEY, retired.integrity)
+        assertEquals("Signed with keys Maya Lindqvist has since replaced.", retired.explanation())
+        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(node(), trust(pin(maya.id, otherKey)))?.integrity)
+    }
+
+    @Test
+    fun aReSealedSignatureIsNeverVerifiedAndSaysWhoReLockedIt() {
+        val resealed = node(metadataSignature = metadata.getString("resealed"), versionSignature = version.getString("resealed"))
+        val byMaya = unverifiedOf(resealed, trust(pin(maya.id, writerKey)))!!
+        assertEquals(Integrity.RESEALED, byMaya.integrity)
+        assertEquals("Re-locked by Maya Lindqvist; HushOS couldn’t confirm who wrote it before.", byMaya.explanation())
+        val mine = node(Signer(me), metadata.getString("resealed"), Signer(me), version.getString("resealed"))
+        assertEquals("Re-locked by you; HushOS couldn’t confirm who wrote it before.", unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyMap()))!!.explanation())
+    }
+
+    @Test
+    fun someoneNotCheckedIsNamedByNobodyAndAStrippedSignatureReadsTheSame() {
         val unknown = unverifiedOf(node(), trust())!!
         assertEquals(Integrity.UNKNOWN_SIGNER, unknown.integrity)
-        assertEquals(maya, unknown.signer)
-        assertEquals("Added or last changed by Maya Lindqvist (maya@example.org), whom you haven’t checked yet.", unknown.explanation())
+        assertEquals(Writer.Unknown(null), unknown.writer)
+        assertEquals("HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked.", unknown.explanation())
+        // A server that strips the signature gets no milder wording to hide behind.
+        val stripped = unverifiedOf(node(metadataSignature = null, versionSigner = null, versionSignature = null), trust(pin(maya.id, writerKey)))!!
+        assertEquals(Integrity.UNSIGNED, stripped.integrity)
+        assertTrue(unknown.explanation().startsWith(stripped.explanation().removeSuffix(".")))
+        // No way to check someone without an address to look up; with an unchecked pin there is one.
+        assertNull(unknown.checkEmail)
+        val unchecked = pin(maya.id, writerKey, fingerprint = "")
+        assertEquals("x@example.org", unverifiedOf(node(), trust(unchecked))!!.checkEmail)
     }
 
     @Test
-    fun aPinWhoseWordsWereNeverCheckedOverBothKeysVouchesForNothing() {
+    fun aPinWhoseWordsWereNeverCheckedOverBothKeysVouchesForNothingAndLendsNoName() {
         val stale = pin(maya.id, writerKey, fingerprint = identityFingerprint(base64urlDecode(writerEncryption), ByteArray(32) { 7 }))
-        assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(stale))?.integrity)
+        val result = unverifiedOf(node(), trust(stale))!!
+        assertEquals(Integrity.UNKNOWN_SIGNER, result.integrity)
+        assertFalse(result.explanation().contains("Maya"))
         assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(stale.copy(signingPublicKey = "", fingerprint = "")))?.integrity)
     }
 
@@ -77,7 +115,7 @@ class IntegrityTest {
     fun aServerThatNamesSomeoneElseAsTheWriterGetsABadSignatureNotAPass() {
         // Sam is checked, with keys of his own; Maya's signature does not hold under them.
         val relabelled = node(metadataSigner = sam, versionSigner = sam)
-        val result = unverifiedOf(relabelled, trust(pin(sam.id, base64urlEncode(ByteArray(32) { 5 }))))!!
+        val result = unverifiedOf(relabelled, trust(pin(sam.id, otherKey, name = "Sam")))!!
         assertEquals(Integrity.BAD_SIGNATURE, result.integrity)
         assertEquals("The signature doesn’t match Sam’s keys. Don’t trust this item.", result.explanation())
     }
@@ -98,17 +136,34 @@ class IntegrityTest {
         val checked = trust(pin(maya.id, writerKey))
         // The name verifies but the content was never signed.
         assertEquals(Integrity.UNSIGNED, unverifiedOf(node(versionSigner = null, versionSignature = null), checked)?.integrity)
-        assertEquals("Made before HushOS signed changes.", unverifiedOf(node(versionSigner = null, versionSignature = null), checked)!!.explanation())
         // An unknown writer of the name, and content under a checked name that doesn't hold: the bad signature wins, and names its signer.
         val mixed = unverifiedOf(node(metadataSigner = sam, versionSigner = maya, versionSignature = metadata.getString("signature")), checked)!!
         assertEquals(Integrity.BAD_SIGNATURE, mixed.integrity)
-        assertEquals(maya, mixed.signer)
+        assertEquals(maya.id, mixed.signerId)
+        assertEquals(Writer.Contact("Maya Lindqvist"), mixed.writer)
     }
 
     @Test
-    fun aKeyAContactReplacedStillVerifiesWhatItSignedWhenTheirSuccessionVouchedForIt() {
-        val newKey = base64urlEncode(ByteArray(32) { 6 }.also { it[0] = 1 })
-        assertNull(unverifiedOf(node(), trust(pin(maya.id, newKey, previous = listOf(writerKey)))))
-        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(node(), trust(pin(maya.id, newKey)))?.integrity)
+    fun withoutATrustSetOrWhenTheCheckThrowsEveryRecordIsUncheckedNeverClean() {
+        // Whom this person trusts did not load: a record that would verify is still marked.
+        assertEquals(Integrity.UNCHECKED, unverifiedOf(node(), null)?.integrity)
+        assertEquals(Integrity.UNCHECKED, markOf(node(), TrustState.Failed)?.integrity)
+        assertEquals("HushOS couldn’t check who wrote this. Try again later.", markOf(node(), TrustState.Failed)!!.explanation())
+        // An envelope that can't even be decoded makes the check throw: that is unchecked, not "no mark".
+        assertEquals(Integrity.UNCHECKED, markOf(node(metadataEnvelope = "%%%"), TrustState.Ready(trust(pin(maya.id, writerKey))))?.integrity)
+        // Still loading is the one state without a mark.
+        assertNull(markOf(node(), TrustState.Loading))
+    }
+
+    @Test
+    fun aFailedLoadFailsClosedAndOnlyALostNetworkKeepsWhatWasLoaded() {
+        val ready = TrustState.Ready(trust(pin(maya.id, writerKey)))
+        assertSame(ready, ready.after(Result.failure(Unreachable())))
+        // Settings refused as rolled back, an identity that won't open: whatever was loaded before no longer counts.
+        assertSame(TrustState.Failed, ready.after(Result.failure(SettingsRolledBack())))
+        assertSame(TrustState.Failed, ready.after(Result.failure(IdentityRolledBack())))
+        assertSame(TrustState.Failed, TrustState.Loading.after(Result.failure(Unreachable())))
+        val fresh = trust()
+        assertEquals(TrustState.Ready(fresh), TrustState.Failed.after(Result.success(fresh)))
     }
 }

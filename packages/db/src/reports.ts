@@ -3,7 +3,7 @@ import { db } from './client';
 import {
     removeNodeIn,
     selectNodes,
-    signersById,
+    signerOf,
     walk,
     type NodeRow,
     type Signer,
@@ -39,20 +39,16 @@ export const REPORT_ITEM_CAP = 2000;
 
 export type ReportRow = typeof driveReports.$inferSelect;
 type RawReportItemRow = typeof driveReportItems.$inferSelect;
-/* A snapshot row with the accounts its signatures name, when they still exist. */
+/* A snapshot row with the accounts its signatures name, by id. */
 export type ReportItemRow = RawReportItemRow & {
     metadataSigner: Signer | null;
     versionSigner: Signer | null;
 };
-async function withSigners(rows: RawReportItemRow[]): Promise<ReportItemRow[]> {
-    const signers = await signersById(
-        db,
-        rows.flatMap((row) => [row.metadataSignerId, row.versionSignerId]),
-    );
+function withSigners(rows: RawReportItemRow[]): ReportItemRow[] {
     return rows.map((row) => ({
         ...row,
-        metadataSigner: row.metadataSignerId ? (signers.get(row.metadataSignerId) ?? null) : null,
-        versionSigner: row.versionSignerId ? (signers.get(row.versionSignerId) ?? null) : null,
+        metadataSigner: signerOf(row.metadataSignerId),
+        versionSigner: signerOf(row.versionSignerId),
     }));
 }
 export type ReportEventRow = typeof driveReportEvents.$inferSelect;
@@ -193,7 +189,11 @@ export async function createReport(input: CreateReport) {
                 itemCount: items.length,
                 itemsTruncated: truncated,
             })
+            // The id is the client's (sealed into every key envelope): one already taken is
+            // refused alike whoever filed it, before anything else is written.
+            .onConflictDoNothing()
             .returning();
+        if (!report) return { status: 'conflict' as const };
         await tx.insert(driveReportKeys).values(
             input.keys.map((key) => ({
                 reportId: input.id,
@@ -413,7 +413,7 @@ export async function listReportChildren(reportId: string, parentId: string) {
         ancestors.unshift(row);
         cursor = row.parentId;
     }
-    const signed = await withSigners([folder, ...ancestors, ...children]);
+    const signed = withSigners([folder, ...ancestors, ...children]);
     return {
         folder: signed[0]!,
         ancestors: signed.slice(1, 1 + ancestors.length),
@@ -426,7 +426,7 @@ export async function getReportItem(reportId: string, nodeId: string) {
         .select()
         .from(driveReportItems)
         .where(and(eq(driveReportItems.reportId, reportId), eq(driveReportItems.nodeId, nodeId)));
-    return row ? (await withSigners([row]))[0]! : null;
+    return row ? withSigners([row])[0]! : null;
 }
 
 export async function getReportVersions(reportId: string, versionIds: string[]) {
@@ -476,24 +476,49 @@ async function lockReport(tx: Tx, reportId: string) {
 
 /*
  * Deletes what lets anyone open a released report, and what it kept about
- * people: the anonymous reporter's address and email and the uploader's email.
- * Its evidence requests go too, and the worker purges the evidence copy.
- * The audit trail stays, and so does the snapshot in `drive_report_items`: the
- * evidence purge needs its object ids to find the copies it deletes, and the
- * envelopes in it open nothing without an operator key.
+ * people: who reported it (the account, or the anonymous reporter's address
+ * and email, and the share they saw it through, which names them too), their
+ * reason in their own words, and the uploader's email. Its evidence requests
+ * go too, and the worker purges the evidence copy. The snapshot in
+ * `drive_report_items` loses its envelopes, signatures and who wrote what;
+ * what stays is the tree's shape and the object ids the evidence purge needs
+ * to find the copies it deletes. The audit trail stays, without the reporter
+ * as the actor of the "reported" entry.
  */
 async function release(tx: Tx, reportId: string, now: Date) {
     await tx.delete(driveReportKeys).where(eq(driveReportKeys.reportId, reportId));
     // Pending ones would be answered with URLs to a copy the purge is about to delete.
     await tx.delete(driveReportRequests).where(eq(driveReportRequests.reportId, reportId));
+    await tx
+        .update(driveReportItems)
+        .set({
+            keyEnvelope: null,
+            metadataEnvelope: null,
+            contentKeyEnvelope: null,
+            contentNonce: null,
+            metadataSignerId: null,
+            metadataSignature: null,
+            versionSignerId: null,
+            versionSignature: null,
+        })
+        .where(eq(driveReportItems.reportId, reportId));
+    await tx
+        .update(driveReportEvents)
+        .set({ actorUserId: null })
+        .where(
+            and(eq(driveReportEvents.reportId, reportId), eq(driveReportEvents.action, 'reported')),
+        );
     const [report] = await tx
         .update(driveReports)
         .set({
             heldAt: null,
             releasedAt: now,
+            reason: null,
+            reporterUserId: null,
             reporterAddressHash: null,
             reporterEmail: null,
             uploaderEmail: null,
+            shareId: null,
             updatedAt: now,
         })
         .where(eq(driveReports.id, reportId))

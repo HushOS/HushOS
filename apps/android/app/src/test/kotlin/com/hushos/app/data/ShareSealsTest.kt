@@ -19,9 +19,9 @@ class ShareSealsTest {
     private fun seal(granter: ULong, grantee: ULong?) = ShareSeals.Seal(granter, grantee)
 
     @Test
-    fun aShareSealedNowByThisIdentityToTheServedKeysIsLeftAlone() {
+    fun aShareSealedNowByThisIdentityToThePinnedKeysIsLeftAlone() {
         assertFalse(needsReseal(3, seal(3uL, 2uL), current, 2uL))
-        // A grantee whose version the server doesn't serve gives nothing to compare: left alone.
+        // A pin from before successions has no version to compare: left alone.
         assertFalse(needsReseal(3, seal(3uL, 2uL), current, null))
     }
 
@@ -34,10 +34,10 @@ class ShareSealsTest {
     }
 
     @Test
-    fun aGranteeWhoReplacedTheirKeysGetsTheShareSealedToTheNewOnes() {
+    fun aGranteeWhoseReplacedKeysThePersonCheckedAgainGetsTheShareSealedToTheNewOnes() {
         assertTrue(needsReseal(3, seal(3uL, 2uL), current, 3uL))
         assertTrue(needsReseal(3, seal(3uL, null), current, 1uL))
-        // A lower served version than the one sealed to is no reason (a rotation never lowers it; a server that does gains nothing).
+        // A pin at a lower version than the one sealed to is no reason (it never moves down).
         assertFalse(needsReseal(3, seal(3uL, 4uL), current, 3uL))
     }
 

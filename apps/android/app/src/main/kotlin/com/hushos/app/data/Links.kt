@@ -113,29 +113,49 @@ object Reports {
 
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
+/* One request to a public route, as built before it is sent: what a test can hold the token's place to. */
+data class PublicRequest(val method: String, val url: String, val headers: Map<String, String>, val body: String? = null)
+
+/* Sends a public request; answers the status and the body text. An IOException is the network's. */
+fun interface PublicTransport {
+    fun send(request: PublicRequest): Pair<Int, String>
+}
+
+/* The header a link visitor's token travels in (docs/integrity-design.md, "Smaller fixes"): never the path, which proxies log. */
+const val LINK_TOKEN_HEADER = "x-link-token"
+
+private object HttpPublicTransport : PublicTransport {
+    override fun send(request: PublicRequest): Pair<Int, String> {
+        val connection = URL(request.url).openConnection() as HttpURLConnection
+        connection.requestMethod = request.method
+        for ((name, value) in request.headers) connection.setRequestProperty(name, value)
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 60_000
+        request.body?.let { body ->
+            connection.doOutput = true
+            connection.outputStream.use { it.write(body.toByteArray()) }
+        }
+        val status = connection.responseCode
+        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+        return status to (stream?.bufferedReader()?.use { it.readText() } ?: "")
+    }
+}
+
 /*
  * The routes that need no session: what a visitor with a link, or anyone filing a report on a link,
  * talks to. No Cookie header is set here, and the app installs no CookieHandler, so nothing of a
- * signed-in session rides along: a visitor stays anonymous even on a phone that is signed in.
+ * signed-in session rides along: a visitor stays anonymous even on a phone that is signed in. A
+ * link's token goes in the x-link-token header on every link route, never in the path or query.
  */
-class PublicApi(val origin: String) {
-    private fun open(path: String, method: String): HttpURLConnection {
-        val connection = URL("$origin/api/drive$path").openConnection() as HttpURLConnection
-        connection.requestMethod = method
-        connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
-        connection.setRequestProperty("Origin", origin)
-        connection.connectTimeout = 30_000
-        connection.readTimeout = 60_000
-        return connection
-    }
-
-    private fun finish(connection: HttpURLConnection): JSONObject {
-        val status: Int
-        val text: String
-        try {
-            status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+class PublicApi(val origin: String, private val transport: PublicTransport = HttpPublicTransport) {
+    private fun request(method: String, path: String, token: String? = null, body: JSONObject? = null): JSONObject {
+        val headers = LinkedHashMap<String, String>()
+        headers["HushOS-Client"] = CLIENT_HEADER
+        headers["Origin"] = origin
+        if (body != null) headers["Content-Type"] = "application/json"
+        if (token != null) headers[LINK_TOKEN_HEADER] = token
+        val (status, text) = try {
+            transport.send(PublicRequest(method, "$origin/api/drive$path", headers, body?.toString()))
         } catch (error: java.io.IOException) {
             throw Unreachable()
         }
@@ -147,17 +167,11 @@ class PublicApi(val origin: String) {
         return if (text.isEmpty()) JSONObject() else JSONObject(text)
     }
 
-    private fun get(path: String): JSONObject = finish(open(path, "GET"))
+    private fun get(path: String, token: String? = null): JSONObject = request("GET", path, token)
 
-    fun post(path: String, body: JSONObject): JSONObject {
-        val connection = open(path, "POST")
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
-        connection.outputStream.use { it.write(body.toString().toByteArray()) }
-        return finish(connection)
-    }
+    fun post(path: String, body: JSONObject): JSONObject = request("POST", path, body = body)
 
-    fun openLink(token: String): OpenedLink = get("/links/$token/open").let {
+    fun openLink(token: String): OpenedLink = get("/links/open", token).let {
         val link = it.getJSONObject("link")
         OpenedLink(link.getString("id"), link.getString("workspaceId"), link.getLong("keyEpoch").toULong(), link.getBoolean("hasPassword"),
             link.getString("linkSalt"), link.getString("linkEnvelope"), if (link.isNull("expiresAt")) null else link.getString("expiresAt"),
@@ -165,15 +179,15 @@ class PublicApi(val origin: String) {
     }
 
     fun linkChildren(token: String, nodeId: String, after: String?): Listing =
-        get("/links/$token/nodes/$nodeId/children" + (after?.let { "?after=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")).let {
+        get("/links/nodes/$nodeId/children" + (after?.let { "?after=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: ""), token).let {
             Listing(NodeView.from(it.getJSONObject("folder")), it.getJSONArray("ancestors").objects().map(NodeView::from),
                 it.getJSONArray("children").objects().map(NodeView::from), if (it.isNull("nextCursor")) null else it.getString("nextCursor"))
         }
 
-    fun linkVersionUrl(token: String, versionId: String): String = get("/links/$token/versions/$versionId/url").getString("url")
+    fun linkVersionUrl(token: String, versionId: String): String = get("/links/versions/$versionId/url", token).getString("url")
 
     fun linkThumbnailUrl(token: String, versionId: String): String? {
-        val urls = get("/links/$token/thumbnails?versions=$versionId").getJSONArray("urls")
+        val urls = get("/links/thumbnails?versions=$versionId", token).getJSONArray("urls")
         return if (urls.length() > 0) urls.getJSONObject(0).getString("url") else null
     }
 
@@ -200,8 +214,7 @@ class PublicApi(val origin: String) {
  * in its own maps, keyed by workspace and node like the Vault's, and never reach
  * the signed-in account's Vault.
  */
-class LinkVault(origin: String, url: String) {
-    val api = PublicApi(origin)
+class LinkVault(origin: String, url: String, val api: PublicApi = PublicApi(origin)) {
     val token: String
     private val secret: String
     private var link: OpenedLink? = null

@@ -135,8 +135,8 @@ data class DriveState(
     val accountDeleted: Boolean = false,
     /* Searches made on this phone, newest first. */
     val recentSearches: List<String> = emptyList(),
-    /* The signing keys this account trusts (its own, and checked contacts'); null until loaded, when no row is marked. */
-    val trust: com.hushos.app.data.Trust? = null,
+    /* The signing keys this account trusts (its own, and checked contacts'): no row is marked while they load, and every row is when they failed. */
+    val trust: com.hushos.app.data.TrustState = com.hushos.app.data.TrustState.Loading,
     /* Shares being sealed again (after a key replacement, or for a grantee's new keys): nodes done of how many. */
     val resealing: Pair<Int, Int>? = null,
 ) {
@@ -476,6 +476,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * daily unless a replacement is waiting. Progress shows in Advanced; only people left out or a failure are said.
      */
     private fun resealIfDue() = viewModelScope.launch {
+        // A rotation that stopped (no trust set, no network) is finished first: its shares are sealed as part of it.
+        val finished = quietly { it.finishRotations() }
+        if (finished != null && finished > 0) afterRotation()
         if (state.value.resealing != null || quietly { it.resealDue() } != true) return@launch
         val result = quietly { vault -> vault.resealLedgerShares { done, total -> _state.update { it.copy(resealing = done to total) } } }
         _state.update { it.copy(resealing = null) }
@@ -883,27 +886,40 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     /*
      * The signing keys rows are checked against: this account's own (current and earlier) and every checked
-     * contact's. Quiet: without them no row is marked, which is better than marking every row for a network blip.
+     * contact's. Fails closed (docs/integrity-design.md, "Checking fails closed"): when they can't load, every row
+     * shows Couldn't check with a retry, never no mark; only a lost network keeps a set already loaded.
      */
     suspend fun refreshTrust() {
-        quietly { it.trust() }?.let { trust -> _state.update { it.copy(trust = trust) } }
+        val vault = vault ?: return
+        val result = withContext(Dispatchers.IO) { runCatching { vault.trust() } }
+        if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return }
+        if (result.exceptionOrNull() is Unreachable) _state.update { it.copy(unreachable = true) }
+        _state.update { it.copy(trust = it.trust.after(result)) }
     }
 
+    /* The mark's Try again. */
+    fun retryTrust() = viewModelScope.launch { refreshTrust() }
+
     private val integrity = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<com.hushos.app.data.Unverified>>()
-    private var integrityTrust: com.hushos.app.data.Trust? = null
+    private var integrityTrust: com.hushos.app.data.TrustState? = null
 
     /*
-     * Why an item is not verified (docs/integrity-design.md, "Reading"), or null when it is, or while the trusted keys
-     * are not loaded yet. Remembered per record and signature, and worked out again when the trusted keys change.
+     * Why an item is not verified (docs/integrity-design.md, "Reading"), or null when it is or while the trusted keys
+     * are still loading; Couldn't check when they failed or the check threw. Remembered per record and signature, and
+     * worked out again when the trusted keys change. An unknown writer who granted a share here can be checked by email.
      */
     fun unverified(item: Opened, state: DriveState): com.hushos.app.data.Unverified? {
-        val trust = state.trust ?: return null
+        val trust = state.trust
         if (integrityTrust !== trust) { integrity.clear(); integrityTrust = trust }
         val node = item.node
         val version = node.currentVersion
         val key = listOf(node.workspaceId, node.id, node.metadataVersion, node.metadataSigner?.id, node.metadataSignature, node.metadataEnvelope.hashCode(),
             version?.id, version?.signer?.id, version?.signature).joinToString("|")
-        return integrity.getOrPut(key) { java.util.Optional.ofNullable(runCatching { com.hushos.app.data.unverifiedOf(node, trust) }.getOrNull()) }.orElse(null)
+        val found = integrity.getOrPut(key) { java.util.Optional.ofNullable(com.hushos.app.data.markOf(node, trust)) }.orElse(null) ?: return null
+        val writer = found.writer
+        if (writer !is com.hushos.app.data.Writer.Unknown || writer.email != null || found.signerId == null) return found
+        val granter = state.shares?.firstOrNull { it.share.granterId.equals(found.signerId, ignoreCase = true) }?.share?.granterEmail?.ifEmpty { null } ?: return found
+        return found.copy(writer = com.hushos.app.data.Writer.Unknown(granter))
     }
 
     /* Started without a network, the account is known only by its id; once the server answers, its name and email fill in for the avatar. */
@@ -1213,7 +1229,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             val name = freeName(item.name, taken).also { taken.add(it.lowercase()) }
             val ticket = begin("copy", item.name)
             var reason: String? = null
-            val ok = write(root, { reason = it }) { vault -> vault.copyAcross(item.id, root, name) { fraction -> progress(ticket, fraction) } }
+            // Always re-sealed: this person re-locks what someone else wrote and vouches for nothing more.
+            val ok = write(root, { reason = it }) { vault -> vault.copyAcross(item.id, root, name, resealed = true) { fraction -> progress(ticket, fraction) } }
             finish(ticket, failed = !ok, message = reason)
         }
         if (items.size == 1) notify("Saving a copy of “${items[0].name}”. It shows up in Files as it copies.")
@@ -1230,9 +1247,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         finish(ticket, failed = !ok, message = reason)
     }
 
+    /* A visitor sees no signatures, so everything saved from a link is signed re-sealed: re-locked, not vouched for. */
     private fun copyFromLink(vault: Vault, link: com.hushos.app.data.LinkVault, item: Opened, parent: String, name: String) {
         if (item.isFolder) {
-            val made = vault.createFolder(parent, name)
+            val made = vault.createFolder(parent, name, com.hushos.core.Integrity.RESEALED)
             for (child in link.children(item.id)) copyFromLink(vault, link, child, made.id, child.name)
             return
         }
@@ -1240,7 +1258,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val file = File(directory, name)
             link.download(item, file)
-            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime))
+            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.RESEALED)
         } finally {
             directory.deleteRecursively()
         }

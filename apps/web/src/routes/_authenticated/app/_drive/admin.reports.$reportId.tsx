@@ -145,7 +145,9 @@ function Facts({ report }: { report: ReportView }) {
         <div className={`${box} divide-y divide-rule`}>
             <div className={row}>
                 <span className={label}>Reason</span>
-                <p className={`${value} whitespace-pre-wrap`}>{report.reason}</p>
+                <p className={`${value} whitespace-pre-wrap`}>
+                    {report.reason ?? 'Cleared when the report was released.'}
+                </p>
             </div>
             <div className={row}>
                 <span className={label}>Item</span>

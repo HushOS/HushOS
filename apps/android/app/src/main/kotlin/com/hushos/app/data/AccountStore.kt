@@ -49,7 +49,7 @@ class AccountStore(private val files: File, private val cache: File, private val
 
     companion object {
         /* Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones awaiting a notification. */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE)
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir) {
             // Jobs queued for that account would run under the next one's session.

@@ -1,7 +1,13 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import { heldObjectCondition } from './reports';
-import { metadataStatement, verifySignature, versionStatement } from './signatures';
+import { openShareCursor, sealShareCursor } from './share-cursor';
+import {
+    metadataSigned as metadataSignedStatement,
+    verifySigned,
+    versionSigned as versionSignedStatement,
+    type SignedStatement,
+} from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -36,6 +42,36 @@ import {
  */
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/* Thrown to undo a transaction whose result is a refusal; carries the result out. */
+class Refusal extends Error {
+    constructor(readonly result: unknown) {
+        super('refused');
+    }
+}
+
+/*
+ * A transaction that commits only the outcomes named in `keep`; any other
+ * result is returned with every write before it undone. For writes that can
+ * be refused partway (an id already taken, a later folder in a batch), where a
+ * plain return would commit what came before: a storage reservation, a node
+ * with no version, the first folders of a batch that "lands whole or not at all".
+ */
+async function transactionKeeping<T extends { status: string }>(
+    keep: readonly T['status'][],
+    work: (tx: Tx) => Promise<T>,
+): Promise<T> {
+    try {
+        return await db.transaction(async (tx) => {
+            const result = await work(tx);
+            if (!keep.includes(result.status)) throw new Refusal(result);
+            return result;
+        });
+    } catch (error) {
+        if (error instanceof Refusal) return error.result as T;
+        throw error;
+    }
+}
 
 export const MAX_DEPTH = 64;
 export const WALK_CAP = 128;
@@ -241,9 +277,16 @@ const versionColumns = {
     signerId: fileVersions.signerId,
     signature: fileVersions.signature,
 };
-/* Who wrote a record, as the server knows the account: for display, never for trust. */
-export type Signer = { id: string; name: string; email: string };
-type RawNodeRow = Omit<typeof driveNodes.$inferSelect, 'createdBy' | 'purgedAt'>;
+/*
+ * Who wrote a record: the account id alone. A client names a signer from its
+ * own pins ("you", a checked contact) or not at all; the server hands out no
+ * name or email of a co-editor to whoever can see the record.
+ */
+export type Signer = { id: string };
+type RawNodeRow = Omit<
+    typeof driveNodes.$inferSelect,
+    'createdBy' | 'purgedAt' | 'purgedAncestorIds'
+>;
 export type NodeRow = RawNodeRow & { metadataSigner: Signer | null };
 type RawVersionRow = Omit<VersionRow, 'signer'>;
 export type VersionRow = {
@@ -265,40 +308,16 @@ export type VersionRow = {
     readyAt: Date | null;
 };
 
-/* The accounts behind these signer ids, by id; a deleted account is simply absent. */
-export async function signersById(tx: Tx | typeof db, ids: (string | null | undefined)[]) {
-    const unique = [...new Set(ids.filter((id): id is string => typeof id === 'string'))];
-    if (!unique.length) return new Map<string, Signer>();
-    const rows = await tx
-        .select({ id: users.id, name: users.name, email: users.email })
-        .from(users)
-        .where(inArray(users.id, unique));
-    return new Map(rows.map((row) => [row.id, row]));
+/* A signer column as the view it is served as; a deleted account's is already null. */
+export function signerOf(id: string | null | undefined): Signer | null {
+    return id ? { id } : null;
 }
-function withVersionSigner(version: RawVersionRow, signers: Map<string, Signer>): VersionRow {
-    return {
-        ...version,
-        signer: version.signerId ? (signers.get(version.signerId) ?? null) : null,
-    };
-}
-/* Version rows with who signed each, in one lookup. */
-async function signVersions<T extends RawVersionRow>(tx: Tx | typeof db, versions: T[]) {
-    const signers = await signersById(
-        tx,
-        versions.map((version) => version.signerId),
-    );
-    return versions.map((version) => ({ ...version, ...withVersionSigner(version, signers) }));
+function withVersionSigner(version: RawVersionRow): VersionRow {
+    return { ...version, signer: signerOf(version.signerId) };
 }
 /* Node rows read without their versions (an update's returning clause), with their signers. */
-async function signNodes(tx: Tx, nodes: RawNodeRow[]): Promise<NodeRow[]> {
-    const signers = await signersById(
-        tx,
-        nodes.map((node) => node.metadataSignerId),
-    );
-    return nodes.map((node) => ({
-        ...node,
-        metadataSigner: node.metadataSignerId ? (signers.get(node.metadataSignerId) ?? null) : null,
-    }));
+function signNodes(nodes: RawNodeRow[]): NodeRow[] {
+    return nodes.map((node) => ({ ...node, metadataSigner: signerOf(node.metadataSignerId) }));
 }
 
 export async function selectNodes(tx: Tx, ids: string[]) {
@@ -309,36 +328,28 @@ export async function selectNodes(tx: Tx, ids: string[]) {
         .leftJoin(fileVersions, eq(fileVersions.id, driveNodes.currentVersionId))
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(inArray(driveNodes.id, ids));
-    const signers = await signersById(
-        tx,
-        rows.flatMap((row) => [row.node.metadataSignerId, row.version.signerId]),
-    );
     return rows.map((row) => ({
         ...(row.node as RawNodeRow),
-        metadataSigner: row.node.metadataSignerId
-            ? (signers.get(row.node.metadataSignerId) ?? null)
-            : null,
-        currentVersion: row.version.id
-            ? withVersionSigner(row.version as RawVersionRow, signers)
-            : null,
+        metadataSigner: signerOf(row.node.metadataSignerId),
+        currentVersion: row.version.id ? withVersionSigner(row.version as RawVersionRow) : null,
     }));
 }
 
 /*
  * Whether every statement carries a valid signature by `userId`'s current
- * identity signing key. Checked inside the writing transaction, before any
- * row changes, so a write either lands signed or not at all.
+ * identity signing key, in either form (ordinary, or re-sealed for a record
+ * the writer re-locked without vouching for it). Checked inside the writing
+ * transaction, before any row changes, so a write either lands signed or not
+ * at all.
  */
-export type SignedStatement = { message: Buffer; signature: Buffer };
+export type { SignedStatement };
 export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
     const [identity] = await tx
         .select({ signingPublicKey: accountIdentities.signingPublicKey })
         .from(accountIdentities)
         .where(eq(accountIdentities.userId, userId));
     if (!identity) return false;
-    return statements.every((statement) =>
-        verifySignature(identity.signingPublicKey, statement.message, statement.signature),
-    );
+    return statements.every((statement) => verifySigned(identity.signingPublicKey, statement));
 }
 /* The metadata statement for a node's envelope as it is about to be stored. */
 function metadataSigned(
@@ -348,16 +359,16 @@ function metadataSigned(
     metadataVersion: number,
     envelopes: { metadataEnvelope: Buffer; metadataSignature: Buffer },
 ): SignedStatement {
-    return {
-        message: metadataStatement({
+    return metadataSignedStatement(
+        {
             workspaceId,
             nodeId,
             kind,
             metadataVersion,
             metadataEnvelope: envelopes.metadataEnvelope,
-        }),
-        signature: envelopes.metadataSignature,
-    };
+        },
+        envelopes.metadataSignature,
+    );
 }
 function versionSigned(input: {
     workspaceId: string;
@@ -369,7 +380,7 @@ function versionSigned(input: {
     signature: Buffer;
 }): SignedStatement {
     const { signature, ...statement } = input;
-    return { message: versionStatement(statement), signature };
+    return versionSignedStatement(statement, signature);
 }
 
 /* The user's personal workspace and their grant to its key, for opening Drive. */
@@ -552,7 +563,7 @@ export async function createFolders(input: {
     userId: string;
     folders: (NewFolder & { parentId: string })[];
 }) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['created'], async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
         // Every folder's signature first: a batch lands whole or not at all.
         if (
@@ -689,7 +700,7 @@ export async function renameNode(input: {
         if (updated)
             return {
                 status: 'ok' as const,
-                node: (await signNodes(tx, [updated as RawNodeRow]))[0]!,
+                node: signNodes([updated as RawNodeRow])[0]!,
             };
         const [current] = await selectNodes(tx, [input.nodeId]);
         return { status: 'stale' as const, node: current! };
@@ -778,7 +789,7 @@ export async function moveNode(input: {
             ],
             chain.node.height_bound,
         );
-        return { status: 'ok' as const, node: (await signNodes(tx, [moved as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([moved as RawNodeRow])[0]! };
     });
 }
 
@@ -796,7 +807,7 @@ export async function trashNode(input: { workspaceId: string; nodeId: string }) 
             .set({ trashedAt: new Date(), changeSeq })
             .where(eq(driveNodes.id, input.nodeId))
             .returning(nodeColumns);
-        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
     });
 }
 
@@ -891,7 +902,7 @@ export async function restoreNode(input: {
                     chain.node.height_bound,
                 );
         }
-        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
     });
 }
 
@@ -1076,7 +1087,7 @@ export type UploadBegin = {
 };
 
 export async function beginUpload(input: UploadBegin) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['ok'], async (tx) => {
         await nextChangeSeq(tx, input.workspaceId);
         let keyEpoch: number;
         let expectedVersionId: string | null = null;
@@ -1165,28 +1176,40 @@ export async function beginUpload(input: UploadBegin) {
             if (!node) return { status: 'conflict' as const };
             void ancestors;
         }
-        await tx.insert(driveObjects).values({
-            id: input.object.id,
-            workspaceId: input.workspaceId,
-            objectKey: input.object.objectKey,
-            contentSuite: input.object.contentSuite,
-            chunkSize: input.object.chunkSize,
-            chunkCount: input.object.chunkCount,
-            contentNonce: input.object.contentNonce,
-            plaintextSize: null,
-            ciphertextSize: input.object.ciphertextSize,
-            status: 'pending',
-        });
-        await tx.insert(fileVersions).values({
-            id: input.version.id,
-            nodeId: input.node.id,
-            workspaceId: input.workspaceId,
-            objectId: input.object.id,
-            contentKeyEnvelope: input.version.contentKeyEnvelope,
-            signerId: input.userId,
-            signature: input.version.signature,
-            status: 'pending',
-        });
+        // Client-generated ids: one already taken, in this workspace or any other, is the
+        // same refusal as a taken node id, and undoes the reservation above.
+        const [object] = await tx
+            .insert(driveObjects)
+            .values({
+                id: input.object.id,
+                workspaceId: input.workspaceId,
+                objectKey: input.object.objectKey,
+                contentSuite: input.object.contentSuite,
+                chunkSize: input.object.chunkSize,
+                chunkCount: input.object.chunkCount,
+                contentNonce: input.object.contentNonce,
+                plaintextSize: null,
+                ciphertextSize: input.object.ciphertextSize,
+                status: 'pending',
+            })
+            .onConflictDoNothing()
+            .returning({ id: driveObjects.id });
+        if (!object) return { status: 'conflict' as const };
+        const [version] = await tx
+            .insert(fileVersions)
+            .values({
+                id: input.version.id,
+                nodeId: input.node.id,
+                workspaceId: input.workspaceId,
+                objectId: input.object.id,
+                contentKeyEnvelope: input.version.contentKeyEnvelope,
+                signerId: input.userId,
+                signature: input.version.signature,
+                status: 'pending',
+            })
+            .onConflictDoNothing()
+            .returning({ id: fileVersions.id });
+        if (!version) return { status: 'conflict' as const };
         const [upload] = await tx
             .insert(driveUploads)
             .values({
@@ -1693,15 +1716,15 @@ export async function getVersionForDownload(workspaceId: string, versionId: stri
         if (!row) return { status: 'not-found' as const };
         const chain = await walk(tx, row.nodeId);
         if (!chain || chain.purged) return { status: 'not-found' as const };
-        const [version] = await signVersions(tx, [row.version as RawVersionRow]);
-        if (version!.status !== 'ready' || version!.objectStatus !== 'ready')
-            return { status: 'not-ready' as const, objectStatus: version!.objectStatus };
+        const version = withVersionSigner(row.version as RawVersionRow);
+        if (version.status !== 'ready' || version.objectStatus !== 'ready')
+            return { status: 'not-ready' as const, objectStatus: version.objectStatus };
         const [node] = await selectNodes(tx, [row.nodeId]);
         return {
             status: 'ok' as const,
-            version: version!,
+            version,
             node: node!,
-            objectKey: objectKeyFor(workspaceId, version!.objectId),
+            objectKey: objectKeyFor(workspaceId, version.objectId),
         };
     });
 }
@@ -1773,7 +1796,7 @@ export type CopyFile = {
  * and the object retires when the last reference goes.
  */
 export async function copyFile(input: CopyFile) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['ok'], async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
         const source = await walk(tx, input.sourceNodeId);
         if (
@@ -1912,14 +1935,10 @@ export async function listVersions(workspaceId: string, nodeId: string) {
             .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
             .where(and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.status, 'ready')))
             .orderBy(desc(fileVersions.readyAt));
-        const signers = await signersById(
-            tx,
-            rows.map((row) => row.version.signerId),
-        );
         return {
             currentVersionId: node?.currentVersionId ?? null,
             versions: rows.map((row) => ({
-                ...withVersionSigner(row.version as RawVersionRow, signers),
+                ...withVersionSigner(row.version as RawVersionRow),
                 supersededAt: row.supersededAt,
                 createdAt: row.createdAt,
             })),
@@ -2090,11 +2109,15 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(eq(fileVersions.nodeId, nodeId))) as PurgedVersion[];
     for (const version of versions) await purgeVersion(tx, workspaceId, version);
+    // Where it was when it went, for the share feeds: tombstones keep their parent, so
+    // the walk reaches the root through any ancestor purged before it.
+    const chain = await walk(tx, nodeId);
     const now = new Date();
     await tx
         .update(driveNodes)
         .set({
             purgedAt: now,
+            purgedAncestorIds: chain ? chain.ancestors.map((ancestor) => ancestor.id) : [],
             keyEnvelope: null,
             metadataEnvelope: null,
             metadataSignerId: null,
@@ -2661,6 +2684,7 @@ async function accessFor(tx: Tx, userId: string, chain: Walk): Promise<Access | 
                 inArray(driveShares.nodeId, ids),
                 eq(driveShares.granteeUserId, userId),
                 isNull(driveShares.revokedAt),
+                servedShare,
             ),
         );
     if (!shares.length) return null;
@@ -2719,6 +2743,7 @@ export async function hasEditorShare(userId: string, workspaceId: string) {
                 eq(driveShares.workspaceId, workspaceId),
                 eq(driveShares.role, 'editor'),
                 isNull(driveShares.revokedAt),
+                servedShare,
             ),
         )
         .limit(1);
@@ -2741,6 +2766,14 @@ export async function authorizeUpload(userId: string, workspaceId: string, uploa
     return row ? authorize(userId, workspaceId, row.nodeId) : null;
 }
 
+/*
+ * A suite 3 share envelope, 1256 bytes, the only kind written or served: a
+ * row of suite 1 or 2 left from before grants nothing and is shown to nobody
+ * but its granter, who can re-seal or revoke it.
+ */
+export const SHARE_ENVELOPE_BYTES = 1256;
+const servedShare = sql`octet_length(${driveShares.shareEnvelope}) = ${SHARE_ENVELOPE_BYTES}`;
+
 /* A share's suite, told apart by length: 72 bytes is 1, 1160 is 2 (hybrid), 1256 is 3 (signed). */
 const shareSuite = sql<number>`case octet_length(${driveShares.shareEnvelope}) when 72 then 1 when 1160 then 2 else 3 end`;
 
@@ -2760,6 +2793,8 @@ export type CreateShare = {
  * or a fresh seal), never duplicated. Refused for a node in the trash.
  */
 export async function createShare(input: CreateShare) {
+    if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
+        return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
         await nextChangeSeq(tx, input.workspaceId);
         const chain = await walk(tx, input.nodeId);
@@ -2838,8 +2873,18 @@ export async function listSharesForGrantee(userId: string) {
                 role: driveShares.role,
                 keyEpoch: driveShares.keyEpoch,
                 shareEnvelope: driveShares.shareEnvelope,
-                prevShareEnvelope: driveShares.prevShareEnvelope,
-                prevKeyEpoch: driveShares.prevKeyEpoch,
+                // The envelope a rotation in flight replaced, served only when it is suite 3
+                // too: a rotation that re-seals a row left from before keeps its suite 1 or 2
+                // envelope here, which opens on no client now.
+                prevShareEnvelope:
+                    sql<Buffer | null>`case when octet_length(${driveShares.prevShareEnvelope}) = ${SHARE_ENVELOPE_BYTES} then ${driveShares.prevShareEnvelope} end`.mapWith(
+                        driveShares.prevShareEnvelope,
+                    ),
+                prevKeyEpoch: sql<
+                    number | null
+                >`case when octet_length(${driveShares.prevShareEnvelope}) = ${SHARE_ENVELOPE_BYTES} then ${driveShares.prevKeyEpoch} end`.mapWith(
+                    driveShares.prevKeyEpoch,
+                ),
                 createdAt: driveShares.createdAt,
                 changeSeq: workspaces.changeSeq,
                 granter: {
@@ -2857,9 +2902,17 @@ export async function listSharesForGrantee(userId: string) {
             .innerJoin(users, eq(users.id, driveShares.granterUserId))
             .innerJoin(accountIdentities, eq(accountIdentities.userId, driveShares.granterUserId))
             .innerJoin(workspaces, eq(workspaces.id, driveShares.workspaceId))
-            .where(and(eq(driveShares.granteeUserId, userId), isNull(driveShares.revokedAt)))
+            .where(
+                and(
+                    eq(driveShares.granteeUserId, userId),
+                    isNull(driveShares.revokedAt),
+                    servedShare,
+                ),
+            )
             .orderBy(desc(driveShares.createdAt));
-        const out: (Omit<(typeof rows)[number], 'nodeId'> & {
+        const out: (Omit<(typeof rows)[number], 'nodeId' | 'changeSeq'> & {
+            /* Where the share's feed starts: the owner's sequence now, sealed. */
+            feedCursor: string;
             node: NodeRow & { currentVersion: VersionRow | null };
         })[] = [];
         for (const row of rows) {
@@ -2867,8 +2920,8 @@ export async function listSharesForGrantee(userId: string) {
             if (!chain || chain.purged || chain.trashed) continue;
             const [node] = await selectNodes(tx, [row.nodeId]);
             if (!node) continue;
-            const { nodeId: _nodeId, ...rest } = row;
-            out.push({ ...rest, node });
+            const { nodeId: _nodeId, changeSeq, ...rest } = row;
+            out.push({ ...rest, feedCursor: sealShareCursor(row.id, changeSeq), node });
         }
         return out;
     });
@@ -2925,10 +2978,11 @@ export async function listSharesByGranter(userId: string) {
 }
 
 /*
- * Replaces a live share's envelope under the node's current key epoch: how a
- * share sealed before the grantee had a KEM key is re-sealed hybrid. Only the
- * granter, only the current epoch (a rotation in flight re-seals on its own),
- * and never a share that is revoked or on a purged node.
+ * Replaces a live share's envelope under the node's current key epoch with a
+ * suite 3 one: how a share is sealed to a grantee's new keys, or a suite 1 or
+ * 2 row left from before is brought back into service. Only the granter,
+ * only the current epoch (a rotation in flight re-seals on its own), and
+ * never a share that is revoked or on a purged node.
  */
 export async function resealShare(input: {
     workspaceId: string;
@@ -2937,6 +2991,8 @@ export async function resealShare(input: {
     keyEpoch: number;
     shareEnvelope: Buffer;
 }) {
+    if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
+        return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
         const [share] = await tx
             .select({
@@ -3270,15 +3326,30 @@ export async function listChanges(input: { workspaceId: string; since: number; l
     };
 }
 
+/* A change as a grantee sees it: in order, but without the owner's sequence numbers. */
+export type ShareChange =
+    | { kind: 'node'; node: NodeRow & { currentVersion: VersionRow | null } }
+    | { kind: 'tombstone'; nodeId: string; parentId: string | null }
+    | { kind: 'entered' | 'left'; nodeId: string };
+
+/* How many of the owner's changes one poll of a share feed looks at, at most. */
+export const SHARE_FEED_SCAN = 2000;
+
 /*
- * A share's feed: the owner's workspace feed filtered to rows whose chain
- * contains the shared node, one walk per row, merged with the share's
- * membership events. Revoked means there is nothing more to say.
+ * A share's feed: the owner's changes inside the shared subtree, tombstones
+ * included, merged with the share's membership events. Only what was inside
+ * the share is shown: a live node by its chain, a tombstone by the ancestors
+ * recorded when it was purged (older tombstones, which have none, are never
+ * shown). The cursor is sealed (see share-cursor.ts), so neither the changes
+ * nor the cursor tell a grantee what the owner did elsewhere or how often; a
+ * missing cursor starts from the beginning and a tampered one is refused.
+ * Each poll looks at a bounded number of the owner's changes. Revoked means
+ * there is nothing more to say.
  */
 export async function listShareChanges(input: {
     shareId: string;
     granteeUserId: string;
-    since: number;
+    cursor?: string | null;
     limit?: number;
 }) {
     const [share] = await db
@@ -3293,53 +3364,128 @@ export async function listShareChanges(input: {
             and(
                 eq(driveShares.id, input.shareId),
                 eq(driveShares.granteeUserId, input.granteeUserId),
+                servedShare,
             ),
         );
     if (!share) return { status: 'not-found' as const };
     if (share.revokedAt) return { status: 'revoked' as const };
-    const page = await listChanges({
-        workspaceId: share.workspaceId,
-        since: input.since,
-        limit: input.limit,
-    });
-    const events = await db
-        .select()
-        .from(driveShareEvents)
-        .where(
-            and(
-                eq(driveShareEvents.shareId, share.id),
-                sql`${driveShareEvents.changeSeq} > ${input.since}`,
-                sql`${driveShareEvents.changeSeq} <= ${page.nextCursor}`,
-            ),
-        );
-    const changes: Change[] = await db.transaction(async (tx) => {
-        const kept: Change[] = [];
-        for (const change of page.changes) {
-            if (change.kind === 'tombstone') {
-                // A tombstone's chain is gone with it; the grantee learns of it through
-                // its parent, which was inside if the node was, or drops it on `left`.
-                kept.push(change);
-                continue;
+    let since = 0;
+    if (input.cursor !== undefined && input.cursor !== null) {
+        const opened = openShareCursor(share.id, input.cursor);
+        if (opened === null) return { status: 'bad-cursor' as const };
+        since = opened;
+    }
+    const limit = Math.min(input.limit ?? 200, 500);
+    const scanned = await db.transaction(async (tx) => {
+        // Read before the scan: every change at or below it has committed (see nextChangeSeq).
+        const [workspace] = await tx
+            .select({
+                changeSeq: workspaces.changeSeq,
+                dropped: workspaces.tombstonesDroppedThrough,
+            })
+            .from(workspaces)
+            .where(eq(workspaces.id, share.workspaceId));
+        const kept: { seq: number; change: ShareChange | { kind: 'node'; nodeId: string } }[] = [];
+        let position = since;
+        let examined = 0;
+        let exhausted = false;
+        while (kept.length < limit && examined < SHARE_FEED_SCAN) {
+            const take = Math.min(500, SHARE_FEED_SCAN - examined);
+            const rows = await tx
+                .select({
+                    id: driveNodes.id,
+                    parentId: driveNodes.parentId,
+                    changeSeq: driveNodes.changeSeq,
+                    purgedAt: driveNodes.purgedAt,
+                    purgedAncestorIds: driveNodes.purgedAncestorIds,
+                })
+                .from(driveNodes)
+                .where(
+                    and(
+                        eq(driveNodes.workspaceId, share.workspaceId),
+                        sql`${driveNodes.changeSeq} > ${position}`,
+                    ),
+                )
+                .orderBy(asc(driveNodes.changeSeq))
+                .limit(take);
+            for (const row of rows) {
+                examined++;
+                position = row.changeSeq!;
+                if (row.purgedAt) {
+                    if (row.purgedAncestorIds?.includes(share.nodeId))
+                        kept.push({
+                            seq: position,
+                            change: { kind: 'tombstone', nodeId: row.id, parentId: row.parentId },
+                        });
+                } else {
+                    const chain = await walk(tx, row.id);
+                    if (
+                        chain &&
+                        (chain.node.id === share.nodeId ||
+                            chain.ancestors.some((a) => a.id === share.nodeId))
+                    )
+                        kept.push({ seq: position, change: { kind: 'node', nodeId: row.id } });
+                }
+                if (kept.length === limit) break;
             }
-            if (change.kind !== 'node') continue;
-            const chain = await walk(tx, change.node.id);
-            const inside =
-                chain !== null &&
-                (chain.node.id === share.nodeId ||
-                    chain.ancestors.some((a) => a.id === share.nodeId));
-            if (inside) kept.push(change);
+            if (rows.length < take && kept.length < limit) {
+                exhausted = true;
+                break;
+            }
         }
-        return kept;
+        // Everything up to the sequence read first has been seen once the scan ran dry.
+        if (exhausted) position = Math.max(position, workspace?.changeSeq ?? 0);
+        const [more] = exhausted
+            ? []
+            : await tx
+                  .select({ id: driveNodes.id })
+                  .from(driveNodes)
+                  .where(
+                      and(
+                          eq(driveNodes.workspaceId, share.workspaceId),
+                          sql`${driveNodes.changeSeq} > ${position}`,
+                      ),
+                  )
+                  .limit(1);
+        const nodeIds = kept.flatMap((entry) =>
+            entry.change.kind === 'node' && 'nodeId' in entry.change ? [entry.change.nodeId] : [],
+        );
+        const nodes = new Map((await selectNodes(tx, nodeIds)).map((node) => [node.id, node]));
+        const events = await tx
+            .select()
+            .from(driveShareEvents)
+            .where(
+                and(
+                    eq(driveShareEvents.shareId, share.id),
+                    sql`${driveShareEvents.changeSeq} > ${since}`,
+                    sql`${driveShareEvents.changeSeq} <= ${position}`,
+                ),
+            );
+        const ordered: { seq: number; change: ShareChange }[] = kept.flatMap((entry) => {
+            if (entry.change.kind !== 'node' || !('nodeId' in entry.change))
+                return [{ seq: entry.seq, change: entry.change as ShareChange }];
+            const node = nodes.get(entry.change.nodeId);
+            return node ? [{ seq: entry.seq, change: { kind: 'node' as const, node } }] : [];
+        });
+        for (const event of events)
+            ordered.push({
+                seq: event.changeSeq,
+                change: { kind: event.kind, nodeId: event.nodeId },
+            });
+        ordered.sort((a, b) => a.seq - b.seq);
+        return {
+            changes: ordered.map((entry) => entry.change),
+            position,
+            hasMore: more !== undefined,
+            resync: since > 0 && since < (workspace?.dropped ?? 0),
+        };
     });
-    for (const event of events)
-        changes.push({ kind: event.kind, changeSeq: event.changeSeq, nodeId: event.nodeId });
-    changes.sort((a, b) => a.changeSeq - b.changeSeq);
     return {
         status: 'ok' as const,
-        changes,
-        nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
-        resync: page.resync,
+        changes: scanned.changes,
+        cursor: sealShareCursor(share.id, scanned.position),
+        hasMore: scanned.hasMore,
+        resync: scanned.resync,
     };
 }
 

@@ -30,9 +30,8 @@ import {
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
     MAX_PART_URLS_PER_REQUEST,
+    RETIRED_SHARE_ENVELOPE_BYTES,
     SHARE_ENVELOPE_BYTES,
-    SHARE_SUITE,
-    shareEnvelopeSuite,
     THUMBNAIL_BATCH,
     THUMBNAIL_MAX_BYTES,
     VERSION_ENVELOPE_BYTES,
@@ -46,7 +45,6 @@ import {
     UPLOAD_TTL_HOURS,
     type Capabilities,
     type DriveErrorCode,
-    type ShareSuite,
 } from './protocol';
 
 /*
@@ -85,8 +83,11 @@ export function capabilities(): Capabilities {
 }
 
 /* Wire shapes: envelopes as Base64url, byte counts as decimal strings, dates as ISO. */
-/* Who the server says wrote a record: for display; the signature is what a reader checks. */
-export type Signer = { id: string; name: string; email: string };
+/*
+ * Who wrote a record: the account id alone. A client names a signer from its
+ * own pins or says it has not checked them; the signature is what it checks.
+ */
+export type Signer = { id: string };
 export type VersionView = {
     id: string;
     objectId: string;
@@ -188,6 +189,15 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
     };
 }
 
+/*
+ * A node as anyone but a member of its workspace sees it: without the owner's
+ * change sequence, which would let a grantee count the owner's changes
+ * elsewhere in the drive by watching it climb.
+ */
+export function granteeView(node: NodeView): NodeView {
+    return { ...node, changeSeq: null };
+}
+
 /* Base64url in, Buffer out, with the exact or maximum length the column allows. */
 export function decodeEnvelope(value: string, exact?: number, max?: number) {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new DriveError('invalid', 'Invalid envelope.');
@@ -209,10 +219,10 @@ const signature = (value: string) => decodeEnvelope(value, 64);
  * not a share envelope at all.
  */
 function shareEnvelope(value: string) {
-    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES[SHARE_SUITE]);
-    const suite = shareEnvelopeSuite(bytes.length);
-    if (suite === null) throw new DriveError('invalid', 'Invalid envelope.');
-    if (suite !== SHARE_SUITE) throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES);
+    if (RETIRED_SHARE_ENVELOPE_BYTES.includes(bytes.length))
+        throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+    if (bytes.length !== SHARE_ENVELOPE_BYTES) throw new DriveError('invalid', 'Invalid envelope.');
     return bytes;
 }
 /* A version envelope for an upload of the current suite: the key sealed with the sizes. */
@@ -422,10 +432,11 @@ export async function listChildren(
     });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
+    const view = access.shareId ? (row: NodeRow) => granteeView(nodeView(row)) : nodeView;
     return {
-        folder: nodeView(result.folder),
-        ancestors: result.ancestors.map(nodeView),
-        children: result.children.map(nodeView),
+        folder: view(result.folder),
+        ancestors: result.ancestors.map(view),
+        children: result.children.map(view),
         nextCursor: result.nextCursor,
     };
 }
@@ -612,6 +623,19 @@ export async function purgeNode(userId: string, workspaceId: string, nodeId: str
     }
 }
 
+/*
+ * A write refused for space. The bytes left are the workspace's own business:
+ * a member is told them, an editor through a share or anyone else only that
+ * there is no room, so a refusal does not tell them how full the owner's
+ * drive is.
+ */
+async function overQuota(userId: string, workspaceId: string, free: bigint, message: string) {
+    const data = (await driveRepository.isMember(userId, workspaceId))
+        ? { freeBytes: free.toString() }
+        : undefined;
+    return new DriveError('over-quota', message, 402, data);
+}
+
 const unavailable = () =>
     new DriveError(
         'conflict',
@@ -665,11 +689,11 @@ export async function copyNode(
         case 'invalid':
             throw new DriveError('invalid', 'The envelope does not match how this file is stored.');
         case 'over-quota':
-            throw new DriveError(
-                'over-quota',
+            throw await overQuota(
+                userId,
+                workspaceId,
+                result.free,
                 'Not enough storage for a copy. Free some space or upgrade your plan.',
-                402,
-                { freeBytes: result.free.toString() },
             );
         case 'not-found':
             throw notFound();
@@ -747,8 +771,9 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
-        // Told apart by length in the query: 1, 2 (hybrid) or 3 (signed).
-        suite: row.suite as ShareSuite,
+        // Told apart by length in the query. Only the granter sees a row of suite 1 or 2,
+        // which grants nothing now, so they can re-seal it in suite 3 or revoke it.
+        suite: row.suite as 1 | 2 | 3,
         grantee: row.grantee,
     };
 }
@@ -784,6 +809,8 @@ export async function shareNode(
             throw stale();
         case 'self':
             throw new DriveError('invalid', 'You already have access to your own files.', 409);
+        case 'unsupported':
+            throw new DriveError('unsupported', 'Update HushOS to share.', 409);
         case 'ok': {
             const shares = await driveRepository.listNodeShares(workspaceId, nodeId);
             const share = shares.find((row) => row.id === result.share.id);
@@ -798,7 +825,7 @@ export async function listNodeShares(userId: string, workspaceId: string, nodeId
     return { shares: (await driveRepository.listNodeShares(workspaceId, nodeId)).map(shareView) };
 }
 
-/* The granter re-seals a live share at the current epoch, typically from suite 1 to hybrid. */
+/* The granter re-seals a live share at the current epoch in suite 3: to a grantee's new keys, or a row left in an older suite. */
 export async function resealShare(
     userId: string,
     workspaceId: string,
@@ -816,6 +843,8 @@ export async function resealShare(
     if (result.status === 'not-found')
         throw new DriveError('not-found', 'This share no longer exists.', 404);
     if (result.status === 'stale') throw stale();
+    if (result.status === 'unsupported')
+        throw new DriveError('unsupported', 'Update HushOS to share.', 409);
     return { resealed: true as const };
 }
 
@@ -866,7 +895,8 @@ export async function listSharedWithMe(userId: string) {
             prevShareEnvelope: row.prevShareEnvelope ? b64(row.prevShareEnvelope) : null,
             prevKeyEpoch: row.prevKeyEpoch,
             createdAt: row.createdAt.toISOString(),
-            changeSeq: row.changeSeq,
+            /* Where this share's feed starts: sealed, so it counts nothing of the owner's. */
+            cursor: row.feedCursor,
             granter: {
                 id: row.granter.id,
                 name: row.granter.name,
@@ -875,7 +905,7 @@ export async function listSharedWithMe(userId: string) {
                 signingPublicKey: b64(row.granter.signingPublicKey),
                 keyVersion: row.granter.keyVersion,
             },
-            node: nodeView(row.node),
+            node: granteeView(nodeView(row.node)),
         })),
     };
 }
@@ -1133,11 +1163,11 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
         await store.abortMultipart(key, multipartId).catch(() => {});
         switch (result.status) {
             case 'over-quota':
-                throw new DriveError(
-                    'over-quota',
+                throw await overQuota(
+                    userId,
+                    workspaceId,
+                    result.free,
                     'Not enough storage for this file. Free some space or upgrade your plan.',
-                    402,
-                    { freeBytes: result.free.toString() },
                 );
             case 'not-found':
                 throw notFound();
@@ -1439,11 +1469,10 @@ async function presignDownloads(workspaceId: string, ids: string[], ttl: number)
  */
 export async function downloadUrl(userId: string, workspaceId: string, versionId: string) {
     const access = await requireVersionAccess(userId, workspaceId, versionId, 'viewer');
-    return presignDownload(
-        workspaceId,
-        versionId,
-        access.role === 'owner' ? DOWNLOAD_URL_TTL_SECONDS : SHARE_URL_TTL_SECONDS,
-    );
+    if (access.role === 'owner')
+        return presignDownload(workspaceId, versionId, DOWNLOAD_URL_TTL_SECONDS);
+    const presigned = await presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    return { ...presigned, node: granteeView(presigned.node) };
 }
 
 async function presignDownload(workspaceId: string, versionId: string, ttl: number) {
@@ -1607,6 +1636,15 @@ export async function revokeLink(userId: string, workspaceId: string, linkId: st
 const linkGone = () => new DriveError('not-found', 'This link no longer works.', 404);
 
 /*
+ * The visitor routes once took the token in their path, where reverse proxies
+ * log it. Those paths now refuse with 410 and say what to do, rather than 404,
+ * which an old client would show as a dead link.
+ */
+export function linkPathRetired(): never {
+    throw new DriveError('unsupported', 'Update HushOS to open links.', 410);
+}
+
+/*
  * Every visit is bounded per address and per token: the token is the only
  * secret the server ever sees, and a token cannot be guessed at any useful
  * rate under these limits.
@@ -1619,18 +1657,34 @@ async function limitLink(token: string, address: string) {
         throw new DriveError('conflict', 'Too many requests. Please try again shortly.', 429);
 }
 
-/* The linked node with what the visitor's device needs to open it; the secret stays in their URL. */
 /*
- * What a link's visitor sees of a node: the signatures, never who wrote it. A
- * visitor has no account and no pins, so a signer's name and email would tell
- * an anonymous holder of the URL who owns and edits the files, and buy them
- * nothing they could check.
+ * What a link's visitor sees of a node and its versions: no signer and no
+ * signature (absent, not null), and not the owner's change sequence. A visitor
+ * has no account and no pins, so a signature buys them nothing they could
+ * check, while testing it against keys from contact lookup would tell an
+ * anonymous holder of the URL who wrote the files. `workspaceId` stays: it is
+ * bound into every envelope.
  */
-function visitorView(node: NodeView): NodeView {
+export type VisitorVersionView = Omit<VersionView, 'signer' | 'signature'>;
+export type VisitorNodeView = Omit<
+    NodeView,
+    'metadataSigner' | 'metadataSignature' | 'currentVersion'
+> & { currentVersion: VisitorVersionView | null };
+function visitorVersion(version: VersionView): VisitorVersionView {
+    const { signer: _signer, signature: _signature, ...rest } = version;
+    return rest;
+}
+function visitorView(node: NodeView): VisitorNodeView {
+    const {
+        metadataSigner: _signer,
+        metadataSignature: _signature,
+        currentVersion,
+        ...rest
+    } = node;
     return {
-        ...node,
-        metadataSigner: null,
-        currentVersion: node.currentVersion ? { ...node.currentVersion, signer: null } : null,
+        ...rest,
+        changeSeq: null,
+        currentVersion: currentVersion ? visitorVersion(currentVersion) : null,
     };
 }
 
@@ -1688,7 +1742,7 @@ export async function linkDownloadUrl(token: string, address: string, versionId:
     return {
         ...presigned,
         node: visitorView(presigned.node),
-        version: { ...presigned.version, signer: null },
+        version: visitorVersion(presigned.version),
     };
 }
 
@@ -1800,6 +1854,8 @@ function evidenceRequestView(row: reportsRepository.EvidenceRequestRow) {
 }
 /* A snapshot row as the node the client already knows how to open. */
 function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: string): NodeView {
+    // A released report's snapshot keeps no envelopes; the routes refuse it before this.
+    if (!item.keyEnvelope || !item.metadataEnvelope) throw reportReleased();
     const version: VersionView | null =
         item.versionId && item.objectId && item.contentKeyEnvelope && item.contentNonce
             ? {
@@ -1949,6 +2005,8 @@ export async function fileReport(
                 'The operators of this instance changed while you were writing. Please try again.',
                 409,
             );
+        case 'conflict':
+            throw new DriveError('conflict', 'A report with this id already exists.', 409);
         case 'duplicate':
             return { report: { id: result.reportId }, duplicate: true };
         case 'ok':
@@ -2431,20 +2489,53 @@ export async function changes(userId: string, workspaceId: string, since: number
     };
 }
 
-/* A grantee follows a share; once it is revoked the feed is gone, and says so with 410. */
-export async function shareChanges(userId: string, shareId: string, since: number) {
-    const page = await driveRepository.listShareChanges({ shareId, granteeUserId: userId, since });
+/*
+ * A grantee follows a share: the changes inside it, in order, with a sealed
+ * cursor and nothing that counts the owner's changes (no sequence numbers on
+ * the changes or their nodes). Once the share is revoked the feed is gone, and
+ * says so with 410; a cursor the server did not seal for this share is a 400.
+ */
+type ShareChangeRow = Extract<
+    Awaited<ReturnType<typeof driveRepository.listShareChanges>>,
+    { status: 'ok' }
+>['changes'][number];
+function shareChangeView(change: ShareChangeRow) {
+    switch (change.kind) {
+        case 'node':
+            return { kind: 'node' as const, node: granteeView(nodeView(change.node)) };
+        case 'tombstone':
+            return {
+                kind: 'tombstone' as const,
+                nodeId: change.nodeId,
+                parentId: change.parentId,
+            };
+        default:
+            return { kind: change.kind, nodeId: change.nodeId };
+    }
+}
+
+export async function shareChanges(userId: string, shareId: string, cursor?: string) {
+    const page = await driveRepository.listShareChanges({
+        shareId,
+        granteeUserId: userId,
+        cursor,
+    });
     switch (page.status) {
         case 'not-found':
             throw new DriveError('not-found', 'This share no longer exists.', 404);
         case 'revoked':
             throw new DriveError('expired', 'This share has ended.', 410);
+        case 'bad-cursor':
+            throw new DriveError(
+                'invalid',
+                'This feed position is not valid here. Start the feed again.',
+            );
         case 'ok':
             return {
-                changes: page.changes.map(changeView),
-                resync: page.resync,
-                nextCursor: page.nextCursor,
+                changes: page.changes.map(shareChangeView),
+                cursor: page.cursor,
                 hasMore: page.hasMore,
+                resync: page.resync,
             };
     }
 }

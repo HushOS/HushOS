@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
-import { accountIdentities, users } from './schema';
+import { accountIdentities, userSettings, users } from './schema';
 
 /*
  * Settings are a compare-and-set document, identity lookup is by normalised
@@ -34,9 +34,11 @@ describe('settings', () => {
     test('the first save names version 0, every save bumps it, and a stale save is refused', async () => {
         const { userId } = await createTestAccount();
         expect(await auth.getSettings(userId)).toBeNull();
+        await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
         const first = await auth.putSettings({
             userId,
             expectedVersion: 0,
+            version: 2,
             nonce: randomBytes(24),
             ciphertext: randomBytes(64),
         });
@@ -45,6 +47,7 @@ describe('settings', () => {
         const stale = await auth.putSettings({
             userId,
             expectedVersion: 0,
+            version: 2,
             nonce: randomBytes(24),
             ciphertext: randomBytes(64),
         });
@@ -54,6 +57,7 @@ describe('settings', () => {
             await auth.putSettings({
                 userId,
                 expectedVersion: 1,
+                version: 2,
                 nonce: randomBytes(24),
                 ciphertext: second,
             }),
@@ -66,13 +70,20 @@ describe('settings', () => {
     test('settings are per person and go with the account', async () => {
         const a = await createTestAccount();
         const b = await createTestAccount();
+        await auth.putSettingsKey({
+            userId: a.userId,
+            nonce: randomBytes(24),
+            ciphertext: randomBytes(48),
+        });
         await auth.putSettings({
             userId: a.userId,
             expectedVersion: 0,
+            version: 2,
             nonce: randomBytes(24),
             ciphertext: randomBytes(64),
         });
         expect(await auth.getSettings(b.userId)).toBeNull();
+        expect(await auth.getSettings(a.userId)).not.toBeNull();
         await db.delete(users).where(eq(users.id, a.userId));
         expect(await auth.getSettings(a.userId)).toBeNull();
     });
@@ -105,9 +116,9 @@ describe('the settings key', () => {
         ).rejects.toThrow();
     });
 
-    test('version 2 settings need a stored key; version 1 is still taken', async () => {
+    test('only version 2 is taken, and only once its key is stored', async () => {
         const { userId } = await createTestAccount();
-        const save = (expectedVersion: number, version: 1 | 2) =>
+        const save = (expectedVersion: number, version: number) =>
             auth.putSettings({
                 userId,
                 expectedVersion,
@@ -117,12 +128,44 @@ describe('the settings key', () => {
             });
         // Sealed under a key the server never received: nobody could open it again.
         expect(await save(0, 2)).toEqual({ status: 'no-key', settingsVersion: 0 });
-        expect(await auth.getSettings(userId)).toBeNull();
-        expect(await save(0, 1)).toEqual({ status: 'ok', settingsVersion: 1 });
-        expect((await auth.getSettings(userId))?.version).toBe(1);
         await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
-        expect(await save(1, 2)).toEqual({ status: 'ok', settingsVersion: 2 });
+        // Version 1 no longer opens anywhere, so it is not stored, whatever it names.
+        for (const version of [1, 3])
+            expect(await save(0, version)).toEqual({
+                status: 'unsupported',
+                settingsVersion: null,
+            });
+        expect(await auth.getSettings(userId)).toBeNull();
+        expect(await save(0, 2)).toEqual({ status: 'ok', settingsVersion: 1 });
         expect((await auth.getSettings(userId))?.version).toBe(2);
+    });
+
+    test('a version 1 document reads as none and the next save replaces it, its sequence still rising', async () => {
+        const { userId } = await createTestAccount();
+        // Left from before: sealed the old way, at sequence 7.
+        await db.insert(userSettings).values({
+            userId,
+            version: 1,
+            settingsVersion: 7,
+            nonce: randomBytes(24),
+            ciphertext: randomBytes(64),
+        });
+        expect(await auth.getSettings(userId)).toBeNull();
+        await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
+        const save = (expectedVersion: number) =>
+            auth.putSettings({
+                userId,
+                expectedVersion,
+                version: 2,
+                nonce: randomBytes(24),
+                ciphertext: randomBytes(64),
+            });
+        // The old sequence is not a precondition anyone could meet now: 0 is.
+        expect(await save(7)).toEqual({ status: 'conflict', settingsVersion: 0 });
+        // Above 7, so a device that once saw the old document never takes this for a rollback.
+        expect(await save(0)).toEqual({ status: 'ok', settingsVersion: 8 });
+        expect(await auth.getSettings(userId)).toMatchObject({ version: 2, settingsVersion: 8 });
+        expect(await save(0)).toEqual({ status: 'conflict', settingsVersion: 8 });
     });
 });
 

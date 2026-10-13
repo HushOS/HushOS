@@ -22,8 +22,9 @@ import java.net.URLEncoder
  * queue has nothing left running (not once per file), on its own channel apart from the
  * ongoing progress notification, never while the app is on screen (the transfers sheet
  * says it there). Tapping it opens the transfers sheet; a failure that Retry can help
- * carries a Retry action. Names stay off the lock screen: its public version says only
- * that transfers finished or didn't.
+ * carries a Retry action. Names stay off the lock screen: the notification is secret there
+ * (a private one shows in full under the default lock-screen setting), so the lock screen
+ * shows nothing of it and the names appear only once the phone is unlocked.
  */
 object TransferNotices {
     private const val CHANNEL = "transfer-results"
@@ -119,7 +120,7 @@ object TransferNotices {
             androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
         val system = context.getSystemService(NotificationManager::class.java)
         if (system.getNotificationChannel(CHANNEL) == null)
-            system.createNotificationChannel(NotificationChannel(CHANNEL, "Finished transfers", NotificationManager.IMPORTANCE_DEFAULT))
+            system.createNotificationChannel(NotificationChannel(CHANNEL, "Finished transfers", NotificationManager.IMPORTANCE_DEFAULT).apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
         val (title, body) = words(ended)
         val failed = ended.any { it.reason != null }
         val id = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
@@ -138,11 +139,6 @@ object TransferNotices {
             Intent(context, com.hushos.app.MainActivity::class.java).setAction(target).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val hidden = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle(if (failed) "Transfers didn’t finish" else "Transfers finished")
-            .setLocalOnly(true)
-            .build()
         val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(if (failed) android.R.drawable.stat_notify_error else android.R.drawable.stat_sys_upload_done)
             .setContentTitle(title)
@@ -150,8 +146,7 @@ object TransferNotices {
             .setStyle(body?.let { NotificationCompat.BigTextStyle().bigText(it) })
             .setContentIntent(open)
             .setAutoCancel(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(hidden)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             // File names stay on this phone: never bridged to a watch or another device.
             .setLocalOnly(true)
         // Retry where it can work: the failures still on the record whose reason a retry can fix.

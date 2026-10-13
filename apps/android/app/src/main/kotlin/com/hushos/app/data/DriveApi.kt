@@ -15,12 +15,13 @@ class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 /* What every request says this client is: 3 since content suite 3, writer signatures and signed shares. */
 const val CLIENT_HEADER = "android/3"
 
-/* Who the server says wrote a record: for display only; the signature is what this device checks. */
-data class Signer(val id: String, val name: String, val email: String) {
-    val displayName: String get() = name.ifEmpty { email }
-
+/*
+ * Who the server says wrote a record: an account id alone (round 3). The signature is what this device checks, and a
+ * name comes only from this device's own pins (Trust.writer), never from the server.
+ */
+data class Signer(val id: String) {
     companion object {
-        fun from(json: JSONObject?): Signer? = json?.let { Signer(it.getString("id"), it.optString("name"), it.optString("email")) }
+        fun from(json: JSONObject?): Signer? = json?.optString("id")?.ifEmpty { null }?.let { Signer(it) }
     }
 }
 

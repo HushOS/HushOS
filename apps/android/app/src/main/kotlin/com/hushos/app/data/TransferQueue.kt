@@ -167,25 +167,21 @@ object TransferQueue {
     /*
      * The ongoing notification Android requires while a job runs: the up arrow for uploads,
      * the down arrow for keeping a file on this phone, and a tap that opens the transfers sheet.
-     * No Cancel here: cancelling asks first, in the app. The title names the file, so the lock
-     * screen gets a version without it, and nothing is bridged to a watch or another device.
+     * No Cancel here: cancelling asks first, in the app. The title names the file, so it is kept off
+     * the lock screen altogether (VISIBILITY_SECRET: a private notification's public version is shown
+     * only when the person chose to hide sensitive content, and the default shows everything), and
+     * nothing is bridged to a watch or another device.
      */
     internal fun foreground(context: Context, id: Int, title: String, fraction: Float, keeping: Boolean = false, detail: String? = null): ForegroundInfo {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL) == null)
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Transfers", NotificationManager.IMPORTANCE_LOW).apply { lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET })
         val open = android.app.PendingIntent.getActivity(
             context, 0,
             android.content.Intent(context, com.hushos.app.MainActivity::class.java).setAction(OPEN_TRANSFERS).addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val icon = if (keeping) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_upload
-        val public = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(icon)
-            .setContentTitle(if (keeping) "Keeping files on this phone" else "Uploading")
-            .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
-            .setLocalOnly(true)
-            .build()
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(icon)
             .setContentTitle(title)
@@ -194,8 +190,7 @@ object TransferQueue {
             .setProgress(100, (fraction * 100).toInt(), fraction <= 0f)
             .setOngoing(true)
             .setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(public)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setLocalOnly(true)
             .build()
         return ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)

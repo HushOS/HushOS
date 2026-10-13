@@ -2,9 +2,12 @@ import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { signingKeyFromSeed } from '../test/helpers';
 import {
+    metadataSigned,
     metadataStatement,
     successionStatement,
     verifySignature,
+    verifySigned,
+    versionSigned,
     versionStatement,
 } from './signatures';
 
@@ -75,6 +78,43 @@ describe('statements', () => {
         );
     });
 
+    test('re-sealed metadata: its own label, otherwise the same fields as the ordinary statement', () => {
+        const envelope = Buffer.from('sealed metadata');
+        expect(
+            metadataStatement(
+                {
+                    workspaceId: WORKSPACE,
+                    nodeId: NODE,
+                    kind: 'folder',
+                    metadataVersion: 2,
+                    metadataEnvelope: envelope,
+                },
+                'resealed',
+            ).toString('utf8'),
+        ).toBe(
+            `["hushos/drive/sig/metadata-resealed",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","folder",2,"${sha(envelope)}"]`,
+        );
+    });
+
+    test('re-sealed version: its own label, otherwise the same fields as the ordinary statement', () => {
+        const envelope = Buffer.alloc(84, 7);
+        expect(
+            versionStatement(
+                {
+                    workspaceId: WORKSPACE,
+                    nodeId: NODE,
+                    versionId: VERSION,
+                    objectId: OBJECT,
+                    contentSuite: 2,
+                    contentKeyEnvelope: envelope,
+                },
+                'resealed',
+            ).toString('utf8'),
+        ).toBe(
+            `["hushos/drive/sig/version-resealed",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b","3f2504e0-4f89-41d3-9a0c-0305e82c3301",2,"${sha(envelope)}"]`,
+        );
+    });
+
     test('succession: both key versions, the four public keys in Base64url, the new KEM key by digest', () => {
         const kem = Buffer.alloc(1184, 9);
         const key = (fill: number) => Buffer.alloc(32, fill);
@@ -140,6 +180,63 @@ describe('verification', () => {
                 signer.publicKey,
                 metadataStatement({ ...at, metadataVersion: 2 }),
                 signature,
+            ),
+        ).toBe(false);
+    });
+
+    test('either form verifies; a label of neither form or another key does not', () => {
+        const signer = signingKeyFromSeed(RFC_1.seed);
+        const other = signingKeyFromSeed(Buffer.alloc(32, 5));
+        const metadata = {
+            workspaceId: WORKSPACE,
+            nodeId: NODE,
+            kind: 'file' as const,
+            metadataVersion: 1,
+            metadataEnvelope: Buffer.from('name'),
+        };
+        const version = {
+            workspaceId: WORKSPACE,
+            nodeId: NODE,
+            versionId: VERSION,
+            objectId: OBJECT,
+            contentSuite: 3,
+            contentKeyEnvelope: Buffer.alloc(84, 1),
+        };
+        for (const form of ['ordinary', 'resealed'] as const) {
+            expect(
+                verifySigned(
+                    signer.publicKey,
+                    metadataSigned(metadata, signer.sign(metadataStatement(metadata, form))),
+                ),
+            ).toBe(true);
+            expect(
+                verifySigned(
+                    signer.publicKey,
+                    versionSigned(version, signer.sign(versionStatement(version, form))),
+                ),
+            ).toBe(true);
+            expect(
+                verifySigned(
+                    signer.publicKey,
+                    metadataSigned(metadata, other.sign(metadataStatement(metadata, form))),
+                ),
+            ).toBe(false);
+        }
+        // A statement under any other label, even one the server might be tricked into
+        // reading as a softer claim, is not accepted.
+        const forged = Buffer.from(
+            metadataStatement(metadata)
+                .toString('utf8')
+                .replace('hushos/drive/sig/metadata', 'hushos/drive/sig/metadata-relocked'),
+        );
+        expect(verifySigned(signer.publicKey, metadataSigned(metadata, signer.sign(forged)))).toBe(
+            false,
+        );
+        // Nor does a metadata signature carry over to the version statement in re-sealed form.
+        expect(
+            verifySigned(
+                signer.publicKey,
+                versionSigned(version, signer.sign(metadataStatement(metadata, 'resealed'))),
             ),
         ).toBe(false);
     });

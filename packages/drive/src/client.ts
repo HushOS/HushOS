@@ -1460,8 +1460,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (page.changes.length) void ingest(workspaceId).catch(() => {});
         return page;
     }
-    async function shareChangesSince(shareId: string, since: number) {
-        const page = await api.shareChanges(shareId, since);
+    async function shareChangesSince(shareId: string, cursor?: string) {
+        const page = await api.shareChanges(shareId, cursor);
         for (const change of page.changes) if (change.kind === 'node') remember([change.node]);
         return page;
     }

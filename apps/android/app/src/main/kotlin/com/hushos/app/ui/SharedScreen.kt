@@ -318,7 +318,8 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
     if (root == null && trust != null) {
         // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
         // A pin that vouches for nothing waits for a words check, like someone not added yet.
-        val unverified = trust is GranterTrust.Unverified || trust is GranterTrust.Recheck
+        // Only keys that changed without a signed succession are a warning; replaced keys and a share waiting for its re-seal are a step to take.
+        val unverified = trust !is GranterTrust.Changed
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onPeople).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).background(if (unverified) alpine.tint else alpine.dangerSoft, CircleShape), contentAlignment = Alignment.Center) {
                 Icon(if (unverified) Icons.Outlined.Group else Icons.Outlined.WarningAmber, null, tint = if (unverified) alpine.inkMuted else alpine.danger, modifier = Modifier.size(20.dp))
