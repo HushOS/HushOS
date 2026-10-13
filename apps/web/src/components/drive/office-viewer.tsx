@@ -29,6 +29,11 @@ import '@/components/drive/rich-text.css';
  * the page.
  */
 
+/* Every renderer the viewer loads on first use, fetched ahead of it (see lib/preload.ts). */
+export async function preloadOffice() {
+    await Promise.all([import('mammoth'), import('xlsx')]);
+}
+
 const schema: Schema = {
     ...defaultSchema,
     clobber: [],

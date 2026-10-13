@@ -207,6 +207,16 @@ export async function highlight(code: string, language: string): Promise<Root> {
     });
 }
 
+/*
+ * Fetches the highlighter and every grammar without highlighting anything:
+ * which grammar a device fetches would otherwise tell the server what kind of
+ * file was opened. Called once after unlock, at idle (see lib/preload.ts).
+ */
+export async function preloadGrammars() {
+    await highlighter();
+    for (const loader of new Set(Object.values(LANGUAGES))) await loader();
+}
+
 export function canHighlight(language: string | null): language is string {
     return language !== null && language in LANGUAGES;
 }
