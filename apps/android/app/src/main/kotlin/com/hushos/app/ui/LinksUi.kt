@@ -593,12 +593,16 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
     }
 }
 
-/* The link as a QR code, for a phone across the table. */
+/*
+ * The link as a QR code, for a phone across the table. The code is the whole link, secret included: its window
+ * (a dialog has its own) is kept out of screenshots, recordings and the recents preview.
+ */
 @Composable
 private fun QrDialog(url: String, name: String, password: Boolean, dismiss: () -> Unit) {
     val bitmap = remember(url) { qrBitmap(url, 720) }
     AlertDialog(
         onDismissRequest = dismiss,
+        properties = androidx.compose.ui.window.DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn),
         title = { Text("Link to $name", maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1000,6 +1004,8 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
     var reporting by remember { mutableStateOf(false) }
     var whole by remember { mutableStateOf("") }
     val current = stack.lastOrNull() ?: root
+    // A link's secret opens everything behind it: the screen holding it (and what it opened) stays out of captures.
+    SecureWindow()
     LaunchedEffect(session) { session.start() }
     LaunchedEffect(current?.id) { current?.let { if (it.isFolder) session.list(it) } }
     BackHandler { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) else close() }
@@ -1049,7 +1055,11 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
                     EmptyState(problem.title, problem.body, if (problem == LinkTrouble.GONE) Icons.Outlined.LinkOff else Icons.Outlined.ErrorOutline, danger = problem == LinkTrouble.FAILED) {
                         if (problem == LinkTrouble.FAILED) Button(onClick = { session.retry() }) { Text("Try again") }
                         if (problem == LinkTrouble.INCOMPLETE) {
-                            OutlinedTextField(value = whole, onValueChange = { whole = it }, singleLine = true, label = { Text("Whole link") }, modifier = Modifier.fillMaxWidth())
+                            // The link's secret is a key: no autocorrect, and nothing the keyboard learns or suggests from it later.
+                            NoKeyboardLearning {
+                                OutlinedTextField(value = whole, onValueChange = { whole = it }, singleLine = true, label = { Text("Whole link") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
+                            }
                             Button(enabled = whole.contains("/s/"), onClick = { model.openLinkRequest(whole.trim()) }, modifier = Modifier.fillMaxWidth()) { Text("Open") }
                         }
                     }

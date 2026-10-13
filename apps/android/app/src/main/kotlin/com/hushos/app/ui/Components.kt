@@ -410,3 +410,25 @@ internal fun SecureWindow() {
         onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
     }
 }
+
+/*
+ * Asks the keyboard not to learn from what is typed inside (IME_FLAG_NO_PERSONALIZED_LEARNING): no new words in its
+ * dictionary, no suggestions from it later, nothing in its typing history. A keyboard may ignore the flag; the
+ * system's and Gboard honour it. Compose has no option for it, so the editor's attributes are amended on the way out.
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+internal fun NoKeyboardLearning(content: @Composable () -> Unit) {
+    androidx.compose.ui.platform.InterceptPlatformTextInput(
+        interceptor = { request, next ->
+            next.startInputMethod(object : androidx.compose.ui.platform.PlatformTextInputMethodRequest by request {
+                override fun createInputConnection(outAttributes: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection {
+                    val connection = request.createInputConnection(outAttributes)
+                    outAttributes.imeOptions = outAttributes.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                    return connection
+                }
+            })
+        },
+        content = content,
+    )
+}

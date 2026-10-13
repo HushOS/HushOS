@@ -5,12 +5,12 @@ import com.hushos.core.PinnedKeys
 import com.hushos.core.ServedKeys
 import com.hushos.core.SettingsEnvelope
 import com.hushos.core.ShareContext
-import com.hushos.core.ShareGranter
 import com.hushos.core.SuccessionLink
 import com.hushos.core.base64urlDecode
 import com.hushos.core.identityFingerprint
 import com.hushos.core.kemBindingVerify
 import com.hushos.core.keyDigest
+import com.hushos.core.settingsOpen
 import com.hushos.core.shareOpen
 import com.hushos.core.successionChainVerify
 import org.json.JSONArray
@@ -122,8 +122,11 @@ fun needsChain(pin: ContactPin, served: ServedIdentity): Boolean {
     return pin.verified && !pin.matches(served) && version > (pin.keyVersion ?: 0uL)
 }
 
-/* The key version a chain is asked for from: the pin's, or 1 for a pin from before successions (the chain is found by keys). */
-fun chainFrom(pin: ContactPin): ULong = pin.keyVersion ?: 1uL
+/*
+ * The key version a chain is asked for from: always the first, so the request says nothing of the version a pin is
+ * at (docs/integrity-design.md, "Who sees whom"). The core finds where the pinned keys enter the chain by keys.
+ */
+const val CHAIN_FROM: ULong = 1uL
 
 /*
  * The pin after a succession, or null when the chain does not carry it from the pinned keys to the served ones (the
@@ -225,9 +228,17 @@ class Settings(val json: JSONObject, val version: ULong) {
 
     companion object {
         fun parse(text: String, version: ULong) = Settings(JSONObject(text), version)
-        fun empty() = Settings(JSONObject().put("version", 1).put("contacts", JSONObject()), 0uL)
+        fun empty(version: ULong = 0uL) = Settings(JSONObject().put("version", 1).put("contacts", JSONObject()), version)
     }
 }
+
+/*
+ * The settings out of a served envelope: version 2 under the settings key. Version 1 (sealed under a key off the
+ * identity, which a stolen identity key opened) no longer opens: it is no settings at all, at the envelope's version,
+ * so the next save (always version 2) goes over it and starts afresh.
+ */
+fun openSettingsText(userId: String, settingsKey: ByteArray?, envelope: SettingsEnvelope): Settings =
+    settingsOpen(userId, settingsKey, envelope)?.let { Settings.parse(it, envelope.settingsVersion) } ?: Settings.empty(envelope.settingsVersion)
 
 class ContactChanged : Exception("This contact's key changed since you pinned it. Check the fingerprint and pin it again.")
 
@@ -240,39 +251,49 @@ sealed class GranterTrust(message: String) : Exception(message) {
     class Changed(name: String) : GranterTrust("$name’s key has changed since you added them. Check it’s them in People you share with before opening what they shared.")
     /* Pinned, but the pin vouches for nothing (an old pin, or a fingerprint that isn't the current one): treated like Unverified. */
     class Recheck(name: String) : GranterTrust("Check $name’s words again in People you share with to open what they shared.")
+    /*
+     * Other keys served at a newer version than the pin's: maybe a succession, but only checking says so (the server
+     * picks the version), and a pin follows only when the person checks them again, never on its own.
+     */
+    class Replaced(name: String) : GranterTrust("$name’s sharing keys changed since you checked them. Check them again in People you share with to open what they shared.")
+    /* Sealed under keys the granter has since replaced, which vouch for nothing now: it waits for their re-seal. */
+    class Reshare(name: String) : GranterTrust("$name replaced their sharing keys since sharing this. Ask $name to share it again.")
 }
 
+/* The one key a share from this granter opens under, and whether the pin followed keys they replaced (so an older share may wait for a re-seal). */
+class GranterKey(val signingPublicKey: ByteArray, val replacedKeys: Boolean)
+
 /*
- * The keys to open a share from this granter with: the pinned ones, and only when the server served those same
- * keys and the pin was checked against both. A suite 3 share is checked against the pinned signing key (then the
- * earlier ones a checked succession vouched for, for shares signed before it); suites 1 and 2 use the pinned X25519
- * key. Taking the served keys of someone not pinned would let a server fake a share "from" anyone with keys of its
- * own, so that is refused, and nothing is pinned here: pinning follows a words check (or a checked succession).
+ * The key to open a share from this granter with: the pinned current signing key, and only when the server served
+ * those same keys and the pin was checked against both (docs/integrity-design.md, "Retired keys"). Keys the granter
+ * replaced open nothing: a share sealed under one waits for their re-seal. Newer keys served than the pin's are not
+ * followed here; the person checks them again. Taking the served keys of someone not pinned would let a server fake
+ * a share "from" anyone with keys of its own, so that is refused, and nothing is pinned here.
  */
-fun granterKeys(granterId: String, granterName: String, served: ServedIdentity, pins: Map<String, ContactPin>): List<ShareGranter> {
+fun granterKey(granterId: String, granterName: String, served: ServedIdentity, pins: Map<String, ContactPin>): GranterKey {
     val pin = pins[granterId] ?: throw GranterTrust.Unverified(granterName)
     if (!pin.verified) throw GranterTrust.Recheck(granterName)
-    if (!pin.matches(served)) throw GranterTrust.Changed(granterName)
-    val encryption = base64urlDecode(pin.encryptionPublicKey)
-    return (listOf(pin.signingPublicKey) + pin.previousSigningKeys).map { ShareGranter(encryption, base64urlDecode(it)) }
+    if (!pin.matches(served)) throw if (needsChain(pin, served)) GranterTrust.Replaced(granterName) else GranterTrust.Changed(granterName)
+    return GranterKey(base64urlDecode(pin.signingPublicKey), pin.previousSigningKeys.isNotEmpty())
 }
 
 /*
- * A received share's node key: each of the granter's trusted keys against each of this account's identities, the
- * current one first. A share row does not say which identity it was sealed to, and after a succession shares sealed
- * to earlier keys open only with them. Suite 3 checks the granter's signature before anything is decapsulated, so a
- * share signed by anyone else never opens; the first refusal (the current identity's, under the pinned key) is what
- * is said.
+ * A received share's node key: the granter's current key against each of this account's identities, the current one
+ * first. A share row does not say which identity it was sealed to, and after a succession shares sealed to earlier
+ * keys open only with them. Suite 3 checks the granter's signature before anything is decapsulated, so a share signed
+ * by anyone else, or under a key the granter replaced, never opens; the first refusal is what is said, unless the
+ * granter replaced keys, when the share is waiting for their re-seal.
  */
-fun openShare(envelope: ByteArray, granters: List<ShareGranter>, identities: List<IdentityKeys>, ctx: ShareContext): ByteArray {
+fun openShare(envelope: ByteArray, granter: GranterKey, granterName: String, identities: List<IdentityKeys>, ctx: ShareContext): ByteArray {
     var refusal: Exception? = null
-    for (granter in granters) for (identity in identities) {
+    for (identity in identities) {
         try {
-            return shareOpen(envelope, granter, identity, ctx)
+            return shareOpen(envelope, granter.signingPublicKey, identity, ctx)
         } catch (error: Exception) {
             if (refusal == null) refusal = error
         }
     }
+    if (granter.replacedKeys) throw GranterTrust.Reshare(granterName)
     throw refusal ?: ShareRefused("This share could not be opened.")
 }
 

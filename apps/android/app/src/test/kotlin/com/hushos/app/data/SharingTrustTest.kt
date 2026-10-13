@@ -64,15 +64,18 @@ class SharingTrustTest {
     @Test
     fun anUnverifiedPinKeepsTheirSharesShut() {
         for (pin in listOf(noSigningKey, staleFingerprint)) {
-            val shut = assertThrows(GranterTrust.Recheck::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to pin)) }
+            val shut = assertThrows(GranterTrust.Recheck::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to pin)) }
             assertEquals("Check Ada’s words again in People you share with to open what they shared.", shut.message)
         }
-        val granter = granterKeys(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to verified)).single()
-        assertEquals(enc, base64urlEncode(granter.encryptionPublicKey!!))
-        assertEquals(sig, base64urlEncode(granter.signingPublicKey!!))
-        assertThrows(GranterTrust.Changed::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, base64urlEncode(ByteArray(32) { 3 }), sig, null), mapOf(userId to verified)) }
+        val granter = granterKey(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to verified))
+        assertEquals(sig, base64urlEncode(granter.signingPublicKey))
+        // Other keys at the pinned version are a change no succession explains.
+        val atTwo = mapOf(userId to verified.copy(keyVersion = 2uL))
+        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, base64urlEncode(ByteArray(32) { 3 }), sig, null), atTwo) }
         // A swapped signing key under the pinned X25519 key is a changed account too: suite 3 shares are checked against it.
-        assertThrows(GranterTrust.Changed::class.java) { granterKeys(userId, "Ada", ServedIdentity(2uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), mapOf(userId to verified)) }
+        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), atTwo) }
+        // At a newer version they may be a succession, followed only once the person checks again: shut until then.
+        assertThrows(GranterTrust.Replaced::class.java) { granterKey(userId, "Ada", ServedIdentity(3uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), atTwo) }
     }
 
     @Test

@@ -54,7 +54,7 @@ class ShareSeals(private val file: File) {
     companion object {
         private val LOCK = Any()
         const val FILE = "share-seals.json"
-        /* A full pass looks every grantee up (to catch keys they replaced): at most daily, unless a re-seal is waiting. */
+        /* A full pass upgrades older suites and finishes what a key change left: at most daily, unless a re-seal is waiting. */
         const val PASS_INTERVAL_MS = 24 * 60 * 60 * 1000L
 
         fun of(context: Context) = ShareSeals(File(context.filesDir, FILE))
@@ -64,12 +64,12 @@ class ShareSeals(private val file: File) {
 /*
  * Whether a ledger share must be sealed again: anything but suite 3; one this device has no record of; one signed
  * by an identity older than the current one (this account replaced its keys); or one sealed to grantee keys older
- * than the ones served for them now (they replaced theirs). Sealing then goes only to keys their pin vouches for,
- * following a checked succession first.
+ * than the ones their pin holds now (they replaced theirs, and the person checked them again, which moved the pin).
+ * Served keys alone never trigger it: a pin follows a succession only when the person asks.
  */
-fun needsReseal(suite: Int, seal: ShareSeals.Seal?, currentKeyVersion: ULong, servedGranteeKeyVersion: ULong?): Boolean {
+fun needsReseal(suite: Int, seal: ShareSeals.Seal?, currentKeyVersion: ULong, pinnedGranteeKeyVersion: ULong?): Boolean {
     if (suite != 3 || seal == null) return true
     if (seal.granterKeyVersion < currentKeyVersion) return true
-    val served = servedGranteeKeyVersion ?: return false
-    return seal.granteeKeyVersion == null || served > seal.granteeKeyVersion
+    val pinned = pinnedGranteeKeyVersion ?: return false
+    return seal.granteeKeyVersion == null || pinned > seal.granteeKeyVersion
 }
