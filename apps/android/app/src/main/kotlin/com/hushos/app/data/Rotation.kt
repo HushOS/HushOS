@@ -65,8 +65,12 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
         val pin = pins[granteeId]
         if (pin == null) { skipped.add("Someone no longer in People you share with lost access."); continue }
         val served = share.getJSONObject("grantee")
-        if (!pin.matches(ServedIdentity.from(served))) {
-            skipped.add("${pin.displayName}’s key has changed since you pinned it. Check it’s them in People you share with, then share again."); continue
+        val identity = ServedIdentity.from(served)
+        if (!pin.matches(identity)) {
+            // Never followed here: newer keys wait for the person to check them again, then the next pass seals to them.
+            skipped.add(if (needsChain(pin, identity)) "${pin.displayName}’s sharing keys changed since you checked them. Check them again in People you share with, then share again."
+                else "${pin.displayName}’s key has changed since you pinned it. Check it’s them in People you share with, then share again.")
+            continue
         }
         val kem = served.optJSONObject("kem")
         try {
@@ -86,17 +90,24 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
  * metadata, versions, live shares (to keys the pins vouch for) and links are
  * sealed again under it. The server hands out the work in depth order and
  * applies each batch; a node whose parent is not ready yet comes back later.
+ *
+ * Every record is checked before it is signed again (docs/integrity-design.md,
+ * "Re-sealing never launders"): a verified one keeps the ordinary statement,
+ * anything else is signed re-sealed. Without the trust set nothing is rotated:
+ * it stops before starting and is tried again later (PendingRotations), never
+ * marking everything re-sealed for a network blip.
  */
 internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): RotationResult {
     val ws = item.node.workspaceId
     val rootId = item.id
+    val trust = trustForWrite()
     val target = api.startRotation(ws, rootId)
     // The root's chain must be open: its parent key is what the new root key wraps under.
     if (item.isFolder) listChildren(rootId) else item.node.parentId?.let { listChildren(it) }
     val keys = identityKeys()
     // What may be sealed again: the owner's ledger and pins, never the server's list alone.
     val settings = loadSettings()
-    val pins = HashMap(settings.contacts)
+    val pins = settings.contacts
     val ledger = settings.ledger
     val skipped = LinkedHashSet<String>()
     val firstKems = HashMap<String, String>()
@@ -157,25 +168,22 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, target), wrapUnder, fresh)
             val metaCtx = MetadataContext(ws, node.id, node.metadataVersion)
             val metadataEnvelope = metadataSeal(metaCtx, fresh, metadataOpen(metaCtx, old, base64urlDecode(node.metadataEnvelope)))
-            // Every re-sealed envelope is signed by the account running the rotation, at the node's unchanged metadata version.
-            val metadataSignature = signMetadata(ws, node.id, if (node.isFolder) NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion, metadataEnvelope)
+            // Every re-sealed envelope is signed by the account running the rotation, at the node's unchanged metadata
+            // version, as the record checked before: ordinary only when it verified.
+            val metadataSignature = signMetadata(ws, node.id, if (node.isFolder) NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion, metadataEnvelope,
+                metadataVerdict(node, trust))
             val versions = JSONArray()
             for (version in entry.versions) {
                 val ctx = VersionContext(ws, node.id, version.getString("id"), version.getString("objectId"))
                 val suite = version.getInt("contentSuite").toUInt()
+                val envelope = version.getString("contentKeyEnvelope")
+                val prior = versionVerdict(ws, node.id, ctx.versionId, ctx.objectId, suite, envelope,
+                    version.optJSONObject("signer")?.optString("id")?.ifEmpty { null }, version.optString("signature").takeIf { !version.isNull("signature") && it.isNotEmpty() }, trust)
                 val rowSize = version.optString("plaintextSize").takeIf { !version.isNull("plaintextSize") }?.toULongOrNull()
-                val content = versionOpen(ctx, suite, old, base64urlDecode(version.getString("contentKeyEnvelope")), rowSize)
+                val content = versionOpen(ctx, suite, old, base64urlDecode(envelope), rowSize)
                 val resealed = versionReseal(ctx, suite, fresh, content)
                 versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(resealed))
-                    .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed)))
-            }
-            // A grantee whose keys changed by a checked succession is followed first, so their share is sealed to the new keys.
-            for (share in entry.shares) {
-                val granteeId = share.optString("granteeUserId")
-                val pin = pins[granteeId] ?: continue
-                if (!ledger.hasShare(node.id, granteeId)) continue
-                val served = share.optJSONObject("grantee")?.let { ServedIdentity.from(it) } ?: continue
-                if (!pin.matches(served)) followPin(pin, served)?.let { pins[granteeId] = it }
+                    .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed, prior)))
             }
             val plan = planReseal(node.id, entry.shares, entry.links, ledger, pins)
             skipped.addAll(plan.skipped)
@@ -186,7 +194,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
                 val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
                 shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
                 val served = entry.shares.firstOrNull { it.optString("id") == share.id }?.optJSONObject("grantee")?.let { ServedIdentity.from(it) }
-                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, served?.keyVersion)
+                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, pins[share.granteeUserId]?.keyVersion ?: served?.keyVersion)
             }
             sealedIn[node.id] = sealedHere
             val links = JSONArray()
@@ -237,4 +245,38 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     // A post-quantum key first vouched for here joins its pin, so a different one later is refused.
     if (firstKems.isNotEmpty()) runCatching { updateSettings { s -> firstKems.forEach { (user, hash) -> s.rememberKem(user, hash) } } }
     return RotationResult(done, skipped.toList())
+}
+
+/*
+ * Rotations started and not finished: one that stopped (the trust set didn't load, the network dropped) is tried again
+ * at the next Drive open, so a revoke never leaves a subtree half re-locked for long. Account data: a sign-out removes it.
+ */
+class PendingRotations(private val file: java.io.File) {
+    private fun read(): JSONObject = runCatching { JSONObject(file.readText()) }.getOrDefault(JSONObject())
+
+    private fun write(json: JSONObject) {
+        file.parentFile?.mkdirs()
+        val next = java.io.File(file.path + ".next")
+        next.writeText(json.toString())
+        if (!next.renameTo(file)) { file.writeText(json.toString()); next.delete() }
+    }
+
+    fun add(workspaceId: String, nodeId: String) = synchronized(LOCK) { write(read().put("$workspaceId/$nodeId", System.currentTimeMillis())) }
+
+    fun remove(workspaceId: String, nodeId: String) = synchronized(LOCK) { val json = read(); if (json.remove("$workspaceId/$nodeId") != null) write(json) }
+
+    /* (workspace, node) pairs, oldest first. */
+    fun all(): List<Pair<String, String>> = synchronized(LOCK) {
+        val json = read()
+        json.keys().asSequence().toList().sortedBy { json.optLong(it) }.mapNotNull { key ->
+            key.split("/").takeIf { it.size == 2 }?.let { it[0] to it[1] }
+        }
+    }
+
+    companion object {
+        private val LOCK = Any()
+        const val FILE = "pending-rotations.json"
+
+        fun of(context: android.content.Context) = PendingRotations(java.io.File(context.filesDir, FILE))
+    }
 }

@@ -49,7 +49,6 @@ class SuccessionPinTest {
     @Test
     fun aPinFromBeforeSuccessionsFindsTheChainByItsKeys() {
         assertTrue(needsChain(pinned.copy(keyVersion = null), served))
-        assertEquals(1uL, chainFrom(pinned.copy(keyVersion = null)))
         assertEquals(link.newSigningPublicKey, followSuccession(pinned.copy(keyVersion = null), served, listOf(link), now)?.signingPublicKey)
     }
 
@@ -109,5 +108,31 @@ class SuccessionPinTest {
         val again = Settings.parse(settings.text(), 2uL).contacts.getValue(userId)
         assertNull(again.keysReplacedAt)
         assertEquals(listOf(link.oldSigningPublicKey), again.previousSigningKeys)
+    }
+
+    @Test
+    fun theWholeChainIsAskedForAndTheCoreFindsWhereThePinnedKeysEnterIt() {
+        // Asked from the first version whatever the pin holds, so the request says nothing of it.
+        assertEquals(1uL, CHAIN_FROM)
+        // Successions before the pinned keys come with the whole chain: the pin follows from its own keys on.
+        val root = randomBytes(32u)
+        val first = identityCreate(userId, root, 1uL)
+        val second = identitySucceed(userId, root, first)
+        val third = identitySucceed(userId, root, second.identity)
+        fun linkOf(old: com.hushos.core.IdentityEnvelope, next: com.hushos.core.IdentitySuccession) = link.copy(
+            oldKeyVersion = old.keyVersion, newKeyVersion = next.identity.keyVersion,
+            oldEncryptionPublicKey = old.encryptionPublicKey, oldSigningPublicKey = old.signingPublicKey,
+            newEncryptionPublicKey = next.identity.encryptionPublicKey, newSigningPublicKey = next.identity.signingPublicKey,
+            newKemPublicKey = next.identity.kem!!.publicKey, signature = next.signature,
+        )
+        val chain = listOf(linkOf(first, second), linkOf(second.identity, third))
+        val atSecond = ContactPin(userId, "ada@example.org", "Ada", second.identity.encryptionPublicKey, second.identity.signingPublicKey,
+            identityFingerprint(base64urlDecode(second.identity.encryptionPublicKey), base64urlDecode(second.identity.signingPublicKey)),
+            "2026-10-01T00:00:00Z", null, keyVersion = 2uL)
+        val now3 = ServedIdentity(3uL, third.identity.encryptionPublicKey, third.identity.signingPublicKey, third.identity.kem!!.publicKey)
+        val next = followSuccession(atSecond, now3, chain, now)!!
+        assertEquals(third.identity.signingPublicKey, next.signingPublicKey)
+        // Only the key the pin held is vouched for as earlier: the one before it was never checked by this person.
+        assertEquals(listOf(second.identity.signingPublicKey), next.previousSigningKeys)
     }
 }

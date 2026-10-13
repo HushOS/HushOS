@@ -213,9 +213,12 @@ object Auth {
         call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature))
     }
 
-    /* A contact's successions from key version `from` to their current one, in order, for the device to check link by link. */
-    fun succession(context: Context, userId: String, from: ULong): List<com.hushos.core.SuccessionLink> {
-        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$from").optJSONArray("links") ?: return emptyList()
+    /*
+     * A contact's whole succession chain, in order, for the device to check link by link. Asked from the first version
+     * whatever the pin holds, so the request does not say which version this device pinned.
+     */
+    fun succession(context: Context, userId: String): List<com.hushos.core.SuccessionLink> {
+        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$CHAIN_FROM").optJSONArray("links") ?: return emptyList()
         return (0 until links.length()).map { index ->
             val link = links.getJSONObject(index)
             com.hushos.core.SuccessionLink(

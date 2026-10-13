@@ -32,14 +32,25 @@ class SettingsKeyTest {
     private fun envelope(json: JSONObject) = SettingsEnvelope(json.getInt("version").toUInt(), json.getLong("settingsVersion").toULong(), json.getString("nonce"), json.getString("ciphertext"))
 
     @Test
-    fun theWebsSettingsOpenInBothVersionsWithTheirOwnKeys() {
+    fun theWebsVersionTwoOpensUnderTheSettingsKeyAlone() {
         assertArrayEquals(rawKey, settingsKeyOpen(userId, root, wrapped))
-        assertEquals(settings.getString("json"), settingsOpen(userId, rawKey, null, envelope(settings.getJSONObject("v2"))))
-        // Version 1 is read once, under the identity it was sealed with, then saved as version 2.
-        assertEquals(settings.getString("json"), settingsOpen(userId, null, base64urlDecode(settings.getString("identityPrivateKey")), envelope(settings.getJSONObject("envelope"))))
-        // Neither opens under the other's key.
-        assertThrows(Exception::class.java) { settingsOpen(userId, null, base64urlDecode(settings.getString("identityPrivateKey")), envelope(settings.getJSONObject("v2"))) }
-        assertThrows(Exception::class.java) { settingsOpen(userId, randomBytes(32u), null, envelope(settings.getJSONObject("v2"))) }
+        assertEquals(settings.getString("json"), settingsOpen(userId, rawKey, envelope(settings.getJSONObject("v2"))))
+        assertThrows(Exception::class.java) { settingsOpen(userId, randomBytes(32u), envelope(settings.getJSONObject("v2"))) }
+        assertThrows(Exception::class.java) { settingsOpen(userId, null, envelope(settings.getJSONObject("v2"))) }
+    }
+
+    @Test
+    fun aVersionOneDocumentNoLongerOpensAndReadsAsEmptySettingsSavedOverAsVersionTwo() {
+        // The web's genuine version 1 document, with pins in it: a stolen identity key opened those, so none come back.
+        val v1 = envelope(settings.getJSONObject("envelope"))
+        val read = openSettingsText(userId, rawKey, v1)
+        assertTrue(read.contacts.isEmpty())
+        assertTrue(read.ledger.shares.isEmpty())
+        // At the stored version, so the next save (version 2, one up) is over that document rather than refused as stale.
+        assertEquals(v1.settingsVersion, read.version)
+        val saved = settingsSeal(userId, rawKey, read.version + 1uL, read.text())
+        assertEquals(2u, saved.version)
+        assertEquals(read.text(), settingsOpen(userId, rawKey, saved))
     }
 
     @Test
@@ -53,7 +64,7 @@ class SettingsKeyTest {
         // Padded to 1 KiB steps (the server refuses anything else), and sealed under a key the next device opens from the root.
         assertEquals(0, (base64urlDecode(sealed.ciphertext).size - 16) % 1024)
         val key = settingsKeyOpen(userId, root, made.envelope)
-        val read = Settings.parse(settingsOpen(userId.lowercase(), key, null, sealed), sealed.settingsVersion)
+        val read = Settings.parse(settingsOpen(userId.lowercase(), key, sealed)!!, sealed.settingsVersion)
         assertEquals("dark", read.json.getString("theme"))
         assertTrue(read.ledger.hasShare("n-1", "u-1"))
         val pin = read.contacts.getValue("u-1")
@@ -61,8 +72,8 @@ class SettingsKeyTest {
         assertEquals(listOf("sig-0"), pin.previousSigningKeys)
         assertEquals("2026-10-02T00:00:00Z", pin.keysReplacedAt)
         // Sealed for one settings version and account: offered as another, it doesn't open.
-        assertThrows(Exception::class.java) { settingsOpen(userId, key, null, sealed.copy(settingsVersion = 6uL)) }
-        assertThrows(Exception::class.java) { settingsOpen("someone-else", key, null, sealed) }
+        assertThrows(Exception::class.java) { settingsOpen(userId, key, sealed.copy(settingsVersion = 6uL)) }
+        assertThrows(Exception::class.java) { settingsOpen("someone-else", key, sealed) }
     }
 
     @Test
