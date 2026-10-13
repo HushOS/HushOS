@@ -33,12 +33,40 @@ public enum Unbacked {
      */
     static var local: URL { folder(group.appendingPathComponent("local", isDirectory: true)) }
 
-    /* Makes a folder (with its parents) and keeps it, and everything that will be put in it, out of backups. */
+    /*
+     * Makes a folder (with its parents) and keeps it, and everything that will be put in it, out
+     * of backups, under an explicit file protection class (see `protection`).
+     */
     @discardableResult
     public static func folder(_ url: URL) -> URL {
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.protectionKey: protection])
         exclude(url)
+        protect(url)
         return url
+    }
+
+    /*
+     * The protection class for everything here, stated rather than left to the default. Not
+     * `.complete`: the background URLSession reads sealed parts from `transfers` and finishes
+     * keeps into `offline` while the phone is locked, the queue relaunches the app in the
+     * background to complete them, and the Files extension and background refresh read the
+     * mirror; all of that would fail once the keys are evicted at lock. So the files are
+     * unreadable from boot until the first unlock, and readable after it.
+     */
+    public static let protection = FileProtectionType.completeUntilFirstUserAuthentication
+
+    /* Sets the class on one item; files made in a folder later take the folder's class. */
+    static func protect(_ url: URL) {
+        let files = FileManager.default
+        guard (try? files.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType) != protection else { return }
+        try? files.setAttributes([.protectionKey: protection], ofItemAtPath: url.path)
+    }
+
+    /* The class on a folder and everything already in it, for what an earlier version wrote without one. */
+    static func protectAll(_ url: URL) {
+        protect(url)
+        guard let walk = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
+        for case let item as URL in walk { protect(item) }
     }
 
     public static func exclude(_ url: URL) {
@@ -53,7 +81,10 @@ public enum Unbacked {
         let files = FileManager.default
         for name in names {
             let url = group.appendingPathComponent(name)
-            if files.fileExists(atPath: url.path) { exclude(url) }
+            if files.fileExists(atPath: url.path) {
+                exclude(url)
+                protectAll(url)
+            }
         }
         moveLooseFiles(in: group)
         migrate()
@@ -136,13 +167,22 @@ public enum LastEmail {
 }
 
 /*
- * Plaintext the app's temporary folder can be left holding, which iOS empties when it likes
- * rather than when the app would: a recovery kit a share sheet never finished with (always
- * removed, it is the phrase in plain text), and files opened, or fetched through a link, more
- * than a day ago. Run at launch, before anything new is written there.
+ * Plaintext a temporary folder can be left holding, which iOS empties when it likes rather
+ * than when the app would. Run at launch of the app and of the Files extension, before
+ * anything new is written there, so nothing found belongs to work in flight:
+ * - always removed: a recovery kit a share sheet never finished with (the phrase in plain
+ *   text), uploads staged from a picker or the camera (`<uuid>/<name>`, `picked-*`) that a
+ *   name prompt or a quit left behind, and the working folders of a copy (`copy-*`) or a
+ *   save from a link (`save-*`);
+ * - removed after a day: files opened (`opened/`), fetched through a link (`links/`), and the
+ *   Files extension's decrypted downloads and their partials (`downloads/`), each
+ *   `<node>/<version>/<file>`, which a reopen within the day reuses.
  */
 public enum TemporaryCopies {
     static let maxAge: TimeInterval = 24 * 3600
+
+    static let alwaysPrefixes = ["kit-", "picked-", "copy-", "save-"]
+    static let cachedFolders = ["opened", "links", "downloads"]
 
     public static func sweep(in temporary: URL = FileManager.default.temporaryDirectory, now: Date = Date()) {
         let files = FileManager.default
@@ -155,9 +195,12 @@ public enum TemporaryCopies {
         }
         for entry in contents(temporary) {
             let name = entry.lastPathComponent
-            if name.hasPrefix("kit-") { try? files.removeItem(at: entry); continue }
-            guard name == "opened" || name == "links" else { continue }
-            // opened/<node>/<version>/<file>: a version's folder is as old as the copy in it.
+            if alwaysPrefixes.contains(where: name.hasPrefix) || UUID(uuidString: name) != nil {
+                try? files.removeItem(at: entry)
+                continue
+            }
+            guard cachedFolders.contains(name) else { continue }
+            // <folder>/<node>/<version>/<file>: a version's folder is as old as the copy in it.
             for node in contents(entry) {
                 for version in contents(node) where old(version) { try? files.removeItem(at: version) }
                 if contents(node).isEmpty { try? files.removeItem(at: node) }

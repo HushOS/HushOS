@@ -504,7 +504,8 @@ struct AdvancedView: View {
                         }
                         Spacer()
                         Button("Copy") {
-                            UIPasteboard.general.string = id
+                            // This phone only, and gone in two minutes: not Universal Clipboard, not every app that reads the board later.
+                            UIPasteboard.general.setItems([["public.utf8-plain-text": id]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
                             store.notify("Account ID copied")
                         }
                         .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
@@ -650,9 +651,10 @@ struct PasswordField: View {
 }
 
 /*
- * A secure field with the eye at its end, as on sign-in. Both fields stay on screen and the
- * eye swaps which one shows (see SignInView): swapping them out makes iOS offer to save a
- * password. The keyboard stays with whichever is showing.
+ * A secure field with the eye at its end, as on sign-in. Typing always goes into the secure
+ * field (the system keyboard, no autocorrection, nothing learned); the eye only lays the
+ * characters over it as text, so a revealed password is never in a plain, editable field a
+ * keyboard could read or learn from. Swapping the fields out made iOS offer to save a password.
  */
 struct RevealingSecureField: View {
     let placeholder: String
@@ -660,26 +662,38 @@ struct RevealingSecureField: View {
     var content: UITextContentType? = .password
     var submit: (() -> Void)? = nil
     @State private var shown = false
-    @FocusState private var focus: Bool?
 
     var body: some View {
         HStack {
-            ZStack {
-                SecureField(placeholder, text: $text).focused($focus, equals: false)
-                    .opacity(shown ? 0 : 1).accessibilityHidden(shown)
-                TextField(placeholder, text: $text).focused($focus, equals: true)
-                    .opacity(shown ? 1 : 0).accessibilityHidden(!shown)
-            }
-            .textContentType(content).textInputAutocapitalization(.never).autocorrectionDisabled()
-            .onSubmit { submit?() }
-            Button {
-                shown.toggle()
-                if focus != nil { focus = shown }
-            } label: {
+            SecureField(placeholder, text: $text)
+                .textContentType(content).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .onSubmit { submit?() }
+                .revealed(shown ? text : nil, placeholder: placeholder)
+            Button { shown.toggle() } label: {
                 Image(systemName: shown ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted)
             }
             .buttonStyle(.plain).accessibilityLabel(shown ? "Hide password" : "Show password")
         }
+    }
+}
+
+extension View {
+    /*
+     * A secure field's characters drawn over it while revealed: the field stays underneath (and
+     * stays the one typed into), only its dots are hidden. Not hit-testable, so a tap still lands
+     * on the field. The field is faded rather than hidden: UIKit stops delivering touches to a
+     * view below 1% alpha.
+     */
+    func revealed(_ value: String?, placeholder: String) -> some View {
+        opacity(value == nil ? 1 : 0.011)
+            .overlay(alignment: .leading) {
+                if let value {
+                    Text(value.isEmpty ? placeholder : value)
+                        .foregroundStyle(value.isEmpty ? Alpine.inkMuted : Alpine.ink)
+                        .lineLimit(1).truncationMode(.head)
+                        .privacySensitive().allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
     }
 }
 

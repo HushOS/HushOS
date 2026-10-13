@@ -277,9 +277,8 @@ private struct RecoverKitStep: View {
 
     private var typing: some View {
         Section {
-            TextField("", text: $typed, axis: .vertical)
-                .font(.body.monospaced()).lineLimit(4 ... 8)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            PhraseEntry(text: $typed)
+                .frame(minHeight: 110)
                 .onChange(of: typed) { error = "" }
                 .disabled(pending).alpineRow()
             // The word being typed, completed from the BIP-39 list.
@@ -470,5 +469,54 @@ private struct NewPhraseStep: View {
                 finish()
             }
         }
+    }
+}
+
+/*
+ * Where the recovery phrase is typed: a text view with everything that would read, keep or
+ * send what is typed turned off. No autocorrection, spelling, predictions (bar or inline),
+ * smart punctuation or Writing Tools, so the keyboard neither learns the words nor offers
+ * them elsewhere; the app refuses third-party keyboards (AppDelegate). The words are not a
+ * password, so no secure entry: they have to be read back while typed.
+ */
+struct PhraseEntry: UIViewRepresentable {
+    @Binding var text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 17, weight: .regular))
+        view.adjustsFontForContentSizeCategory = true
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.autocapitalizationType = .none
+        view.autocorrectionType = .no
+        view.spellCheckingType = .no
+        view.inlinePredictionType = .no
+        view.smartQuotesType = .no
+        view.smartDashesType = .no
+        view.smartInsertDeleteType = .no
+        view.keyboardType = .asciiCapable
+        view.textContentType = nil
+        view.writingToolsBehavior = .none
+        view.allowedWritingToolsResultOptions = []
+        view.dataDetectorTypes = []
+        view.accessibilityLabel = "Recovery phrase"
+        view.delegate = context.coordinator
+        view.text = text
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        if view.text != text { view.text = text }
+        view.isEditable = context.environment.isEnabled
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func textViewDidChange(_ view: UITextView) { text.wrappedValue = view.text }
     }
 }
