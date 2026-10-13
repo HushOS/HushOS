@@ -55,7 +55,8 @@ export async function saveCopy(
     }
     async function saveTree(node: DriveNode, into: DriveNode, name: string) {
         if (node.kind === 'file') return saveFile(node, into, name);
-        const [made] = await driveClient.createFolderPath(into, [name]);
+        // Re-locked, not vouched for: the name comes from something this person did not write.
+        const [made] = await driveClient.createFolderPath(into, [name], { resealed: true });
         tick();
         const children = await driveClient.listFolder(node.id);
         for (const child of children.children) await saveTree(child, made!, child.name);

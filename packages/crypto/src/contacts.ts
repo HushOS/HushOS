@@ -13,7 +13,8 @@ import { decode, encode } from './keys';
  * random settings key wrapped under the account root (see SettingsKeyEnvelope),
  * so it survives an identity succession and a stolen identity key opens none
  * of it. Version 1 sealed it under a key derived from the identity's X25519
- * private key; it is opened once and saved again as version 2.
+ * private key, which a stolen identity key opened; it no longer opens anywhere,
+ * and a version 1 document reads as no settings at all.
  */
 
 export const SETTINGS_MAX_BYTES = 64 * 1024;
@@ -22,7 +23,7 @@ export const SETTINGS_PAD_STEP = 1024;
 export { fingerprint } from './fingerprint';
 
 export type SettingsEnvelope = {
-    /* 2 under the settings key; 1 under a key off the identity, read and never written. */
+    /* 2 under the settings key; 1 (under a key off the identity) is neither written nor read. */
     version: 1 | 2;
     /* Bumped by every save; the server refuses a save that names a stale one. */
     settingsVersion: number;
@@ -89,10 +90,6 @@ async function hkdf(ikm: Uint8Array<ArrayBuffer>, info: string) {
         ),
     ) as Uint8Array<ArrayBuffer>;
 }
-/* Version 1's key, derived from the identity's X25519 private key: read once, never sealed under again. */
-function legacySettingsKey(identityPrivateKey: Uint8Array<ArrayBuffer>) {
-    return hkdf(identityPrivateKey, 'hushos/settings/v1');
-}
 function settingsKeyContext(userId: string) {
     return new TextEncoder().encode(userId.toLowerCase());
 }
@@ -156,7 +153,7 @@ export async function rewrapSettingsKey(
     }
 }
 
-function settingsContext(userId: string, version: 1 | 2, settingsVersion: number) {
+function settingsContext(userId: string, version: 2, settingsVersion: number) {
     return new TextEncoder().encode(
         JSON.stringify(['hushos/settings', version, userId.toLowerCase(), settingsVersion]),
     );
@@ -205,49 +202,37 @@ export async function sealSettings(
 }
 
 /*
- * What opens settings: version 2 opens with the settings key, version 1 (once,
- * to be saved again as version 2) with the identity's X25519 private key.
+ * The settings out of a version 2 envelope, under the settings key. A version
+ * 1 envelope is null: it is not opened, and the caller treats it as no
+ * settings (its rollback mark still applies). Anything else is refused.
  */
-export type SettingsKeys = {
-    settingsKey: Uint8Array<ArrayBuffer> | null;
-    identityPrivateKey: Uint8Array<ArrayBuffer> | null;
-};
-
 export async function openSettings(
-    keys: SettingsKeys,
+    settingsKey: Uint8Array<ArrayBuffer> | null,
     userId: string,
     envelope: SettingsEnvelope,
-): Promise<Settings> {
+): Promise<Settings | null> {
     if (
         (envelope.version !== 1 && envelope.version !== 2) ||
         !Number.isSafeInteger(envelope.settingsVersion) ||
         envelope.settingsVersion < 1
     )
         throw new CryptoError('Unsupported settings envelope.');
-    let derived: Uint8Array<ArrayBuffer> | undefined;
-    if (envelope.version === 1) {
-        if (!keys.identityPrivateKey) throw new CryptoError('Open your identity first.');
-        derived = await legacySettingsKey(keys.identityPrivateKey);
-    } else if (!keys.settingsKey) throw new CryptoError('Open your settings key first.');
-    const key = derived ?? keys.settingsKey!;
-    try {
-        const plaintext = await decryptKey(
-            decode(envelope.ciphertext),
-            key,
-            decode(envelope.nonce, 24),
-            settingsContext(userId, envelope.version, envelope.settingsVersion),
-        );
-        const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
-        plaintext.fill(0);
-        if (
-            !parsed ||
-            typeof parsed !== 'object' ||
-            (parsed as Settings).version !== 1 ||
-            typeof (parsed as Settings).contacts !== 'object'
-        )
-            throw new CryptoError('Unsupported settings document.');
-        return parsed as Settings;
-    } finally {
-        derived?.fill(0);
-    }
+    if (envelope.version === 1) return null;
+    if (!settingsKey) throw new CryptoError('Open your settings key first.');
+    const plaintext = await decryptKey(
+        decode(envelope.ciphertext),
+        settingsKey,
+        decode(envelope.nonce, 24),
+        settingsContext(userId, 2, envelope.settingsVersion),
+    );
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(plaintext));
+    plaintext.fill(0);
+    if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        (parsed as Settings).version !== 1 ||
+        typeof (parsed as Settings).contacts !== 'object'
+    )
+        throw new CryptoError('Unsupported settings document.');
+    return parsed as Settings;
 }

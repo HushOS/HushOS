@@ -30,21 +30,21 @@ import {
     type SettingsEnvelope,
     type SettingsKeyEnvelope,
 } from './contacts';
-import {
-    openShareKey,
-    sealShareKey,
-    type GranteeSecrets,
-    type GranterKeys,
-    type ShareContext,
-} from './shares';
+import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './shares';
 import {
     integrityOf,
+    metadataResealedStatement,
     metadataStatement,
+    metadataStatements,
     signStatement,
+    versionResealedStatement,
     versionStatement,
+    versionStatements,
     type Integrity,
     type MetadataStatement,
     type NodeKind,
+    type StatementPair,
+    type TrustedSigner,
     type VersionStatement,
 } from './signatures';
 import { openReportKey, sealReportKey } from './reports';
@@ -187,8 +187,8 @@ export type CryptoRequests = {
      * Settings. The settings key is created once per account (store it with
      * PUT /api/auth/settings-key; on 409 open the one stored) or opened from
      * GET /api/auth/settings, and stays in the worker until a lock. Open reads
-     * version 2 with it and version 1 with the identity's key; seal writes
-     * version 2 only.
+     * version 2 with it, and answers null for version 1, which no longer
+     * opens; seal writes version 2 only.
      */
     settingsKeyCreate: { userId: string };
     settingsKeyOpen: { userId: string; settingsKey: SettingsKeyEnvelope };
@@ -216,10 +216,12 @@ export type CryptoRequests = {
         nodeId: string;
         keyEpoch: number;
         granterUserId: string;
-        /* The granter's pinned X25519 key: what suites 1 and 2 open with. */
-        granterPublicKey: string | null;
-        /* The granter's pinned signing key: a suite 3 share opens only if it signed it. */
-        granterSigningPublicKey: string | null;
+        /*
+         * The granter's current signing key, as the grantee's pin vouches for it
+         * (followed through a signed succession when it moved on). A share opens
+         * only if this key signed it: never one the granter has since replaced.
+         */
+        granterSigningPublicKey: string;
         granteeUserId: string;
         /*
          * Which of this account's identities the share was sealed to, when the
@@ -310,6 +312,12 @@ export type CryptoRequests = {
         workspaceId: string;
         targetEpoch: number;
         granterUserId: string | null;
+        /*
+         * Who this person trusts, as for driveVerify. Required: each record is
+         * checked before it is signed again, a verified one with the ordinary
+         * statement and anything else re-sealed. Without it nothing is rotated.
+         */
+        signers: DriveSigners;
         nodes: RotateNodeInput[];
     };
     /* Drive: opens the workspace key from the member's grant and keeps it in the worker. */
@@ -335,14 +343,16 @@ export type CryptoRequests = {
     };
     /*
      * Who wrote each record, checked against keys the caller trusts: `signers`
-     * maps an account id to its signing public keys the caller verified (a
-     * pinned contact's, and earlier ones a succession chain vouched for). The
-     * worker adds this account's own, current and earlier. A signer who is not
-     * there is an unknown signer, never a verified one. Pure: needs no unlock.
+     * maps an account id to the signing keys the caller verified (a pinned
+     * contact's current key, and the earlier ones a succession chain vouched
+     * for, which only ever yield `retired-key`). The worker adds this
+     * account's own, current and earlier, so the identity must be open. A
+     * signer who is not there is an unknown signer, never a verified one; a
+     * record whose check throws is `unchecked`.
      */
     driveVerify: {
         workspaceId: string;
-        signers: Record<string, string[]>;
+        signers: DriveSigners;
         nodes: DriveSignedNode[];
     };
     /* The same node key rewrapped under another parent's key, for a move. */
@@ -367,6 +377,8 @@ export type CryptoRequests = {
         plaintextSize: number;
         /* The rendered thumbnail, sealed here as the object's trailer; null or empty for none. */
         thumbnail?: Uint8Array | null;
+        /* Sign the re-sealed version statement: the bytes are a copy of something not verified (see DriveNodeInput). */
+        resealed?: boolean;
     };
     /*
      * Reopen reinstates an upload after a reload or a lock from what the journal
@@ -392,7 +404,14 @@ export type CryptoRequests = {
      * key (opened or created first), for attaching a conflicted upload to a fresh
      * sibling or to the same node after a key rotation. Nothing new is minted.
      */
-    driveUploadRewrap: { workspaceId: string; objectId: string; nodeId: string; versionId: string };
+    driveUploadRewrap: {
+        workspaceId: string;
+        objectId: string;
+        nodeId: string;
+        versionId: string;
+        /* As for prepare: a copy of something not verified is signed re-sealed. */
+        resealed?: boolean;
+    };
     /* The plaintext digest of one chunk, to prove a re-read file is the one that was journaled. */
     driveUploadDigest: { objectId: string; file: Blob; index: number };
     /*
@@ -401,10 +420,27 @@ export type CryptoRequests = {
      * (opened under the source node's key, which must be open) wrapped again
      * under the new node key for the new version. The object is shared, so the
      * key it was encrypted under is the one thing that must not change.
+     *
+     * The source's records are checked first, as a reading would: the copy's
+     * metadata is signed with the ordinary statement only when the source's
+     * metadata verified, and its version only when the source's version
+     * verified; anything else is signed re-sealed. `signers` is required: a
+     * copy never re-signs what it could not check.
      */
     driveCopyFile: {
         workspaceId: string;
-        source: { nodeId: string } & DriveVersionEnvelope;
+        signers: DriveSigners;
+        source: {
+            nodeId: string;
+            /* The source node's metadata record as served, signature included. */
+            metadataVersion: number;
+            metadataEnvelope: string;
+            metadataSigner: string | null;
+            metadataSignature: string | null;
+            /* Who signed the source version's envelope. */
+            signer: string | null;
+            signature: string | null;
+        } & DriveVersionEnvelope;
         node: {
             id: string;
             parentId: string;
@@ -464,11 +500,24 @@ export type DriveNodeInput = {
     id: string;
     /* Signed with the metadata: a folder's name cannot be passed off as a file's. */
     kind: NodeKind;
+    /*
+     * Sign the re-sealed statement rather than the ordinary one: the metadata
+     * comes from a record this person did not verify (a folder saved from a
+     * link or a share, a copy of an unverified one), so they re-lock it
+     * without vouching for who wrote it.
+     */
+    resealed?: boolean;
     parentId: string;
     parentKeyEpoch: number;
     keyEpoch: number;
     metadata: NodeMetadata;
 };
+/*
+ * The signing keys a caller trusts, per account id, base64url: the account's
+ * current key, and the keys it replaced (a succession chain vouched for them),
+ * which only ever yield `retired-key`. See TrustedSigner.
+ */
+export type DriveSigners = Record<string, { current: string; retired: string[] }>;
 /* A node's signed records as the server serves them, for driveVerify. */
 export type DriveSignedNode = {
     id: string;
@@ -532,7 +581,11 @@ export type RotateNodeInput = {
     keyEnvelope: string;
     metadataVersion: number;
     metadataEnvelope: string;
-    versions: DriveVersionEnvelope[];
+    /* Who signed the metadata envelope being replaced, and how, as the rotation work serves it. */
+    metadataSigner: string | null;
+    metadataSignature: string | null;
+    /* Each version with who signed the envelope being replaced. */
+    versions: (DriveVersionEnvelope & { signer: string | null; signature: string | null })[];
     shares: {
         id: string;
         granteeUserId: string;
@@ -608,7 +661,8 @@ export type CryptoResults = {
     identityVerifyKem: { valid: boolean };
     settingsKeyCreate: { settingsKey: SettingsKeyEnvelope };
     settingsKeyOpen: { opened: true };
-    settingsOpen: { settings: Settings };
+    /* Null for a version 1 document, which no longer opens: treat it as no settings. */
+    settingsOpen: { settings: Settings | null };
     settingsSeal: { envelope: SettingsEnvelope };
     driveSealShare: { shareEnvelope: string };
     driveOpenShare: { opened: true };
@@ -803,11 +857,85 @@ export function createCryptoSession() {
         if (!identityKey) throw new CryptoError('Open your identity first.');
         return encode(await signStatement(statement, identityKey.signingKey));
     }
-    async function signMetadata(ctx: MetadataStatement, envelope: Uint8Array) {
-        return sign(await metadataStatement(ctx, envelope));
+    /* The ordinary statement, or with `resealed` the re-sealed one ("I re-locked this, nothing more"). */
+    async function signMetadata(ctx: MetadataStatement, envelope: Uint8Array, resealed = false) {
+        return sign(
+            await (resealed ? metadataResealedStatement : metadataStatement)(ctx, envelope),
+        );
     }
-    async function signVersion(ctx: VersionStatement, envelope: Uint8Array) {
-        return sign(await versionStatement(ctx, envelope));
+    async function signVersion(ctx: VersionStatement, envelope: Uint8Array, resealed = false) {
+        return sign(await (resealed ? versionResealedStatement : versionStatement)(ctx, envelope));
+    }
+    /*
+     * The keys a check accepts: the caller's, and this account's own (its
+     * current key, and its earlier ones as retired), proven when the identity
+     * was opened. No trust set, or one with a key that does not read, is
+     * refused outright rather than checked against in part: the caller shows
+     * every record as unchecked, and a rotation or copy stops and retries.
+     */
+    function trustSet(signers: DriveSigners | null | undefined) {
+        if (!signers || typeof signers !== 'object')
+            throw new CryptoError(
+                'HushOS couldn’t load the people you trust, so nothing was checked. Try again.',
+            );
+        if (!identityKey) throw new CryptoError('Open your identity first.');
+        const trusted = new Map<string, TrustedSigner>();
+        for (const [userId, keys] of Object.entries(signers))
+            try {
+                trusted.set(userId.toLowerCase(), {
+                    current: decode(keys.current, 32),
+                    retired: keys.retired.map((key) => decode(key, 32)),
+                });
+            } catch {
+                throw new CryptoError(
+                    'A key of someone you trust could not be read, so nothing was checked.',
+                );
+            }
+        trusted.set(identityKey.userId.toLowerCase(), {
+            current: decode(identityKey.signingPublicKey, 32),
+            retired: identityHistory.map((earlier) => decode(earlier.signingPublicKey, 32)),
+        });
+        return trusted;
+    }
+    /*
+     * One record's verdict, as a reading shows it. A signature present but
+     * unreadable is one that cannot hold; a check that throws is `unchecked`.
+     */
+    async function checkRecord(
+        trusted: Map<string, TrustedSigner>,
+        statements: () => Promise<StatementPair>,
+        signer: string | null,
+        signature: string | null,
+    ): Promise<Integrity> {
+        let bytes: Uint8Array | null = null;
+        if (signature)
+            try {
+                bytes = decode(signature);
+            } catch {
+                bytes = new Uint8Array(0);
+            }
+        try {
+            return await integrityOf(
+                statements,
+                bytes,
+                signer ? trusted.get(signer.toLowerCase()) : undefined,
+            );
+        } catch {
+            return 'unchecked';
+        }
+    }
+    /*
+     * How a rotation or copy signs a record it re-sealed: the ordinary
+     * statement only for one that verified, the re-sealed one for anything
+     * else, so re-locking never launders a record into one this person
+     * vouches for. A record whose check did not run is not re-signed at all.
+     */
+    function resealedUnless(integrity: Integrity) {
+        if (integrity === 'unchecked')
+            throw new CryptoError(
+                'HushOS couldn’t check who wrote this, so it was not locked again. Try again.',
+            );
+        return integrity !== 'verified';
     }
     /*
      * The identities a share sealed to this account may have been sealed to:
@@ -827,19 +955,20 @@ export function createCryptoSession() {
         return named;
     }
     /*
-     * A share opened with the first of `candidates` it was sealed to. Under
-     * suite 3 the granter's signature is checked before any of them is tried.
+     * A share opened with the first of `candidates` it was sealed to. The
+     * granter's signature, under their current key, is checked before any of
+     * them is tried.
      */
     async function openShareWithAny(
         envelope: Uint8Array,
-        granter: GranterKeys,
+        granterSigningPublicKey: Uint8Array,
         candidates: GranteeSecrets[],
         ctx: ShareContext,
     ) {
         let failure: unknown;
         for (const grantee of candidates)
             try {
-                return await openShareKey(envelope, granter, grantee, ctx);
+                return await openShareKey(envelope, granterSigningPublicKey, grantee, ctx);
             } catch (error) {
                 // A bad signature fails for every candidate alike: say so at once.
                 if (error instanceof CryptoError && /not signed/.test(error.message)) throw error;
@@ -991,6 +1120,7 @@ export function createCryptoSession() {
         targetEpoch: number,
         granterUserId: string | null,
         node: RotateNodeInput,
+        trusted: Map<string, TrustedSigner>,
     ): Promise<RotatedNode> {
         const nodeId = node.id;
         // The key as it is: cached from a listing, or opened now under the parent
@@ -1033,8 +1163,49 @@ export function createCryptoSession() {
                 rewrap: true,
             };
         }
-        // Everything re-sealed below is signed by the account running the rotation.
+        // Everything re-sealed below is signed by the account running the rotation,
+        // as it was checked first: what did not verify is signed re-sealed.
         if (!identityKey) throw new CryptoError('Open your identity first.');
+        const metadataResealed = resealedUnless(
+            await checkRecord(
+                trusted,
+                async () =>
+                    metadataStatements(
+                        {
+                            workspaceId,
+                            nodeId,
+                            kind: node.kind,
+                            metadataVersion: node.metadataVersion,
+                        },
+                        decode(node.metadataEnvelope),
+                    ),
+                node.metadataSigner,
+                node.metadataSignature,
+            ),
+        );
+        const versionsResealed = new Map<string, boolean>();
+        for (const version of node.versions)
+            versionsResealed.set(
+                version.id,
+                resealedUnless(
+                    await checkRecord(
+                        trusted,
+                        async () =>
+                            versionStatements(
+                                {
+                                    workspaceId,
+                                    nodeId,
+                                    versionId: version.id,
+                                    objectId: version.objectId,
+                                    contentSuite: version.contentSuite,
+                                },
+                                decode(version.contentKeyEnvelope),
+                            ),
+                        version.signer,
+                        version.signature,
+                    ),
+                ),
+            );
         const fresh = generateKey();
         try {
             const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
@@ -1058,6 +1229,7 @@ export function createCryptoSession() {
             const metadataSignature = await signMetadata(
                 { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
                 metadataEnvelope,
+                metadataResealed,
             );
             const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
             for (const version of node.versions) {
@@ -1091,6 +1263,7 @@ export function createCryptoSession() {
                                 contentSuite: opened.suite,
                             },
                             envelope,
+                            versionsResealed.get(version.id) ?? true,
                         ),
                     });
                 } finally {
@@ -1540,14 +1713,7 @@ export function createCryptoSession() {
             case 'settingsOpen': {
                 const { userId, envelope } = message.input;
                 const ownSettingsKey = settingsKey?.userId === userId ? settingsKey.key : null;
-                const ownIdentityKey = identityKey?.userId === userId ? identityKey.key : null;
-                return {
-                    settings: await openSettings(
-                        { settingsKey: ownSettingsKey, identityPrivateKey: ownIdentityKey },
-                        userId,
-                        envelope,
-                    ),
-                };
+                return { settings: await openSettings(ownSettingsKey, userId, envelope) };
             }
             case 'settingsSeal': {
                 const { userId, settingsVersion, settings } = message.input;
@@ -1594,14 +1760,9 @@ export function createCryptoSession() {
                     throw new CryptoError('Open your identity first.');
                 const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
-                const granter = {
-                    encryptionPublicKey: message.input.granterPublicKey
-                        ? decode(message.input.granterPublicKey, 32)
-                        : null,
-                    signingPublicKey: message.input.granterSigningPublicKey
-                        ? decode(message.input.granterSigningPublicKey, 32)
-                        : null,
-                };
+                if (!message.input.granterSigningPublicKey)
+                    throw new CryptoError('This share needs the key of the person who shared it.');
+                const granter = decode(message.input.granterSigningPublicKey, 32);
                 const candidates = granteeIdentities(message.input.granteeKeyVersion);
                 const key = await openShareWithAny(
                     decode(message.input.shareEnvelope),
@@ -1799,10 +1960,15 @@ export function createCryptoSession() {
             }
             case 'driveRotateNodes': {
                 const { workspaceId, targetEpoch, granterUserId } = message.input;
+                // Every record is checked before it is signed again: without the trust
+                // set the whole batch stops, rather than re-sealing everything in it.
+                const trusted = trustSet(message.input.signers);
                 const out: RotatedNode[] = [];
                 for (const node of message.input.nodes) {
                     try {
-                        out.push(await rotateOne(workspaceId, targetEpoch, granterUserId, node));
+                        out.push(
+                            await rotateOne(workspaceId, targetEpoch, granterUserId, node, trusted),
+                        );
                     } catch (error) {
                         out.push({
                             id: node.id,
@@ -1898,6 +2064,7 @@ export function createCryptoSession() {
                                     metadataVersion: 1,
                                 },
                                 metadataEnvelope,
+                                node.resealed === true,
                             ),
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
@@ -2022,40 +2189,13 @@ export function createCryptoSession() {
             }
             case 'driveVerify': {
                 const { workspaceId } = message.input;
-                // The caller's trusted keys, and this account's own: it signed with them.
-                const trusted = new Map<string, Uint8Array[]>();
-                const trust = (userId: string, key: string) => {
-                    try {
-                        const bytes = decode(key, 32);
-                        const id = userId.toLowerCase();
-                        trusted.set(id, [...(trusted.get(id) ?? []), bytes]);
-                    } catch {
-                        /* A key that is not one trusts nothing. */
-                    }
-                };
-                for (const [userId, keys] of Object.entries(message.input.signers))
-                    for (const key of keys) trust(userId, key);
-                if (identityKey) {
-                    trust(identityKey.userId, identityKey.signingPublicKey);
-                    for (const earlier of identityHistory)
-                        trust(identityKey.userId, earlier.signingPublicKey);
-                }
-                const bytesOf = (value: string | null) => {
-                    if (!value) return null;
-                    try {
-                        return decode(value);
-                    } catch {
-                        // Present but unreadable is a signature that cannot hold.
-                        return new Uint8Array(0);
-                    }
-                };
-                const keysOf = (signer: string | null) =>
-                    signer ? trusted.get(signer.toLowerCase()) : undefined;
+                const trusted = trustSet(message.input.signers);
                 const nodes: DriveVerifiedNode[] = [];
                 for (const node of message.input.nodes) {
-                    const metadata = await integrityOf(
+                    const metadata = await checkRecord(
+                        trusted,
                         async () =>
-                            metadataStatement(
+                            metadataStatements(
                                 {
                                     workspaceId,
                                     nodeId: node.id,
@@ -2064,16 +2204,17 @@ export function createCryptoSession() {
                                 },
                                 decode(node.metadataEnvelope),
                             ),
-                        bytesOf(node.metadataSignature),
-                        keysOf(node.metadataSigner),
+                        node.metadataSigner,
+                        node.metadataSignature,
                     );
                     const versions = [];
                     for (const version of node.versions ?? [])
                         versions.push({
                             id: version.id,
-                            integrity: await integrityOf(
+                            integrity: await checkRecord(
+                                trusted,
                                 async () =>
-                                    versionStatement(
+                                    versionStatements(
                                         {
                                             workspaceId,
                                             nodeId: node.id,
@@ -2083,8 +2224,8 @@ export function createCryptoSession() {
                                         },
                                         decode(version.contentKeyEnvelope),
                                     ),
-                                bytesOf(version.signature),
-                                keysOf(version.signer),
+                                version.signer,
+                                version.signature,
                             ),
                         });
                     nodes.push({ id: node.id, metadata, versions });
@@ -2158,6 +2299,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
+                        message.input.resealed === true,
                     ),
                     chunkCount: chunkCount(length),
                     ciphertextSize: ciphertextSize(CONTENT_SUITE, plaintextSize, thumbnailBytes),
@@ -2255,6 +2397,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
+                        message.input.resealed === true,
                     ),
                 };
             }
@@ -2263,6 +2406,43 @@ export function createCryptoSession() {
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
+                // The source as a reading would check it: only what verified is vouched for again.
+                const trusted = trustSet(message.input.signers);
+                const metadataResealed = resealedUnless(
+                    await checkRecord(
+                        trusted,
+                        async () =>
+                            metadataStatements(
+                                {
+                                    workspaceId,
+                                    nodeId: source.nodeId,
+                                    kind: 'file',
+                                    metadataVersion: source.metadataVersion,
+                                },
+                                decode(source.metadataEnvelope),
+                            ),
+                        source.metadataSigner,
+                        source.metadataSignature,
+                    ),
+                );
+                const versionResealed = resealedUnless(
+                    await checkRecord(
+                        trusted,
+                        async () =>
+                            versionStatements(
+                                {
+                                    workspaceId,
+                                    nodeId: source.nodeId,
+                                    versionId: source.id,
+                                    objectId: source.objectId,
+                                    contentSuite: source.contentSuite,
+                                },
+                                decode(source.contentKeyEnvelope),
+                            ),
+                        source.signer,
+                        source.signature,
+                    ),
+                );
                 const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
                     sourceKey.key,
@@ -2306,6 +2486,7 @@ export function createCryptoSession() {
                         metadataSignature: await signMetadata(
                             { workspaceId, nodeId: node.id, kind: 'file', metadataVersion: 1 },
                             metadataEnvelope,
+                            metadataResealed,
                         ),
                         versionSignature: await signVersion(
                             {
@@ -2316,6 +2497,7 @@ export function createCryptoSession() {
                                 contentSuite: opened.suite,
                             },
                             contentKeyEnvelope,
+                            versionResealed,
                         ),
                     };
                     rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);

@@ -11,7 +11,6 @@ import { encryptKey } from './aead';
 import { hybridKey } from './hybrid';
 import { KEM_CIPHERTEXT_BYTES, kemEncapsulate } from './pq';
 import {
-    HYBRID_SHARE_ENVELOPE_BYTES,
     openShareKey,
     sealShareKey,
     shareContext,
@@ -25,7 +24,8 @@ import { decode } from './keys';
 /*
  * A share opens for the person it was sealed to, under the context it was
  * sealed with, from the person who signed it, and for nobody and nothing else.
- * Suite 3 is the one sealed; suites 1 and 2, made before, still open. The
+ * Suite 3 is the only one sealed or opened: suites 1 and 2, whose static key
+ * agreement a stolen granter key opened, are refused even when genuine. The
  * session test runs the whole exchange: the owner seals a folder key to a
  * contact, the contact opens it and reads the folder's children, and cannot
  * climb above the folder.
@@ -45,7 +45,15 @@ const ctx: ShareContext = {
     granterUserId: OWNER,
 };
 
-/* Suite 1 as clients made them before shares went hybrid: none is sealed now, but they open. */
+/* The share context as suites 1 and 2 bound it. */
+const legacyContext = (ctx: ShareContext, suite: 1 | 2) =>
+    new TextEncoder().encode(
+        new TextDecoder()
+            .decode(shareContext(ctx))
+            .replace('"hushos/drive/share",3,', `"hushos/drive/share",${suite},`),
+    );
+
+/* Suite 1 as clients made them before shares went hybrid: genuine, and refused. */
 async function suite1Envelope(
     nodeKey: Uint8Array,
     granteePublicKey: Uint8Array,
@@ -55,7 +63,7 @@ async function suite1Envelope(
     await sodium.ready;
     const pair = sodium.crypto_box_beforenm(granteePublicKey, granterPrivateKey);
     const nonce = crypto.getRandomValues(new Uint8Array(24));
-    const body = await encryptKey(nodeKey, pair, nonce, shareContext(ctx, 1));
+    const body = await encryptKey(nodeKey, pair, nonce, legacyContext(ctx, 1));
     return new Uint8Array([...nonce, ...body]);
 }
 
@@ -74,7 +82,7 @@ async function suite2Envelope(
     const { ciphertext, sharedSecret } = kemEncapsulate(grantee.kemPublicKey);
     const key = await hybridKey(pair, sharedSecret, ciphertext, 'hushos/drive/share-key/v2');
     const nonce = crypto.getRandomValues(new Uint8Array(24));
-    const body = await encryptKey(nodeKey, key, nonce, shareContext(ctx, 2));
+    const body = await encryptKey(nodeKey, key, nonce, legacyContext(ctx, 2));
     return new Uint8Array([...nonce, ...ciphertext, ...body]);
 }
 
@@ -101,10 +109,8 @@ const secretsOf = (who: Account) => ({
     privateKey: who.privateKey,
     kemSecretKey: who.kem.secretKey,
 });
-const granterOf = (who: Account) => ({
-    encryptionPublicKey: who.publicKey,
-    signingPublicKey: who.signingPublicKey,
-});
+/* What a share opens against: the granter's current signing key, as pinned. */
+const granterOf = (who: Account) => who.signingPublicKey;
 
 async function person(userId: string) {
     const root = crypto.getRandomValues(new Uint8Array(32));
@@ -140,15 +146,6 @@ describe('share suite 3', () => {
         expect(await openShareKey(envelope, granterOf(owner), secretsOf(guest), ctx)).toEqual(
             nodeKey,
         );
-        // The granter's X25519 key plays no part: the signing key alone identifies them.
-        expect(
-            await openShareKey(
-                envelope,
-                { encryptionPublicKey: null, signingPublicKey: owner.signingPublicKey },
-                secretsOf(guest),
-                ctx,
-            ),
-        ).toEqual(nodeKey);
         // Each share has its own ephemeral key: sealing again shares nothing with the first.
         const again = await sealShareKey(nodeKey, keysOf(guest), owner.signingKey, ctx);
         expect(again.subarray(0, 32)).not.toEqual(envelope.subarray(0, 32));
@@ -204,14 +201,13 @@ describe('share suite 3', () => {
             await expect(
                 openShareKey(envelope, granterOf(owner), secretsOf(guest), { ...ctx, ...change }),
             ).rejects.toThrow('not signed');
+        // The granter's X25519 key is no signing key: nothing opens without the right one.
         await expect(
-            openShareKey(
-                envelope,
-                { encryptionPublicKey: owner.publicKey, signingPublicKey: null },
-                secretsOf(guest),
-                ctx,
-            ),
+            openShareKey(envelope, new Uint8Array(0), secretsOf(guest), ctx),
         ).rejects.toThrow(/needs the key/);
+        await expect(
+            openShareKey(envelope, owner.publicKey, secretsOf(guest), ctx),
+        ).rejects.toThrow('not signed');
     });
 
     test('needs both of the grantee’s private halves, and only the grantee’s', async () => {
@@ -244,56 +240,33 @@ describe('share suite 3', () => {
 });
 
 describe('older share suites', () => {
-    test('suites 1 and 2 still open for the grantee under their context, with the granter’s X25519 key', async () => {
-        const [owner, guest, stranger] = await Promise.all([
-            account(OWNER),
-            account(GUEST),
-            account(CHILD),
-        ]);
+    test('suites 1 and 2 no longer open, even genuine ones from the pinned granter to the grantee', async () => {
+        const [owner, guest] = await Promise.all([account(OWNER), account(GUEST)]);
         const nodeKey = crypto.getRandomValues(new Uint8Array(32));
         const one = await suite1Envelope(nodeKey, guest.publicKey, owner.privateKey, ctx);
         const two = await suite2Envelope(nodeKey, keysOf(guest), owner.privateKey, ctx);
-        expect([one.length, two.length]).toEqual([72, HYBRID_SHARE_ENVELOPE_BYTES]);
-        for (const envelope of [one, two]) {
-            expect(await openShareKey(envelope, granterOf(owner), secretsOf(guest), ctx)).toEqual(
-                nodeKey,
-            );
-            // The wrong person, the wrong granter key, a missing granter key, or a shifted context.
+        expect([one.length, two.length]).toEqual([72, 1160]);
+        // A static agreement that a stolen granter key reproduces: refused by length, whoever asks.
+        for (const envelope of [one, two])
             await expect(
-                openShareKey(envelope, granterOf(owner), secretsOf(stranger), ctx),
-            ).rejects.toThrow();
-            await expect(
-                openShareKey(envelope, granterOf(stranger), secretsOf(guest), ctx),
-            ).rejects.toThrow();
-            await expect(
-                openShareKey(
-                    envelope,
-                    { encryptionPublicKey: null, signingPublicKey: owner.signingPublicKey },
-                    secretsOf(guest),
-                    ctx,
-                ),
-            ).rejects.toThrow(/needs the key/);
-            for (const change of [{ keyEpoch: 4 }, { nodeId: CHILD }, { granterUserId: GUEST }])
-                await expect(
-                    openShareKey(envelope, granterOf(owner), secretsOf(guest), {
-                        ...ctx,
-                        ...change,
-                    }),
-                ).rejects.toThrow();
-        }
-        // Suite 2 needs the KEM half too; a tampered KEM ciphertext is rejected implicitly.
-        await expect(
-            openShareKey(two, granterOf(owner), { ...secretsOf(guest), kemSecretKey: null }, ctx),
-        ).rejects.toThrow(/does not hold/);
-        const tampered = two.slice();
-        tampered[24 + KEM_CIPHERTEXT_BYTES - 1]! ^= 1;
-        await expect(
-            openShareKey(tampered, granterOf(owner), secretsOf(guest), ctx),
-        ).rejects.toThrow();
-        // A length that is no suite is refused.
+                openShareKey(envelope, granterOf(owner), secretsOf(guest), ctx),
+            ).rejects.toThrow('Invalid share envelope');
         await expect(
             openShareKey(two.subarray(0, 100), granterOf(owner), secretsOf(guest), ctx),
         ).rejects.toThrow('Invalid share envelope');
+    });
+
+    test('a share signed with a key the granter has since replaced does not open against the current one', async () => {
+        const [earlier, current, guest] = await Promise.all([
+            account(OWNER),
+            account(OWNER),
+            account(GUEST),
+        ]);
+        const nodeKey = crypto.getRandomValues(new Uint8Array(32));
+        const envelope = await sealShareKey(nodeKey, keysOf(guest), earlier.signingKey, ctx);
+        await expect(
+            openShareKey(envelope, granterOf(current), secretsOf(guest), ctx),
+        ).rejects.toThrow('not signed');
     });
 });
 
@@ -361,7 +334,6 @@ describe('shares through the session', () => {
             nodeId: SHARED,
             keyEpoch: 2,
             granterUserId: OWNER,
-            granterPublicKey: owner.identity.encryptionPublicKey,
             granterSigningPublicKey: owner.identity.signingPublicKey,
             granteeUserId: GUEST,
             shareEnvelope,
@@ -375,7 +347,7 @@ describe('shares through the session', () => {
             }),
         ).rejects.toThrow('not signed');
         await expect(
-            guest.call('driveOpenShare', { ...open, granterSigningPublicKey: null }),
+            guest.call('driveOpenShare', { ...open, granterSigningPublicKey: '' }),
         ).rejects.toThrow(/needs the key/);
         await guest.call('driveOpenShare', open);
         const opened = (await guest.call('driveOpenNodes', {

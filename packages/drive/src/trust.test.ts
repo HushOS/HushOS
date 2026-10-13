@@ -45,10 +45,10 @@ const served = (overrides: Partial<Parameters<typeof comparePin>[1]> = {}) => ({
 });
 
 describe('signers', () => {
-    test('a verified pin vouches for its key and the earlier keys it followed', async () => {
+    test('a verified pin vouches for its current key; the keys it followed from are only retired', async () => {
         const followed = await pin({ previousSigningKeys: [key(6), key(7)] });
         expect(await signersFromPins({ maya: followed })).toEqual({
-            maya: [key(2), key(6), key(7)],
+            maya: { current: key(2), retired: [key(6), key(7)] },
         });
     });
 
@@ -133,15 +133,17 @@ describe('a pin after a succession', () => {
             ),
         ).toBe('same');
         expect(await comparePin(after, served(now))).toBe('changed');
-        // Records signed before the succession still verify: both signing keys count.
-        expect(await signersFromPins({ maya: after })).toEqual({ maya: [key(4), key(2)] });
-        // And shares sealed before it open: newest keys first, then the earlier.
-        expect(granterKeysOf(after).map((k) => k.signingPublicKey)).toEqual([key(4), key(2)]);
+        // Records signed before the succession read as a retired key, never as verified.
+        expect(await signersFromPins({ maya: after })).toEqual({
+            maya: { current: key(4), retired: [key(2)] },
+        });
+        // And a share opens only against the current key: one the old key signed waits.
+        expect(granterKeysOf(after)).toEqual({ signingPublicKey: key(4) });
     });
 });
 
 describe('a second succession', () => {
-    test('appends the replaced key, oldest first, and tries the newest keys first', async () => {
+    test('appends the replaced key, oldest first, and opens shares with the newest only', async () => {
         const once = await pinAfterSuccession(
             await pin(),
             { keyVersion: 2, encryptionPublicKey: key(3), signingPublicKey: key(4) },
@@ -155,11 +157,7 @@ describe('a second succession', () => {
             new Date('2026-10-13T10:00:00.000Z'),
         );
         expect(twice.previousSigningKeys).toEqual([key(2), key(4)]);
-        expect(granterKeysOf(twice).map((k) => k.signingPublicKey)).toEqual([
-            key(6),
-            key(4),
-            key(2),
-        ]);
+        expect(granterKeysOf(twice)).toEqual({ signingPublicKey: key(6) });
         // People says so until the person dismisses this replacement; a later one shows again.
         expect(replacementUnseen(twice)).toBe(true);
         expect(replacementUnseen({ ...twice, replacementSeen: twice.keysReplacedAt })).toBe(false);
@@ -171,7 +169,7 @@ describe('what an item shows', () => {
     const maya = { id: 'maya', name: 'Maya', email: 'maya@example.com' };
     const sam = { id: 'sam', name: 'Sam', email: 'sam@example.com' };
 
-    test('a verified item, or one never checked, shows nothing', () => {
+    test('a verified item, or one with nothing to check, shows nothing', () => {
         expect(
             integrityIssues({
                 metadataSigner: maya,
@@ -195,5 +193,31 @@ describe('what an item shows', () => {
             { record: 'version', integrity: 'bad-signature', signer: sam },
             { record: 'metadata', integrity: 'unsigned', signer: maya },
         ]);
+    });
+
+    test('every verdict but verified is an issue: unsigned, re-sealed, retired and unchecked included', () => {
+        for (const integrity of [
+            'unsigned',
+            'resealed',
+            'retired-key',
+            'unknown-signer',
+            'bad-signature',
+            'unchecked',
+        ] as const)
+            expect(
+                integrityIssues({
+                    metadataSigner: maya,
+                    currentVersion: null,
+                    integrity: { metadata: integrity, version: null },
+                }),
+            ).toEqual([{ record: 'metadata', integrity, signer: maya }]);
+        // A bad signature outranks a check that did not run, so a server cannot hide one behind it.
+        expect(
+            integrityIssues({
+                metadataSigner: maya,
+                currentVersion: { signer: sam },
+                integrity: { metadata: 'unchecked', version: 'bad-signature' },
+            })[0]!.integrity,
+        ).toBe('bad-signature');
     });
 });

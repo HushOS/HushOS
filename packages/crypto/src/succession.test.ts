@@ -251,7 +251,7 @@ async function device(userId: string, root: Uint8Array<ArrayBuffer>) {
 const meta = (name: string) => ({ name, mime: null, size: null, modified: null });
 
 describe('succession in the worker', () => {
-    test('a device succeeds, then still opens what was shared to its earlier keys and trusts what they signed', async () => {
+    test('a device succeeds, then still opens what was shared to its earlier keys, and what they signed is only a retired key', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const first = await createIdentity(root, USER);
         const me = await device(USER, root);
@@ -354,7 +354,6 @@ describe('succession in the worker', () => {
             nodeId: B,
             keyEpoch: 2,
             granterUserId: FRIEND,
-            granterPublicKey: friendIdentity.encryptionPublicKey,
             granterSigningPublicKey: friendIdentity.signingPublicKey,
             granteeUserId: USER,
             shareEnvelope,
@@ -370,7 +369,23 @@ describe('succession in the worker', () => {
         await fresh('identityOpen', { userId: USER, identity: second, history: [first] });
         await fresh('driveOpenShare', open);
 
-        // What the first identity signed is still this account's own.
+        // The friend replaces their keys: the share their first key signed waits for them to
+        // seal it again, and does not open against the key they hold now.
+        const { identity: friendSecond } = (await friend('identitySucceed', {
+            userId: FRIEND,
+            identity: friendIdentity,
+        })) as { identity: IdentityEnvelope };
+        const later = await device(USER, root);
+        await later('identityOpen', { userId: USER, identity: second, history: [first] });
+        await expect(
+            later('driveOpenShare', {
+                ...open,
+                granterSigningPublicKey: friendSecond.signingPublicKey,
+            }),
+        ).rejects.toThrow('not signed');
+
+        // What the first identity signed is this account's, under a key it has replaced:
+        // replaced because it may be exposed, so it vouches for nothing any more.
         const verified = (await me('driveVerify', {
             workspaceId: C,
             signers: {},
@@ -385,7 +400,7 @@ describe('succession in the worker', () => {
                 },
             ],
         })) as { nodes: { metadata: string }[] };
-        expect(verified.nodes[0]!.metadata).toBe('verified');
+        expect(verified.nodes[0]!.metadata).toBe('retired-key');
         // And it no longer signs: new writes carry the second identity's signature.
         const renamed = (await me('driveSealMetadata', {
             workspaceId: C,

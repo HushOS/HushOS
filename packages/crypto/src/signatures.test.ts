@@ -1,14 +1,19 @@
 import { createHash } from 'node:crypto';
 import sodium from 'libsodium-wrappers';
 import { describe, expect, test } from 'vitest';
+import { CryptoError } from './errors';
 import { encode } from './keys';
 import {
     integrityOf,
+    metadataResealedStatement,
     metadataStatement,
+    metadataStatements,
     signStatement,
     successionStatement,
     verifyStatement,
+    versionResealedStatement,
     versionStatement,
+    versionStatements,
 } from './signatures';
 
 /*
@@ -175,25 +180,94 @@ describe('signatures', () => {
             ).toBe(false);
     });
 
-    test("a reader's verdict: unsigned, unknown signer, bad signature, or verified by any trusted key", async () => {
+    test("a reader's verdict: verified only under the signer's current key, over the ordinary statement", async () => {
         const earlier = await keyPair();
         const current = await keyPair();
         const envelope = new Uint8Array(296).fill(3);
-        const statement = () => metadataStatement(ctx, envelope);
-        const signature = await signStatement(await statement(), earlier.privateKey);
-        expect(await integrityOf(statement, null, [current.publicKey])).toBe('unsigned');
-        expect(await integrityOf(statement, signature, undefined)).toBe('unknown-signer');
-        expect(await integrityOf(statement, signature, [])).toBe('unknown-signer');
-        expect(await integrityOf(statement, signature, [current.publicKey])).toBe('bad-signature');
-        // A record made before a succession verifies against the earlier key the chain vouched for.
+        const statements = () => metadataStatements(ctx, envelope);
+        const trusted = { current: current.publicKey, retired: [earlier.publicKey] };
+        const byCurrent = await signStatement(
+            await metadataStatement(ctx, envelope),
+            current.privateKey,
+        );
+        const byEarlier = await signStatement(
+            await metadataStatement(ctx, envelope),
+            earlier.privateKey,
+        );
+        expect(await integrityOf(statements, byCurrent, trusted)).toBe('verified');
+        expect(await integrityOf(statements, null, trusted)).toBe('unsigned');
+        expect(await integrityOf(statements, byCurrent, undefined)).toBe('unknown-signer');
+        expect(await integrityOf(statements, byCurrent, null)).toBe('unknown-signer');
+        // A record signed with a key the writer replaced vouches for nothing any more.
+        expect(await integrityOf(statements, byEarlier, trusted)).toBe('retired-key');
+        // ...and with no chain to that key at all, it is simply not theirs.
         expect(
-            await integrityOf(statement, signature, [current.publicKey, earlier.publicKey]),
-        ).toBe('verified');
+            await integrityOf(statements, byEarlier, { current: current.publicKey, retired: [] }),
+        ).toBe('bad-signature');
+        // A retired key listed as current would verify: the caller's split is what decides.
+        expect(
+            await integrityOf(statements, byCurrent, {
+                current: earlier.publicKey,
+                retired: [current.publicKey],
+            }),
+        ).toBe('retired-key');
         // A statement that cannot be built (a damaged row) is not a good signature.
         expect(
-            await integrityOf(() => Promise.reject(new Error('damaged')), signature, [
-                earlier.publicKey,
-            ]),
+            await integrityOf(
+                () => Promise.reject(new CryptoError('Invalid key encoding.')),
+                byCurrent,
+                trusted,
+            ),
+        ).toBe('bad-signature');
+        // A check that fails to run is unchecked: never verified, never silently dropped.
+        expect(
+            await integrityOf(() => Promise.reject(new Error('worker died')), byCurrent, trusted),
+        ).toBe('unchecked');
+    });
+
+    test('a re-sealed signature is resealed, never verified, and an ordinary one never reads as re-sealed', async () => {
+        const writer = await keyPair();
+        const earlier = await keyPair();
+        const envelope = crypto.getRandomValues(new Uint8Array(84));
+        const version = {
+            workspaceId: WS,
+            nodeId: NODE,
+            versionId: VERSION,
+            objectId: OBJECT,
+            contentSuite: 3,
+        };
+        const ordinary = await versionStatement(version, envelope);
+        const resealed = await versionResealedStatement(version, envelope);
+        expect(new TextDecoder().decode(resealed)).toBe(
+            `["hushos/drive/sig/version-resealed",1,"${WS}","${NODE}","${VERSION}","${OBJECT}",3,"${sha(envelope)}"]`,
+        );
+        const metadataResealed = await metadataResealedStatement(ctx, envelope);
+        expect(new TextDecoder().decode(metadataResealed)).toBe(
+            `["hushos/drive/sig/metadata-resealed",1,"${WS}","${NODE}","folder",2,"${sha(envelope)}"]`,
+        );
+        const asResealed = await signStatement(resealed, writer.privateKey);
+        const asOrdinary = await signStatement(ordinary, writer.privateKey);
+        // Domain separation both ways, at the primitive.
+        expect(await verifyStatement(ordinary, asResealed, writer.publicKey)).toBe(false);
+        expect(await verifyStatement(resealed, asOrdinary, writer.publicKey)).toBe(false);
+        expect(
+            await verifyStatement(
+                await metadataStatement(ctx, envelope),
+                await signStatement(metadataResealed, writer.privateKey),
+                writer.publicKey,
+            ),
+        ).toBe(false);
+        const statements = () => versionStatements(version, envelope);
+        const trusted = { current: writer.publicKey, retired: [earlier.publicKey] };
+        expect(await integrityOf(statements, asResealed, trusted)).toBe('resealed');
+        expect(await integrityOf(statements, asOrdinary, trusted)).toBe('verified');
+        // Re-sealed under a replaced key is still only a retired key.
+        const oldResealed = await signStatement(resealed, earlier.privateKey);
+        expect(await integrityOf(statements, oldResealed, trusted)).toBe('retired-key');
+        // A re-sealed signature over another record is no signature of this one.
+        const other = crypto.getRandomValues(new Uint8Array(84));
+        expect(
+            await integrityOf(() => versionStatements(version, other), asResealed, trusted),
         ).toBe('bad-signature');
     });
 });

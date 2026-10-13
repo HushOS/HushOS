@@ -570,6 +570,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                         parentKeyEpoch: parent.keyEpoch,
                         keyEpoch: from,
                         metadata,
+                        // A saved copy re-locks someone else's file: it vouches for nothing more.
+                        resealed: u.item.origin === 'copy',
                     },
                 ],
             });
@@ -603,6 +605,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             plaintextSize: u.item.size,
             thumbnail:
                 thumbnail && thumbnail.size ? new Uint8Array(await thumbnail.arrayBuffer()) : null,
+            resealed: u.item.origin === 'copy',
         });
         u.prepared = true;
         if (u.generation !== generation) return;
@@ -844,6 +847,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 objectId: u.objectId,
                 nodeId: replaces.id,
                 versionId: u.versionId,
+                resealed: u.item.origin === 'copy',
             });
             try {
                 return await api.attachUpload(workspaceId, u.uploadId, {
@@ -877,6 +881,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                             ? new Date(u.file.lastModified).toISOString()
                             : null,
                     },
+                    resealed: u.item.origin === 'copy',
                 },
             ],
         });
@@ -885,6 +890,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             objectId: u.objectId,
             nodeId,
             versionId: u.versionId,
+            resealed: u.item.origin === 'copy',
         });
         const result = await api.attachUpload(workspaceId, u.uploadId, {
             mode: 'sibling',

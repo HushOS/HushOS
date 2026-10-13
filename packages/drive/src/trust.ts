@@ -1,3 +1,4 @@
+import type { DriveSigners } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
 import { fingerprint, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
 import { pinVerified } from '@hushos/crypto/pins';
@@ -16,8 +17,8 @@ export type { Integrity };
 /*
  * A pin after a followed succession, as every client keeps it:
  * `previousSigningKeys`, the signing keys it held before, oldest first
- * (records signed before the succession stay signed by them, and a share
- * signed then opens only with them), and `keysReplacedAt`, when it followed.
+ * (records signed with them read as `retired-key`, never verified, and a
+ * share signed with them does not open), and `keysReplacedAt`, when it followed.
  * Both survive every rewrite of the pin but a words check of brand-new keys.
  * The web adds two fields of its own: `replacementSeen`, the `keysReplacedAt`
  * the person dismissed or compared words after, and `resealShares`, set while
@@ -38,14 +39,19 @@ export function replacementUnseen(pin: Pin) {
 
 /*
  * The signing keys driveVerify may accept for each account other than this
- * one: a verified pin's current key and the earlier ones it followed a chain
- * from. A pin made before the words covered both keys vouches for nothing.
+ * one: a verified pin's current key, which alone can verify a record, and the
+ * earlier ones it followed a chain from, which only say `retired-key`. A pin
+ * made before the words covered both keys vouches for nothing.
  */
-export async function signersFromPins(contacts: Record<string, Pin>) {
-    const signers: Record<string, string[]> = {};
+export type { DriveSigners };
+export async function signersFromPins(contacts: Record<string, Pin>): Promise<DriveSigners> {
+    const signers: DriveSigners = {};
     for (const pin of Object.values(contacts)) {
         if (!(await pinVerified(pin))) continue;
-        signers[pin.userId] = [pin.signingPublicKey, ...(pin.previousSigningKeys ?? [])];
+        signers[pin.userId] = {
+            current: pin.signingPublicKey,
+            retired: [...(pin.previousSigningKeys ?? [])],
+        };
     }
     return signers;
 }
@@ -114,17 +120,13 @@ export async function pinAfterSuccession(
 }
 
 /*
- * The keys a granter's share may have been signed with, newest first: the
- * pin's, then the ones it followed a succession from, so a suite 3 share
- * signed before the granter's succession and not yet sealed again still
- * opens. Only the current X25519 key is kept, which is all suite 3 needs; a
- * suite 1 or 2 share from before a succession waits for the granter to seal
- * it again.
+ * The key a granter's share must be signed with: the pin's current signing
+ * key and nothing else. Keys the pin followed a succession from were replaced
+ * because they may be exposed, so a share signed with one waits for the
+ * granter to seal it again ("Ask them to share it again").
  */
 export function granterKeysOf(pin: Pin) {
-    return [pin.signingPublicKey, ...[...(pin.previousSigningKeys ?? [])].reverse()].map(
-        (signingPublicKey) => ({ encryptionPublicKey: pin.encryptionPublicKey, signingPublicKey }),
-    );
+    return { signingPublicKey: pin.signingPublicKey };
 }
 
 /* An item's checks: its metadata, and its current version when it has one; null when not checked. */
@@ -138,9 +140,12 @@ export type IntegrityIssue = {
 };
 
 /*
- * Why an item is shown as Unverified, worst first (a bad signature, then an
- * unknown signer, then no signature at all); empty when everything verified or
- * nothing was checked. One mark per item, however many records failed.
+ * Why an item is shown as Unverified, worst first: a bad signature, then a
+ * retired key, an unknown signer, no signature, a re-sealed record, and a
+ * check that could not run. `unsigned` is an issue like any other (a stripped
+ * signature and one never made read the same). Empty only when everything
+ * verified, or when there was nothing to check (null integrity: a link view,
+ * an item that would not open). One mark per item, however many records failed.
  */
 export function integrityIssues(
     node: Pick<NodeView, 'metadataSigner'> & {
@@ -162,6 +167,13 @@ export function integrityIssues(
             integrity: node.integrity.version,
             signer: node.currentVersion?.signer ?? null,
         });
-    const rank = { 'bad-signature': 0, 'unknown-signer': 1, unsigned: 2 } as const;
+    const rank: Record<IntegrityIssue['integrity'], number> = {
+        'bad-signature': 0,
+        'retired-key': 1,
+        'unknown-signer': 2,
+        unsigned: 3,
+        resealed: 4,
+        unchecked: 5,
+    };
     return issues.sort((a, b) => rank[a.integrity] - rank[b.integrity]);
 }

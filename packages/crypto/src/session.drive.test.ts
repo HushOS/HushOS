@@ -329,7 +329,9 @@ describe('drive session operations', () => {
                     metadata: meta('file'),
                 },
             ],
-        })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
+        })) as {
+            nodes: { keyEnvelope: string; metadataEnvelope: string; metadataSignature: string }[];
+        };
         const objectId = D;
         const sourceVersion = 'dddddddd-dddd-4ddd-8ddd-000000000001';
         const copyVersion = 'dddddddd-dddd-4ddd-8ddd-000000000002';
@@ -340,18 +342,27 @@ describe('drive session operations', () => {
             versionId: sourceVersion,
             objectId,
             plaintextSize: 100,
-        })) as { contentKeyEnvelope: string };
+        })) as { contentKeyEnvelope: string; versionSignature: string };
 
+        // The source as served: its own records, signed by this account, so they verify.
+        const source = {
+            nodeId: C,
+            id: sourceVersion,
+            objectId,
+            contentKeyEnvelope: prepared.contentKeyEnvelope,
+            contentSuite: CONTENT_SUITE,
+            plaintextSize: null,
+            metadataVersion: 1,
+            metadataEnvelope: created.nodes[2]!.metadataEnvelope,
+            metadataSigner: USER,
+            metadataSignature: created.nodes[2]!.metadataSignature,
+            signer: USER,
+            signature: prepared.versionSignature,
+        };
         const copied = (await call('driveCopyFile', {
             workspaceId: WS,
-            source: {
-                nodeId: C,
-                id: sourceVersion,
-                objectId,
-                contentKeyEnvelope: prepared.contentKeyEnvelope,
-                contentSuite: CONTENT_SUITE,
-                plaintextSize: null,
-            },
+            signers: {},
+            source,
             node: {
                 id: copyId,
                 parentId: B,
@@ -480,14 +491,8 @@ describe('drive session operations', () => {
         await expect(
             call('driveCopyFile', {
                 workspaceId: WS,
-                source: {
-                    nodeId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-                    id: sourceVersion,
-                    objectId,
-                    contentKeyEnvelope: prepared.contentKeyEnvelope,
-                    contentSuite: CONTENT_SUITE,
-                    plaintextSize: null,
-                },
+                signers: {},
+                source: { ...source, nodeId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' },
                 node: {
                     id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
                     parentId: B,
@@ -1195,7 +1200,7 @@ describe('writer signatures', () => {
     });
 
     test('a reader is told who wrote a record, and when that cannot be trusted, why', async () => {
-        const { call, grant, identity } = await unlockedSession();
+        const { call, grant } = await unlockedSession();
         await call('driveOpenWorkspace', { userId: USER, grant });
         const created = (await call('driveCreateNodes', {
             workspaceId: WS,
@@ -1256,7 +1261,10 @@ describe('writer signatures', () => {
                 intruder.privateKey,
             ),
         );
-        const verify = async (nodes: unknown[], signers: Record<string, string[]> = {}) =>
+        const verify = async (
+            nodes: unknown[],
+            signers: Record<string, { current: string; retired: string[] }> = {},
+        ) =>
             (
                 (await call('driveVerify', {
                     workspaceId: WS,
@@ -1311,15 +1319,201 @@ describe('writer signatures', () => {
         // Once the caller has verified the intruder (say, they compared words), their record is theirs.
         const [known] = await verify(
             [{ ...file, metadataSigner: INTRUDER, metadataSignature: planted, versions: [] }],
-            { [INTRUDER]: [encode(intruder.publicKey)] },
+            { [INTRUDER]: { current: encode(intruder.publicKey), retired: [] } },
         );
         expect(known!.metadata).toBe('verified');
         // A key the caller passes for this account does not stand in for its own: the
         // intruder's signature under this account's name is still bad.
         const [impostor] = await verify([{ ...file, metadataSignature: planted, versions: [] }], {
-            [USER]: [identity.signingPublicKey],
+            [USER]: { current: encode(intruder.publicKey), retired: [] },
         });
         expect(impostor!.metadata).toBe('bad-signature');
+        // A key only a succession vouched for is retired: the record is no longer vouched for.
+        const [retired] = await verify(
+            [{ ...file, metadataSigner: INTRUDER, metadataSignature: planted, versions: [] }],
+            {
+                [INTRUDER]: {
+                    current: encode(sodium.crypto_sign_keypair().publicKey),
+                    retired: [encode(intruder.publicKey)],
+                },
+            },
+        );
+        expect(retired!.metadata).toBe('retired-key');
+        // Without a trust set, or with one that does not read, nothing is checked at all.
+        await expect(
+            call('driveVerify', { workspaceId: WS, signers: null as never, nodes: [file] }),
+        ).rejects.toThrow(/couldn’t load/);
+        await expect(
+            call('driveVerify', {
+                workspaceId: WS,
+                signers: { [INTRUDER]: { current: 'not a key', retired: [] } },
+                nodes: [file],
+            }),
+        ).rejects.toThrow(/could not be read/);
+    });
+
+    test('a copy of a record nobody verified is signed re-sealed, so copying never launders it', async () => {
+        const { call, grant } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        const created = (await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('planted.pdf'),
+                },
+            ],
+        })) as { nodes: { metadataEnvelope: string; metadataSignature: string }[] };
+        const prepared = (await call('driveUploadPrepare', {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            plaintextSize: 10,
+        })) as { contentKeyEnvelope: string; versionSignature: string };
+        // The server (or anyone holding the folder key) planted this file and signed it
+        // with a key of its own, naming someone this person never checked.
+        await sodium.ready;
+        const intruder = sodium.crypto_sign_keypair();
+        const INTRUDER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+        const metadataEnvelope = created.nodes[1]!.metadataEnvelope;
+        const planted: {
+            nodeId: string;
+            id: string;
+            objectId: string;
+            contentKeyEnvelope: string;
+            contentSuite: number;
+            plaintextSize: null;
+            metadataVersion: number;
+            metadataEnvelope: string;
+            metadataSigner: string | null;
+            metadataSignature: string | null;
+            signer: string | null;
+            signature: string | null;
+        } = {
+            nodeId: B,
+            id: C,
+            objectId: D,
+            contentKeyEnvelope: prepared.contentKeyEnvelope,
+            contentSuite: CONTENT_SUITE,
+            plaintextSize: null,
+            metadataVersion: 1,
+            metadataEnvelope,
+            metadataSigner: INTRUDER,
+            metadataSignature: encode(
+                await signStatement(
+                    await metadataStatement(
+                        { workspaceId: WS, nodeId: B, kind: 'file', metadataVersion: 1 },
+                        decode(metadataEnvelope),
+                    ),
+                    intruder.privateKey,
+                ),
+            ),
+            signer: INTRUDER,
+            signature: encode(
+                await signStatement(
+                    await versionStatement(
+                        {
+                            workspaceId: WS,
+                            nodeId: B,
+                            versionId: C,
+                            objectId: D,
+                            contentSuite: CONTENT_SUITE,
+                        },
+                        decode(prepared.contentKeyEnvelope),
+                    ),
+                    intruder.privateKey,
+                ),
+            ),
+        };
+        const copyId = 'dddddddd-dddd-4ddd-8ddd-000000000003';
+        const copyVersion = 'dddddddd-dddd-4ddd-8ddd-000000000002';
+        const copy = (signers: unknown, source = planted) =>
+            call('driveCopyFile', {
+                workspaceId: WS,
+                signers: signers as never,
+                source,
+                node: {
+                    id: copyId,
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    metadata: meta('x'),
+                },
+                versionId: copyVersion,
+            }) as Promise<{
+                metadataEnvelope: string;
+                metadataSignature: string;
+                contentKeyEnvelope: string;
+                versionSignature: string;
+            }>;
+        // Without the trust set the copy does not happen: it never re-signs blind.
+        await expect(copy(undefined)).rejects.toThrow(/couldn’t load/);
+        const readBack = async (copied: Awaited<ReturnType<typeof copy>>) =>
+            (
+                (await call('driveVerify', {
+                    workspaceId: WS,
+                    signers: {},
+                    nodes: [
+                        {
+                            id: copyId,
+                            kind: 'file',
+                            metadataVersion: 1,
+                            metadataEnvelope: copied.metadataEnvelope,
+                            metadataSigner: USER,
+                            metadataSignature: copied.metadataSignature,
+                            versions: [
+                                {
+                                    id: copyVersion,
+                                    objectId: D,
+                                    contentSuite: CONTENT_SUITE,
+                                    contentKeyEnvelope: copied.contentKeyEnvelope,
+                                    signer: USER,
+                                    signature: copied.versionSignature,
+                                },
+                            ],
+                        },
+                    ],
+                })) as { nodes: { metadata: string; versions: { integrity: string }[] }[] }
+            ).nodes[0]!;
+        // Re-locked by this person, who vouches for nothing more: never verified.
+        const read = await readBack(await copy({}));
+        expect(read.metadata).toBe('resealed');
+        expect(read.versions[0]!.integrity).toBe('resealed');
+        // Once the intruder is someone this person checked, a copy is theirs to vouch for.
+        const trusted = { [INTRUDER]: { current: encode(intruder.publicKey), retired: [] } };
+        const vouched = await readBack(await copy(trusted));
+        expect(vouched.metadata).toBe('verified');
+        expect(vouched.versions[0]!.integrity).toBe('verified');
+        // A key the intruder has since replaced vouches for nothing: re-sealed again.
+        const replaced = await readBack(
+            await copy({
+                [INTRUDER]: {
+                    current: encode(sodium.crypto_sign_keypair().publicKey),
+                    retired: [encode(intruder.publicKey)],
+                },
+            }),
+        );
+        expect(replaced.metadata).toBe('resealed');
+        // An unsigned source (written before signatures, or stripped) is re-sealed too,
+        // and so is each record on its own: a stripped name beside a signed version.
+        const stripped = await readBack(
+            await copy(trusted, { ...planted, metadataSigner: null, metadataSignature: null }),
+        );
+        expect(stripped.metadata).toBe('resealed');
+        expect(stripped.versions[0]!.integrity).toBe('verified');
     });
 });
 

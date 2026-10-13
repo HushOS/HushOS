@@ -21,12 +21,35 @@ export const SIGNING_SECRET_KEY_BYTES = 64;
 export type NodeKind = 'folder' | 'file';
 /*
  * What a reader can say about who wrote a record:
- * - verified: the signer is someone this person trusts, and the signature holds;
+ * - verified: the signer is someone this person trusts, and the signature
+ *   holds under their current signing key over the ordinary statement;
+ * - resealed: it holds under their current key, but over the re-sealed
+ *   statement ("I re-locked this; I don't vouch for who wrote it");
+ * - retired-key: it holds only under a signing key the signer has since
+ *   replaced (an earlier key a succession chain vouches for, or the reader's
+ *   own earlier key), which vouches for nothing any more;
  * - unknown-signer: there is a signature, but by nobody this person has verified;
  * - bad-signature: the signer is trusted, and the signature does not hold;
- * - unsigned: there is no signature (written before signatures).
+ * - unsigned: there is no signature (written before signatures, or stripped);
+ * - unchecked: the check could not run (what the reader trusts did not load,
+ *   or the check threw). Never shown as clean.
+ * Only `verified` is clean; everything else is an issue.
  */
-export type Integrity = 'verified' | 'unknown-signer' | 'bad-signature' | 'unsigned';
+export type Integrity =
+    | 'verified'
+    | 'resealed'
+    | 'retired-key'
+    | 'unknown-signer'
+    | 'bad-signature'
+    | 'unsigned'
+    | 'unchecked';
+
+/*
+ * The signing keys a reader trusts for one account: the current one, which
+ * alone can make a record `verified` (or `resealed`), and the ones it held
+ * before, which can only make it `retired-key`.
+ */
+export type TrustedSigner = { current: Uint8Array; retired: readonly Uint8Array[] };
 
 export type MetadataStatement = {
     workspaceId: string;
@@ -77,11 +100,16 @@ export async function digest(bytes: Uint8Array) {
     return encode(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice())));
 }
 
-/* ["hushos/drive/sig/metadata", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)] */
-export async function metadataStatement(ctx: MetadataStatement, metadataEnvelope: Uint8Array) {
+const METADATA_DOMAIN = 'hushos/drive/sig/metadata';
+const VERSION_DOMAIN = 'hushos/drive/sig/version';
+/* The re-sealed forms: the same fields under their own domain, so neither can pass for the other. */
+const METADATA_RESEALED_DOMAIN = 'hushos/drive/sig/metadata-resealed';
+const VERSION_RESEALED_DOMAIN = 'hushos/drive/sig/version-resealed';
+
+async function metadataParts(domain: string, ctx: MetadataStatement, metadataEnvelope: Uint8Array) {
     if (ctx.kind !== 'folder' && ctx.kind !== 'file') throw new CryptoError('Invalid node kind.');
     return statement([
-        'hushos/drive/sig/metadata',
+        domain,
         1,
         text(ctx.workspaceId, 'workspace id'),
         text(ctx.nodeId, 'node id'),
@@ -90,11 +118,9 @@ export async function metadataStatement(ctx: MetadataStatement, metadataEnvelope
         await digest(metadataEnvelope),
     ]);
 }
-
-/* ["hushos/drive/sig/version", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope)] */
-export async function versionStatement(ctx: VersionStatement, contentKeyEnvelope: Uint8Array) {
+async function versionParts(domain: string, ctx: VersionStatement, contentKeyEnvelope: Uint8Array) {
     return statement([
-        'hushos/drive/sig/version',
+        domain,
         1,
         text(ctx.workspaceId, 'workspace id'),
         text(ctx.nodeId, 'node id'),
@@ -103,6 +129,57 @@ export async function versionStatement(ctx: VersionStatement, contentKeyEnvelope
         count(ctx.contentSuite, 'content suite'),
         await digest(contentKeyEnvelope),
     ]);
+}
+
+/* ["hushos/drive/sig/metadata", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)] */
+export async function metadataStatement(ctx: MetadataStatement, metadataEnvelope: Uint8Array) {
+    return metadataParts(METADATA_DOMAIN, ctx, metadataEnvelope);
+}
+
+/*
+ * ["hushos/drive/sig/metadata-resealed", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)]
+ * What a rotation or copy signs over metadata it re-sealed without having
+ * verified who wrote it: the signer re-locked it and vouches for nothing else.
+ */
+export async function metadataResealedStatement(
+    ctx: MetadataStatement,
+    metadataEnvelope: Uint8Array,
+) {
+    return metadataParts(METADATA_RESEALED_DOMAIN, ctx, metadataEnvelope);
+}
+
+/* ["hushos/drive/sig/version", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope)] */
+export async function versionStatement(ctx: VersionStatement, contentKeyEnvelope: Uint8Array) {
+    return versionParts(VERSION_DOMAIN, ctx, contentKeyEnvelope);
+}
+
+/* ["hushos/drive/sig/version-resealed", 1, ...the version statement's fields]: see metadataResealedStatement. */
+export async function versionResealedStatement(
+    ctx: VersionStatement,
+    contentKeyEnvelope: Uint8Array,
+) {
+    return versionParts(VERSION_RESEALED_DOMAIN, ctx, contentKeyEnvelope);
+}
+
+/* A record's two statement forms, ordinary and re-sealed: what integrityOf checks a signature against. */
+export type StatementPair = { ordinary: Uint8Array; resealed: Uint8Array };
+export async function metadataStatements(
+    ctx: MetadataStatement,
+    metadataEnvelope: Uint8Array,
+): Promise<StatementPair> {
+    return {
+        ordinary: await metadataStatement(ctx, metadataEnvelope),
+        resealed: await metadataResealedStatement(ctx, metadataEnvelope),
+    };
+}
+export async function versionStatements(
+    ctx: VersionStatement,
+    contentKeyEnvelope: Uint8Array,
+): Promise<StatementPair> {
+    return {
+        ordinary: await versionStatement(ctx, contentKeyEnvelope),
+        resealed: await versionResealedStatement(ctx, contentKeyEnvelope),
+    };
 }
 
 /*
@@ -186,26 +263,43 @@ export async function verifyStatement(
 }
 
 /*
- * What a reader shows for one record: no signature is `unsigned`; a signature
- * by someone the reader holds no trusted key for is `unknown-signer`; else it
- * is `verified` when any of that signer's trusted keys (their current one, or
- * an earlier one their succession chain vouches for) verifies it, and
- * `bad-signature` when none does.
+ * What a reader shows for one record (see Integrity):
+ * - no signature is `unsigned`;
+ * - a signature by someone the reader holds no trusted key for is `unknown-signer`;
+ * - otherwise the ordinary statement, then the re-sealed one, under the
+ *   signer's current key: `verified`, then `resealed`;
+ * - then either statement under a key the signer has replaced: `retired-key`;
+ * - and `bad-signature` when nothing holds, or when the record is too
+ *   malformed for a statement to be built over it.
+ * A check that throws anywhere else is `unchecked`, never clean.
  */
 export async function integrityOf(
-    message: () => Promise<Uint8Array>,
+    statements: () => Promise<StatementPair>,
     signature: Uint8Array | null,
-    trustedKeys: readonly Uint8Array[] | null | undefined,
+    trusted: TrustedSigner | null | undefined,
 ): Promise<Integrity> {
     if (!signature) return 'unsigned';
-    if (!trustedKeys || trustedKeys.length === 0) return 'unknown-signer';
-    let bytes: Uint8Array;
+    if (!trusted) return 'unknown-signer';
+    let pair: StatementPair;
     try {
-        bytes = await message();
-    } catch {
-        return 'bad-signature';
+        pair = await statements();
+    } catch (error) {
+        // A record no statement can be built over cannot carry a valid signature;
+        // anything other than a refusal of its fields is the check failing to run.
+        if (error instanceof CryptoError) return 'bad-signature';
+        return 'unchecked';
     }
-    for (const key of trustedKeys)
-        if (await verifyStatement(bytes, signature, key)) return 'verified';
-    return 'bad-signature';
+    try {
+        if (await verifyStatement(pair.ordinary, signature, trusted.current)) return 'verified';
+        if (await verifyStatement(pair.resealed, signature, trusted.current)) return 'resealed';
+        for (const key of trusted.retired)
+            if (
+                (await verifyStatement(pair.ordinary, signature, key)) ||
+                (await verifyStatement(pair.resealed, signature, key))
+            )
+                return 'retired-key';
+        return 'bad-signature';
+    } catch {
+        return 'unchecked';
+    }
 }

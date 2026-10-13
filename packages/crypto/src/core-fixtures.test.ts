@@ -295,10 +295,7 @@ describe('records sealed by the Rust core', () => {
         const privateKey = await openIdentityEncryptionKey(root, web.account.userId, identity);
         const kem = await openIdentityKemKey(root, web.account.userId, identity);
         const grantee = { privateKey, kemSecretKey: kem!.secretKey };
-        const granter = {
-            encryptionPublicKey: null,
-            signingPublicKey: decode(share.granterSigningPublicKey, 32),
-        };
+        const granter = decode(share.granterSigningPublicKey, 32);
         expect(decode(share.signed)).toHaveLength(1256);
         expect(await openShareKey(decode(share.signed), granter, grantee, share.ctx)).toEqual(
             decode(share.nodeKey, 32),
@@ -309,7 +306,7 @@ describe('records sealed by the Rust core', () => {
         await expect(
             openShareKey(
                 decode(share.signed),
-                { ...granter, signingPublicKey: decode(web.share.identity.signingPublicKey, 32) },
+                decode(web.share.identity.signingPublicKey, 32),
                 grantee,
                 share.ctx,
             ),
@@ -403,13 +400,9 @@ describe('records sealed by the Rust core', () => {
         const root = decode(web.account.accountKey, 32);
         const webKey = await openSettingsKey(root, web.settings.userId, web.settings.settingsKey);
         expect(settings.envelope.version).toBe(2);
-        expect(
-            await openSettings(
-                { settingsKey: webKey, identityPrivateKey: null },
-                settings.userId,
-                settings.envelope as never,
-            ),
-        ).toEqual(JSON.parse(settings.json));
+        expect(await openSettings(webKey, settings.userId, settings.envelope as never)).toEqual(
+            JSON.parse(settings.json),
+        );
         expect(await openSettingsKey(root, settings.userId, settings.settingsKey)).toEqual(
             decode(settings.settingsKeyRaw, 32),
         );

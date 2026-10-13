@@ -6,7 +6,14 @@ import { openLinkKey } from './links';
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode, encode } from './keys';
-import { metadataStatement, verifyStatement, versionStatement } from './signatures';
+import {
+    metadataStatement,
+    signStatement,
+    verifyStatement,
+    versionResealedStatement,
+    versionStatement,
+} from './signatures';
+import sodium from 'libsodium-wrappers';
 
 /*
  * Rotation in the worker: a chain gets fresh keys top-down, the old keys stay
@@ -86,7 +93,14 @@ describe('rotation', () => {
                     metadata: meta('inner'),
                 },
             ],
-        })) as { nodes: { id: string; keyEnvelope: string; metadataEnvelope: string }[] };
+        })) as {
+            nodes: {
+                id: string;
+                keyEnvelope: string;
+                metadataEnvelope: string;
+                metadataSignature: string;
+            }[];
+        };
         const [a, b, c] = created.nodes as [
             (typeof created.nodes)[number],
             (typeof created.nodes)[number],
@@ -144,6 +158,7 @@ describe('rotation', () => {
             workspaceId: WS,
             targetEpoch: 9,
             granterUserId: USER,
+            signers: {},
             nodes: [
                 {
                     id: B,
@@ -155,7 +170,10 @@ describe('rotation', () => {
                     keyEnvelope: b.keyEnvelope,
                     metadataVersion: 1,
                     metadataEnvelope: b.metadataEnvelope,
-                    // A first-release version: suite 1, its size on the row, resealed in its own suite.
+                    metadataSigner: USER,
+                    metadataSignature: b.metadataSignature,
+                    // A first-release version: suite 1, its size on the row, resealed in its own
+                    // suite. Written before signatures, so nobody vouched for it.
                     versions: [
                         {
                             id: VERSION,
@@ -163,6 +181,8 @@ describe('rotation', () => {
                             contentKeyEnvelope: contentEnvelope,
                             contentSuite: 1,
                             plaintextSize: 5,
+                            signer: null,
+                            signature: null,
                         },
                     ],
                     shares: [
@@ -196,7 +216,8 @@ describe('rotation', () => {
         const rotatedB = first.nodes[0]!;
         expect(rotatedB.error).toBeUndefined();
         // Everything re-sealed is signed by the account running the rotation, the old suite's
-        // version included; checked with the primitives against the owner's signing key.
+        // version included; checked with the primitives against the owner's signing key. The
+        // metadata verified, so it is signed as the owner's; the unsigned version is only re-sealed.
         const owners = decode(identity.signingPublicKey, 32);
         expect(
             await verifyStatement(
@@ -208,22 +229,28 @@ describe('rotation', () => {
                 owners,
             ),
         ).toBe(true);
+        const rotatedVersion = {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: VERSION,
+            objectId: OBJECT,
+            contentSuite: 1,
+        };
+        const rotatedEnvelope = decode(rotatedB.versions[0]!.contentKeyEnvelope);
         expect(
             await verifyStatement(
-                await versionStatement(
-                    {
-                        workspaceId: WS,
-                        nodeId: B,
-                        versionId: VERSION,
-                        objectId: OBJECT,
-                        contentSuite: 1,
-                    },
-                    decode(rotatedB.versions[0]!.contentKeyEnvelope),
-                ),
+                await versionResealedStatement(rotatedVersion, rotatedEnvelope),
                 decode(rotatedB.versions[0]!.signature, 64),
                 owners,
             ),
         ).toBe(true);
+        expect(
+            await verifyStatement(
+                await versionStatement(rotatedVersion, rotatedEnvelope),
+                decode(rotatedB.versions[0]!.signature, 64),
+                owners,
+            ),
+        ).toBe(false);
         expect(rotatedB.keyEnvelope).not.toBe(b.keyEnvelope);
         expect(rotatedB.versions[0]!.contentKeyEnvelope).not.toBe(contentEnvelope);
         expect(decode(rotatedB.versions[0]!.contentKeyEnvelope)).toHaveLength(72);
@@ -254,6 +281,7 @@ describe('rotation', () => {
             workspaceId: WS,
             targetEpoch: 9,
             granterUserId: USER,
+            signers: {},
             nodes: [
                 {
                     id: C,
@@ -265,6 +293,8 @@ describe('rotation', () => {
                     keyEnvelope: c.keyEnvelope,
                     metadataVersion: 1,
                     metadataEnvelope: c.metadataEnvelope,
+                    metadataSigner: USER,
+                    metadataSignature: c.metadataSignature,
                     versions: [],
                     shares: [],
                     links: [],
@@ -354,7 +384,6 @@ describe('rotation', () => {
             nodeId: B,
             keyEpoch: 9,
             granterUserId: USER,
-            granterPublicKey: identity.encryptionPublicKey,
             granterSigningPublicKey: identity.signingPublicKey,
             granteeUserId: GUEST,
             shareEnvelope: rotatedB.shares[0]!.shareEnvelope,
@@ -401,6 +430,7 @@ describe('rotation', () => {
             workspaceId: WS,
             targetEpoch: 12,
             granterUserId: USER,
+            signers: {},
             nodes: [
                 {
                     id: A,
@@ -412,6 +442,8 @@ describe('rotation', () => {
                     keyEnvelope: a.keyEnvelope,
                     metadataVersion: 1,
                     metadataEnvelope: a.metadataEnvelope,
+                    metadataSigner: USER,
+                    metadataSignature: a.metadataSignature,
                     versions: [],
                     shares: [],
                     links: [{ id: LINK, hasPassword: true, secretEnvelope: null }],
@@ -419,5 +451,114 @@ describe('rotation', () => {
             ],
         })) as { nodes: { links: { unsealable?: true }[] }[] };
         expect(legacy.nodes[0]!.links[0]!.unsealable).toBe(true);
+    }, 60_000);
+
+    test('a planted record stays unverified through a rotation, and nothing rotates without the trust set', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const grant = await createWorkspaceGrant(root, USER, WS, 1);
+        const identity = await createIdentity(root, USER);
+        const owner = await device(USER, root, 'owner');
+        await owner('driveOpenWorkspace', { userId: USER, grant });
+        await owner('identityOpen', { userId: USER, identity });
+        const created = (await owner('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('Invoices'),
+                },
+            ],
+        })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
+        const b = created.nodes[1]!;
+        // Someone holding the folder key renamed B and signed it as themselves, a person
+        // the owner never checked; the server serves that signature.
+        await sodium.ready;
+        const intruder = sodium.crypto_sign_keypair();
+        const INTRUDER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+        const plantedSignature = encode(
+            await signStatement(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: B, kind: 'folder', metadataVersion: 1 },
+                    decode(b.metadataEnvelope),
+                ),
+                intruder.privateKey,
+            ),
+        );
+        const node = {
+            id: B,
+            kind: 'folder' as const,
+            parentId: A,
+            parentKeyEpoch: 1,
+            keyEpoch: 2,
+            wrappedParentKeyEpoch: 1,
+            keyEnvelope: b.keyEnvelope,
+            metadataVersion: 1,
+            metadataEnvelope: b.metadataEnvelope,
+            metadataSigner: INTRUDER,
+            metadataSignature: plantedSignature,
+            versions: [],
+            shares: [],
+            links: [],
+        };
+        // Without the trust set the batch is refused whole: nothing is re-signed blind.
+        await expect(
+            owner('driveRotateNodes', {
+                workspaceId: WS,
+                targetEpoch: 7,
+                granterUserId: USER,
+                signers: undefined as never,
+                nodes: [node],
+            }),
+        ).rejects.toThrow(/couldn’t load/);
+        const rotated = (
+            (await owner('driveRotateNodes', {
+                workspaceId: WS,
+                targetEpoch: 7,
+                granterUserId: USER,
+                signers: {},
+                nodes: [node],
+            })) as { nodes: { metadataEnvelope: string; metadataSignature: string }[] }
+        ).nodes[0]!;
+        // After the rotation the owner's signature stands on it, but only as re-sealed:
+        // reading it back never says verified.
+        const [after] = (
+            (await owner('driveVerify', {
+                workspaceId: WS,
+                signers: {},
+                nodes: [
+                    {
+                        id: B,
+                        kind: 'folder',
+                        metadataVersion: 1,
+                        metadataEnvelope: rotated.metadataEnvelope,
+                        metadataSigner: USER,
+                        metadataSignature: rotated.metadataSignature,
+                    },
+                ],
+            })) as { nodes: { metadata: string }[] }
+        ).nodes;
+        expect(after!.metadata).toBe('resealed');
+        expect(
+            await verifyStatement(
+                await metadataStatement(
+                    { workspaceId: WS, nodeId: B, kind: 'folder', metadataVersion: 1 },
+                    decode(rotated.metadataEnvelope),
+                ),
+                decode(rotated.metadataSignature, 64),
+                decode(identity.signingPublicKey, 32),
+            ),
+        ).toBe(false);
     }, 60_000);
 });

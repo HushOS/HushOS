@@ -12,6 +12,7 @@ export {
     type DriveVersionEnvelope,
     type DriveSignedNode,
     type DriveSignedVersion,
+    type DriveSigners,
     type DriveVerifiedNode,
     type RotateNodeInput,
     type RotatedNode,

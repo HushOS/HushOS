@@ -229,40 +229,10 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
     if (!envelope) return { settings: EMPTY, version: 0 };
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
     rememberSettingsSeen(userId, own.encryptionPublicKey, envelope.settingsVersion);
-    const loaded = {
-        settings: settings as LoadedSettings['settings'],
-        version: envelope.settingsVersion,
-    };
-    // Version 1 is sealed under a key off the identity, which a succession replaces: it is
-    // read once and saved again under the settings key, before anything can strand it.
-    if (envelope.version === 1) return migrate(userId, loaded);
-    return loaded;
-}
-
-async function migrate(userId: string, loaded: LoadedSettings): Promise<LoadedSettings> {
-    const { settingsKey } = await authClient.settings();
-    await settingsKeyReady(userId, settingsKey, true);
-    const { envelope } = await authClient.rpc('settingsSeal', {
-        userId,
-        settingsVersion: loaded.version + 1,
-        settings: loaded.settings,
-    });
-    try {
-        const saved = await authClient.saveSettings({
-            expectedVersion: loaded.version,
-            version: 2,
-            nonce: envelope.nonce,
-            ciphertext: envelope.ciphertext,
-        });
-        const own = await openIdentity(userId);
-        rememberSettingsSeen(userId, own.encryptionPublicKey, saved.settingsVersion);
-        return { settings: loaded.settings, version: saved.settingsVersion };
-    } catch (error) {
-        // Another device saved (and so moved them) first: read theirs.
-        if (/another device/.test(String((error as Error).message)))
-            return readSettings(userId, false);
-        throw error;
-    }
+    // Version 1 (sealed under a key off the identity, which a stolen identity key opened)
+    // no longer opens: it reads as no settings, and the next save starts version 2 afresh.
+    if (!settings) return { settings: EMPTY, version: envelope.settingsVersion };
+    return { settings: settings as LoadedSettings['settings'], version: envelope.settingsVersion };
 }
 
 function loadSettings(userId: string) {
@@ -634,7 +604,7 @@ export async function trustGranter(granter: {
  * whose words were checked, with the keys their pin followed a succession
  * from. Cached with the settings query, so a listing does not refetch them.
  */
-const signersCache = new WeakMap<object, Promise<Record<string, string[]>>>();
+const signersCache = new WeakMap<object, ReturnType<typeof signersFromPins>>();
 export async function trustedSigners(userId: string) {
     const loaded = boundQueryClient
         ? await boundQueryClient.fetchQuery(settingsQueryOptions(userId))
