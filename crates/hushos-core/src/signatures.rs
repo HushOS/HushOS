@@ -4,10 +4,11 @@
 //! the sealed bytes it vouches for, signed detached with the identity's
 //! Ed25519 key and verified strictly.
 //!
-//! Each record has two statement forms: the ordinary one ("I wrote this") and
+//! Each record has three statement forms: the ordinary one ("I wrote this"),
+//! the saved one ("I saved this from a link", with a trailing `"link"`), and
 //! the re-sealed one ("I re-locked this; I don't vouch for who wrote it"),
 //! which a rotation or copy signs over a record it could not verify. Their
-//! domains differ, so neither signature passes for the other.
+//! domains differ, so no signature passes for another form.
 
 use crate::bytes::{encode, expect_len};
 use crate::envelope::context;
@@ -36,8 +37,9 @@ impl NodeKind {
     }
 }
 
-/// What a reader can say about who wrote a record. Only `Verified` is
-/// clean; every other verdict is shown as Unverified.
+/// What a reader can say about who wrote a record. `Verified` is clean and
+/// `SavedFromLink` is shown without a mark (with a neutral line in Info);
+/// every other verdict is shown as Unverified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Integrity {
@@ -61,6 +63,10 @@ pub enum Integrity {
     /// failed. The core never returns it; apps use it so a failure is never
     /// shown as clean.
     Unchecked,
+    /// It holds under the signer's current key over the saved statement: they
+    /// saved it from a link, where nobody's signature could be checked. No
+    /// mark on a row; Info and the viewer say "Saved from a link by …".
+    SavedFromLink,
 }
 
 /// The signing keys a reader trusts for one account: the current one, which
@@ -110,10 +116,30 @@ const METADATA_DOMAIN: &str = "hushos/drive/sig/metadata";
 const VERSION_DOMAIN: &str = "hushos/drive/sig/version";
 const METADATA_RESEALED_DOMAIN: &str = "hushos/drive/sig/metadata-resealed";
 const VERSION_RESEALED_DOMAIN: &str = "hushos/drive/sig/version-resealed";
+const METADATA_SAVED_DOMAIN: &str = "hushos/drive/sig/metadata-saved";
+const VERSION_SAVED_DOMAIN: &str = "hushos/drive/sig/version-saved";
+/* Where a saved copy came from, the saved statements' last element. Only links, in version 1. */
+const SAVED_FROM_LINK: &str = "link";
 
-/* [domain, 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)] */
-fn metadata_parts(domain: &str, statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    Ok(context(&[
+/* Which statement a signature makes over a record. */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    Ordinary,
+    Saved,
+    Resealed,
+}
+
+/*
+ * [domain, 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope)],
+ * and for the saved form "link" after the digest.
+ */
+fn metadata_parts(form: Form, statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
+    let domain = match form {
+        Form::Ordinary => METADATA_DOMAIN,
+        Form::Saved => METADATA_SAVED_DOMAIN,
+        Form::Resealed => METADATA_RESEALED_DOMAIN,
+    };
+    let mut parts = vec![
         json!(domain),
         json!(1),
         json!(statement.workspace_id.to_lowercase()),
@@ -121,12 +147,24 @@ fn metadata_parts(domain: &str, statement: &MetadataStatement, envelope: &[u8]) 
         json!(statement.kind.as_str()),
         json!(positive(statement.metadata_version, "metadata version")?),
         json!(digest(envelope)),
-    ]))
+    ];
+    if form == Form::Saved {
+        parts.push(json!(SAVED_FROM_LINK));
+    }
+    Ok(context(&parts))
 }
 
-/* [domain, 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope)] */
-fn version_parts(domain: &str, statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    Ok(context(&[
+/*
+ * [domain, 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope)],
+ * and for the saved form "link" after the digest.
+ */
+fn version_parts(form: Form, statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
+    let domain = match form {
+        Form::Ordinary => VERSION_DOMAIN,
+        Form::Saved => VERSION_SAVED_DOMAIN,
+        Form::Resealed => VERSION_RESEALED_DOMAIN,
+    };
+    let mut parts = vec![
         json!(domain),
         json!(1),
         json!(statement.workspace_id.to_lowercase()),
@@ -135,23 +173,35 @@ fn version_parts(domain: &str, statement: &VersionStatement, envelope: &[u8]) ->
         json!(statement.object_id.to_lowercase()),
         json!(positive(statement.content_suite as u64, "content suite")?),
         json!(digest(envelope)),
-    ]))
+    ];
+    if form == Form::Saved {
+        parts.push(json!(SAVED_FROM_LINK));
+    }
+    Ok(context(&parts))
 }
 
 fn metadata_message(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    metadata_parts(METADATA_DOMAIN, statement, envelope)
+    metadata_parts(Form::Ordinary, statement, envelope)
 }
 
 fn version_message(statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    version_parts(VERSION_DOMAIN, statement, envelope)
+    version_parts(Form::Ordinary, statement, envelope)
 }
 
 fn metadata_resealed_message(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    metadata_parts(METADATA_RESEALED_DOMAIN, statement, envelope)
+    metadata_parts(Form::Resealed, statement, envelope)
 }
 
 fn version_resealed_message(statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
-    version_parts(VERSION_RESEALED_DOMAIN, statement, envelope)
+    version_parts(Form::Resealed, statement, envelope)
+}
+
+fn metadata_saved_message(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
+    metadata_parts(Form::Saved, statement, envelope)
+}
+
+fn version_saved_message(statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Vec<u8>> {
+    version_parts(Form::Saved, statement, envelope)
 }
 
 /* Ed25519 over `message` with the identity's 32-byte signing seed. */
@@ -174,16 +224,24 @@ pub(crate) fn verify(signing_public_key: &[u8], message: &[u8], signature: &[u8]
     key.verify_strict(message, &Signature::from_bytes(&signature)).is_ok()
 }
 
+/* A record's three statements, in the order a reader tries them. */
+struct Messages {
+    ordinary: Vec<u8>,
+    saved: Vec<u8>,
+    resealed: Vec<u8>,
+}
+
 /*
  * The verdict, as packages/crypto's integrityOf gives it: no signature is
  * Unsigned; no trusted keys for the signer is UnknownSigner; then the
- * ordinary statement and the re-sealed one under the current key (Verified,
- * Resealed); then either under a replaced key (RetiredKey); else BadSignature,
- * a record no statement can be built over included.
+ * ordinary, saved and re-sealed statements under the current key (Verified,
+ * SavedFromLink, Resealed); then any of them under a replaced key
+ * (RetiredKey); else BadSignature, a record no statement can be built over
+ * included.
  */
 fn integrity(
     trusted: Option<&TrustedKeys>,
-    messages: CoreResult<(Vec<u8>, Vec<u8>)>,
+    messages: CoreResult<Messages>,
     signature: Option<Vec<u8>>,
 ) -> Integrity {
     let Some(signature) = signature else {
@@ -192,45 +250,84 @@ fn integrity(
     let Some(trusted) = trusted else {
         return Integrity::UnknownSigner;
     };
-    let Ok((ordinary, resealed)) = messages else {
+    let Ok(messages) = messages else {
         return Integrity::BadSignature;
     };
-    if verify(&trusted.current, &ordinary, &signature) {
+    if verify(&trusted.current, &messages.ordinary, &signature) {
         return Integrity::Verified;
     }
-    if verify(&trusted.current, &resealed, &signature) {
+    if verify(&trusted.current, &messages.saved, &signature) {
+        return Integrity::SavedFromLink;
+    }
+    if verify(&trusted.current, &messages.resealed, &signature) {
         return Integrity::Resealed;
     }
-    if trusted
-        .retired
-        .iter()
-        .any(|key| verify(key, &ordinary, &signature) || verify(key, &resealed, &signature))
-    {
+    if trusted.retired.iter().any(|key| {
+        [&messages.ordinary, &messages.saved, &messages.resealed]
+            .into_iter()
+            .any(|message| verify(key, message, &signature))
+    }) {
         return Integrity::RetiredKey;
     }
     Integrity::BadSignature
 }
 
-fn metadata_messages(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<(Vec<u8>, Vec<u8>)> {
-    Ok((metadata_message(statement, envelope)?, metadata_resealed_message(statement, envelope)?))
+fn metadata_messages(statement: &MetadataStatement, envelope: &[u8]) -> CoreResult<Messages> {
+    Ok(Messages {
+        ordinary: metadata_message(statement, envelope)?,
+        saved: metadata_saved_message(statement, envelope)?,
+        resealed: metadata_resealed_message(statement, envelope)?,
+    })
 }
 
-fn version_messages(statement: &VersionStatement, envelope: &[u8]) -> CoreResult<(Vec<u8>, Vec<u8>)> {
-    Ok((version_message(statement, envelope)?, version_resealed_message(statement, envelope)?))
+fn version_messages(statement: &VersionStatement, envelope: &[u8]) -> CoreResult<Messages> {
+    Ok(Messages {
+        ordinary: version_message(statement, envelope)?,
+        saved: version_saved_message(statement, envelope)?,
+        resealed: version_resealed_message(statement, envelope)?,
+    })
 }
 
 /*
- * Whether a record a rotation or copy re-sealed is signed re-sealed: anything
- * but Verified is; an Unchecked record is not signed at all.
+ * How a rotation or rename re-signs a record it sealed again, from the
+ * record's verdict as it was: Verified stays ordinary, SavedFromLink stays
+ * saved, anything else is re-sealed; an Unchecked record is not signed at all.
  */
-fn resealed_unless_verified(prior: Integrity) -> CoreResult<bool> {
+fn reseal_form(prior: Integrity) -> CoreResult<Form> {
     match prior {
-        Integrity::Verified => Ok(false),
+        Integrity::Verified => Ok(Form::Ordinary),
+        Integrity::SavedFromLink => Ok(Form::Saved),
         Integrity::Unchecked => {
             Err(input("HushOS couldn't check who wrote this, so it was not locked again."))
         }
-        _ => Ok(true),
+        _ => Ok(Form::Resealed),
     }
+}
+
+/* How a copy signs: saved when it came from a link (whose signatures a visitor never sees), else as a reseal. */
+fn copy_form(prior: Integrity, from_link: bool) -> CoreResult<Form> {
+    if from_link {
+        return Ok(Form::Saved);
+    }
+    reseal_form(prior)
+}
+
+fn sign_metadata_as(
+    form: Form,
+    signing_seed: &[u8],
+    statement: &MetadataStatement,
+    envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &metadata_parts(form, statement, envelope)?)
+}
+
+fn sign_version_as(
+    form: Form,
+    signing_seed: &[u8],
+    statement: &VersionStatement,
+    envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    sign(signing_seed, &version_parts(form, statement, envelope)?)
 }
 
 /// Signs a metadata envelope as its writer, with the identity's signing seed
@@ -336,12 +433,61 @@ pub fn version_resealed_verify(
         .is_ok_and(|message| verify(&signing_public_key, &message, &signature))
 }
 
-/// How a rotation or a copy signs metadata it sealed again: `prior` is the
+/// Signs a metadata envelope a save from a link created (the copied file's,
+/// or a folder the save made) with the saved statement
+/// (`"hushos/drive/sig/metadata-saved"`, ending in `"link"`): "I saved this
+/// from a link". Send as `metadataSignature`, exactly like an ordinary one.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_saved_sign(
+    signing_seed: Vec<u8>,
+    statement: MetadataStatement,
+    metadata_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign(&signing_seed, &metadata_saved_message(&statement, &metadata_envelope)?)
+}
+
+/// Whether `signature` is `signing_public_key`'s saved statement over this metadata envelope.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_saved_verify(
+    signing_public_key: Vec<u8>,
+    statement: MetadataStatement,
+    metadata_envelope: Vec<u8>,
+    signature: Vec<u8>,
+) -> bool {
+    metadata_saved_message(&statement, &metadata_envelope)
+        .is_ok_and(|message| verify(&signing_public_key, &message, &signature))
+}
+
+/// Signs a content-key envelope a save from a link created with the saved
+/// statement (`"hushos/drive/sig/version-saved"`): send as `versionSignature`.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_saved_sign(
+    signing_seed: Vec<u8>,
+    statement: VersionStatement,
+    content_key_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign(&signing_seed, &version_saved_message(&statement, &content_key_envelope)?)
+}
+
+/// Whether `signature` is `signing_public_key`'s saved statement over this content-key envelope.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_saved_verify(
+    signing_public_key: Vec<u8>,
+    statement: VersionStatement,
+    content_key_envelope: Vec<u8>,
+    signature: Vec<u8>,
+) -> bool {
+    version_saved_message(&statement, &content_key_envelope)
+        .is_ok_and(|message| verify(&signing_public_key, &message, &signature))
+}
+
+/// How a rotation or a rename signs metadata it sealed again: `prior` is the
 /// record's verdict as it was (from [`metadata_integrity`] over the old
-/// envelope). Only a `Verified` record is signed with the ordinary statement;
-/// anything else gets the re-sealed one, so re-locking never launders a
-/// record into one this person vouches for. An `Unchecked` record is refused:
-/// load the trust set and retry rather than re-seal blind.
+/// envelope). A `Verified` record is signed with the ordinary statement and a
+/// `SavedFromLink` one with the saved statement; anything else gets the
+/// re-sealed one, so re-locking never launders a record into one this person
+/// vouches for. An `Unchecked` record is refused: load the trust set and
+/// retry rather than re-seal blind. A copy uses [`metadata_copy_sign`].
 ///
 /// ```
 /// use hushos_core::*;
@@ -363,14 +509,10 @@ pub fn metadata_reseal_sign(
     statement: MetadataStatement,
     metadata_envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    if resealed_unless_verified(prior)? {
-        metadata_resealed_sign(signing_seed, statement, metadata_envelope)
-    } else {
-        metadata_sign(signing_seed, statement, metadata_envelope)
-    }
+    sign_metadata_as(reseal_form(prior)?, &signing_seed, &statement, &metadata_envelope)
 }
 
-/// How a rotation or a copy signs a content-key envelope it sealed again;
+/// How a rotation or a rename signs a content-key envelope it sealed again;
 /// see [`metadata_reseal_sign`]. `prior` is the old version's verdict.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn version_reseal_sign(
@@ -379,11 +521,53 @@ pub fn version_reseal_sign(
     statement: VersionStatement,
     content_key_envelope: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
-    if resealed_unless_verified(prior)? {
-        version_resealed_sign(signing_seed, statement, content_key_envelope)
-    } else {
-        version_sign(signing_seed, statement, content_key_envelope)
-    }
+    sign_version_as(reseal_form(prior)?, &signing_seed, &statement, &content_key_envelope)
+}
+
+/// How a copy ("Save a copy", or a copy within a drive) signs the new
+/// metadata envelope, by where the original came from: with `from_link` the
+/// saved statement, whatever `prior` is (a visitor never sees signatures);
+/// otherwise as [`metadata_reseal_sign`] from the original's verdict
+/// (`Verified` ordinary, `SavedFromLink` saved, anything else re-sealed,
+/// `Unchecked` refused). Folders a save from a link creates pass `from_link`.
+///
+/// ```
+/// use hushos_core::*;
+/// let seed = random_bytes(32)?;
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![] };
+/// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "n1".into(), kind: NodeKind::File, metadata_version: 1 };
+/// let check = |signature| metadata_integrity(Some(me.clone()), statement.clone(), b"copy".to_vec(), Some(signature));
+/// let from_link = metadata_copy_sign(seed.clone(), Integrity::Unchecked, true, statement.clone(), b"copy".to_vec())?;
+/// assert_eq!(check(from_link), Integrity::SavedFromLink);
+/// let verified = metadata_copy_sign(seed.clone(), Integrity::Verified, false, statement.clone(), b"copy".to_vec())?;
+/// assert_eq!(check(verified), Integrity::Verified);
+/// let planted = metadata_copy_sign(seed.clone(), Integrity::UnknownSigner, false, statement.clone(), b"copy".to_vec())?;
+/// assert_eq!(check(planted), Integrity::Resealed);
+/// assert!(metadata_copy_sign(seed, Integrity::Unchecked, false, statement, b"copy".to_vec()).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn metadata_copy_sign(
+    signing_seed: Vec<u8>,
+    prior: Integrity,
+    from_link: bool,
+    statement: MetadataStatement,
+    metadata_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign_metadata_as(copy_form(prior, from_link)?, &signing_seed, &statement, &metadata_envelope)
+}
+
+/// How a copy signs the new version's content-key envelope; see
+/// [`metadata_copy_sign`]. `prior` is the original version's verdict.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn version_copy_sign(
+    signing_seed: Vec<u8>,
+    prior: Integrity,
+    from_link: bool,
+    statement: VersionStatement,
+    content_key_envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    sign_version_as(copy_form(prior, from_link)?, &signing_seed, &statement, &content_key_envelope)
 }
 
 /// What a reader shows for a node's metadata. `trusted` holds the signing
@@ -391,8 +575,8 @@ pub fn version_reseal_sign(
 /// its own (its current key, and its earlier ones as retired), or a verified
 /// contact's (their current key, and as retired the earlier ones their
 /// succession chain vouches for); `None` for anyone else. Only the current
-/// key can verify; a match under a retired key is `RetiredKey`, and a valid
-/// re-sealed signature is `Resealed`.
+/// key can verify; a match under a retired key is `RetiredKey`, a valid saved
+/// signature is `SavedFromLink`, and a valid re-sealed one is `Resealed`.
 ///
 /// ```
 /// use hushos_core::{metadata_integrity, metadata_sign, random_bytes, signing_public_key, Integrity, MetadataStatement, NodeKind, TrustedKeys};
@@ -635,5 +819,158 @@ mod tests {
         );
         assert!(version_reseal_sign(seed.clone(), Integrity::Unchecked, version(), envelope.clone()).is_err());
         assert!(metadata_reseal_sign(seed, Integrity::Unchecked, statement(), envelope).is_err());
+    }
+
+    #[test]
+    fn saved_statements_end_in_link_and_no_form_passes_for_another() {
+        let seed = random(32);
+        let envelope = random(84);
+        assert_eq!(
+            String::from_utf8(metadata_saved_message(&statement(), &envelope).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/sig/metadata-saved",1,"ws","n1","folder",2,"{}","link"]"#,
+                digest(&envelope)
+            )
+        );
+        assert_eq!(
+            String::from_utf8(version_saved_message(&version(), &envelope).unwrap()).unwrap(),
+            format!(
+                r#"["hushos/drive/sig/version-saved",1,"ws","n1","v1","o1",3,"{}","link"]"#,
+                digest(&envelope)
+            )
+        );
+        let public = key(&seed);
+        // Each form's signature, checked by every form's verifier: only its own holds.
+        let metadata = [
+            (Form::Ordinary, metadata_sign(seed.clone(), statement(), envelope.clone()).unwrap()),
+            (Form::Saved, metadata_saved_sign(seed.clone(), statement(), envelope.clone()).unwrap()),
+            (Form::Resealed, metadata_resealed_sign(seed.clone(), statement(), envelope.clone()).unwrap()),
+        ];
+        for (form, signature) in &metadata {
+            let held = [
+                (
+                    Form::Ordinary,
+                    metadata_verify(public.clone(), statement(), envelope.clone(), signature.clone()),
+                ),
+                (
+                    Form::Saved,
+                    metadata_saved_verify(public.clone(), statement(), envelope.clone(), signature.clone()),
+                ),
+                (
+                    Form::Resealed,
+                    metadata_resealed_verify(
+                        public.clone(),
+                        statement(),
+                        envelope.clone(),
+                        signature.clone(),
+                    ),
+                ),
+            ];
+            for (verifier, ok) in held {
+                assert_eq!(ok, verifier == *form, "{form:?} signature under the {verifier:?} verifier");
+            }
+        }
+        let versions = [
+            (Form::Ordinary, version_sign(seed.clone(), version(), envelope.clone()).unwrap()),
+            (Form::Saved, version_saved_sign(seed.clone(), version(), envelope.clone()).unwrap()),
+            (Form::Resealed, version_resealed_sign(seed.clone(), version(), envelope.clone()).unwrap()),
+        ];
+        for (form, signature) in &versions {
+            let held = [
+                (
+                    Form::Ordinary,
+                    version_verify(public.clone(), version(), envelope.clone(), signature.clone()),
+                ),
+                (
+                    Form::Saved,
+                    version_saved_verify(public.clone(), version(), envelope.clone(), signature.clone()),
+                ),
+                (
+                    Form::Resealed,
+                    version_resealed_verify(public.clone(), version(), envelope.clone(), signature.clone()),
+                ),
+            ];
+            for (verifier, ok) in held {
+                assert_eq!(ok, verifier == *form, "{form:?} signature under the {verifier:?} verifier");
+            }
+        }
+        // And the verdicts: each form reads as itself, saved under a replaced key is only retired.
+        let trusted = TrustedKeys { current: public.clone(), retired: vec![] };
+        let verdicts: Vec<_> = versions
+            .iter()
+            .map(|(_, signature)| {
+                version_integrity(Some(trusted.clone()), version(), envelope.clone(), Some(signature.clone()))
+            })
+            .collect();
+        assert_eq!(verdicts, [Integrity::Verified, Integrity::SavedFromLink, Integrity::Resealed]);
+        assert_eq!(
+            metadata_integrity(
+                Some(trusted.clone()),
+                statement(),
+                envelope.clone(),
+                Some(metadata[1].1.clone())
+            ),
+            Integrity::SavedFromLink
+        );
+        let replaced = TrustedKeys { current: key(&random(32)), retired: vec![public] };
+        assert_eq!(
+            version_integrity(Some(replaced), version(), envelope.clone(), Some(versions[1].1.clone())),
+            Integrity::RetiredKey
+        );
+        // Over another envelope a saved signature holds for nothing.
+        assert_eq!(
+            version_integrity(Some(trusted), version(), random(84), Some(versions[1].1.clone())),
+            Integrity::BadSignature
+        );
+    }
+
+    #[test]
+    fn a_copy_is_signed_by_where_it_came_from_and_a_reseal_keeps_only_what_checked() {
+        let seed = random(32);
+        let me = TrustedKeys { current: key(&seed), retired: vec![] };
+        let envelope = random(84);
+        let read = |signature: Vec<u8>| {
+            version_integrity(Some(me.clone()), version(), envelope.clone(), Some(signature))
+        };
+        let read_metadata = |signature: Vec<u8>| {
+            metadata_integrity(Some(me.clone()), statement(), envelope.clone(), Some(signature))
+        };
+        // From a link: saved, whatever the original's verdict (a visitor has none to check).
+        for prior in
+            [Integrity::Unchecked, Integrity::Verified, Integrity::UnknownSigner, Integrity::Unsigned]
+        {
+            let signature =
+                version_copy_sign(seed.clone(), prior, true, version(), envelope.clone()).unwrap();
+            assert_eq!(read(signature), Integrity::SavedFromLink, "{prior:?}");
+            let signature =
+                metadata_copy_sign(seed.clone(), prior, true, statement(), envelope.clone()).unwrap();
+            assert_eq!(read_metadata(signature), Integrity::SavedFromLink, "{prior:?}");
+        }
+        // Not from a link: a verified original stays ordinary, a saved one stays saved,
+        // everything else is re-sealed, and an unchecked one is refused.
+        let expected = [
+            (Integrity::Verified, Integrity::Verified),
+            (Integrity::SavedFromLink, Integrity::SavedFromLink),
+            (Integrity::UnknownSigner, Integrity::Resealed),
+            (Integrity::BadSignature, Integrity::Resealed),
+            (Integrity::Unsigned, Integrity::Resealed),
+            (Integrity::Resealed, Integrity::Resealed),
+            (Integrity::RetiredKey, Integrity::Resealed),
+        ];
+        for (prior, verdict) in expected {
+            let copied = version_copy_sign(seed.clone(), prior, false, version(), envelope.clone()).unwrap();
+            assert_eq!(read(copied), verdict, "copy of {prior:?}");
+            let copied =
+                metadata_copy_sign(seed.clone(), prior, false, statement(), envelope.clone()).unwrap();
+            assert_eq!(read_metadata(copied), verdict, "copy of {prior:?}");
+            // A rotation or rename re-signs the same way, saved only for what verified as saved.
+            let rotated = version_reseal_sign(seed.clone(), prior, version(), envelope.clone()).unwrap();
+            assert_eq!(read(rotated), verdict, "reseal of {prior:?}");
+            let renamed = metadata_reseal_sign(seed.clone(), prior, statement(), envelope.clone()).unwrap();
+            assert_eq!(read_metadata(renamed), verdict, "reseal of {prior:?}");
+        }
+        assert!(version_copy_sign(seed.clone(), Integrity::Unchecked, false, version(), envelope.clone())
+            .is_err());
+        assert!(metadata_copy_sign(seed, Integrity::Unchecked, false, statement(), envelope).is_err());
     }
 }

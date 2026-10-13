@@ -257,15 +257,39 @@ fn main() {
             "statement": { "workspaceId": signed_metadata.workspace_id, "nodeId": signed_metadata.node_id, "kind": "file", "metadataVersion": 3 },
             "envelope": e(&metadata_envelope),
             "signature": e(&metadata_sign(granter.signing_seed.to_vec(), signed_metadata.clone(), metadata_envelope.clone()).unwrap()),
-            "resealed": e(&metadata_resealed_sign(granter.signing_seed.to_vec(), signed_metadata, metadata_envelope.clone()).unwrap()),
+            "resealed": e(&metadata_resealed_sign(granter.signing_seed.to_vec(), signed_metadata.clone(), metadata_envelope.clone()).unwrap()),
+            "saved": e(&metadata_saved_sign(granter.signing_seed.to_vec(), signed_metadata, metadata_envelope.clone()).unwrap()),
         },
         "version": {
             "statement": { "workspaceId": signed_version.workspace_id, "nodeId": signed_version.node_id, "versionId": signed_version.version_id, "objectId": signed_version.object_id, "contentSuite": signed_version.content_suite },
             "envelope": e(&signed_version_envelope),
             "signature": e(&version_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
             "resealed": e(&version_resealed_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
+            "saved": e(&version_saved_sign(granter.signing_seed.to_vec(), signed_version.clone(), signed_version_envelope.clone()).unwrap()),
         },
     });
+
+    // Scoped ids: the same fixed seeds and scopes as the web's fixture, so both carry known answers.
+    let id_scopes = [
+        "0b6f0e1c-6a52-4f37-9d0e-5f1f2a3b4c5d",
+        "0B6F0E1C-6A52-4F37-9D0E-5F1F2A3B4C5D",
+        "f4a7c2d9-1e3b-4c5a-8f6e-7d8c9b0a1e2f",
+    ];
+    let id_kinds = [
+        ("node", IdKind::Node),
+        ("version", IdKind::Version),
+        ("object", IdKind::Object),
+        ("link", IdKind::Link),
+        ("report", IdKind::Report),
+    ];
+    let mut ids = vec![];
+    for (s, scope_id) in id_scopes.iter().enumerate() {
+        for (k, (name, kind)) in id_kinds.iter().enumerate() {
+            let seed = e(&pattern(16, (1 + s * id_kinds.len() + k) as u8));
+            let id = derive_id(*kind, scope_id.to_string(), seed.clone()).unwrap();
+            ids.push(json!({ "kind": name, "scopeId": scope_id, "seed": seed, "id": id }));
+        }
+    }
 
     let new_root = random_bytes(32).unwrap();
     let grant = &web["workspace"]["grant"];
@@ -364,6 +388,7 @@ fn main() {
         "settings": settings,
         "signatures": signatures,
         "succession": succession,
+        "ids": ids,
         "document": document,
         "account": account,
         "device": device,

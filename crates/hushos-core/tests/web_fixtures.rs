@@ -545,3 +545,78 @@ fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_version_1_rea
     assert_eq!(settings_open(user.clone(), Some(key), v1.clone()).unwrap(), None);
     assert_eq!(settings_open(user, Some(b(settings, "identityPrivateKey")), v1).unwrap(), None);
 }
+
+#[test]
+fn the_web_s_scoped_ids_derive_here_from_the_same_seed_and_scope() {
+    let ids = fixture()["ids"].as_array().expect("ids").clone();
+    assert_eq!(ids.len(), 15);
+    for entry in ids {
+        let kind = match s(&entry, "kind").as_str() {
+            "node" => IdKind::Node,
+            "version" => IdKind::Version,
+            "object" => IdKind::Object,
+            "link" => IdKind::Link,
+            "report" => IdKind::Report,
+            other => panic!("unknown kind {other}"),
+        };
+        assert_eq!(
+            derive_id(kind, s(&entry, "scopeId"), s(&entry, "seed")).unwrap(),
+            s(&entry, "id"),
+            "{entry}"
+        );
+    }
+}
+
+#[test]
+fn the_web_s_saved_signatures_read_as_saved_and_as_nothing_else() {
+    let signatures = &fixture()["signatures"];
+    let public = b(signatures, "signingPublicKey");
+    let me = TrustedKeys { current: public.clone(), retired: vec![] };
+    let metadata = &signatures["metadata"];
+    let statement = MetadataStatement {
+        workspace_id: s(&metadata["statement"], "workspaceId"),
+        node_id: s(&metadata["statement"], "nodeId"),
+        kind: NodeKind::File,
+        metadata_version: n(&metadata["statement"], "metadataVersion"),
+    };
+    let saved = b(metadata, "saved");
+    assert!(metadata_saved_verify(public.clone(), statement.clone(), b(metadata, "envelope"), saved.clone()));
+    assert!(!metadata_verify(public.clone(), statement.clone(), b(metadata, "envelope"), saved.clone()));
+    assert!(!metadata_resealed_verify(
+        public.clone(),
+        statement.clone(),
+        b(metadata, "envelope"),
+        saved.clone()
+    ));
+    assert!(!metadata_saved_verify(
+        public.clone(),
+        statement.clone(),
+        b(metadata, "envelope"),
+        b(metadata, "resealed")
+    ));
+    assert_eq!(
+        metadata_integrity(Some(me.clone()), statement, b(metadata, "envelope"), Some(saved)),
+        Integrity::SavedFromLink
+    );
+    let version = &signatures["version"];
+    let statement = VersionStatement {
+        workspace_id: s(&version["statement"], "workspaceId"),
+        node_id: s(&version["statement"], "nodeId"),
+        version_id: s(&version["statement"], "versionId"),
+        object_id: s(&version["statement"], "objectId"),
+        content_suite: n(&version["statement"], "contentSuite") as u32,
+    };
+    let saved = b(version, "saved");
+    assert!(version_saved_verify(public.clone(), statement.clone(), b(version, "envelope"), saved.clone()));
+    assert!(!version_verify(public.clone(), statement.clone(), b(version, "envelope"), saved.clone()));
+    assert!(!version_saved_verify(
+        public,
+        statement.clone(),
+        b(version, "envelope"),
+        b(version, "signature")
+    ));
+    assert_eq!(
+        version_integrity(Some(me), statement, b(version, "envelope"), Some(saved)),
+        Integrity::SavedFromLink
+    );
+}
