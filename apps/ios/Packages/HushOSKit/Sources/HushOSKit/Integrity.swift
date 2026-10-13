@@ -89,6 +89,20 @@ public enum Provenance: Sendable, Equatable, Hashable {
     }
 }
 
+/*
+ * A copy saved from a link by this person or a checked contact ("Saved copies, by where they
+ * came from"): no mark on the row, since it was kept on purpose, and a neutral line in Info
+ * and the viewer saying where it came from. Only a current trusted key yields it.
+ */
+public struct SavedCopy: Sendable, Equatable, Hashable {
+    public let writer: Writer
+
+    /* The line Info and the viewer show, as every client says it. */
+    public var line: String {
+        "Saved from a link by \(writer.phrase). HushOS can’t confirm who made the original."
+    }
+}
+
 /* A trust set that can't be read in full is refused whole: checking against part of it would pass records off as clean. */
 public enum SignersError: Error, LocalizedError, Equatable {
     case unreadableKey
@@ -200,9 +214,30 @@ public struct TrustedSigners: Sendable, Equatable {
         case .resealed: .resealed(writer(signer))
         case .retiredKey: .retiredKey(writer(signer))
         case .unchecked: .unchecked
-        // Kept on purpose from a link: no mark on a row.
+        // Kept on purpose from a link: no mark (Info says where it came from; see `savedCopy`).
         case .savedFromLink: nil
         }
+    }
+
+    private func saved(_ integrity: Integrity, signer: Signer?) -> SavedCopy? {
+        integrity == .savedFromLink ? SavedCopy(writer: writer(signer)) : nil
+    }
+
+    /*
+     * Where a node came from when it was saved from a link: its metadata or current version
+     * holds a saved signature and nothing about it carries a mark. A mark always wins.
+     */
+    public func savedCopy(of node: NodeView) -> SavedCopy? {
+        guard provenance(of: node) == nil else { return nil }
+        if let saved = saved(metadata(of: node), signer: node.metadataSigner) { return saved }
+        guard !node.isFolder, let current = node.currentVersion else { return nil }
+        return saved(version(current, of: node), signer: current.signer)
+    }
+
+    /* The same for one version in the versions list or the viewer. */
+    public func savedCopy(of version: VersionListView, in node: NodeView) -> SavedCopy? {
+        guard provenance(of: version, in: node) == nil else { return nil }
+        return saved(self.version(version, of: node), signer: version.signer) ?? saved(metadata(of: node), signer: node.metadataSigner)
     }
 
     /*
@@ -288,4 +323,9 @@ extension TrustState {
         case .loaded(let signers): signers.provenance(of: version, in: node)
         }
     }
+
+    /* Saved from a link, for Info and the viewer; nil until whom to trust loaded, and when it failed (that shows "Couldn't check"). */
+    public func savedCopy(of node: NodeView) -> SavedCopy? { signers?.savedCopy(of: node) }
+
+    public func savedCopy(of version: VersionListView, in node: NodeView) -> SavedCopy? { signers?.savedCopy(of: version, in: node) }
 }

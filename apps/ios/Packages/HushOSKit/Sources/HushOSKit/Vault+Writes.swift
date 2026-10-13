@@ -96,7 +96,7 @@ extension Vault {
         let newName = try checkName(name: name ?? source.name)
         var done = 0
         if source.isFolder {
-            let made = try await createFolder(in: parent.id, name: newName, signing: .after(trusted.metadata(of: source.node)))
+            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(trusted.metadata(of: source.node)))
             done += 1
             progress(done)
             for child in try await children(of: source.id) {
@@ -125,10 +125,10 @@ extension Vault {
         )
         // Signed where they land: the copy's node and version, over the source's object and its suite, by the source's verdicts.
         let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope,
-                                                       signing: .after(trusted.metadata(of: source.node)))
+                                                       signing: .copy(trusted.metadata(of: source.node)))
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
                                                      suite: version.contentSuite, envelope: contentKeyEnvelope,
-                                                     signing: .after(trusted.version(version, of: source.node)))
+                                                     signing: .copy(trusted.version(version, of: source.node)))
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
             "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
@@ -519,23 +519,25 @@ extension Vault {
     }
 
     /*
-     * A copy into another workspace (a shared folder): the server keeps objects
-     * per workspace, so the file is fetched and uploaded again, thumbnail and
-     * all. Folders go node by node. Signed by each record's verdict as a copy
-     * is; `resealed` signs everything re-sealed whatever it verified as (a copy
-     * saved from someone's share, which this person never vouched for).
+     * A copy into another workspace (a shared folder, or this person's own drive
+     * out of someone's share): the server keeps objects per workspace, so the
+     * file is fetched and uploaded again, thumbnail and all. Folders go node by
+     * node. Signed by each record's verdict as a copy is: a share from a checked
+     * contact that verifies is copied as this person's own, anything else is
+     * re-sealed, and without whom to trust nothing is copied.
      */
-    public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil, resealed: Bool = false,
+    public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil,
                            progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
-        let trusted = resealed ? nil : try await copySigners()
-        let metadata: Signing = trusted.map { .after($0.metadata(of: source.node)) } ?? .resealed
+        let trusted = try await copySigners()
+        let metadata: Signing = .copy(trusted.metadata(of: source.node))
         if source.isFolder {
             let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata)
-            for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, resealed: resealed, progress: progress) }
+            for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
             return made
         }
-        let version: Signing = trusted.flatMap { signers in source.node.currentVersion.map { .after(signers.version($0, of: source.node)) } } ?? .resealed
+        // A file without a version has nothing to vouch for: whatever it is, it isn't verified.
+        let version: Signing = .copy(source.node.currentVersion.map { trusted.version($0, of: source.node) } ?? .unsigned)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

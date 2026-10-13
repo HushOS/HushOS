@@ -259,6 +259,7 @@ final class FakeDrive: @unchecked Sendable {
         let key = try base64urlDecode(value: identity.signingPublicKey)
         let (bytes, sig) = (try base64urlDecode(value: envelope), try base64urlDecode(value: signature))
         if metadataVerify(signingPublicKey: key, statement: statement, metadataEnvelope: bytes, signature: sig) { return "ordinary" }
+        if metadataSavedVerify(signingPublicKey: key, statement: statement, metadataEnvelope: bytes, signature: sig) { return "saved" }
         if metadataResealedVerify(signingPublicKey: key, statement: statement, metadataEnvelope: bytes, signature: sig) { return "resealed" }
         return nil
     }
@@ -268,6 +269,7 @@ final class FakeDrive: @unchecked Sendable {
         let key = try base64urlDecode(value: identity.signingPublicKey)
         let (bytes, sig) = (try base64urlDecode(value: envelope), try base64urlDecode(value: signature))
         if versionVerify(signingPublicKey: key, statement: statement, contentKeyEnvelope: bytes, signature: sig) { return "ordinary" }
+        if versionSavedVerify(signingPublicKey: key, statement: statement, contentKeyEnvelope: bytes, signature: sig) { return "saved" }
         if versionResealedVerify(signingPublicKey: key, statement: statement, contentKeyEnvelope: bytes, signature: sig) { return "resealed" }
         return nil
     }

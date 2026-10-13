@@ -5,8 +5,9 @@ import Testing
 
 /*
  * Ids derived from a seed and the workspace (docs/integrity-design.md, "Ids derived from a
- * seed and a scope"). Against the fake Drive server, which refuses an id its seed doesn't
- * derive for the workspace as the real one does.
+ * seed and a scope") and saved copies signed by where they came from. Against the fake
+ * Drive server, which refuses an id its seed doesn't derive for the workspace as the real
+ * one does, and records which statement each stored signature is over.
  */
 extension OnFakeDrive {
 @Suite struct ScopedIdTests {
@@ -67,6 +68,42 @@ extension OnFakeDrive {
         #expect(landed.id == (server.begins.first?["node"] as? [String: Any])?["id"] as? String)
         #expect(landed.name == "a.bin")
         #expect(server.minted.filter { $0.kind == .node }.map(\.id) == [landed.id])
+    }
+
+    @Test func aSaveFromALinkSignsTheSavedStatementsAndShowsNoMark() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        // As "Save a copy" from a link does: the folder it makes, then each file uploaded into it.
+        let folder = try await vault.createFolder(in: server.root, name: "From a link", signing: .savedFromLink)
+        let saved = try await vault.upload(fileURL: try file(), name: "notes.txt", mime: "text/plain", in: folder.id, replacing: nil,
+                                           signing: (.savedFromLink, .savedFromLink))
+        let version = try #require(saved.node.currentVersion)
+        #expect(server.statements[folder.id] == "saved")
+        #expect(server.statements[saved.id] == "saved" && server.statements["version:" + version.id] == "saved")
+
+        let reader = try server.ownerTrusts()
+        for id in [folder.id, saved.id] {
+            let node = try #require(server.nodes[id])
+            #expect(reader.provenance(of: node) == nil)
+            #expect(reader.savedCopy(of: node) == SavedCopy(writer: .you))
+        }
+    }
+
+    @Test func aSavedCopyStaysSavedThroughACopyAndARename() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        let saved = try await vault.upload(fileURL: try file(), name: "kept.txt", mime: nil, in: server.root, replacing: nil,
+                                           signing: (.savedFromLink, .savedFromLink))
+        // It verified as saved: a copy of it says the same, and is not laundered into an ordinary one or warned about.
+        let copied = try await vault.copy(saved.id, to: server.a)
+        #expect(server.statements[copied.id] == "saved")
+        #expect(server.statements["version:" + (copied.node.currentVersion?.id ?? "")] == "saved")
+        _ = try await vault.rename(saved.id, to: "kept, renamed.txt")
+        #expect(server.statements["rename:" + saved.id] == "saved")
+        #expect(try server.ownerTrusts().savedCopy(of: try #require(server.nodes[saved.id])) == SavedCopy(writer: .you))
     }
 }
 }

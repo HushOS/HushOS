@@ -456,6 +456,11 @@ struct InfoSheet: View {
                     } footer: {
                         Text(provenance.explanation)
                     }
+                } else if let saved = store.savedCopy(of: item) {
+                    // Kept on purpose from a link: said plainly, without a mark or a warning's colour.
+                    Section {
+                        Text(saved.line).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).padding(.vertical, Alpine.Space.s2).alpineRow()
+                    }
                 }
                 Section {
                     fact("Kind", kind)
