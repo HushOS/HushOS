@@ -174,7 +174,7 @@ Non-exportability prevents ordinary raw-key export; it does not stop malicious s
 
 ## Quota and permanent deletion
 
-New accounts receive a personal workspace and a configurable base allowance (default 1 GiB). `workspace_storage` uses bigint for base quota, used bytes, and reserved bytes. `storage_entitlements` holds separate positive grants with unique source references and optional expiry/revocation. APIs return byte counts as decimal strings. Entitlements are written only by the billing integration (`@hushos/billing`), from the provider's customer state; there is no public quota mutation.
+New accounts receive a personal workspace and a configurable base allowance (default 2 GiB). `workspace_storage` uses bigint for base quota, used bytes, and reserved bytes. `storage_entitlements` holds separate positive grants with unique source references and optional expiry/revocation. APIs return byte counts as decimal strings. Entitlements are written only by the billing integration (`@hushos/billing`), from the provider's customer state; there is no public quota mutation.
 
 Future uploads must reserve ciphertext bytes transactionally before presigning, reconcile actual object sizes, and count retained versions/trash. Quota records alone do not enforce a file-transfer protocol.
 

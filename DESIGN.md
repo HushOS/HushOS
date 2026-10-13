@@ -312,7 +312,7 @@ Everything is sentence case. Nothing in product UI is uppercase. Sizes and dates
 
 ## Layout
 
-- **Web app shell.** A collapsible sidebar on the ground (256px, 48px as icons, a 288px sheet on phones): Home, My files, Shared, Trash; then Tags and People you share with; an Operator group for admins; the storage meter ("487 MB of 1 GB used", "537 MB free", a Plan and storage link) at the foot. The active place is tint, a semibold label and a heavier icon. The page is one surface panel, inset 10px from the window with `card` corners on a desk-sized screen and full-bleed on a phone, scrolling inside. Its 64px header holds the search box (opens the command palette, `/` or ⌘K) and the account avatar, which opens the account menu.
+- **Web app shell.** A collapsible sidebar on the ground (256px, 48px as icons, a 288px sheet on phones): Home, My files, Shared, Trash; then Tags and People you share with; an Operator group for admins; the storage meter ("1.5 GB of 2 GB used", "512 MB free", a Plan and storage link) at the foot. The active place is tint, a semibold label and a heavier icon. The page is one surface panel, inset 10px from the window with `card` corners on a desk-sized screen and full-bleed on a phone, scrolling inside. Its 64px header holds the search box (opens the command palette, `/` or ⌘K) and the account avatar, which opens the account menu.
 - **Page header.** Title on the left, the page's few actions on the right. Gutters are 20px, 32px from the small breakpoint.
 - **Lists.** Rows of 56px with 36px marks and a rule hairline between them; no vertical lines. Columns: Name, Who can open (from the large breakpoint), Changed, Size. A shared folder starts with an access banner that begins with "You": "You and anyone with the link can open everything in this folder." Rows then say who can open only when it differs; otherwise "Same as folder" on the web and nothing on the phones.
 - **Details.** A 320px panel beside the list on wide windows (Info), a dialog on narrow ones: who can open in a full sentence, the plain facts, tags, then two folds, Keep your own copy and Technical details.
@@ -354,7 +354,7 @@ The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing els
 - Do keep one blue button per screen, and make clickable things ink or blue, never muted.
 - Do mark a link with the blue link icon and keep its words muted.
 - Do pair every icon with a word or an accessible name, and every state with a word.
-- Do keep units in KB, MB, GB and TB counted in 1024s, and quotas whole ("1 GB", "200 GB").
+- Do keep units in KB, MB, GB and TB counted in 1024s, and quotas whole ("2 GB", "200 GB").
 - Do say what happened and what to do next, in one or two plain sentences.
 - Don't use amber or any colour of its own for links, or `warning` for anything but a caution.
 - Don't use tint alone for selection or the active place.
@@ -386,7 +386,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
 - **Words, the same on every client:** Share; Who can open; Only you; Same as folder; Anyone with the link; Stop sharing; Turn off link; Copy link; People you share with; Check it's them; Move to Trash; Restore; Delete forever; Empty Trash; Keep on this phone; Remove from this phone; Send a copy (the system share sheet); Open in… (iOS); Info; Versions; My files; Account; Plan and storage; Lock on this browser (web).
 - **Trash** keeps items for 30 days, and says so. Removing a file from the phone says it stays in HushOS.
 - **Dates**, on every client: "Today, 14:02", "Yesterday", "29 Sept" this year, "29 Sept 2025" in another; day and month the en-GB way, the time on the person's own 12 or 24 hour clock. In a sentence: "Added today, 14:02", "on 3 Sept", "until 12 Oct". Web helpers: `formatWhen`, `formatDay`, `formatTime` in `apps/web/src/lib/drive.ts`.
-- **Sizes:** "1.6 KB", "487 MB of 1 GB used", "537 MB free"; quotas never show decimals they don't have.
+- **Sizes:** "1.6 KB", "1.5 GB of 2 GB used", "512 MB free"; quotas never show decimals they don't have.
 - **Errors** say what happened and what to do: "Couldn't reach HushOS. Check your connection, then retry."
 - Legal pages and blog posts are MDX under `apps/web/src/content`. The site also serves `/robots.txt`, `/sitemap.xml`, `/llms.txt` and `/design.md`.
 

@@ -14,7 +14,7 @@ export const appEnv = createEnv({
         INITIAL_STORAGE_QUOTA_BYTES: z
             .string()
             .regex(/^[0-9]{1,16}$/)
-            .default('1073741824')
+            .default('2147483648')
             .transform(BigInt),
         APP_ORIGIN: z
             .url()
