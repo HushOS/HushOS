@@ -3,7 +3,7 @@ import { db } from './client';
 import {
     removeNodeIn,
     selectNodes,
-    signersById,
+    signerOf,
     walk,
     type NodeRow,
     type Signer,
@@ -39,20 +39,16 @@ export const REPORT_ITEM_CAP = 2000;
 
 export type ReportRow = typeof driveReports.$inferSelect;
 type RawReportItemRow = typeof driveReportItems.$inferSelect;
-/* A snapshot row with the accounts its signatures name, when they still exist. */
+/* A snapshot row with the accounts its signatures name, by id. */
 export type ReportItemRow = RawReportItemRow & {
     metadataSigner: Signer | null;
     versionSigner: Signer | null;
 };
-async function withSigners(rows: RawReportItemRow[]): Promise<ReportItemRow[]> {
-    const signers = await signersById(
-        db,
-        rows.flatMap((row) => [row.metadataSignerId, row.versionSignerId]),
-    );
+function withSigners(rows: RawReportItemRow[]): ReportItemRow[] {
     return rows.map((row) => ({
         ...row,
-        metadataSigner: row.metadataSignerId ? (signers.get(row.metadataSignerId) ?? null) : null,
-        versionSigner: row.versionSignerId ? (signers.get(row.versionSignerId) ?? null) : null,
+        metadataSigner: signerOf(row.metadataSignerId),
+        versionSigner: signerOf(row.versionSignerId),
     }));
 }
 export type ReportEventRow = typeof driveReportEvents.$inferSelect;
@@ -413,7 +409,7 @@ export async function listReportChildren(reportId: string, parentId: string) {
         ancestors.unshift(row);
         cursor = row.parentId;
     }
-    const signed = await withSigners([folder, ...ancestors, ...children]);
+    const signed = withSigners([folder, ...ancestors, ...children]);
     return {
         folder: signed[0]!,
         ancestors: signed.slice(1, 1 + ancestors.length),
@@ -426,7 +422,7 @@ export async function getReportItem(reportId: string, nodeId: string) {
         .select()
         .from(driveReportItems)
         .where(and(eq(driveReportItems.reportId, reportId), eq(driveReportItems.nodeId, nodeId)));
-    return row ? (await withSigners([row]))[0]! : null;
+    return row ? withSigners([row])[0]! : null;
 }
 
 export async function getReportVersions(reportId: string, versionIds: string[]) {

@@ -246,8 +246,12 @@ const versionColumns = {
     signerId: fileVersions.signerId,
     signature: fileVersions.signature,
 };
-/* Who wrote a record, as the server knows the account: for display, never for trust. */
-export type Signer = { id: string; name: string; email: string };
+/*
+ * Who wrote a record: the account id alone. A client names a signer from its
+ * own pins ("you", a checked contact) or not at all; the server hands out no
+ * name or email of a co-editor to whoever can see the record.
+ */
+export type Signer = { id: string };
 type RawNodeRow = Omit<typeof driveNodes.$inferSelect, 'createdBy' | 'purgedAt'>;
 export type NodeRow = RawNodeRow & { metadataSigner: Signer | null };
 type RawVersionRow = Omit<VersionRow, 'signer'>;
@@ -270,40 +274,16 @@ export type VersionRow = {
     readyAt: Date | null;
 };
 
-/* The accounts behind these signer ids, by id; a deleted account is simply absent. */
-export async function signersById(tx: Tx | typeof db, ids: (string | null | undefined)[]) {
-    const unique = [...new Set(ids.filter((id): id is string => typeof id === 'string'))];
-    if (!unique.length) return new Map<string, Signer>();
-    const rows = await tx
-        .select({ id: users.id, name: users.name, email: users.email })
-        .from(users)
-        .where(inArray(users.id, unique));
-    return new Map(rows.map((row) => [row.id, row]));
+/* A signer column as the view it is served as; a deleted account's is already null. */
+export function signerOf(id: string | null | undefined): Signer | null {
+    return id ? { id } : null;
 }
-function withVersionSigner(version: RawVersionRow, signers: Map<string, Signer>): VersionRow {
-    return {
-        ...version,
-        signer: version.signerId ? (signers.get(version.signerId) ?? null) : null,
-    };
-}
-/* Version rows with who signed each, in one lookup. */
-async function signVersions<T extends RawVersionRow>(tx: Tx | typeof db, versions: T[]) {
-    const signers = await signersById(
-        tx,
-        versions.map((version) => version.signerId),
-    );
-    return versions.map((version) => ({ ...version, ...withVersionSigner(version, signers) }));
+function withVersionSigner(version: RawVersionRow): VersionRow {
+    return { ...version, signer: signerOf(version.signerId) };
 }
 /* Node rows read without their versions (an update's returning clause), with their signers. */
-async function signNodes(tx: Tx, nodes: RawNodeRow[]): Promise<NodeRow[]> {
-    const signers = await signersById(
-        tx,
-        nodes.map((node) => node.metadataSignerId),
-    );
-    return nodes.map((node) => ({
-        ...node,
-        metadataSigner: node.metadataSignerId ? (signers.get(node.metadataSignerId) ?? null) : null,
-    }));
+function signNodes(nodes: RawNodeRow[]): NodeRow[] {
+    return nodes.map((node) => ({ ...node, metadataSigner: signerOf(node.metadataSignerId) }));
 }
 
 export async function selectNodes(tx: Tx, ids: string[]) {
@@ -314,18 +294,10 @@ export async function selectNodes(tx: Tx, ids: string[]) {
         .leftJoin(fileVersions, eq(fileVersions.id, driveNodes.currentVersionId))
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(inArray(driveNodes.id, ids));
-    const signers = await signersById(
-        tx,
-        rows.flatMap((row) => [row.node.metadataSignerId, row.version.signerId]),
-    );
     return rows.map((row) => ({
         ...(row.node as RawNodeRow),
-        metadataSigner: row.node.metadataSignerId
-            ? (signers.get(row.node.metadataSignerId) ?? null)
-            : null,
-        currentVersion: row.version.id
-            ? withVersionSigner(row.version as RawVersionRow, signers)
-            : null,
+        metadataSigner: signerOf(row.node.metadataSignerId),
+        currentVersion: row.version.id ? withVersionSigner(row.version as RawVersionRow) : null,
     }));
 }
 
@@ -694,7 +666,7 @@ export async function renameNode(input: {
         if (updated)
             return {
                 status: 'ok' as const,
-                node: (await signNodes(tx, [updated as RawNodeRow]))[0]!,
+                node: signNodes([updated as RawNodeRow])[0]!,
             };
         const [current] = await selectNodes(tx, [input.nodeId]);
         return { status: 'stale' as const, node: current! };
@@ -783,7 +755,7 @@ export async function moveNode(input: {
             ],
             chain.node.height_bound,
         );
-        return { status: 'ok' as const, node: (await signNodes(tx, [moved as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([moved as RawNodeRow])[0]! };
     });
 }
 
@@ -801,7 +773,7 @@ export async function trashNode(input: { workspaceId: string; nodeId: string }) 
             .set({ trashedAt: new Date(), changeSeq })
             .where(eq(driveNodes.id, input.nodeId))
             .returning(nodeColumns);
-        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
     });
 }
 
@@ -896,7 +868,7 @@ export async function restoreNode(input: {
                     chain.node.height_bound,
                 );
         }
-        return { status: 'ok' as const, node: (await signNodes(tx, [node as RawNodeRow]))[0]! };
+        return { status: 'ok' as const, node: signNodes([node as RawNodeRow])[0]! };
     });
 }
 
@@ -1698,15 +1670,15 @@ export async function getVersionForDownload(workspaceId: string, versionId: stri
         if (!row) return { status: 'not-found' as const };
         const chain = await walk(tx, row.nodeId);
         if (!chain || chain.purged) return { status: 'not-found' as const };
-        const [version] = await signVersions(tx, [row.version as RawVersionRow]);
-        if (version!.status !== 'ready' || version!.objectStatus !== 'ready')
-            return { status: 'not-ready' as const, objectStatus: version!.objectStatus };
+        const version = withVersionSigner(row.version as RawVersionRow);
+        if (version.status !== 'ready' || version.objectStatus !== 'ready')
+            return { status: 'not-ready' as const, objectStatus: version.objectStatus };
         const [node] = await selectNodes(tx, [row.nodeId]);
         return {
             status: 'ok' as const,
-            version: version!,
+            version,
             node: node!,
-            objectKey: objectKeyFor(workspaceId, version!.objectId),
+            objectKey: objectKeyFor(workspaceId, version.objectId),
         };
     });
 }
@@ -1917,14 +1889,10 @@ export async function listVersions(workspaceId: string, nodeId: string) {
             .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
             .where(and(eq(fileVersions.nodeId, nodeId), eq(fileVersions.status, 'ready')))
             .orderBy(desc(fileVersions.readyAt));
-        const signers = await signersById(
-            tx,
-            rows.map((row) => row.version.signerId),
-        );
         return {
             currentVersionId: node?.currentVersionId ?? null,
             versions: rows.map((row) => ({
-                ...withVersionSigner(row.version as RawVersionRow, signers),
+                ...withVersionSigner(row.version as RawVersionRow),
                 supersededAt: row.supersededAt,
                 createdAt: row.createdAt,
             })),

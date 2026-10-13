@@ -7,8 +7,12 @@ import type { Capabilities, DriveErrorCode } from './protocol';
  * are Base64url strings, byte counts decimal strings, dates ISO strings.
  */
 
-/* Who the server says wrote a record: for display only; the signature is what a reader checks. */
-export type Signer = { id: string; name: string; email: string };
+/*
+ * Who wrote a record: the account id alone. A client names a signer from its
+ * own pins ("you", a checked contact's name) or says "someone you haven't
+ * checked"; the signature is what it checks.
+ */
+export type Signer = { id: string };
 
 export type VersionView = {
     id: string;

@@ -16,8 +16,9 @@ export type IssueLine = {
     check: Signer | null;
 };
 
-const who = (signer: Signer) => `${signer.name} (${signer.email})`;
-const first = (signer: Signer) => signer.name.trim().split(/\s+/)[0] || signer.name;
+// The server names a signer by account id alone; a name comes only from this person's pins.
+const who = (_signer: Signer) => 'someone';
+const first = (_signer: Signer) => 'the writer';
 
 function line(issue: IntegrityIssue): IssueLine {
     const { signer, record, integrity } = issue;

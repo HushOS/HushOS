@@ -191,12 +191,8 @@ describe('creating', () => {
             },
         });
         if (genuine.status !== 'created') throw new Error(genuine.status);
-        // Stored with the signer, and served with what the server knows of the account.
-        expect(genuine.root.metadataSigner).toEqual({
-            id: owner.userId,
-            name: 'Test',
-            email: owner.email,
-        });
+        // Stored with the signer, served as the account id alone: no name, no email.
+        expect(genuine.root.metadataSigner).toEqual({ id: owner.userId });
         expect(genuine.root.metadataSignature).toHaveLength(64);
     });
 
@@ -438,7 +434,7 @@ describe('versions', () => {
         expect(node.currentVersion?.signer?.id).toBe(owner.userId);
         expect(node.currentVersion?.signature).toHaveLength(64);
         const listed = await drive.listVersions(owner.workspaceId, node.id);
-        expect(listed?.versions[0]?.signer?.email).toBe(owner.email);
+        expect(listed?.versions[0]?.signer).toEqual({ id: owner.userId });
     });
 
     test('a copy is signed over its own node and the source object, never the source node', async () => {

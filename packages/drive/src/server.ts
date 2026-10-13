@@ -85,8 +85,11 @@ export function capabilities(): Capabilities {
 }
 
 /* Wire shapes: envelopes as Base64url, byte counts as decimal strings, dates as ISO. */
-/* Who the server says wrote a record: for display; the signature is what a reader checks. */
-export type Signer = { id: string; name: string; email: string };
+/*
+ * Who wrote a record: the account id alone. A client names a signer from its
+ * own pins or says it has not checked them; the signature is what it checks.
+ */
+export type Signer = { id: string };
 export type VersionView = {
     id: string;
     objectId: string;

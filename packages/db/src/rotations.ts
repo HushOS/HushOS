@@ -6,7 +6,7 @@ import {
     nextChangeSeq,
     selectNodes,
     signedBy,
-    signersById,
+    signerOf,
     walk,
     type NodeRow,
     type Signer,
@@ -174,10 +174,6 @@ export async function listRotationWork(input: {
                   .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
                   .where(and(inArray(fileVersions.nodeId, ids), eq(fileVersions.status, 'ready')))
             : [];
-        const signers = await signersById(
-            tx,
-            versions.map((v) => v.signerId),
-        );
         const shares = ids.length
             ? await tx
                   .select({
@@ -223,7 +219,7 @@ export async function listRotationWork(input: {
                             contentKeyEnvelope: v.contentKeyEnvelope!,
                             contentSuite: v.contentSuite,
                             plaintextSize: v.plaintextSize,
-                            signer: v.signerId ? (signers.get(v.signerId) ?? null) : null,
+                            signer: signerOf(v.signerId),
                             signature: v.signature,
                         })),
                     shares: shares

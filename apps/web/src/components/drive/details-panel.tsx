@@ -357,7 +357,9 @@ export function ItemDetails({
                     <Fact label="Changed by">
                         <span className="inline-flex flex-wrap items-center gap-2">
                             <span>
-                                {(unverified[0]!.signer ?? node.metadataSigner)?.name ?? 'Unknown'}
+                                {(unverified[0]!.signer ?? node.metadataSigner)
+                                    ? 'Someone you haven’t checked'
+                                    : 'Unknown'}
                             </span>
                             <UnverifiedMark node={node} />
                         </span>

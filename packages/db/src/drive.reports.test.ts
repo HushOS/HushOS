@@ -186,11 +186,7 @@ describe('filing a report', () => {
         expect(deep?.children[0]?.versionSignature?.equals(live!.currentVersion!.signature!)).toBe(
             true,
         );
-        expect(deep?.children[0]?.metadataSigner).toEqual({
-            id: owner.userId,
-            name: 'Test',
-            email: owner.email,
-        });
+        expect(deep?.children[0]?.metadataSigner).toEqual({ id: owner.userId });
         expect(deep?.children[0]?.versionSigner?.id).toBe(owner.userId);
         expect(await reports.listReportChildren(made.report.id, rootId)).toBeNull();
         expect(await reports.getReportKey(made.report.id, operator.userId)).toHaveLength(112);
