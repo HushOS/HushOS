@@ -1,0 +1,27 @@
+packages/drive/src/server.shares.test.ts
+  s_7c0f424aad5a1e::t_30127cd9b6bf52 1-107
+packages/db/src/drive.ts
+  s_7c0f424aad5a1e::t_0bfef1faf0bb10 2834-2845
+packages/drive/src/protocol.test.ts
+  s_7c0f424aad5a1e::t_3adebde2c6a650 2
+packages/drive/src/protocol.ts
+  s_7c0f424aad5a1e::t_98243eca637c39 42-46,49-50
+packages/drive/src/server.ts
+  s_7c0f424aad5a1e::t_41d566c0a77864 33,222-225,774-776
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "14c2e942016f05a4f64c63763d9aa55d09f226e5",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
