@@ -1258,10 +1258,15 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/drive/shares/:id/changes',
         {
             params: t.Object({ id: uuidSchema }),
-            query: t.Object({ since: t.Integer({ minimum: 0 }) }),
+            // Opaque and sealed by the server; absent means from the start of the share.
+            query: t.Object({ cursor: t.Optional(t.String({ maxLength: 128 })) }),
         },
         async ({ request, sessionToken, params, query }) =>
-            drive.shareChanges((await driveUser(request, sessionToken)).id, params.id, query.since),
+            drive.shareChanges(
+                (await driveUser(request, sessionToken)).id,
+                params.id,
+                query.cursor,
+            ),
     )
     // Rotation: the owner's device re-keys a subtree after a revocation, in batches.
     .post(
@@ -1351,14 +1356,10 @@ export const apiApp = new Elysia({ prefix: '/api' })
      * the link (never the path, which reverse proxies log), bounded per address and
      * token. The paths that carried the token answer 410 so an old client says why.
      */
-    .get(
-        '/drive/links/open',
-        { headers: linkHeadersSchema },
-        ({ request, headers }) => {
-            requireClient(request);
-            return drive.openLink(headers[LINK_TOKEN_HEADER], requestAddress(request));
-        },
-    )
+    .get('/drive/links/open', { headers: linkHeadersSchema }, ({ request, headers }) => {
+        requireClient(request);
+        return drive.openLink(headers[LINK_TOKEN_HEADER], requestAddress(request));
+    })
     .get(
         '/drive/links/nodes/:nodeId/children',
         {

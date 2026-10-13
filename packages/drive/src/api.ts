@@ -116,6 +116,25 @@ export type ChangeFeed = {
     hasMore: boolean;
     resync: boolean;
 };
+/*
+ * A share's feed, as a grantee sees it: only changes inside the share (a
+ * tombstone only for what was inside when it was purged), in order, with no
+ * sequence numbers of the owner's anywhere, nodes included (`changeSeq` is
+ * null). `cursor` is opaque and sealed by the server for this share: pass it
+ * back as it came; none starts from the beginning, and one the server did not
+ * seal for this share is refused with 400, after which the feed starts over.
+ */
+export type ShareChange =
+    | { kind: 'node'; node: NodeView }
+    | { kind: 'tombstone'; nodeId: string; parentId: string | null }
+    | { kind: 'entered' | 'left'; nodeId: string };
+export type ShareChangeFeed = {
+    changes: ShareChange[];
+    cursor: string;
+    hasMore: boolean;
+    /* As on the workspace feed: deletions were dropped since the cursor; start from none. */
+    resync: boolean;
+};
 /* A sealed workspace document as the server holds it: kind, the version it is at, bytes. */
 export type DocumentView = {
     kind: string;
@@ -268,8 +287,8 @@ export type SharedWithMeView = {
     prevShareEnvelope: string | null;
     prevKeyEpoch: number | null;
     createdAt: string;
-    /* The owner's workspace sequence as of this listing: where the share's feed starts. */
-    changeSeq: number;
+    /* Where the share's feed starts: opaque and sealed, as the feed's own cursor. */
+    cursor: string;
     /* The granter's current identity: the signing key a suite 3 share is checked against. */
     granter: {
         id: string;
@@ -490,7 +509,7 @@ export interface DriveApi {
         kind: string,
         input: { version: number; envelope: string },
     ): Promise<{ document: DocumentView }>;
-    shareChanges(shareId: string, since: number): Promise<ChangeFeed>;
+    shareChanges(shareId: string, cursor?: string): Promise<ShareChangeFeed>;
     /* Rotation: start (or learn of the one running), fetch a batch of work, apply it. */
     startRotation(workspaceId: string, nodeId: string): Promise<{ rotation: RotationView }>;
     rotationWork(workspaceId: string, nodeId: string, after?: string | null): Promise<RotationWork>;

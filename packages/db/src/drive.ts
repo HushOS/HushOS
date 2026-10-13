@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
 import { heldObjectCondition } from './reports';
+import { openShareCursor, sealShareCursor } from './share-cursor';
 import {
     metadataSigned as metadataSignedStatement,
     verifySigned,
@@ -252,7 +253,10 @@ const versionColumns = {
  * name or email of a co-editor to whoever can see the record.
  */
 export type Signer = { id: string };
-type RawNodeRow = Omit<typeof driveNodes.$inferSelect, 'createdBy' | 'purgedAt'>;
+type RawNodeRow = Omit<
+    typeof driveNodes.$inferSelect,
+    'createdBy' | 'purgedAt' | 'purgedAncestorIds'
+>;
 export type NodeRow = RawNodeRow & { metadataSigner: Signer | null };
 type RawVersionRow = Omit<VersionRow, 'signer'>;
 export type VersionRow = {
@@ -2063,11 +2067,15 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
         .leftJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
         .where(eq(fileVersions.nodeId, nodeId))) as PurgedVersion[];
     for (const version of versions) await purgeVersion(tx, workspaceId, version);
+    // Where it was when it went, for the share feeds: tombstones keep their parent, so
+    // the walk reaches the root through any ancestor purged before it.
+    const chain = await walk(tx, nodeId);
     const now = new Date();
     await tx
         .update(driveNodes)
         .set({
             purgedAt: now,
+            purgedAncestorIds: chain ? chain.ancestors.map((ancestor) => ancestor.id) : [],
             keyEnvelope: null,
             metadataEnvelope: null,
             metadataSignerId: null,
@@ -2634,6 +2642,7 @@ async function accessFor(tx: Tx, userId: string, chain: Walk): Promise<Access | 
                 inArray(driveShares.nodeId, ids),
                 eq(driveShares.granteeUserId, userId),
                 isNull(driveShares.revokedAt),
+                servedShare,
             ),
         );
     if (!shares.length) return null;
@@ -2692,6 +2701,7 @@ export async function hasEditorShare(userId: string, workspaceId: string) {
                 eq(driveShares.workspaceId, workspaceId),
                 eq(driveShares.role, 'editor'),
                 isNull(driveShares.revokedAt),
+                servedShare,
             ),
         )
         .limit(1);
@@ -2714,6 +2724,14 @@ export async function authorizeUpload(userId: string, workspaceId: string, uploa
     return row ? authorize(userId, workspaceId, row.nodeId) : null;
 }
 
+/*
+ * A suite 3 share envelope, 1256 bytes, the only kind written or served: a
+ * row of suite 1 or 2 left from before grants nothing and is shown to nobody
+ * but its granter, who can re-seal or revoke it.
+ */
+export const SHARE_ENVELOPE_BYTES = 1256;
+const servedShare = sql`octet_length(${driveShares.shareEnvelope}) = ${SHARE_ENVELOPE_BYTES}`;
+
 /* A share's suite, told apart by length: 72 bytes is 1, 1160 is 2 (hybrid), 1256 is 3 (signed). */
 const shareSuite = sql<number>`case octet_length(${driveShares.shareEnvelope}) when 72 then 1 when 1160 then 2 else 3 end`;
 
@@ -2733,6 +2751,8 @@ export type CreateShare = {
  * or a fresh seal), never duplicated. Refused for a node in the trash.
  */
 export async function createShare(input: CreateShare) {
+    if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
+        return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
         await nextChangeSeq(tx, input.workspaceId);
         const chain = await walk(tx, input.nodeId);
@@ -2830,9 +2850,17 @@ export async function listSharesForGrantee(userId: string) {
             .innerJoin(users, eq(users.id, driveShares.granterUserId))
             .innerJoin(accountIdentities, eq(accountIdentities.userId, driveShares.granterUserId))
             .innerJoin(workspaces, eq(workspaces.id, driveShares.workspaceId))
-            .where(and(eq(driveShares.granteeUserId, userId), isNull(driveShares.revokedAt)))
+            .where(
+                and(
+                    eq(driveShares.granteeUserId, userId),
+                    isNull(driveShares.revokedAt),
+                    servedShare,
+                ),
+            )
             .orderBy(desc(driveShares.createdAt));
-        const out: (Omit<(typeof rows)[number], 'nodeId'> & {
+        const out: (Omit<(typeof rows)[number], 'nodeId' | 'changeSeq'> & {
+            /* Where the share's feed starts: the owner's sequence now, sealed. */
+            feedCursor: string;
             node: NodeRow & { currentVersion: VersionRow | null };
         })[] = [];
         for (const row of rows) {
@@ -2840,8 +2868,8 @@ export async function listSharesForGrantee(userId: string) {
             if (!chain || chain.purged || chain.trashed) continue;
             const [node] = await selectNodes(tx, [row.nodeId]);
             if (!node) continue;
-            const { nodeId: _nodeId, ...rest } = row;
-            out.push({ ...rest, node });
+            const { nodeId: _nodeId, changeSeq, ...rest } = row;
+            out.push({ ...rest, feedCursor: sealShareCursor(row.id, changeSeq), node });
         }
         return out;
     });
@@ -2898,10 +2926,11 @@ export async function listSharesByGranter(userId: string) {
 }
 
 /*
- * Replaces a live share's envelope under the node's current key epoch: how a
- * share sealed before the grantee had a KEM key is re-sealed hybrid. Only the
- * granter, only the current epoch (a rotation in flight re-seals on its own),
- * and never a share that is revoked or on a purged node.
+ * Replaces a live share's envelope under the node's current key epoch with a
+ * suite 3 one: how a share is sealed to a grantee's new keys, or a suite 1 or
+ * 2 row left from before is brought back into service. Only the granter,
+ * only the current epoch (a rotation in flight re-seals on its own), and
+ * never a share that is revoked or on a purged node.
  */
 export async function resealShare(input: {
     workspaceId: string;
@@ -2910,6 +2939,8 @@ export async function resealShare(input: {
     keyEpoch: number;
     shareEnvelope: Buffer;
 }) {
+    if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
+        return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
         const [share] = await tx
             .select({
@@ -3243,15 +3274,30 @@ export async function listChanges(input: { workspaceId: string; since: number; l
     };
 }
 
+/* A change as a grantee sees it: in order, but without the owner's sequence numbers. */
+export type ShareChange =
+    | { kind: 'node'; node: NodeRow & { currentVersion: VersionRow | null } }
+    | { kind: 'tombstone'; nodeId: string; parentId: string | null }
+    | { kind: 'entered' | 'left'; nodeId: string };
+
+/* How many of the owner's changes one poll of a share feed looks at, at most. */
+export const SHARE_FEED_SCAN = 2000;
+
 /*
- * A share's feed: the owner's workspace feed filtered to rows whose chain
- * contains the shared node, one walk per row, merged with the share's
- * membership events. Revoked means there is nothing more to say.
+ * A share's feed: the owner's changes inside the shared subtree, tombstones
+ * included, merged with the share's membership events. Only what was inside
+ * the share is shown: a live node by its chain, a tombstone by the ancestors
+ * recorded when it was purged (older tombstones, which have none, are never
+ * shown). The cursor is sealed (see share-cursor.ts), so neither the changes
+ * nor the cursor tell a grantee what the owner did elsewhere or how often; a
+ * missing cursor starts from the beginning and a tampered one is refused.
+ * Each poll looks at a bounded number of the owner's changes. Revoked means
+ * there is nothing more to say.
  */
 export async function listShareChanges(input: {
     shareId: string;
     granteeUserId: string;
-    since: number;
+    cursor?: string | null;
     limit?: number;
 }) {
     const [share] = await db
@@ -3266,53 +3312,128 @@ export async function listShareChanges(input: {
             and(
                 eq(driveShares.id, input.shareId),
                 eq(driveShares.granteeUserId, input.granteeUserId),
+                servedShare,
             ),
         );
     if (!share) return { status: 'not-found' as const };
     if (share.revokedAt) return { status: 'revoked' as const };
-    const page = await listChanges({
-        workspaceId: share.workspaceId,
-        since: input.since,
-        limit: input.limit,
-    });
-    const events = await db
-        .select()
-        .from(driveShareEvents)
-        .where(
-            and(
-                eq(driveShareEvents.shareId, share.id),
-                sql`${driveShareEvents.changeSeq} > ${input.since}`,
-                sql`${driveShareEvents.changeSeq} <= ${page.nextCursor}`,
-            ),
-        );
-    const changes: Change[] = await db.transaction(async (tx) => {
-        const kept: Change[] = [];
-        for (const change of page.changes) {
-            if (change.kind === 'tombstone') {
-                // A tombstone's chain is gone with it; the grantee learns of it through
-                // its parent, which was inside if the node was, or drops it on `left`.
-                kept.push(change);
-                continue;
+    let since = 0;
+    if (input.cursor !== undefined && input.cursor !== null) {
+        const opened = openShareCursor(share.id, input.cursor);
+        if (opened === null) return { status: 'bad-cursor' as const };
+        since = opened;
+    }
+    const limit = Math.min(input.limit ?? 200, 500);
+    const scanned = await db.transaction(async (tx) => {
+        // Read before the scan: every change at or below it has committed (see nextChangeSeq).
+        const [workspace] = await tx
+            .select({
+                changeSeq: workspaces.changeSeq,
+                dropped: workspaces.tombstonesDroppedThrough,
+            })
+            .from(workspaces)
+            .where(eq(workspaces.id, share.workspaceId));
+        const kept: { seq: number; change: ShareChange | { kind: 'node'; nodeId: string } }[] = [];
+        let position = since;
+        let examined = 0;
+        let exhausted = false;
+        while (kept.length < limit && examined < SHARE_FEED_SCAN) {
+            const take = Math.min(500, SHARE_FEED_SCAN - examined);
+            const rows = await tx
+                .select({
+                    id: driveNodes.id,
+                    parentId: driveNodes.parentId,
+                    changeSeq: driveNodes.changeSeq,
+                    purgedAt: driveNodes.purgedAt,
+                    purgedAncestorIds: driveNodes.purgedAncestorIds,
+                })
+                .from(driveNodes)
+                .where(
+                    and(
+                        eq(driveNodes.workspaceId, share.workspaceId),
+                        sql`${driveNodes.changeSeq} > ${position}`,
+                    ),
+                )
+                .orderBy(asc(driveNodes.changeSeq))
+                .limit(take);
+            for (const row of rows) {
+                examined++;
+                position = row.changeSeq!;
+                if (row.purgedAt) {
+                    if (row.purgedAncestorIds?.includes(share.nodeId))
+                        kept.push({
+                            seq: position,
+                            change: { kind: 'tombstone', nodeId: row.id, parentId: row.parentId },
+                        });
+                } else {
+                    const chain = await walk(tx, row.id);
+                    if (
+                        chain &&
+                        (chain.node.id === share.nodeId ||
+                            chain.ancestors.some((a) => a.id === share.nodeId))
+                    )
+                        kept.push({ seq: position, change: { kind: 'node', nodeId: row.id } });
+                }
+                if (kept.length === limit) break;
             }
-            if (change.kind !== 'node') continue;
-            const chain = await walk(tx, change.node.id);
-            const inside =
-                chain !== null &&
-                (chain.node.id === share.nodeId ||
-                    chain.ancestors.some((a) => a.id === share.nodeId));
-            if (inside) kept.push(change);
+            if (rows.length < take && kept.length < limit) {
+                exhausted = true;
+                break;
+            }
         }
-        return kept;
+        // Everything up to the sequence read first has been seen once the scan ran dry.
+        if (exhausted) position = Math.max(position, workspace?.changeSeq ?? 0);
+        const [more] = exhausted
+            ? []
+            : await tx
+                  .select({ id: driveNodes.id })
+                  .from(driveNodes)
+                  .where(
+                      and(
+                          eq(driveNodes.workspaceId, share.workspaceId),
+                          sql`${driveNodes.changeSeq} > ${position}`,
+                      ),
+                  )
+                  .limit(1);
+        const nodeIds = kept.flatMap((entry) =>
+            entry.change.kind === 'node' && 'nodeId' in entry.change ? [entry.change.nodeId] : [],
+        );
+        const nodes = new Map((await selectNodes(tx, nodeIds)).map((node) => [node.id, node]));
+        const events = await tx
+            .select()
+            .from(driveShareEvents)
+            .where(
+                and(
+                    eq(driveShareEvents.shareId, share.id),
+                    sql`${driveShareEvents.changeSeq} > ${since}`,
+                    sql`${driveShareEvents.changeSeq} <= ${position}`,
+                ),
+            );
+        const ordered: { seq: number; change: ShareChange }[] = kept.flatMap((entry) => {
+            if (entry.change.kind !== 'node' || !('nodeId' in entry.change))
+                return [{ seq: entry.seq, change: entry.change as ShareChange }];
+            const node = nodes.get(entry.change.nodeId);
+            return node ? [{ seq: entry.seq, change: { kind: 'node' as const, node } }] : [];
+        });
+        for (const event of events)
+            ordered.push({
+                seq: event.changeSeq,
+                change: { kind: event.kind, nodeId: event.nodeId },
+            });
+        ordered.sort((a, b) => a.seq - b.seq);
+        return {
+            changes: ordered.map((entry) => entry.change),
+            position,
+            hasMore: more !== undefined,
+            resync: since > 0 && since < (workspace?.dropped ?? 0),
+        };
     });
-    for (const event of events)
-        changes.push({ kind: event.kind, changeSeq: event.changeSeq, nodeId: event.nodeId });
-    changes.sort((a, b) => a.changeSeq - b.changeSeq);
     return {
         status: 'ok' as const,
-        changes,
-        nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
-        resync: page.resync,
+        changes: scanned.changes,
+        cursor: sealShareCursor(share.id, scanned.position),
+        hasMore: scanned.hasMore,
+        resync: scanned.resync,
     };
 }
 

@@ -66,6 +66,10 @@ export const driveNodes = pgTable(
         heightBound: integer('height_bound').notNull().default(0),
         changeSeq: bigint('change_seq', { mode: 'number' }), // null until visible
         purgedAt: timestamp('purged_at', { withTimezone: true }),
+        // A tombstone's ancestors when it was purged, root first: a share's feed shows a
+        // deletion only to grantees of a share above it. Null on tombstones older than
+        // this, which no grantee is shown.
+        purgedAncestorIds: uuid('purged_ancestor_ids').array(),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     },

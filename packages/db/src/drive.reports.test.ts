@@ -441,7 +441,7 @@ describe('removal', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: project.keyEpoch,
-            shareEnvelope: keyEnvelope(),
+            shareEnvelope: randomBytes(1256),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const linked = await drive.createLink({

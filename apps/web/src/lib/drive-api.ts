@@ -232,8 +232,12 @@ export const driveApi: DriveApi = {
                 .workspaces({ id: workspaceId })
                 .changes.get({ query: limit ? { since, limit } : { since } }),
         ),
-    shareChanges: (shareId, since) =>
-        unwrapDrive(api().shares({ id: shareId }).changes.get({ query: { since } })),
+    shareChanges: (shareId, cursor) =>
+        unwrapDrive(
+            api()
+                .shares({ id: shareId })
+                .changes.get({ query: cursor ? { cursor } : {} }),
+        ),
     startRotation: (workspaceId, nodeId) =>
         unwrapDrive(api().nodes({ id: nodeId }).rotation.post({ workspaceId })),
     rotationWork: (workspaceId, nodeId, after) =>

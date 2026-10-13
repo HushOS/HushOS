@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     LINK_KDF_VERSION,
+    SHARE_ENVELOPE_BYTES,
     activeRotation,
     nextChangeSeq,
     selectNodes,
@@ -425,7 +426,10 @@ export async function rotateNodes(input: {
                         signature: version.signature,
                     })
                     .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
-            for (const share of rotated.shares)
+            // Only suite 3 is written; anything else is left unsealed and revoked below.
+            for (const share of rotated.shares.filter(
+                (entry) => entry.shareEnvelope.length === SHARE_ENVELOPE_BYTES,
+            ))
                 await tx
                     .update(driveShares)
                     .set({

@@ -191,6 +191,15 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
     };
 }
 
+/*
+ * A node as anyone but a member of its workspace sees it: without the owner's
+ * change sequence, which would let a grantee count the owner's changes
+ * elsewhere in the drive by watching it climb.
+ */
+export function granteeView(node: NodeView): NodeView {
+    return { ...node, changeSeq: null };
+}
+
 /* Base64url in, Buffer out, with the exact or maximum length the column allows. */
 export function decodeEnvelope(value: string, exact?: number, max?: number) {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new DriveError('invalid', 'Invalid envelope.');
@@ -425,10 +434,11 @@ export async function listChildren(
     });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'trashed') throw trashed();
+    const view = access.shareId ? (row: NodeRow) => granteeView(nodeView(row)) : nodeView;
     return {
-        folder: nodeView(result.folder),
-        ancestors: result.ancestors.map(nodeView),
-        children: result.children.map(nodeView),
+        folder: view(result.folder),
+        ancestors: result.ancestors.map(view),
+        children: result.children.map(view),
         nextCursor: result.nextCursor,
     };
 }
@@ -787,6 +797,8 @@ export async function shareNode(
             throw stale();
         case 'self':
             throw new DriveError('invalid', 'You already have access to your own files.', 409);
+        case 'unsupported':
+            throw new DriveError('unsupported', 'Update HushOS to share.', 409);
         case 'ok': {
             const shares = await driveRepository.listNodeShares(workspaceId, nodeId);
             const share = shares.find((row) => row.id === result.share.id);
@@ -801,7 +813,7 @@ export async function listNodeShares(userId: string, workspaceId: string, nodeId
     return { shares: (await driveRepository.listNodeShares(workspaceId, nodeId)).map(shareView) };
 }
 
-/* The granter re-seals a live share at the current epoch, typically from suite 1 to hybrid. */
+/* The granter re-seals a live share at the current epoch in suite 3: to a grantee's new keys, or a row left in an older suite. */
 export async function resealShare(
     userId: string,
     workspaceId: string,
@@ -819,6 +831,8 @@ export async function resealShare(
     if (result.status === 'not-found')
         throw new DriveError('not-found', 'This share no longer exists.', 404);
     if (result.status === 'stale') throw stale();
+    if (result.status === 'unsupported')
+        throw new DriveError('unsupported', 'Update HushOS to share.', 409);
     return { resealed: true as const };
 }
 
@@ -869,7 +883,8 @@ export async function listSharedWithMe(userId: string) {
             prevShareEnvelope: row.prevShareEnvelope ? b64(row.prevShareEnvelope) : null,
             prevKeyEpoch: row.prevKeyEpoch,
             createdAt: row.createdAt.toISOString(),
-            changeSeq: row.changeSeq,
+            /* Where this share's feed starts: sealed, so it counts nothing of the owner's. */
+            cursor: row.feedCursor,
             granter: {
                 id: row.granter.id,
                 name: row.granter.name,
@@ -878,7 +893,7 @@ export async function listSharedWithMe(userId: string) {
                 signingPublicKey: b64(row.granter.signingPublicKey),
                 keyVersion: row.granter.keyVersion,
             },
-            node: nodeView(row.node),
+            node: granteeView(nodeView(row.node)),
         })),
     };
 }
@@ -1442,11 +1457,10 @@ async function presignDownloads(workspaceId: string, ids: string[], ttl: number)
  */
 export async function downloadUrl(userId: string, workspaceId: string, versionId: string) {
     const access = await requireVersionAccess(userId, workspaceId, versionId, 'viewer');
-    return presignDownload(
-        workspaceId,
-        versionId,
-        access.role === 'owner' ? DOWNLOAD_URL_TTL_SECONDS : SHARE_URL_TTL_SECONDS,
-    );
+    if (access.role === 'owner')
+        return presignDownload(workspaceId, versionId, DOWNLOAD_URL_TTL_SECONDS);
+    const presigned = await presignDownload(workspaceId, versionId, SHARE_URL_TTL_SECONDS);
+    return { ...presigned, node: granteeView(presigned.node) };
 }
 
 async function presignDownload(workspaceId: string, versionId: string, ttl: number) {
@@ -2459,20 +2473,53 @@ export async function changes(userId: string, workspaceId: string, since: number
     };
 }
 
-/* A grantee follows a share; once it is revoked the feed is gone, and says so with 410. */
-export async function shareChanges(userId: string, shareId: string, since: number) {
-    const page = await driveRepository.listShareChanges({ shareId, granteeUserId: userId, since });
+/*
+ * A grantee follows a share: the changes inside it, in order, with a sealed
+ * cursor and nothing that counts the owner's changes (no sequence numbers on
+ * the changes or their nodes). Once the share is revoked the feed is gone, and
+ * says so with 410; a cursor the server did not seal for this share is a 400.
+ */
+type ShareChangeRow = Extract<
+    Awaited<ReturnType<typeof driveRepository.listShareChanges>>,
+    { status: 'ok' }
+>['changes'][number];
+function shareChangeView(change: ShareChangeRow) {
+    switch (change.kind) {
+        case 'node':
+            return { kind: 'node' as const, node: granteeView(nodeView(change.node)) };
+        case 'tombstone':
+            return {
+                kind: 'tombstone' as const,
+                nodeId: change.nodeId,
+                parentId: change.parentId,
+            };
+        default:
+            return { kind: change.kind, nodeId: change.nodeId };
+    }
+}
+
+export async function shareChanges(userId: string, shareId: string, cursor?: string) {
+    const page = await driveRepository.listShareChanges({
+        shareId,
+        granteeUserId: userId,
+        cursor,
+    });
     switch (page.status) {
         case 'not-found':
             throw new DriveError('not-found', 'This share no longer exists.', 404);
         case 'revoked':
             throw new DriveError('expired', 'This share has ended.', 410);
+        case 'bad-cursor':
+            throw new DriveError(
+                'invalid',
+                'This feed position is not valid here. Start the feed again.',
+            );
         case 'ok':
             return {
-                changes: page.changes.map(changeView),
-                resync: page.resync,
-                nextCursor: page.nextCursor,
+                changes: page.changes.map(shareChangeView),
+                cursor: page.cursor,
                 hasMore: page.hasMore,
+                resync: page.resync,
             };
     }
 }
