@@ -1,0 +1,59 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_7c0f424aad5a1e::t_587a14e1d1d030 52
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_7c0f424aad5a1e::t_16a58eb611e079 216-221
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_7c0f424aad5a1e::t_dbe4a87d191bea 13,125-129,231,235-242,254-260,263-265,267-271,273,276-277,281-285,287,289,291,296
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_7c0f424aad5a1e::t_a105722c01b0bc 18-22,24
+apps/android/app/src/main/kotlin/com/hushos/app/data/Integrity.kt
+  s_7c0f424aad5a1e::t_90488f2ab3fc63 6,10-11,13-14,17-21,23-32,34-41,45-62,66-79,81-82,84-89,96-97,99-121,123-143,148-153,155-172,175-240
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_7c0f424aad5a1e::t_0d2e3aec628b5c 68-73,93-98,103,110,171-174,179-181,183,186,197,249-282
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_7c0f424aad5a1e::t_142b9c5c0046a8 10-11,13-19,46-66,73-80
+apps/android/app/src/main/kotlin/com/hushos/app/data/ShareSeals.kt
+  s_7c0f424aad5a1e::t_fa49e412539156 57,67-68,70,73-74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_7c0f424aad5a1e::t_0b012f78e47c55 50,228-241,256-258,260-274,276-283,285-287,352-353,383-384,388,390-391,396-397,431-434,466-468,470,472,479,502-507,556-560,566,585-586,600,626-650,657-662,664,666-668,670-671,679,868-869,875-877,1055-1056,1069,1100-1105,1111-1112,1114-1115,1135,1137,1197-1202,1234,1243
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_7c0f424aad5a1e::t_7b91ecf32354cb 138-139,479-481,889-890,893-897,900-902,904,907-909,912,918-922,1232-1233,1250,1253,1261
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_7c0f424aad5a1e::t_6b052acf9248ef 321-322
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Unverified.kt
+  s_7c0f424aad5a1e::t_385ce85cccc6a2 26,34-36,43,45,48-49,59-61,68,71,75-76
+apps/android/app/src/test/kotlin/com/hushos/app/data/GranterTrustTest.kt
+  s_7c0f424aad5a1e::t_958bf23b2926af 7-9,13-16,24-27,31,35-36,40-54
+apps/android/app/src/test/kotlin/com/hushos/app/data/IntegrityTest.kt
+  s_7c0f424aad5a1e::t_25e400e6a16665 8,10-11,15-19,30-32,48-49,52,60-67,71-90,93-102,106,108-110,118,142-155,159-167
+apps/android/app/src/test/kotlin/com/hushos/app/data/ResealTest.kt
+  s_7c0f424aad5a1e::t_1726a7693da8bb 1-120
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_7c0f424aad5a1e::t_f4308d373dd150 35,37-53,67,75-76
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_7c0f424aad5a1e::t_f6d2299d57e577 43-50,52-77
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareOpenTest.kt
+  s_7c0f424aad5a1e::t_59e476871621ce 15,36,47,54,57-58,64-65,69-70,72-73
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareSealsTest.kt
+  s_7c0f424aad5a1e::t_379a7e0093347d 22,24,37,40
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharingTrustTest.kt
+  s_7c0f424aad5a1e::t_ee55f169b7689c 67,70-74,76-78
+apps/android/app/src/test/kotlin/com/hushos/app/data/SuccessionPinTest.kt
+  s_7c0f424aad5a1e::t_89ae12b13dabcd 112-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab2c16c4e54310d858f06acdd94b158c16972c62",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
