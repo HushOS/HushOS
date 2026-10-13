@@ -43,7 +43,9 @@ export const Route = createFileRoute('/llms.txt')({
 - Anyone who can see shared content can report it; operators triage reports, remove content, and can file with authorities. Privacy is not a shield for abuse.
 - Sign-in uses OPAQUE, a password-authenticated key exchange. The server never receives the password, not even a hash of it.
 - Each account key is generated in the browser and wrapped by the password and by a 24-word recovery phrase. Resetting the password keeps the same key.
-- File and folder keys are made on the device and wrapped under the workspace key; content is encrypted in 8 MiB chunks with XChaCha20-Poly1305 before it leaves. The server sees ciphertext, sizes and the tree's shape, never names or contents.
+- File and folder keys are made on the device and wrapped under the workspace key; content is padded (Padmé) and encrypted in 8 MiB chunks with XChaCha20-Poly1305 before it leaves. The server sees ciphertext, the tree's shape and padded sizes, never names or contents: below 256 bytes everything is 256, otherwise at most 6.25% is added, so a file's size is known only to within roughly 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB.
+- Every change is signed by the account that wrote it. Devices check signatures against keys their person compared in person and mark anything else Unverified, or Couldn't check when the check cannot run. The server stores the writer as an account id alone; link visitors get no signatures or writers.
+- Reports are sealed to operator keys the server provides, so whoever runs a server can open what is reported to it.
 - Every account has an invite link; someone who joins through it earns both people extra storage. Creators can be enrolled as affiliates with a coupon code and a page showing the plans with their discount.
 - Mission: make the private choice the easy choice. Drive is the first part of a productivity suite built the same way.
 - Licence: GNU AGPL-3.0. Source: [github.com/HushOS](https://github.com/HushOS)

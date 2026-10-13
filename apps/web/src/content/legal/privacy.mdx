@@ -29,7 +29,7 @@ does not receive any data from instances it does not run.
         ['Workspace', 'Your workspace, its storage allowance, and usage counters'],
         [
             'Drive',
-            'The shape of your folder tree (ids, parents, sizes, times) and encrypted names and contents the Service cannot read; each upload’s encrypted chunks in object storage',
+            'The shape of your folder tree (ids, parents, times, and which account wrote each change) and encrypted names and contents the Service cannot read; each upload’s encrypted chunks in object storage. Contents are padded before encryption, so the stored size tells the Service a file’s size only roughly: anything under 256 bytes is stored as 256, and otherwise at most 6.25% is added, which leaves a file’s size known to within about 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB',
         ],
         [
             'Sharing',

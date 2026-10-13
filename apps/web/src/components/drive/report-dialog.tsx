@@ -26,9 +26,12 @@ import { cue } from '@/lib/sounds';
 
 /*
  * Reporting something seen through a link or a share. The key to what was
- * reported is sealed on this device to the instance's operators, so a report
- * is the one act that gives anyone but the sharer's audience a way in, and it
- * is theirs alone to open. The person who shared it is not told who reported.
+ * reported is sealed on this device to the operator keys the server lists:
+ * the device cannot tell an operator's key from any other the server hands
+ * it, so whoever runs the server can open what is reported to it, which is
+ * what the dialog says ("the people who run this HushOS"). A report is the one
+ * act that gives anyone beyond the sharer's audience a way in. The person who
+ * shared it is not told who reported.
  */
 export function ReportDialog({
     node,
