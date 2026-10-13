@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_7c0f424aad5a1e::t_3e3f4584b14706 50-69,90-92
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_7c0f424aad5a1e::t_2d1f90a0a8324d 390-392,396,415-416
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_7c0f424aad5a1e::t_4873a1dc701493 21-24,28-31,36-39,44,46-47,50,59,77-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6750f8efd04f4754eb5b891a064b9a2f54522624",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
