@@ -3,6 +3,7 @@ import type { Signer } from '@hushos/drive/api';
 import { integrityIssues, signersFromPins, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
+import { ShieldAlertIcon, ShieldQuestionIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { CheckContact } from '@/components/drive/check-contact';
@@ -89,16 +90,20 @@ export function SavedFromLinkLine({
  * "Check again" for a checked contact whose signature does not hold, "Try
  * again" for a check that did not run. Verified items, and anything with
  * nothing to check (a link visitor's view), show nothing. It warns; it never
- * stops the item opening.
+ * stops the item opening. In a row or on a card it is a shield beside the
+ * name (`variant="icon"`), so it never takes the name's room; Info and the
+ * viewer, which have room, show the word.
  */
 export function UnverifiedMark({
     node,
     issues: given,
+    variant = 'badge',
     className,
 }: {
     node?: Pick<DriveNode, 'name' | 'metadataSigner' | 'currentVersion' | 'integrity'>;
     /* For a record other than an item's current state, such as an earlier version. */
     issues?: IntegrityIssue[];
+    variant?: 'badge' | 'icon';
     className?: string;
 }) {
     const issues = given ?? (node ? integrityIssues(node) : []);
@@ -165,11 +170,21 @@ export function UnverifiedMark({
                     }}
                     onDoubleClick={(event) => event.stopPropagation()}
                     className={cn(
-                        'eyebrow inline-flex h-5 shrink-0 cursor-pointer items-center rounded-xs border border-transparent bg-warning-soft px-1.5 whitespace-nowrap text-warning outline-none transition-colors hover:border-warning/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:border-warning/40',
+                        variant === 'icon'
+                            ? 'relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-warning outline-none transition-colors after:absolute after:-inset-2.5 hover:bg-warning-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:bg-warning-soft'
+                            : 'eyebrow inline-flex h-5 shrink-0 cursor-pointer items-center rounded-xs border border-transparent bg-warning-soft px-1.5 whitespace-nowrap text-warning outline-none transition-colors hover:border-warning/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:border-warning/40',
                         className,
                     )}
                 >
-                    {label}
+                    {variant === 'icon' ? (
+                        worst === 'unchecked' ? (
+                            <ShieldQuestionIcon aria-hidden="true" className="size-4" />
+                        ) : (
+                            <ShieldAlertIcon aria-hidden="true" className="size-4" />
+                        )
+                    ) : (
+                        label
+                    )}
                 </PopoverTrigger>
                 <PopoverContent
                     className="flex w-72 flex-col gap-2 p-3"

@@ -19,6 +19,7 @@ import { FileMark } from '@/components/drive/file-mark';
 import { keyLabel } from '@/components/drive/shortcuts';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
+import { useIsMobile } from '@/hooks/use-mobile';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -172,6 +173,7 @@ export function TrashView() {
     const rows = useMemo(() => trash.data ?? [], [trash.data]);
     const ids = useMemo(() => rows.map((item) => item.node.id), [rows]);
     const listRef = useRef<HTMLDivElement>(null);
+    const mobile = useIsMobile();
     const {
         coarse,
         selected,
@@ -507,9 +509,9 @@ export function TrashView() {
                 >
                     <thead>
                         <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
-                            <th scope="col" className="pl-5 text-left sm:pl-8">
-                                <span className="flex items-center gap-4">
-                                    <span className="w-10 shrink-0" />
+                            <th scope="col" className="pl-4 text-left md:pl-8">
+                                <span className="flex items-center gap-3 md:gap-4">
+                                    <span className="w-8 shrink-0 md:w-10" />
                                     Name
                                 </span>
                             </th>
@@ -558,7 +560,7 @@ export function TrashView() {
                                         )}
                                     >
                                         <td className="min-w-0 p-0">
-                                            <span className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-4 pl-5 sm:pl-8">
+                                            <span className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] items-center gap-x-3 pl-4 md:grid-cols-[2.5rem_minmax(0,1fr)] md:gap-x-4 md:pl-8">
                                                 <span
                                                     className={cn(
                                                         'row-span-2',
@@ -571,10 +573,13 @@ export function TrashView() {
                                                         revealed={coarse && picked.length > 0}
                                                         onToggle={() => toggle(item.node.id)}
                                                     >
-                                                        <FileMark node={item.node} size="list" />
+                                                        <FileMark
+                                                            node={item.node}
+                                                            size={mobile ? 'row' : 'list'}
+                                                        />
                                                     </SelectableMark>
                                                 </span>
-                                                <span className="truncate text-[15px] font-medium">
+                                                <span className="truncate text-[14px] font-medium md:text-[15px]">
                                                     {item.node.name}
                                                 </span>
                                                 {rowFailed ? (

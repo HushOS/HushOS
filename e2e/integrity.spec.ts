@@ -82,7 +82,8 @@ test('when the people she trusts can’t load, every row says Couldn’t check, 
     await expect(mark(maya, 'notes.md')).toHaveAttribute('data-integrity', 'unchecked', {
         timeout: 60_000,
     });
-    await expect(mark(maya, 'notes.md')).toHaveText('Couldn’t check');
+    // In a row the mark is a shield; what it says is its name.
+    await expect(mark(maya, 'notes.md')).toHaveAccessibleName(/^Couldn’t check:/);
     // Info says the same, beside who wrote it.
     const box = (await row(maya, 'notes.md').boundingBox())!;
     await maya.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
@@ -149,7 +150,7 @@ test('a file from someone not checked is Unverified, says who, and clears once c
     await expect(mark(maya, 'module.ts')).toHaveAttribute('data-integrity', 'unknown-signer', {
         timeout: 60_000,
     });
-    await expect(mark(maya, 'module.ts')).toHaveText('Unverified');
+    await expect(mark(maya, 'module.ts')).toHaveAccessibleName(/^Unverified:/);
     // One mark per row, though the name and the version are both his.
     await expect(mark(maya, 'module.ts')).toHaveCount(1);
     await expect(mark(maya, 'notes.md')).toHaveCount(0);
@@ -347,7 +348,7 @@ test('a copy of what no longer verifies keeps its Unverified mark', async () => 
     await expect(mark(maya, 'module.ts')).toHaveAttribute('data-integrity', 'resealed', {
         timeout: 60_000,
     });
-    await expect(mark(maya, 'module.ts')).toHaveText('Unverified');
+    await expect(mark(maya, 'module.ts')).toHaveAccessibleName(/^Unverified:/);
 });
 
 test('rotating Sam’s account key carries his earlier keys and his settings key over', async () => {

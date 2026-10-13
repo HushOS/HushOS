@@ -102,7 +102,10 @@ export function SearchView({ query }: { query: string }) {
                             <th scope="col" className="hidden w-40 text-left sm:table-cell">
                                 Changed
                             </th>
-                            <th scope="col" className="w-28 pr-5 text-right sm:pr-8">
+                            <th
+                                scope="col"
+                                className="hidden w-28 pr-5 text-right sm:pr-8 md:table-cell"
+                            >
                                 Size
                             </th>
                         </tr>
@@ -126,7 +129,7 @@ export function SearchView({ query }: { query: string }) {
                                     className={`h-14 border-b border-rule ${index === focused ? 'bg-muted' : ''}`}
                                     onMouseEnter={() => setFocus({ query, index })}
                                 >
-                                    <td className="min-w-0 pl-5 sm:pl-8">
+                                    <td className="min-w-0 pr-5 pl-5 sm:pl-8 md:pr-0">
                                         <span className="flex min-w-0 items-center gap-4">
                                             <Link
                                                 {...target}
@@ -142,7 +145,7 @@ export function SearchView({ query }: { query: string }) {
                                                     </span>
                                                 </span>
                                             </Link>
-                                            <UnverifiedMark node={node} />
+                                            <UnverifiedMark node={node} variant="icon" />
                                         </span>
                                     </td>
                                     <td className="hidden min-w-0 pr-4 lg:table-cell">
@@ -154,7 +157,7 @@ export function SearchView({ query }: { query: string }) {
                                     <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
                                         {formatWhen(node.metadata?.modified ?? node.updatedAt)}
                                     </td>
-                                    <td className="pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8">
+                                    <td className="hidden pr-5 text-right text-[13px] text-muted-foreground tabular-nums sm:pr-8 md:table-cell">
                                         {node.kind === 'folder'
                                             ? '–'
                                             : Number.isNaN(size)

@@ -12,12 +12,14 @@ import {
     CornerCheck,
     EmptyState,
     MarqueeBox,
+    RowName,
     SelectableMark,
     SkeletonRows,
     SortButton,
     useListSelection,
 } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { HotkeyHints } from '@/components/drive/hotkey-hints';
 import { InfoDialog } from '@/components/drive/info-dialog';
 import { MoveDialog } from '@/components/drive/move-dialog';
@@ -192,6 +194,7 @@ export function FolderView({ folderId }: { folderId: string }) {
     );
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
+    const mobile = useIsMobile();
     const {
         coarse,
         selected,
@@ -932,10 +935,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                                         <th
                                             scope="col"
                                             aria-sort={ariaSort(order, 'name')}
-                                            className="pl-5 text-left sm:pl-8"
+                                            className="pl-4 text-left md:pl-8"
                                         >
-                                            <span className="flex items-center gap-4">
-                                                <span className="w-10 shrink-0" />
+                                            <span className="flex items-center gap-3 md:gap-4">
+                                                <span className="w-8 shrink-0 md:w-10" />
                                                 <SortButton
                                                     label="Name"
                                                     {...sortProps(order, 'name', setOrder)}
@@ -963,7 +966,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                         <th
                                             scope="col"
                                             aria-sort={ariaSort(order, 'size')}
-                                            className="w-24 pr-2 text-right sm:w-28"
+                                            className="hidden w-28 pr-2 text-right md:table-cell"
                                         >
                                             <SortButton
                                                 label="Size"
@@ -1007,16 +1010,12 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     )}
                                                 >
                                                     <td className="min-w-0 p-0">
-                                                        {/* Only as wide as the name: the blank rest of the cell is row, where a second click lets go. */}
-                                                        <span className="inline-flex max-w-full min-w-0 items-center gap-4">
-                                                            {/* The padding, the thumbnail and the name are one target that selects; only the name's text opens. */}
-                                                            <button
-                                                                type="button"
-                                                                className="inline-flex min-w-0 cursor-default items-center gap-4 py-2 pl-5 text-left text-[15px] font-medium outline-none sm:pl-8"
-                                                                onClick={(event) =>
-                                                                    select(node.id, event)
-                                                                }
-                                                            >
+                                                        <RowName
+                                                            node={node}
+                                                            onSelect={(event) =>
+                                                                select(node.id, event)
+                                                            }
+                                                            thumbnail={
                                                                 <SelectableMark
                                                                     name={node.name}
                                                                     checked={isSelected}
@@ -1025,29 +1024,40 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                                 >
                                                                     <FileMark
                                                                         node={node}
-                                                                        size="list"
+                                                                        size={
+                                                                            mobile ? 'row' : 'list'
+                                                                        }
                                                                     />
                                                                 </SelectableMark>
+                                                            }
+                                                            name={
                                                                 <NodeName
                                                                     node={node}
                                                                     rootId={rootId}
                                                                     folderId={folderId}
                                                                     onOpen={markOpened(node)}
                                                                 />
-                                                            </button>
-                                                            <UnverifiedMark node={node} />
-                                                            <TagStamps
-                                                                tagIds={tagIds(node)}
-                                                                registry={registry}
-                                                                itemName={node.name}
-                                                                onEdit={
-                                                                    node.workspaceId === workspaceId
-                                                                        ? () => setTagging([node])
-                                                                        : undefined
-                                                                }
-                                                                max={2}
-                                                            />
-                                                        </span>
+                                                            }
+                                                            tags={
+                                                                tagIds(node).length > 0 && (
+                                                                    <TagStamps
+                                                                        tagIds={tagIds(node)}
+                                                                        registry={registry}
+                                                                        itemName={node.name}
+                                                                        onEdit={
+                                                                            node.workspaceId ===
+                                                                            workspaceId
+                                                                                ? () =>
+                                                                                      setTagging([
+                                                                                          node,
+                                                                                      ])
+                                                                                : undefined
+                                                                        }
+                                                                        max={2}
+                                                                    />
+                                                                )
+                                                            }
+                                                        />
                                                     </td>
                                                     {!shared && (
                                                         <td className="hidden min-w-0 pr-4 lg:table-cell">
@@ -1063,7 +1073,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                                 node.updatedAt,
                                                         )}
                                                     </td>
-                                                    <td className="pr-2 text-right text-[13px] text-muted-foreground tabular-nums">
+                                                    <td className="hidden pr-2 text-right text-[13px] text-muted-foreground tabular-nums md:table-cell">
                                                         <SizeText node={node} folderWord="–" />
                                                     </td>
                                                     <td className="pr-3 text-right sm:pr-5">
@@ -1149,7 +1159,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                 />
                                                 <UnverifiedMark
                                                     node={node}
-                                                    className="absolute top-3.5 right-3.5 shadow-md"
+                                                    variant="icon"
+                                                    className="absolute top-3.5 right-3.5 bg-card shadow-md hover:bg-card"
                                                 />
                                             </ContextMenuTrigger>
                                             <NodeContextMenu entries={entries} />

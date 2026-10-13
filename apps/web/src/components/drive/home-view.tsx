@@ -13,6 +13,7 @@ import { useDrive } from '@/components/drive/drive-shell';
 import {
     EmptyState,
     MarqueeBox,
+    RowName,
     SelectableMark,
     SkeletonRows,
     useListSelection,
@@ -36,10 +37,10 @@ import { ShareDialog } from '@/components/drive/share-dialog';
 import { Swatch } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
 import { PageHeader } from '@/components/page-header';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { toast } from '@/components/ui/toast';
@@ -128,6 +129,7 @@ export function HomeView() {
     }, [catalogue, top.data, type, tag, registry, gone]);
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
+    const mobile = useIsMobile();
     const {
         coarse,
         selected,
@@ -431,9 +433,9 @@ export function HomeView() {
                                 >
                                     <thead>
                                         <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
-                                            <th scope="col" className="pl-5 text-left sm:pl-8">
-                                                <span className="flex items-center gap-4">
-                                                    <span className="w-10 shrink-0" />
+                                            <th scope="col" className="pl-4 text-left md:pl-8">
+                                                <span className="flex items-center gap-3 md:gap-4">
+                                                    <span className="w-8 shrink-0 md:w-10" />
                                                     Name
                                                 </span>
                                             </th>
@@ -451,7 +453,7 @@ export function HomeView() {
                                             </th>
                                             <th
                                                 scope="col"
-                                                className="w-24 pr-2 text-right sm:w-28"
+                                                className="hidden w-28 pr-2 text-right md:table-cell"
                                             >
                                                 Size
                                             </th>
@@ -490,14 +492,12 @@ export function HomeView() {
                                                         )}
                                                     >
                                                         <td className="min-w-0 p-0">
-                                                            <span className="inline-flex max-w-full min-w-0 items-center gap-4">
-                                                                <button
-                                                                    type="button"
-                                                                    className="inline-flex min-w-0 cursor-default items-center gap-4 py-2 pl-5 text-left text-[15px] font-medium outline-none sm:pl-8"
-                                                                    onClick={(event) =>
-                                                                        select(node.id, event)
-                                                                    }
-                                                                >
+                                                            <RowName
+                                                                node={node}
+                                                                onSelect={(event) =>
+                                                                    select(node.id, event)
+                                                                }
+                                                                thumbnail={
                                                                     <SelectableMark
                                                                         name={node.name}
                                                                         checked={isSelected}
@@ -511,9 +511,15 @@ export function HomeView() {
                                                                     >
                                                                         <FileMark
                                                                             node={node}
-                                                                            size="list"
+                                                                            size={
+                                                                                mobile
+                                                                                    ? 'row'
+                                                                                    : 'list'
+                                                                            }
                                                                         />
                                                                     </SelectableMark>
+                                                                }
+                                                                name={
                                                                     <HomeName
                                                                         node={node}
                                                                         rootId={rootId}
@@ -524,25 +530,30 @@ export function HomeView() {
                                                                                 pushedPreview.current = true;
                                                                         }}
                                                                     />
-                                                                </button>
-                                                                <UnverifiedMark node={node} />
-                                                                <TagStamps
-                                                                    tagIds={
-                                                                        registry
-                                                                            ? tagsOf(
-                                                                                  registry,
-                                                                                  node.id,
-                                                                              )
-                                                                            : []
-                                                                    }
-                                                                    registry={registry}
-                                                                    itemName={node.name}
-                                                                    onEdit={() =>
-                                                                        setTagging([node])
-                                                                    }
-                                                                    max={2}
-                                                                />
-                                                            </span>
+                                                                }
+                                                                tags={
+                                                                    registry !== null &&
+                                                                    tagsOf(registry, node.id)
+                                                                        .length > 0 && (
+                                                                        <TagStamps
+                                                                            tagIds={
+                                                                                registry
+                                                                                    ? tagsOf(
+                                                                                          registry,
+                                                                                          node.id,
+                                                                                      )
+                                                                                    : []
+                                                                            }
+                                                                            registry={registry}
+                                                                            itemName={node.name}
+                                                                            onEdit={() =>
+                                                                                setTagging([node])
+                                                                            }
+                                                                            max={2}
+                                                                        />
+                                                                    )
+                                                                }
+                                                            />
                                                         </td>
                                                         <td className="hidden min-w-0 pr-4 lg:table-cell">
                                                             <AccessCell
@@ -553,7 +564,7 @@ export function HomeView() {
                                                         <td className="hidden text-[13px] text-muted-foreground tabular-nums sm:table-cell">
                                                             {formatWhen(node.updatedAt)}
                                                         </td>
-                                                        <td className="pr-2 text-right text-[13px] text-muted-foreground tabular-nums">
+                                                        <td className="hidden pr-2 text-right text-[13px] text-muted-foreground tabular-nums md:table-cell">
                                                             <SizeText node={node} folderWord="–" />
                                                         </td>
                                                         <td className="pr-3 text-right sm:pr-5">

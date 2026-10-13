@@ -7,8 +7,11 @@ import {
     useSyncExternalStore,
     type ComponentProps,
     type ReactNode,
+    type MouseEvent,
     type RefObject,
 } from 'react';
+import type { DriveNode } from '@hushos/drive/client';
+import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Button } from '@/components/ui/button';
 
 /*
@@ -282,6 +285,59 @@ export function MarqueeBox({ marquee }: { marquee: Marquee | null }) {
 }
 
 /*
+ * The name cell of a list row: the thumbnail, the name with the Unverified
+ * shield right after it, and the item's tags on a line of their own under the
+ * name. The name always keeps the width; nothing sits beside it but the
+ * shield, so a long name, a mark and tags never crowd each other or spill into
+ * the next column, on a phone or a desk. Rows stay one height: with tags the
+ * two lines share the space one line and the padding had.
+ *
+ * The padding with the thumbnail and the name are two targets side by side
+ * that both select; only the name's text opens. The thumbnail's is out of the
+ * tab order, since the keys move between rows. Only as wide as its content:
+ * the blank rest of the cell is row, where a second click lets go.
+ */
+export function RowName({
+    node,
+    thumbnail,
+    name,
+    tags,
+    onSelect,
+}: {
+    node: Pick<DriveNode, 'name' | 'metadataSigner' | 'currentVersion' | 'integrity'>;
+    thumbnail: ReactNode;
+    name: ReactNode;
+    tags?: ReactNode;
+    onSelect: (event: MouseEvent) => void;
+}) {
+    return (
+        <span className="inline-flex max-w-full min-w-0 items-stretch">
+            <button
+                type="button"
+                tabIndex={-1}
+                className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-4 outline-none md:pr-4 md:pl-8"
+                onClick={onSelect}
+            >
+                {thumbnail}
+            </button>
+            <span className="flex min-w-0 flex-col justify-center gap-0.5 py-1">
+                <span className="flex min-w-0 items-center gap-0.5">
+                    <button
+                        type="button"
+                        className="block min-w-0 cursor-default truncate text-left text-[14px] font-medium outline-none md:text-[15px]"
+                        onClick={onSelect}
+                    >
+                        {name}
+                    </button>
+                    <UnverifiedMark node={node} variant="icon" />
+                </span>
+                {tags}
+            </span>
+        </span>
+    );
+}
+
+/*
  * An item's thumbnail that carries its selection: a selected item wears a check
  * badge on its corner; hovering an unselected row shows an empty badge that adds
  * it to the selection, and on a touch screen every row shows one while anything
@@ -303,7 +359,7 @@ export function SelectableMark({
     children: ReactNode;
 }) {
     return (
-        <span className="relative flex size-10 shrink-0 items-center justify-center">
+        <span className="relative flex size-8 shrink-0 items-center justify-center md:size-10">
             {children}
             <CornerCheck
                 name={name}
