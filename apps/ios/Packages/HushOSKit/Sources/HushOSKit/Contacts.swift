@@ -69,6 +69,8 @@ public struct Lookup: Sendable {
     public var recheck: Bool = false
     /* The pin just followed their succession to the keys served now: said quietly, with comparing the words again offered. */
     public var followed: Bool = false
+    /* Changed, and the served keys are newer than the pin's: "Check again" may find a succession their pinned keys signed. */
+    public var canFollow: Bool = false
 }
 
 public enum ContactError: Error, LocalizedError, Equatable {
@@ -166,24 +168,30 @@ extension Vault {
         return try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey))
     }
 
-    /* A person by email, with what the pin says about them. */
+    /*
+     * A person by email, with what the pin says about them. A pin whose served keys moved on is
+     * not followed here: that asks the server for their chain, which only "Check again" does.
+     */
     public func lookup(email: String) async throws -> Lookup {
         let contact = try await Auth.lookupContact(email: email)
-        var pinned = try await loadSettings().contacts[contact.userId]
-        // Keys replaced by a succession the pinned keys signed: the pin moves with them.
-        var followed = false
-        if let pin = pinned {
-            let next = await follow(pin, served: contact.served)
-            followed = next != pin
-            pinned = next
-        }
+        let pinned = try await loadSettings().contacts[contact.userId]
         var changed = false
         if let pinned {
             // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
             if pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey { changed = true }
             if let hash = pinned.kemPublicKeyHash, contact.kem.map({ keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) }) != hash { changed = true }
         }
-        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false, followed: followed)
+        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false,
+                      canFollow: changed && (pinned?.mayFollow(contact.served) ?? false))
+    }
+
+    /* "Check again" from a lookup: follows the pinned keys along the chain to the served ones, then looks them up afresh. */
+    public func checkAgain(_ found: Lookup) async throws -> Lookup {
+        guard let pin = found.pinned else { return found }
+        let decision = try await checkAgain(pin, served: found.contact.served)
+        var next = try await lookup(email: found.contact.email)
+        if case .followed = decision { next.followed = true }
+        return next
     }
 
     /* Trusts the keys shown now: what the person does after checking the fingerprint. Re-pinning writes a current fingerprint. */
@@ -233,7 +241,6 @@ extension Vault {
         guard pin.verified else { throw ContactError.recheck(pin.displayName) }
         let contact = try await Auth.lookupContact(email: pin.email)
         guard contact.userId == pin.userId else { throw ContactError.changed }
-        let pin = await follow(pin, served: contact.served)
         let sealing = try pin.sealKeys(encryptionPublicKey: contact.encryptionPublicKey, kemPublicKey: contact.kem?.publicKey, kemSignature: contact.kem?.signature)
         if let digest = sealing.newDigest { try await rememberKem(digest, for: pin.userId) }
         let keys = try await identityKeys()

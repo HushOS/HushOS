@@ -362,6 +362,10 @@ struct VersionsSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(changedLabel(parseDate(version.createdAt)) ?? version.createdAt).font(Theme.Text.body).foregroundStyle(Alpine.ink)
                 if let note { Text(note).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1) }
+                // Each version carries its own signature: an earlier one can be unverified when the current one is not.
+                if let provenance = store.provenance(of: version, in: shown) {
+                    UnverifiedText.text(provenance).font(Theme.Text.footnote).lineLimit(1).accessibilityHint(provenance.explanation)
+                }
             }
             Spacer(minLength: 0)
             if restoring == version.id {

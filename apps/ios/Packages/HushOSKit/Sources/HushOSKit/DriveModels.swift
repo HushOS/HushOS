@@ -2,19 +2,15 @@ import Foundation
 
 /* The Drive API's views, as the server returns them (packages/drive/src/api.ts). */
 
-/* Who the server says wrote a record: for display only; the signature is what a reader checks. */
+/*
+ * The account the server says wrote a record, by id alone (round 3: no name or email, so a
+ * signer is never named from what the server claims). The signature is what a reader checks;
+ * a name comes only from this person's own pins (see `Writer`).
+ */
 public struct Signer: Codable, Sendable, Equatable, Hashable, Identifiable {
     public let id: String
-    public let name: String
-    public let email: String
 
-    public init(id: String, name: String, email: String) {
-        self.id = id
-        self.name = name
-        self.email = email
-    }
-
-    public var displayName: String { name.isEmpty ? email : name }
+    public init(id: String) { self.id = id }
 }
 
 public struct VersionView: Codable, Sendable, Equatable, Hashable {
@@ -28,7 +24,7 @@ public struct VersionView: Codable, Sendable, Equatable, Hashable {
     public let plaintextSize: String?
     public let ciphertextSize: String?
     public let readyAt: String?
-    /* The account that sealed the content-key envelope and its signature (base64url); null before signatures, and on link routes. */
+    /* The account that sealed the content-key envelope and its signature (base64url); null before signatures, absent on link routes. */
     public var signer: Signer? = nil
     public var signature: String? = nil
 }
@@ -51,7 +47,7 @@ public struct NodeView: Codable, Sendable, Equatable, Hashable {
     public let updatedAt: String?
     /* How the row's envelopes are sealed; absent (from an older server) means 1. */
     public var envelopeSuite: Int? = nil
-    /* The account that wrote the metadata envelope and its signature; null before signatures (signer null on link routes). */
+    /* The account that wrote the metadata envelope and its signature; null before signatures, absent on link routes. */
     public var metadataSigner: Signer? = nil
     public var metadataSignature: String? = nil
 

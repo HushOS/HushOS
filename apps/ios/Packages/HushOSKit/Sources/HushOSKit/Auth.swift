@@ -26,7 +26,7 @@ public struct SessionUser: Codable, Sendable, Equatable {
     }
 }
 
-public enum AuthError: Error, LocalizedError, Sendable {
+public enum AuthError: Error, LocalizedError, Sendable, Equatable {
     case message(String)
     case wrongPassword
     case noSession

@@ -691,6 +691,9 @@ struct CheckContactView: View {
     @State private var adding = false
     @State private var mismatch = false
     @State private var error = ""
+    @State private var following = false
+    /* "Check again" found no succession their pinned keys signed: the change stands. */
+    @State private var unfollowed = false
 
     private var first: String { found.map { ($0.contact.name.isEmpty ? $0.contact.email : $0.contact.name).split(separator: " ").first.map(String.init) ?? "them" } ?? "them" }
     private var unsignedKem: Bool { found.map { $0.contact.kem != nil && !$0.contact.kemSigned } ?? false }
@@ -718,6 +721,14 @@ struct CheckContactView: View {
                     } else if found.changed {
                         Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
+                        // Only when asked: following asks the server for their succession chain.
+                        if found.canFollow && !unfollowed {
+                            Button { checkAgain() } label: { Text(following ? "Checking…" : "Check again") }
+                                .disabled(following).alpineRow()
+                        } else if unfollowed {
+                            Text("Their new keys aren’t signed by the keys you checked. Compare their words before you accept.")
+                                .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
+                        }
                     } else {
                         Text("Ask \(first) to open People you share with in HushOS and read you their twelve words, on a call or in person. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
@@ -782,6 +793,23 @@ struct CheckContactView: View {
                 self.error = (error as? LocalizedError)?.errorDescription ?? "Check the address and try again."
             }
             looking = false
+        }
+    }
+
+    /* Follows their succession from the pinned keys, when one their pinned keys signed leads to the keys served now. */
+    private func checkAgain() {
+        guard let current = found else { return }
+        following = true
+        error = ""
+        Task {
+            do {
+                let next = try await store.vault.checkAgain(current)
+                found = next
+                if next.changed { unfollowed = true } else { Task { await store.refreshSigners() } }
+            } catch {
+                self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t check again. Try again."
+            }
+            following = false
         }
     }
 

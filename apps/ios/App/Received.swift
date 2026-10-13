@@ -20,6 +20,8 @@ struct SharedView: View {
     @State private var linkText = ""
     @State private var openingLink: String?
     @State private var showingPeople = false
+    /* A granter whose keys changed since they were pinned: checked again from a fresh lookup, which can follow their succession. */
+    @State private var checkingAgain: CheckTarget?
     @State private var action: NodeAction?
     @State private var viewing: Opened?
     @State private var stopping: SharedByMe?
@@ -37,6 +39,16 @@ struct SharedView: View {
             .navigationTitle("Shared")
             .screenChrome(title: "Shared") { peopleButton }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
+            .sheet(item: $checkingAgain) { target in
+                NavigationStack {
+                    CheckContactView(email: target.email, intro: "Check it’s them again before you open what they share.") { _ in
+                        checkingAgain = nil
+                        Task { await store.refreshMounts() }
+                    }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { checkingAgain = nil } } }
+                }
+                .environment(store)
+            }
             .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name) }
             .navigationDestination(item: $openingLink) { url in LinkBrowserView(url: url) }
             .nodeActionSheets(action: $action, store: store)
@@ -192,9 +204,16 @@ struct SharedView: View {
             }
             .itemRow()
         } else if let trust = mount.trust {
-            // Shut until the granter is checked in People you share with: the server's word for their key is not enough.
+            // Shut until the granter is checked in People you share with (the server's word for their key is not enough),
+            // checked again after their keys changed, or, signed with keys they replaced, sealed again by them.
             let unverified = trust.unverified
-            Button { showingPeople = true } label: {
+            Button {
+                switch trust {
+                case .changed: checkingAgain = CheckTarget(id: mount.share.granter.id, email: mount.share.granter.email)
+                case .reseal: break
+                default: showingPeople = true
+                }
+            } label: {
                 HStack(spacing: Alpine.Space.s3) {
                     Image(systemName: unverified ? "person.badge.shield.checkmark" : "exclamationmark.triangle")
                         .foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
@@ -206,7 +225,7 @@ struct SharedView: View {
                 }
                 .frame(minHeight: Theme.row).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).itemRow()
+            .buttonStyle(.plain).disabled(!trust.actionable).itemRow()
         } else {
             HStack(spacing: Alpine.Space.s3) {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(Alpine.danger)

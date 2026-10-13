@@ -95,10 +95,10 @@ public actor Vault {
     var identityCheckedAt: Date?
     /* The settings key, opened under the account key (see Settings). */
     var settingsKey: Data?
-    /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity). */
+    /* The pins as the last settings read had them (see `knownPins`). */
+    var lastPins: [String: ContactPin] = [:]
+    /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity); a load that fails is not kept. */
     var trustedSigners: TrustedSigners?
-    /* Succession chains already found not to hold, by person and served keys: not asked for again this process. */
-    var refusedSuccessions: Set<String> = []
     var parents: [String: String]
     private let indexURL: URL?
     /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue). */
@@ -245,11 +245,20 @@ public actor Vault {
         workspaceKey = key
     }
 
-    /* The identity's private keys, opened once under the account key. */
+    /*
+     * The identity's private keys, opened once under the account key. An identity served as
+     * current with a lower key version than this device has opened is refused: those are keys
+     * the account replaced, and a server handing them back wants them used again.
+     */
     func identityKeys() async throws -> IdentityKeys {
         if let identity { return identity }
         let envelope = try await Auth.identity()
+        let marks = IdentityMarks.shared
+        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion)
         let keys = try identityOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
+        marks.record(userId: session.userId, keyVersion: keys.keyVersion)
+        // A settings mark an earlier version kept under this identity's key becomes the account's.
+        SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: [keys.encryptionPublicKey])
         identity = keys
         identityCheckedAt = Date()
         return keys

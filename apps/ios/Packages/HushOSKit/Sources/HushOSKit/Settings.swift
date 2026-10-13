@@ -53,7 +53,11 @@ struct Settings {
     var document: [String: Any]
     /* The version the server holds; 0 when there is no document yet. */
     var version: UInt64
-    /* How the stored envelope is sealed: 2 under the settings key, 1 under the identity (read, never written). */
+    /*
+     * How the stored envelope is sealed: 2 under the settings key. A version 1 document (sealed
+     * under the identity, which no longer opens) reads as empty settings at its served version,
+     * and the next save writes version 2 over it.
+     */
     var envelopeVersion: UInt32 = 2
     /* The settings key as the server keeps it, when the account has one. */
     var keyEnvelope: SettingsKeyEnvelope?
@@ -70,6 +74,23 @@ struct Settings {
         document = ["version": 1, "contacts": [String: Any]()]
         self.version = version
         self.keyEnvelope = keyEnvelope
+    }
+
+    /*
+     * A served envelope, opened: version 2 under the settings key; version 1 (which the core no
+     * longer opens) as empty settings at its served version, so the next save writes version 2
+     * over it. A version 2 document that doesn't open is refused, never read as empty: empty
+     * settings would drop every pin and the ledger as surely as a rollback.
+     */
+    static func opened(userId: String, envelope: SettingsEnvelope, settingsKey: Data?) throws -> Settings {
+        var settings: Settings
+        if let json = try settingsOpen(userId: userId, settingsKey: settingsKey, envelope: envelope) {
+            settings = try Settings(json: json, version: envelope.settingsVersion)
+        } else {
+            settings = Settings(version: envelope.settingsVersion)
+        }
+        settings.envelopeVersion = envelope.version
+        return settings
     }
 
     private var rawContacts: [String: Any] { document["contacts"] as? [String: Any] ?? [:] }
@@ -141,48 +162,6 @@ struct Settings {
     }
 }
 
-/*
- * The highest settings version this device has seen, per account and identity key. The
- * server could otherwise hand back an older document (a pin since replaced, a share
- * since stopped in the ledger) and every client would take it. Kept on this phone only,
- * and kept across sign-outs, since a rollback is likeliest right after signing in again;
- * the key is a digest, so the file names no account.
- */
-public struct SettingsMarks: Sendable {
-    let file: URL
-
-    public static let rolledBack = "The server sent older settings than this device has seen. Nothing was changed."
-
-    static var shared: SettingsMarks { SettingsMarks(file: Unbacked.local.appendingPathComponent("settings-marks.json")) }
-
-    static func key(userId: String, encryptionPublicKey: String) -> String {
-        keyDigest(publicKey: Data("\(userId.lowercased())\n\(encryptionPublicKey)".utf8))
-    }
-
-    private func load() -> [String: UInt64] {
-        guard let data = try? Data(contentsOf: file) else { return [:] }
-        return (try? JSONDecoder().decode([String: UInt64].self, from: data)) ?? [:]
-    }
-
-    func mark(_ key: String) -> UInt64 { load()[key] ?? 0 }
-
-    /* A served document (nil when the server says there is none) checked against the mark. */
-    func check(_ key: String, served: UInt64?) throws {
-        let seen = mark(key)
-        guard seen > 0 else { return }
-        guard let served, served >= seen else { throw ContactError.message(Self.rolledBack) }
-    }
-
-    /* Raised, never lowered: two processes writing at once keep the higher. */
-    func record(_ key: String, version: UInt64) {
-        var marks = load()
-        guard version > marks[key] ?? 0 else { return }
-        marks[key] = version
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(marks) { try? data.write(to: file, options: .atomic) }
-    }
-}
-
 extension ContactPin {
     /*
      * A pin made after a words check: it has the signing key the words cover, and its
@@ -226,13 +205,6 @@ extension ContactPin {
 }
 
 extension Vault {
-    private var marksKey: String {
-        get async throws {
-            let keys = try await identityKeys()
-            return SettingsMarks.key(userId: session.userId, encryptionPublicKey: keys.encryptionPublicKey)
-        }
-    }
-
     /* The settings key out of the envelope the server keeps beside the settings, under the account key; kept for the process. */
     private func openSettingsKey(_ envelope: SettingsKeyEnvelope) throws -> Data {
         if let settingsKey { return settingsKey }
@@ -260,35 +232,25 @@ extension Vault {
 
     /*
      * The settings document, opened and checked against the highest version this device has
-     * seen: version 2 under the settings key, version 1 (read once, saved again as 2) under a
-     * key off the identity, the current one or, after a succession, an earlier one.
+     * seen for this account: version 2 under the settings key. A version 1 document no longer
+     * opens (it was sealed under a key off the identity, which a stolen identity key
+     * reproduces): it reads as empty settings, and the next save starts afresh at version 2.
      */
     func loadSettings() async throws -> Settings {
         let marks = SettingsMarks.shared
-        let key = try await marksKey
         let reply = try await Auth.settings()
-        try marks.check(key, served: reply.envelope?.settingsVersion)
+        try marks.check(userId: session.userId, served: reply.envelope?.settingsVersion)
         guard let envelope = reply.envelope else { return Settings(keyEnvelope: reply.key) }
-        let json: String
+        var settings: Settings
         if envelope.version == 2 {
             guard let stored = reply.key else { throw ContactError.message("Your settings key is missing. Try again later.") }
-            json = try settingsOpen(userId: session.userId, settingsKey: try openSettingsKey(stored), identityPrivateKey: nil, envelope: envelope)
+            settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: try openSettingsKey(stored))
         } else {
-            var opened: String?
-            var failure: Error?
-            for identity in try await allIdentities() {
-                do {
-                    opened = try settingsOpen(userId: session.userId, settingsKey: nil, identityPrivateKey: identity.encryptionPrivateKey, envelope: envelope)
-                    break
-                } catch { failure = failure ?? error }
-            }
-            guard let opened else { throw failure ?? ContactError.message("Unsupported settings document.") }
-            json = opened
+            settings = try Settings.opened(userId: session.userId, envelope: envelope, settingsKey: nil)
         }
-        var settings = try Settings(json: json, version: envelope.settingsVersion)
-        settings.envelopeVersion = envelope.version
         settings.keyEnvelope = reply.key
-        marks.record(key, version: envelope.settingsVersion)
+        marks.record(userId: session.userId, version: envelope.settingsVersion)
+        lastPins = settings.contacts
         return settings
     }
 
@@ -307,7 +269,7 @@ extension Vault {
             let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
                 try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
-                SettingsMarks.shared.record(try await marksKey, version: settings.version + 1)
+                SettingsMarks.shared.record(userId: session.userId, version: settings.version + 1)
                 settings.version += 1
                 settings.envelopeVersion = sealed.version
                 trustedSigners = nil
@@ -318,11 +280,16 @@ extension Vault {
         }
     }
 
-    /* Settings still sealed under the identity (version 1) are sealed again under the settings key, which outlives an identity. */
+    /* A version 1 document (read as empty) is written over as version 2 under the settings key, which outlives an identity. */
     func ensureSettingsKeyed() async throws {
         let settings = try await loadSettings()
         if settings.version == 0 || settings.envelopeVersion == 2 { return }
         try await updateSettings { _ in }
+    }
+
+    /* Everyone pinned as of the last settings read, checked or not, by lowercase id: for offering a check, never for trust. */
+    public func knownPins() -> [String: ContactPin] {
+        Dictionary(lastPins.values.map { ($0.userId.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /* What this account shared, by its own record. */

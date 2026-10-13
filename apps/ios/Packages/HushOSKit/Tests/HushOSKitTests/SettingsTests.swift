@@ -97,24 +97,61 @@ struct RotationLedgerTests {
 }
 
 struct SettingsMarksTests {
-    let marks = SettingsMarks(file: FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString).json"))
-    let key = SettingsMarks.key(userId: "User-1", encryptionPublicKey: "key")
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString).json")
+    var marks: SettingsMarks { SettingsMarks(file: file) }
 
     @Test func olderOrMissingSettingsAfterANewerOneAreRefused() throws {
-        defer { try? FileManager.default.removeItem(at: marks.file) }
+        defer { try? FileManager.default.removeItem(at: file) }
         // Nothing seen yet: no document and any version are fine.
-        try marks.check(key, served: nil)
-        try marks.check(key, served: 1)
-        marks.record(key, version: 5)
-        try marks.check(key, served: 5)
-        try marks.check(key, served: 6)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(key, served: 4) }
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(key, served: nil) }
-        // Never lowered, and per account and identity key.
-        marks.record(key, version: 2)
-        #expect(marks.mark(key) == 5)
-        #expect(SettingsMarks.key(userId: "user-1", encryptionPublicKey: "key") == key)
-        try marks.check(SettingsMarks.key(userId: "user-1", encryptionPublicKey: "rotated"), served: 1)
+        try marks.check(userId: "User-1", served: nil)
+        try marks.check(userId: "User-1", served: 1)
+        marks.record(userId: "User-1", version: 5)
+        try marks.check(userId: "user-1", served: 5)
+        try marks.check(userId: "user-1", served: 6)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 4) }
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: nil) }
+        // Never lowered, and per account.
+        marks.record(userId: "user-1", version: 2)
+        #expect(marks.mark(userId: "user-1") == 5)
+        try marks.check(userId: "user-2", served: 1)
+    }
+
+    @Test func theMarkSurvivesASuccessionAndTakesOverOneKeptPerIdentityKey() throws {
+        defer { try? FileManager.default.removeItem(at: file) }
+        // An earlier version kept the mark under the account and its identity key: 7 seen under the old keys.
+        HighWaterMarks(file: file).raise(SettingsMarks.legacyKey(userId: "user-1", encryptionPublicKey: "old-key"), to: 7)
+        marks.adopt(userId: "user-1", encryptionPublicKeys: ["old-key"])
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
+        // A succession changes the identity key; the mark is the account's and still refuses the older document.
+        marks.adopt(userId: "user-1", encryptionPublicKeys: ["new-key"])
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
+        // Taken over, never lowered by it: a higher mark already kept stays.
+        marks.record(userId: "user-1", version: 9)
+        HighWaterMarks(file: file).raise(SettingsMarks.legacyKey(userId: "user-1", encryptionPublicKey: "other-key"), to: 3)
+        marks.adopt(userId: "user-1", encryptionPublicKeys: ["other-key"])
+        #expect(marks.mark(userId: "user-1") == 9)
+    }
+}
+
+/*
+ * The highest own identity key version this device opened: an identity served as current
+ * with a lower one (keys the account replaced) is refused.
+ */
+struct IdentityMarksTests {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("identity-marks-\(UUID().uuidString).json")
+    var marks: IdentityMarks { IdentityMarks(file: file) }
+
+    @Test func anIdentityServedBelowTheHighestOpenedHereIsRefused() throws {
+        defer { try? FileManager.default.removeItem(at: file) }
+        try marks.check(userId: "user-1", keyVersion: 1)
+        marks.record(userId: "User-1", keyVersion: 3)
+        try marks.check(userId: "user-1", keyVersion: 3)
+        try marks.check(userId: "user-1", keyVersion: 4)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2) }
+        // Never lowered by a later, lower record, and per account.
+        marks.record(userId: "user-1", keyVersion: 1)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2) }
+        try marks.check(userId: "user-2", keyVersion: 1)
     }
 }
 
