@@ -290,12 +290,13 @@ Round 3 signed every saved copy with the re-sealed statement, so every copy a pe
 - **A verified original** (in one's own drive or a share from a checked contact): the ordinary statements, signed by the copier. The original was checked when copied, so nothing is laundered; the copy shows no mark.
 - **From a link**: a visitor has nothing to check the original against, and saving from a link is like downloading a file someone sent. The copy is signed with the **saved** statements:
 
-  ```
-  metadata: ["hushos/drive/sig/metadata-saved", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope), "link"]
-  version:  ["hushos/drive/sig/version-saved", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope), "link"]
-  ```
+    ```
+    metadata: ["hushos/drive/sig/metadata-saved", 1, workspaceId, nodeId, kind, metadataVersion, sha256(metadataEnvelope), "link"]
+    version:  ["hushos/drive/sig/version-saved", 1, workspaceId, nodeId, versionId, objectId, contentSuite, sha256(contentKeyEnvelope), "link"]
+    ```
 
-  A valid saved signature by the reader or a checked contact yields `saved-from-link`: no mark on the row, and a neutral line in Info and the viewer ("Saved from a link by you. HushOS can't confirm who made the original."; "by Maya" for a checked contact). Folders a save from a link creates are signed the same way.
+    A valid saved signature by the reader or a checked contact yields `saved-from-link`: no mark on the row, and a neutral line in Info and the viewer ("Saved from a link by you. HushOS can't confirm who made the original."; "by Maya" for a checked contact). Folders a save from a link creates are signed the same way.
+
 - **An original that isn't verified** (Unverified, Couldn't check, re-sealed, retired key): the re-sealed statements, as before, so the copy keeps its warning.
 
 Readers try the ordinary statement, then the saved one, then the re-sealed one. The server accepts any of the three on every signed write. Rotation and rename never produce a saved statement: a saved copy that is later rotated or renamed keeps `saved-from-link` only if the re-signing device re-signs it with the saved statement after checking it verified as saved; otherwise it becomes re-sealed.
