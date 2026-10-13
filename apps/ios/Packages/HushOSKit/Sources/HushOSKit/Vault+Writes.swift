@@ -39,8 +39,11 @@ extension Vault {
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
             nodeKey: key, metadata: metadata
         )
+        // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
+        // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
+        let prior = try await changeSigners().metadata(of: item.node)
         let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
-                                               version: item.node.metadataVersion + 1, envelope: sealed)
+                                               version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
         let node = try await api.rename(
             nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
             keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
@@ -216,6 +219,8 @@ extension Vault {
         var nodeInput: [String: Any]
         let final: NodeMetadata
         if let replacing {
+            // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is sent.
+            _ = try await changeSigners()
             nodeId = replacing.id
             guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
             nodeKey = key
@@ -299,7 +304,10 @@ extension Vault {
                 ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
                 nodeKey: nodeKey, metadata: final
             )
-            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed)
+            // The name kept from the record as the server holds it now: vouched for again only if that verified.
+            let prior = try await changeSigners().metadata(of: node)
+            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
+                                                   signing: .after(prior))
             node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
                                         metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
             return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
@@ -490,6 +498,13 @@ extension Vault {
     func copySigners() async throws -> TrustedSigners {
         do { return try await signers() } catch {
             throw DriveAPIError.server(503, "HushOS couldn’t check who wrote this, so it wasn’t copied. Try again.")
+        }
+    }
+
+    /* The same for a write that signs an existing record again (a rename, a replacement's name): it stops rather than vouch blind. */
+    func changeSigners() async throws -> TrustedSigners {
+        do { return try await signers() } catch {
+            throw DriveAPIError.server(503, "HushOS couldn’t check who wrote this, so it wasn’t changed. Try again.")
         }
     }
 

@@ -109,6 +109,33 @@ extension OnFakeDrive {
         #expect(reader.provenance(of: try #require(server.nodes[ofF.id])) == .resealed(.you))
     }
 
+    /* A rename re-signs the record's other fields beside the new name: a planted one is re-sealed, never vouched for. */
+    @Test func aRenameVouchesOnlyForARecordThatVerified() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        _ = try await vault.listChildren(of: server.b)
+        _ = try await vault.rename(server.g, to: "g renamed.txt")
+        _ = try await vault.rename(server.f, to: "f renamed.txt")
+        #expect(server.statements["rename:" + server.g] == "ordinary")
+        #expect(server.statements["rename:" + server.f] == "resealed")
+        let reader = try server.ownerTrusts()
+        #expect(reader.provenance(of: try #require(server.nodes[server.f])) == .resealed(.you))
+    }
+
+    @Test func aRenameWithoutWhomToTrustSendsNothing() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server, trusting: false)
+        Auth.testSession = server.session
+        Auth.testTransport = FakeDrive.configuration
+        defer { Auth.testSession = nil; Auth.testTransport = nil }
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        await #expect(throws: (any Error).self) { try await vault.rename(server.f, to: "f renamed.txt") }
+        #expect(server.nodes[server.f]?.metadataVersion == 1 && server.statements["rename:" + server.f] == nil)
+    }
+
     @Test func aCopyWithoutWhomToTrustSendsNothing() async throws {
         let server = try FakeDrive()
         let vault = try await readyVault(server, trusting: false)
@@ -309,6 +336,23 @@ final class FakeDrive: @unchecked Sendable {
             copied.metadataSignature = wire["metadataSignature"] as? String
             nodes[newId] = copied
             return (200, ["node": try json(copied)])
+        case ("POST", ["metadata"]):
+            // A rename: stored only under the owner's valid signature over the next metadata version, as the server checks it.
+            let sent = try JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any] ?? [:]
+            guard let old = nodes[id], let envelope = sent["metadataEnvelope"] as? String,
+                  (sent["metadataVersion"] as? NSNumber)?.uint64Value == old.metadataVersion else { return (409, ["message": "Changed"]) }
+            guard let kind = try statement(metadata: envelope, signature: sent["metadataSignature"] as? String,
+                                           node: (workspace, id, old.kind, old.metadataVersion + 1))
+            else { return (400, ["message": "This change was not signed by your keys"]) }
+            statements["rename:" + id] = kind
+            var renamed = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                                   parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion + 1,
+                                   metadataEnvelope: envelope, currentVersion: old.currentVersion, trashedAt: nil,
+                                   changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+            renamed.metadataSigner = writer
+            renamed.metadataSignature = sent["metadataSignature"] as? String
+            nodes[id] = renamed
+            return (200, ["node": try json(renamed)])
         case ("POST", ["rotation"]):
             rotationStarted = true
             target = (nodes[id]?.keyEpoch ?? 1) + 1
