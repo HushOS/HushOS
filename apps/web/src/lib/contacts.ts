@@ -212,19 +212,23 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
     // and a failure here must fail the trust set rather than leave it half loaded.
     await openIdentity(userId);
     requireUnlocked(userId);
-    const { settings: envelope, settingsKey } = await authClient.settings();
+    const { settings: envelope, settingsKey, settingsVersion } = await authClient.settings();
     await settingsKeyReady(userId, settingsKey, create);
-    if (settingsRolledBack(envelope?.settingsVersion ?? null, settingsSeen(userId)))
-        throw new Error(ROLLED_BACK);
-    // None stored, or a version 1 document the server serves as none: empty, and the next
-    // save names version 0, which replaces a version 1 row.
-    if (!envelope) return { settings: EMPTY, version: 0 };
+    // The stored sequence, whatever is stored: a device that has seen a later one refuses it,
+    // document or none. A document served at another sequence than the server says is stored
+    // is refused too.
+    if (settingsRolledBack(settingsVersion, settingsSeen(userId))) throw new Error(ROLLED_BACK);
+    if (envelope && envelope.settingsVersion !== settingsVersion) throw new Error(ROLLED_BACK);
+    rememberSettingsSeen(userId, settingsVersion);
+    // None stored (sequence 0), or a version 1 document the server serves as none at its
+    // sequence: empty settings, and the next save names that sequence and is sealed at the
+    // one after, which replaces a version 1 row.
+    if (!envelope) return { settings: EMPTY, version: settingsVersion };
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
-    rememberSettingsSeen(userId, envelope.settingsVersion);
     // Version 1 (sealed under a key off the identity, which a stolen identity key opened)
-    // no longer opens: it reads as no settings, saved over from version 0 as above.
-    if (!settings) return { settings: EMPTY, version: 0 };
-    return { settings: settings as LoadedSettings['settings'], version: envelope.settingsVersion };
+    // no longer opens: it reads as no settings, saved over as above.
+    if (!settings) return { settings: EMPTY, version: settingsVersion };
+    return { settings: settings as LoadedSettings['settings'], version: settingsVersion };
 }
 
 function loadSettings(userId: string) {
