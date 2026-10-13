@@ -46,13 +46,13 @@ The seed is sealed only to members holding `members` (in a family, the organizer
 One signed document names every member and their keys:
 
 ```
-["hushos/group/roster",1,groupId,kind,rosterVersion,groupKeyVersion,members]
+["hushos/group/roster",1,groupId,kind,rosterVersion,previousRosterDigest,groupKeyVersion,members]
 members = [[userId,keyVersion,encryptionPublicKey,signingPublicKey,kemPublicKeyDigest,status,sinceVersion], ...]
 ```
 
-Sorted by `userId`. `status` is `active` or `left` (a member who left or was removed); `sinceVersion` is the roster version the entry last changed at. Entries for former members stay, so their earlier work can be labelled. The signature is over the statement bytes, by the group key at `groupKeyVersion`.
+Sorted by `userId`. `status` is `active` or `left` (a member who left or was removed); `sinceVersion` is the roster version the entry last changed at. Entries for former members stay, so their earlier work can be labelled. `previousRosterDigest` is the SHA-256 of the previous roster's statement bytes (empty for version 1), so rosters form a chain. The signature is over the statement bytes, by the group key at `groupKeyVersion`.
 
-A client accepts a roster only if: the group key is pinned and its words were checked (2.6); the signature holds under that key, or under a key reached from it by verified successions (2.4); and `rosterVersion` is at least the highest version this person has seen for the group. Anything else leaves members' records at their personal-check verdict, never better.
+A client accepts a roster only if: the group key is pinned and its words were checked (2.6); the signature holds under that key, or under a key reached from it by verified successions (2.4); `rosterVersion` is at least the highest version this person has seen for the group; and its `previousRosterDigest` matches the previous roster this device holds, when it holds it. Anything else leaves members' records at their personal-check verdict, never better. A client that sees two different rosters with the same version, or a chain that does not join, raises a hard warning ("Acme's member list was shown differently to you") and keeps the newest roster it can verify.
 
 ### 2.4 Group key succession
 
@@ -100,7 +100,7 @@ The organizer's client derives the group id, makes the group key, signs roster v
 
 1. A `members` holder invites an email address; the server mails a link with a one-time token in its fragment (`/join#invite=<token>`), hashed at rest as sign-up tokens are.
 2. The invitee signs in or signs up, opens the invitation and accepts. Membership moves to `accepted`; nothing opens yet, and no seat is taken.
-3. The admitting admin and the newcomer compare words once, in person or on a call: the admin reads the newcomer's twelve words from its own screen and the newcomer reads the group key's. Both are required; there is no skip.
+3. The admitting admin and the newcomer compare words once, in person or on a call through another service, never in a message sent through HushOS: the admin reads the newcomer's twelve words from its own screen and the newcomer reads the group key's. Both are required; there is no skip, and the admit button stays disabled until both sides have confirmed.
 4. The admin's client signs the next roster with the newcomer added, seals the shared areas' keys to them (and the group key, if they get `members`), and calls admit. The server applies membership, roster, grants and the seat in one transaction.
 5. The newcomer's client verifies the roster against the group key it just checked and pins the group.
 
@@ -120,6 +120,7 @@ The organizer's client derives the group id, makes the group key, signs roster v
 - A group plan's quota pools across the group's areas and, for families, the personal spaces of members who draw from it. `freeBytes` for any workspace in the pool reads the pool.
 - **One storage source per person**, as iCloud+ and Dropbox Family do it: a member on the free tier draws from the family pool automatically once admitted; a member who pays for their own plan chooses at admission, and later in Account, to keep it (their personal space stays outside the pool) or to switch (their subscription is cancelled with a prorated refund through Polar). Never both.
 - **No stacking of free allowances:** the pool is the plan's size; a member's own free allowance is not added to it, so the pool does not grow with headcount.
+- **What the organizer sees:** the pool's total and which members are at their cap, never each member's usage, which would show how active they are.
 - **Optional per-member limits:** the organizer may cap how much of the pool a member's personal space uses; off by default. A member at their cap or with a full pool can still read, download and delete; only uploads are refused.
 - The payer is a billing customer keyed by owner kind and id. Polar products carry `hushos_plan`, `quota_bytes`, and new `hushos_group_kind` and `included_members` metadata; members beyond those included are billed per member with no upper limit, and companies have a minimum seat count.
 - Seats are counted at admission, never at invitation; a seat cut blocks new admissions and never removes anyone.
@@ -183,7 +184,7 @@ The group name is plaintext because it appears in invitation emails and on bills
 
 Each fails on a defect a person would notice (see AGENTS.md):
 
-- Roster: a forged signature, a lower version than the device has seen, a roster signed by a removed holder's old key after a succession, and an entry whose keys differ from the member's served identity are all refused.
+- Roster: a forged signature, a lower version than the device has seen, a roster signed by a removed holder's old key after a succession, and an entry whose keys differ from the member's served identity are all refused; two different rosters with the same version, or a chain that does not join, raise the hard warning.
 - Verdicts: a writer on a verified roster is `verified` via the group; the same writer with a disagreeing pin is `key-conflict`; a `left` entry is `former-member`; a roster whose group key was never checked raises nothing above Unverified.
 - Admission: the transaction lands whole or not at all (membership, roster, grants, seat); a concurrent second admission on the last seat gets 402; admission with a stale roster version gets 409.
 - Leaving and removal: the server stops serving grants at once; rotation produces new grants only for remaining members; a removed `members` holder forces a succession.
