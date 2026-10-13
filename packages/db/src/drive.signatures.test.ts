@@ -249,8 +249,8 @@ describe('creating', () => {
     });
 });
 
-describe('re-sealed statements', () => {
-    function signResealed(signer: TestSigner) {
+describe('re-sealed and saved statements', () => {
+    function signAs(form: 'resealed' | 'saved', signer: TestSigner) {
         return {
             metadata: (nodeId: string, envelope: Buffer) =>
                 signer.sign(
@@ -262,7 +262,7 @@ describe('re-sealed statements', () => {
                             metadataVersion: 1,
                             metadataEnvelope: envelope,
                         },
-                        'resealed',
+                        form,
                     ),
                 ),
             version: (ids: { nodeId: string; versionId: string; objectId: string }, e: Buffer) =>
@@ -274,11 +274,12 @@ describe('re-sealed statements', () => {
                             contentSuite: 3,
                             contentKeyEnvelope: e,
                         },
-                        'resealed',
+                        form,
                     ),
                 ),
         };
     }
+    const signResealed = (signer: TestSigner) => signAs('resealed', signer);
 
     test('a write signed with the re-sealed statements by the writer lands, signed', async () => {
         const { result, nodeId, versionId } = await beginWith(signResealed(ownerKey));
@@ -297,6 +298,67 @@ describe('re-sealed statements', () => {
         expect(result.status).toBe('bad-signature');
         expect(await nodeRow(nodeId)).toBeNull();
         expect(await storage()).toEqual(before);
+    });
+
+    test('a write signed with the saved statements by the writer lands; by anyone else it is refused', async () => {
+        const saved = await beginWith(signAs('saved', ownerKey));
+        expect(saved.result.status).toBe('ok');
+        expect((await nodeRow(saved.nodeId))?.metadataSignerId).toBe(owner.userId);
+        const before = await storage();
+        const forged = await beginWith(signAs('saved', otherKey));
+        expect(forged.result.status).toBe('bad-signature');
+        expect(await nodeRow(forged.nodeId)).toBeNull();
+        expect(await storage()).toEqual(before);
+    });
+
+    test('a saved statement that drops or changes its source is refused', async () => {
+        const retail = (statement: Buffer, tail: string) =>
+            Buffer.from(statement.toString('utf8').replace(/,"link"\]$/, tail));
+        for (const tail of [']', ',"share"]']) {
+            const honest = signAs('saved', ownerKey);
+            const metadata = (nodeId: string, envelope: Buffer) =>
+                ownerKey.sign(
+                    retail(
+                        metadataStatement(
+                            {
+                                workspaceId: owner.workspaceId,
+                                nodeId,
+                                kind: 'file',
+                                metadataVersion: 1,
+                                metadataEnvelope: envelope,
+                            },
+                            'saved',
+                        ),
+                        tail,
+                    ),
+                );
+            const version = (
+                ids: { nodeId: string; versionId: string; objectId: string },
+                envelope: Buffer,
+            ) =>
+                ownerKey.sign(
+                    retail(
+                        versionStatement(
+                            {
+                                workspaceId: owner.workspaceId,
+                                ...ids,
+                                contentSuite: 3,
+                                contentKeyEnvelope: envelope,
+                            },
+                            'saved',
+                        ),
+                        tail,
+                    ),
+                );
+            for (const sign of [
+                { metadata, version: honest.version },
+                { metadata: honest.metadata, version },
+            ]) {
+                const { result, nodeId } = await beginWith(sign);
+                expect(result.status, tail).toBe('bad-signature');
+                expect(await nodeRow(nodeId)).toBeNull();
+            }
+        }
     });
 
     test('a statement under a label of neither form is refused', async () => {
