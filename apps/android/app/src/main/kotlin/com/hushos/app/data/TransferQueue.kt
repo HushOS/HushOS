@@ -41,6 +41,8 @@ object TransferQueue {
     /* The notification's tap: MainActivity opens the transfers sheet. */
     const val OPEN_TRANSFERS = "com.hushos.app.OPEN_TRANSFERS"
     /* An upload refused because the account is out of room: Retry can't help; Make room can. */
+    /* How often an upload that couldn't check the name it keeps is tried again before it is said to have failed. */
+    const val TRUST_RETRIES = 5
     const val NO_ROOM = "Not enough room for this file."
 
     /* Whether a failure's words are the out-of-room refusal (the server's own sentence too). */
@@ -206,6 +208,8 @@ private fun jobVault(context: Context): Vault? = Vault.fromShared(context)?.also
  */
 private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY): androidx.work.ListenableWorker.Result = when {
     Resumable.retryable(error) && error !is NotAuthenticated -> androidx.work.ListenableWorker.Result.retry()
+    // Whom this person trusts didn't load, so a replaced file's name couldn't be checked: tried again a few times, then said.
+    error is TrustUnavailable && runAttemptCount < TransferQueue.TRUST_RETRIES -> androidx.work.ListenableWorker.Result.retry()
     else -> failed(when {
         error is NotAuthenticated -> "Sign in again to finish this."
         error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM

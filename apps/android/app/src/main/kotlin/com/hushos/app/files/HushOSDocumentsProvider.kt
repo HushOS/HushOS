@@ -248,10 +248,15 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
             Thread {
-                runCatching {
-                    val fresh = vault.resolve(id)
+                val fresh = runCatching { vault.resolve(id) }.getOrNull()
+                val sent = fresh != null && runCatching {
                     vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
                     context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
+                }.isSuccess
+                // Not sent now (no network, or the name it keeps couldn't be checked): the queue takes the edit and tries
+                // again, rather than the edit being dropped.
+                if (!sent && fresh != null) runCatching {
+                    com.hushos.app.data.TransferQueue.upload(context!!, edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh.id)
                 }
                 edit.delete()
             }.start()

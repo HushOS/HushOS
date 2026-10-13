@@ -1194,6 +1194,17 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
+     * How the metadata a new version re-signs is signed: it keeps the replaced record's name, so it is that record's
+     * verdict. Verified stays ordinary; anything else is re-sealed. Without the trust set it throws (the upload waits
+     * and is tried again) rather than vouching for a name nobody checked.
+     */
+    private fun replacedNamePrior(replacing: Opened): Integrity {
+        val verdict = metadataVerdict(replacing.node, trustForWrite())
+        if (verdict == Integrity.UNCHECKED) throw TrustUnavailable()
+        return verdict
+    }
+
+    /*
      * A file's bytes as a new node under `parentId`, or a new version of `replacing`; a thumbnail rides after the last
      * chunk. `prior`: set when the bytes and name are a copy of a record that existed before (a copy across drives, a
      * saved copy), whose verdicts decide how the new node is signed; see signMetadata.
@@ -1201,6 +1212,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, prior: Prior? = null, progress: (Float) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
+        // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
+        // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run.
+        val keptName = replacing?.let { prior?.metadata ?: replacedNamePrior(it) }
         val size = file.length().toULong()
         val modified = Instant.ofEpochMilli(file.lastModified()).toString()
         val versionId = UUID.randomUUID().toString()
@@ -1282,7 +1296,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
             val next = node.metadataVersion + 1uL
             val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
-            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed))
+            node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed, keptName))
         }
         return adoptWritten(node, nodeKey, final, ws, nodeId)
     }
