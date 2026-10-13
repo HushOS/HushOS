@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { driveRepository } from '@hushos/db';
+import { driveRepository, scopedId, type IdKind } from '@hushos/db';
 import { db } from '../../db/src/client';
 import { workspaceKeys } from '../../db/src/schema';
 import { createTestAccount, createTestIdentity } from '../../db/test/helpers';
@@ -18,6 +18,12 @@ export const metadataEnvelope = () => randomBytes(100);
 export const hashToken = (token: string) => createHash('sha256').update(token).digest();
 
 export type Account = Awaited<ReturnType<typeof createTestAccount>>;
+
+/* A client-made id as a client mints it: a fresh seed and the id it derives for `kind` in `workspaceId`. */
+export function minted(kind: IdKind, workspaceId: string) {
+    const seed = randomBytes(16).toString('base64url');
+    return { id: scopedId(kind, workspaceId, seed)!, seed };
+}
 
 export async function member(input: { quotaBytes?: bigint } = {}) {
     const account = await createTestAccount(input);

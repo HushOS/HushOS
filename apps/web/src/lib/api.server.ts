@@ -181,6 +181,12 @@ const uuidSchema = t.String({
     pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 });
 const epochSchema = t.Integer({ minimum: 1, maximum: 2147483646 });
+/*
+ * The seed a client-made id was derived from. Optional and loose here on
+ * purpose: the domain derives the id again and answers a missing, malformed
+ * or wrong seed alike, "This id was not made for this workspace".
+ */
+const idSeedSchema = t.Optional(t.String({ maxLength: 64 }));
 // 72 bytes of nonce || wrapped key is 96 Base64url characters; metadata is bounded by its column.
 const keyEnvelopeSchema = t.String({ minLength: 96, maxLength: 96, pattern: '^[A-Za-z0-9_-]+$' });
 const MAX_REPORT_OPERATORS = 500;
@@ -247,6 +253,7 @@ const uploadNodeSchema = t.Union([
     t.Object({
         existing: t.Literal(false),
         id: uuidSchema,
+        idSeed: idSeedSchema,
         parentId: uuidSchema,
         ...nodeEnvelopesSchema,
     }),
@@ -774,7 +781,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/drive/workspaces/:id/root',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ id: uuidSchema, ...nodeEnvelopesSchema }),
+            body: t.Object({ id: uuidSchema, idSeed: idSeedSchema, ...nodeEnvelopesSchema }),
         },
         async ({ request, sessionToken, params, body }) =>
             drive.createRoot((await driveMutation(request, sessionToken)).id, params.id, body),
@@ -799,7 +806,12 @@ export const apiApp = new Elysia({ prefix: '/api' })
             body: t.Object({
                 workspaceId: uuidSchema,
                 folders: t.Array(
-                    t.Object({ id: uuidSchema, parentId: uuidSchema, ...nodeEnvelopesSchema }),
+                    t.Object({
+                        id: uuidSchema,
+                        idSeed: idSeedSchema,
+                        parentId: uuidSchema,
+                        ...nodeEnvelopesSchema,
+                    }),
                     {
                         minItems: 1,
                         maxItems: 64,
@@ -889,7 +901,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 workspaceId: uuidSchema,
                 node: uploadNodeSchema,
                 versionId: uuidSchema,
+                versionIdSeed: idSeedSchema,
                 objectId: uuidSchema,
+                objectIdSeed: idSeedSchema,
                 contentKeyEnvelope: versionEnvelopeSchema,
                 versionSignature: signatureSchema,
                 contentNonce: t.String({
@@ -972,6 +986,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         mode: t.Literal('sibling'),
                         node: t.Object({
                             id: uuidSchema,
+                            idSeed: idSeedSchema,
                             parentId: uuidSchema,
                             ...nodeEnvelopesSchema,
                         }),
@@ -1031,8 +1046,14 @@ export const apiApp = new Elysia({ prefix: '/api' })
             body: t.Object({
                 workspaceId: uuidSchema,
                 sourceVersionId: uuidSchema,
-                node: t.Object({ id: uuidSchema, parentId: uuidSchema, ...nodeEnvelopesSchema }),
+                node: t.Object({
+                    id: uuidSchema,
+                    idSeed: idSeedSchema,
+                    parentId: uuidSchema,
+                    ...nodeEnvelopesSchema,
+                }),
                 versionId: uuidSchema,
+                versionIdSeed: idSeedSchema,
                 contentKeyEnvelope: anyVersionEnvelopeSchema,
                 versionSignature: signatureSchema,
             }),
@@ -1152,6 +1173,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
             body: t.Object({
                 workspaceId: uuidSchema,
                 linkId: uuidSchema,
+                linkIdSeed: idSeedSchema,
                 token: linkTokenSchema,
                 keyEpoch: epochSchema,
                 linkEnvelope: keyEnvelopeSchema,
@@ -1494,6 +1516,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
         {
             body: t.Object({
                 id: uuidSchema,
+                reportIdSeed: idSeedSchema,
                 workspaceId: uuidSchema,
                 nodeId: uuidSchema,
                 keyEpoch: epochSchema,
