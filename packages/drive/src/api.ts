@@ -31,10 +31,12 @@ export type VersionView = {
     readyAt: string | null;
     /*
      * The account that sealed the content-key envelope and its Ed25519 signature
-     * over the version statement (docs/integrity-design.md); null before signatures.
+     * over the version statement (docs/integrity-design.md); null before
+     * signatures. Absent, not null, on what a link visitor receives: a visitor
+     * has nothing to check them against.
      */
-    signer: Signer | null;
-    signature: string | null;
+    signer?: Signer | null;
+    signature?: string | null;
 };
 
 export type NodeView = {
@@ -61,9 +63,12 @@ export type NodeView = {
      * beside this one while a workspace is re-wrapped.
      */
     envelopeSuite: number;
-    /* The account that wrote the metadata envelope and its signature; null before signatures. */
-    metadataSigner: Signer | null;
-    metadataSignature: string | null;
+    /*
+     * The account that wrote the metadata envelope and its signature; null
+     * before signatures. Absent, not null, on what a link visitor receives.
+     */
+    metadataSigner?: Signer | null;
+    metadataSignature?: string | null;
 };
 
 export type NodeEnvelopes = {
@@ -306,8 +311,11 @@ export type OpenedLink = {
 };
 
 /*
- * The no-session surface a link visitor uses: the token names the link, and
- * every node or version asked for must lie beneath the linked node.
+ * The no-session surface a link visitor uses: the token names the link (sent in
+ * the `x-link-token` header, never the path, so proxy logs do not keep it), and
+ * every node or version asked for must lie beneath the linked node. Nodes and
+ * versions come without signers or signatures, and without the owner's change
+ * sequence.
  */
 export interface LinkApi {
     open(token: string): Promise<OpenedLink>;

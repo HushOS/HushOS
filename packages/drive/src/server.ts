@@ -1610,6 +1610,15 @@ export async function revokeLink(userId: string, workspaceId: string, linkId: st
 const linkGone = () => new DriveError('not-found', 'This link no longer works.', 404);
 
 /*
+ * The visitor routes once took the token in their path, where reverse proxies
+ * log it. Those paths now refuse with 410 and say what to do, rather than 404,
+ * which an old client would show as a dead link.
+ */
+export function linkPathRetired(): never {
+    throw new DriveError('unsupported', 'Update HushOS to open links.', 410);
+}
+
+/*
  * Every visit is bounded per address and per token: the token is the only
  * secret the server ever sees, and a token cannot be guessed at any useful
  * rate under these limits.
@@ -1622,18 +1631,34 @@ async function limitLink(token: string, address: string) {
         throw new DriveError('conflict', 'Too many requests. Please try again shortly.', 429);
 }
 
-/* The linked node with what the visitor's device needs to open it; the secret stays in their URL. */
 /*
- * What a link's visitor sees of a node: the signatures, never who wrote it. A
- * visitor has no account and no pins, so a signer's name and email would tell
- * an anonymous holder of the URL who owns and edits the files, and buy them
- * nothing they could check.
+ * What a link's visitor sees of a node and its versions: no signer and no
+ * signature (absent, not null), and not the owner's change sequence. A visitor
+ * has no account and no pins, so a signature buys them nothing they could
+ * check, while testing it against keys from contact lookup would tell an
+ * anonymous holder of the URL who wrote the files. `workspaceId` stays: it is
+ * bound into every envelope.
  */
-function visitorView(node: NodeView): NodeView {
+export type VisitorVersionView = Omit<VersionView, 'signer' | 'signature'>;
+export type VisitorNodeView = Omit<
+    NodeView,
+    'metadataSigner' | 'metadataSignature' | 'currentVersion'
+> & { currentVersion: VisitorVersionView | null };
+function visitorVersion(version: VersionView): VisitorVersionView {
+    const { signer: _signer, signature: _signature, ...rest } = version;
+    return rest;
+}
+function visitorView(node: NodeView): VisitorNodeView {
+    const {
+        metadataSigner: _signer,
+        metadataSignature: _signature,
+        currentVersion,
+        ...rest
+    } = node;
     return {
-        ...node,
-        metadataSigner: null,
-        currentVersion: node.currentVersion ? { ...node.currentVersion, signer: null } : null,
+        ...rest,
+        changeSeq: null,
+        currentVersion: currentVersion ? visitorVersion(currentVersion) : null,
     };
 }
 
@@ -1691,7 +1716,7 @@ export async function linkDownloadUrl(token: string, address: string, versionId:
     return {
         ...presigned,
         node: visitorView(presigned.node),
-        version: { ...presigned.version, signer: null },
+        version: visitorVersion(presigned.version),
     };
 }
 

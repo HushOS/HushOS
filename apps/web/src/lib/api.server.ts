@@ -16,7 +16,12 @@ import {
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
 import { driveRepository, growthRepository } from '@hushos/db';
-import { CLIENT_HEADER, checkClient, parseMinimums } from '@hushos/drive/protocol';
+import {
+    CLIENT_HEADER,
+    LINK_TOKEN_HEADER,
+    checkClient,
+    parseMinimums,
+} from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
 import { storageEnv } from '@hushos/env/storage';
@@ -233,6 +238,8 @@ const trashCursorSchema = t.Optional(
     t.String({ maxLength: 64, pattern: driveRepository.TRASH_CURSOR_PATTERN }),
 );
 const linkTokenSchema = t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' });
+/* A link visitor's token travels in a header, never the path: proxies log paths. */
+const linkHeadersSchema = t.Object({ [LINK_TOKEN_HEADER]: linkTokenSchema });
 const linkSaltSchema = t.String({ minLength: 22, maxLength: 22, pattern: '^[A-Za-z0-9_-]+$' });
 // 104 or 136 bytes: 139 or 182 Base64url characters; the server checks the exact lengths.
 const linkSecretSchema = t.String({ minLength: 139, maxLength: 182, pattern: '^[A-Za-z0-9_-]+$' });
@@ -1339,25 +1346,30 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 body.nodes,
             ),
     )
-    // The visitor's surface: no session, the token names the link, bounded per address and token.
+    /*
+     * The visitor's surface: no session, the token in the x-link-token header names
+     * the link (never the path, which reverse proxies log), bounded per address and
+     * token. The paths that carried the token answer 410 so an old client says why.
+     */
     .get(
-        '/drive/links/:id/open',
-        { params: t.Object({ id: linkTokenSchema }) },
-        ({ request, params }) => {
+        '/drive/links/open',
+        { headers: linkHeadersSchema },
+        ({ request, headers }) => {
             requireClient(request);
-            return drive.openLink(params.id, requestAddress(request));
+            return drive.openLink(headers[LINK_TOKEN_HEADER], requestAddress(request));
         },
     )
     .get(
-        '/drive/links/:id/nodes/:nodeId/children',
+        '/drive/links/nodes/:nodeId/children',
         {
-            params: t.Object({ id: linkTokenSchema, nodeId: uuidSchema }),
+            headers: linkHeadersSchema,
+            params: t.Object({ nodeId: uuidSchema }),
             query: t.Object({ after: cursorSchema }),
         },
-        ({ request, params, query }) => {
+        ({ request, headers, params, query }) => {
             requireClient(request);
             return drive.linkChildren(
-                params.id,
+                headers[LINK_TOKEN_HEADER],
                 requestAddress(request),
                 params.nodeId,
                 query.after,
@@ -1365,39 +1377,52 @@ export const apiApp = new Elysia({ prefix: '/api' })
         },
     )
     .get(
-        '/drive/links/:id/versions/:versionId/url',
-        { params: t.Object({ id: linkTokenSchema, versionId: uuidSchema }) },
-        ({ request, params }) => {
+        '/drive/links/versions/:versionId/url',
+        { headers: linkHeadersSchema, params: t.Object({ versionId: uuidSchema }) },
+        ({ request, headers, params }) => {
             requireClient(request);
-            return drive.linkDownloadUrl(params.id, requestAddress(request), params.versionId);
+            return drive.linkDownloadUrl(
+                headers[LINK_TOKEN_HEADER],
+                requestAddress(request),
+                params.versionId,
+            );
         },
     )
     .post(
-        '/drive/links/:id/versions/urls',
+        '/drive/links/versions/urls',
         {
-            params: t.Object({ id: linkTokenSchema }),
+            headers: linkHeadersSchema,
             body: t.Object({ versionIds: t.Array(uuidSchema, { minItems: 1, maxItems: 100 }) }),
         },
-        ({ request, params, body }) => {
+        ({ request, headers, body }) => {
             requireClient(request);
-            return drive.linkDownloadUrls(params.id, requestAddress(request), body.versionIds);
+            return drive.linkDownloadUrls(
+                headers[LINK_TOKEN_HEADER],
+                requestAddress(request),
+                body.versionIds,
+            );
         },
     )
     .get(
-        '/drive/links/:id/thumbnails',
+        '/drive/links/thumbnails',
         {
-            params: t.Object({ id: linkTokenSchema }),
+            headers: linkHeadersSchema,
             query: t.Object({ versions: t.String({ minLength: 36, maxLength: 3700 }) }),
         },
-        ({ request, params, query }) => {
+        ({ request, headers, query }) => {
             requireClient(request);
             return drive.linkThumbnailUrls(
-                params.id,
+                headers[LINK_TOKEN_HEADER],
                 requestAddress(request),
                 query.versions.split(',').filter((id) => /^[0-9a-f-]{36}$/i.test(id)),
             );
         },
     )
+    .get('/drive/links/:id/open', () => drive.linkPathRetired())
+    .get('/drive/links/:id/nodes/:nodeId/children', () => drive.linkPathRetired())
+    .get('/drive/links/:id/versions/:versionId/url', () => drive.linkPathRetired())
+    .post('/drive/links/:id/versions/urls', () => drive.linkPathRetired())
+    .get('/drive/links/:id/thumbnails', () => drive.linkPathRetired())
     .get(
         '/drive/workspaces/:id/storage',
         { params: t.Object({ id: uuidSchema }) },

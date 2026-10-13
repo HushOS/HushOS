@@ -105,6 +105,11 @@ export type DriveErrorCode =
  */
 
 export const CLIENT_HEADER = 'HushOS-Client';
+/*
+ * How a link visitor names the link to the API: the token in this header, so it
+ * never sits in a path that reverse proxies write to their access logs.
+ */
+export const LINK_TOKEN_HEADER = 'x-link-token';
 
 export type ClientIdentity = { name: string; version: string };
 
