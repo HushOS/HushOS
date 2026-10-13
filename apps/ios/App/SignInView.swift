@@ -21,7 +21,7 @@ struct SignInView: View {
     @State private var showingServer = false
     @FocusState private var focus: Field?
 
-    private enum Field { case email, password, shown }
+    private enum Field { case email, password }
 
     var body: some View {
         NavigationStack { form.toolbar(.hidden, for: .navigationBar).navigationDestination(isPresented: $showingServer) { SelfHostingView() } }
@@ -68,20 +68,16 @@ struct SignInView: View {
                             Theme.divider.frame(height: 1).padding(.leading, Alpine.Space.s4)
                             fieldRow("Password", error: fieldError == .password) {
                                 HStack {
-                                    // Both fields stay on screen and the eye swaps which one shows: removing the secure
-                                    // field makes iOS think the form was sent and offer to save the password.
-                                    ZStack {
-                                        SecureField("Required", text: $password)
-                                            .focused($focus, equals: .password).opacity(showPassword ? 0 : 1)
-                                        TextField("Required", text: $password)
-                                            .focused($focus, equals: .shown).opacity(showPassword ? 1 : 0)
-                                    }
-                                    .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
-                                    .submitLabel(.go)
-                                    .onSubmit { submit() }
+                                    // Typing always goes into the secure field; the eye only draws the characters over it
+                                    // (see RevealingSecureField), so the password is never in a plain field.
+                                    SecureField("Required", text: $password)
+                                        .focused($focus, equals: .password)
+                                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                        .submitLabel(.go)
+                                        .onSubmit { submit() }
+                                        .revealed(showPassword ? password : nil, placeholder: "Required")
                                     Button {
                                         showPassword.toggle()
-                                        if focus == .password || focus == .shown { focus = showPassword ? .shown : .password }
                                     } label: {
                                         Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted).frame(width: 36, height: 36)
                                     }

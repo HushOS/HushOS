@@ -16,7 +16,10 @@ final class Mirror {
 
     init?(url: URL) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else { return nil }
+        // The database and the side files SQLite makes, under the same class as the rest of the group (see `Unbacked.protection`):
+        // the Files extension and background refresh read it while the phone is locked, after the first unlock.
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_FILEPROTECTION_COMPLETEUNTILFIRSTUSERAUTHENTICATION
+        guard sqlite3_open_v2(url.path, &db, flags, nil) == SQLITE_OK else { return nil }
         exec("PRAGMA journal_mode = WAL")
         exec("CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, json BLOB NOT NULL)")
         exec("CREATE INDEX IF NOT EXISTS nodes_workspace ON nodes (workspace_id)")

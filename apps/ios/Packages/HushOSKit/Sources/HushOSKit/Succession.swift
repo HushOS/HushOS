@@ -4,9 +4,9 @@ import HushOSCore
 /*
  * Following a contact's identity succession (docs/integrity-design.md, "What contacts
  * see"). When the keys the server serves for a pinned person differ from the pin, the
- * chain of successions from the pinned keys is fetched and checked link by link, by key
- * continuity; a chain that holds moves the pin to the new keys and says so quietly, and
- * anything else stays the changed-key warning it always was.
+ * changed-key warning offers "Check again": only then is the whole chain fetched and
+ * checked link by link, by key continuity; a chain that holds moves the pin to the new
+ * keys and says so quietly, and anything else stays the changed-key warning.
  */
 
 /* What the server serves for a person now: from a lookup, a share's granter or a rotation's grantee. */
@@ -103,40 +103,50 @@ extension SharedWithMeView.Granter {
 
 extension Vault {
     /*
-     * The pin to use for a person whose served keys may have moved on: the same pin, or the
-     * one their succession chain leads to (saved over the pin it was decided from, unless
-     * another device moved that meanwhile). Any failure leaves the pin as it was, and the
-     * caller's own check says the key changed.
+     * "Check again": the person asked to follow a pinned contact to the keys served now. Only
+     * then is the server asked for the chain, and always for the whole of it, so lookups never
+     * say which contacts are pinned or at which version. A chain that holds moves the pin
+     * (saved over the pin it was decided from, unless another device moved that meanwhile) and
+     * queues what was shared with them to be sealed again to the new keys; anything else
+     * leaves the pin as it was and the changed-key warning stands.
      */
-    func follow(_ pin: ContactPin, served: ServedContactKeys) async -> ContactPin {
-        guard pin.mayFollow(served) else { return pin }
-        let attempt = "\(pin.userId.lowercased())|\(served.encryptionPublicKey)|\(served.signingPublicKey)"
-        if refusedSuccessions.contains(attempt) { return pin }
-        guard let links = try? await Auth.succession(of: pin.userId, from: pin.keyVersion ?? 1) else { return pin }
-        guard case .followed(let next) = pin.follow(served, links: links) else {
-            refusedSuccessions.insert(attempt)
-            return pin
+    public func checkAgain(_ pin: ContactPin, served: ServedContactKeys) async throws -> PinFollow {
+        guard pin.mayFollow(served) else { return pin.matches(served) ? .same : .changed }
+        let links = try await Auth.succession(of: pin.userId)
+        let decision = pin.follow(served, links: links)
+        guard case .followed(let next) = decision else { return decision }
+        try await updateSettings { settings in
+            guard let stored = settings.contacts[pin.userId], stored.encryptionPublicKey == pin.encryptionPublicKey,
+                  stored.signingPublicKey == pin.signingPublicKey else { return }
+            settings.setPin(next)
         }
-        do {
-            try await updateSettings { settings in
-                guard let stored = settings.contacts[pin.userId], stored.encryptionPublicKey == pin.encryptionPublicKey,
-                      stored.signingPublicKey == pin.signingPublicKey else { return }
-                settings.setPin(next)
-            }
-        } catch {
-            return pin
-        }
-        return next
+        ResealTo.add(next.userId)
+        return decision
+    }
+}
+
+/*
+ * People whose keys this person followed along a succession, whose shares still hold the old
+ * keys: the next upgrade pass seals them again to the pin's keys, then lets them go. Kept on
+ * this phone, in `state/` (out of backups, wiped on sign-out).
+ */
+enum ResealTo {
+    static let file = "reseal-to.json"
+
+    static func add(_ userId: String) {
+        var all = Set(Unbacked.read([String].self, file) ?? [])
+        all.insert(userId.lowercased())
+        Unbacked.write(all.sorted(), file)
     }
 
-    /* Every pin, each moved along its person's succession chain when the served keys say they replaced them. */
-    func followAll(_ pins: [String: ContactPin], served: [String: ServedContactKeys]) async -> [String: ContactPin] {
-        var out = pins
-        for (id, keys) in served {
-            guard let pin = pins[id] else { continue }
-            out[id] = await follow(pin, served: keys)
-        }
-        return out
+    static var all: Set<String> { Set(Unbacked.read([String].self, file) ?? []) }
+
+    static func contains(_ userId: String) -> Bool { all.contains(userId.lowercased()) }
+
+    static func remove(_ userIds: Set<String>) {
+        guard !userIds.isEmpty else { return }
+        let left = (Unbacked.read([String].self, file) ?? []).filter { !userIds.contains($0) }
+        Unbacked.write(left, file)
     }
 }
 

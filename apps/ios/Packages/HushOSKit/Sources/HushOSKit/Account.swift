@@ -33,7 +33,12 @@ public struct BillingSummary: Codable, Sendable {
 extension Auth {
     private struct Reply2 { let body: [String: Any] }
 
+    /* Tests: a session and transport in place of the keychain's and the network. */
+    nonisolated(unsafe) static var testSession: SharedKeychain.Session?
+    nonisolated(unsafe) static var testTransport: URLSessionConfiguration?
+
     private static func session() throws -> SharedKeychain.Session {
+        if let testSession { return testSession }
         guard let session = SharedKeychain.session else { throw AuthError.message("Sign in first.") }
         return session
     }
@@ -55,7 +60,7 @@ extension Auth {
         request.timeoutInterval = 30
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+            (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
         } catch {
             throw AuthError.message("We couldn’t reach HushOS. Check your connection, then try again.")
         }

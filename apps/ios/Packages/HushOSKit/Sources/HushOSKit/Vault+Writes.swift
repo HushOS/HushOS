@@ -8,7 +8,8 @@ import Foundation
 extension Vault {
     private func newId() -> String { UUID().uuidString.lowercased() }
 
-    public func createFolder(in parentId: String, name: String) async throws -> Opened {
+    /* A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name. */
+    public func createFolder(in parentId: String, name: String, signing: Signing = .own) async throws -> Opened {
         _ = try await loadWorkspace()
         let parent = try await resolve(parentId)
         // Shared folders belong to the granter's workspace; an editor writes there.
@@ -21,7 +22,7 @@ extension Vault {
         let wrapped = try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)
         let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil)
         let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
-        let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
+        let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
         let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
             "id": id, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
             "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
@@ -38,8 +39,11 @@ extension Vault {
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
             nodeKey: key, metadata: metadata
         )
+        // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
+        // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
+        let prior = try await changeSigners().metadata(of: item.node)
         let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
-                                               version: item.node.metadataVersion + 1, envelope: sealed)
+                                               version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
         let node = try await api.rename(
             nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
             keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
@@ -72,9 +76,13 @@ extension Vault {
      * A copy under `parentId`: the server keeps the object and its chunks; only
      * the envelopes change hands, resealed here under a fresh node key. A folder
      * is copied node by node, since the server holds no key to rewrap a subtree.
+     * Each record is checked as it was first and signed by that verdict (see
+     * `Signing`): a copy never makes a record this person vouches for out of one
+     * they couldn't confirm. Without whom to trust, nothing is copied.
      */
     public func copy(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Int) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
+        let trusted = try await copySigners()
         let parent = try await resolve(parentId)
         _ = try await loadWorkspace()
         let workspace = Target(workspaceId: parent.node.workspaceId)
@@ -82,7 +90,7 @@ extension Vault {
         let newName = try checkName(name: name ?? source.name)
         var done = 0
         if source.isFolder {
-            let made = try await createFolder(in: parent.id, name: newName)
+            let made = try await createFolder(in: parent.id, name: newName, signing: .after(trusted.metadata(of: source.node)))
             done += 1
             progress(done)
             for child in try await children(of: source.id) {
@@ -107,10 +115,12 @@ extension Vault {
             suite: version.contentSuite, nodeKey: key,
             content: ContentKey(key: opened.content.key, plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes)
         )
-        // Signed where they land: the copy's node and version, over the source's object and its suite.
-        let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope)
+        // Signed where they land: the copy's node and version, over the source's object and its suite, by the source's verdicts.
+        let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope,
+                                                       signing: .after(trusted.metadata(of: source.node)))
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
-                                                     suite: version.contentSuite, envelope: contentKeyEnvelope)
+                                                     suite: version.contentSuite, envelope: contentKeyEnvelope,
+                                                     signing: .after(trusted.version(version, of: source.node)))
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
             "node": ["id": id, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
@@ -190,7 +200,8 @@ extension Vault {
         let replacing: Bool
     }
 
-    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnailBytes: UInt32) async throws -> Begun {
+    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnailBytes: UInt32,
+                       signing: (metadata: Signing, version: Signing)) async throws -> Begun {
         _ = try await loadWorkspace()
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
         let workspace: Target
@@ -208,6 +219,8 @@ extension Vault {
         var nodeInput: [String: Any]
         let final: NodeMetadata
         if let replacing {
+            // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is sent.
+            _ = try await changeSigners()
             nodeId = replacing.id
             guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
             nodeKey = key
@@ -228,7 +241,8 @@ extension Vault {
             nodeInput = ["existing": false, "id": nodeId, "parentId": parent.id, "keyEpoch": epochs.from,
                          "parentKeyEpoch": parent.node.keyEpoch, "keyEnvelope": base64urlEncode(bytes: wrapped),
                          "metadataEnvelope": base64urlEncode(bytes: sealed),
-                         "metadataSignature": try await signMetadata(workspaceId: workspace.workspaceId, nodeId: nodeId, kind: .file, version: 1, envelope: sealed)]
+                         "metadataSignature": try await signMetadata(workspaceId: workspace.workspaceId, nodeId: nodeId, kind: .file, version: 1, envelope: sealed,
+                                                                     signing: signing.metadata)]
         }
 
         let version = try versionSeal(
@@ -243,7 +257,7 @@ extension Vault {
         )
         let layout = try contentLayout(suite: suite, plaintextSize: plaintextSize, thumbnailBytes: thumbnailBytes)
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId,
-                                                     suite: suite, envelope: version.envelope)
+                                                     suite: suite, envelope: version.envelope, signing: signing.version)
         let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: [
             "node": nodeInput, "versionId": versionId, "objectId": objectId,
             "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "versionSignature": versionSignature,
@@ -290,7 +304,10 @@ extension Vault {
                 ctx: MetadataContext(workspaceId: workspaceId, nodeId: nodeId, metadataVersion: node.metadataVersion + 1),
                 nodeKey: nodeKey, metadata: final
             )
-            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed)
+            // The name kept from the record as the server holds it now: vouched for again only if that verified.
+            let prior = try await changeSigners().metadata(of: node)
+            let signature = try await signMetadata(workspaceId: workspaceId, nodeId: nodeId, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
+                                                   signing: .after(prior))
             node = try await api.rename(nodeId: nodeId, workspaceId: workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
                                         metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
             return try adopt(node, nodeKey: nodeKey, metadata: final, in: workspaceId)
@@ -301,12 +318,16 @@ extension Vault {
         return try open(node)
     }
 
+    /*
+     * `signing` is `.own` for what this person uploads; a copy that travels as an upload (into
+     * another drive, or saved from a link or a share) passes the verdicts it is signed by.
+     */
     public func upload(
         fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
-        thumbnail: Data? = nil, progress: @Sendable (Double) -> Void = { _ in }
+        thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0))
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing)
         var urls = begun.urls
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
@@ -370,7 +391,7 @@ extension Vault {
     public func sealUpload(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
                            thumbnail: Data?, into directory: URL) async throws -> SealedUpload {
         let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0))
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: (.own, .own))
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let handle = try FileHandle(forReadingFrom: fileURL)
@@ -473,24 +494,45 @@ extension Vault {
 private struct Target { let workspaceId: String }
 
 extension Vault {
+    /* Whom to trust for a copy's verdicts; a copy stops rather than sign records it couldn't check. */
+    func copySigners() async throws -> TrustedSigners {
+        do { return try await signers() } catch {
+            throw DriveAPIError.server(503, "HushOS couldn’t check who wrote this, so it wasn’t copied. Try again.")
+        }
+    }
+
+    /* The same for a write that signs an existing record again (a rename, a replacement's name): it stops rather than vouch blind. */
+    func changeSigners() async throws -> TrustedSigners {
+        do { return try await signers() } catch {
+            throw DriveAPIError.server(503, "HushOS couldn’t check who wrote this, so it wasn’t changed. Try again.")
+        }
+    }
+
     /*
      * A copy into another workspace (a shared folder): the server keeps objects
      * per workspace, so the file is fetched and uploaded again, thumbnail and
-     * all. Folders go node by node.
+     * all. Folders go node by node. Signed by each record's verdict as a copy
+     * is; `resealed` signs everything re-sealed whatever it verified as (a copy
+     * saved from someone's share, which this person never vouched for).
      */
-    public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
+    public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil, resealed: Bool = false,
+                           progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
         let source = try await resolve(nodeId)
+        let trusted = resealed ? nil : try await copySigners()
+        let metadata: Signing = trusted.map { .after($0.metadata(of: source.node)) } ?? .resealed
         if source.isFolder {
-            let made = try await createFolder(in: parentId, name: name ?? source.name)
-            for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
+            let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata)
+            for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, resealed: resealed, progress: progress) }
             return made
         }
+        let version: Signing = trusted.flatMap { signers in source.node.currentVersion.map { .after(signers.version($0, of: source.node)) } } ?? .resealed
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent(source.name)
         try await download(source.id, to: file) { progress($0 / 2) }
         let thumbnail = try? await thumbnail(source.id)
-        return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail) { progress(0.5 + $0 / 2) }
+        return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail,
+                                signing: (metadata, version)) { progress(0.5 + $0 / 2) }
     }
 }

@@ -65,15 +65,24 @@ extension DriveAPI {
 
 /*
  * The routes that need no session: what a visitor with a link, or anyone
- * filing a report, talks to. Same client header, no cookie.
+ * filing a report, talks to. Same client header, no cookie; a link's token
+ * goes in the `x-link-token` header (the server answers 410 to the old path
+ * form), and its replies carry no signers or signatures.
  */
 public final class PublicAPI: Sendable {
     public let origin: String
-    private let http = URLSession(configuration: .ephemeral)
+    private let http: URLSession
 
-    public init(origin: String) { self.origin = origin }
+    /* `configuration` is for tests; the app talks over an ephemeral session, no cookies or cache kept. */
+    public init(origin: String, configuration: URLSessionConfiguration = .ephemeral) {
+        self.origin = origin
+        http = URLSession(configuration: configuration)
+    }
 
-    private func request(_ path: String, query: [URLQueryItem] = []) throws -> URLRequest {
+    /* The header a link's token travels in, never the path: proxies log paths. */
+    static let linkTokenHeader = "x-link-token"
+
+    private func request(_ path: String, query: [URLQueryItem] = [], token: String? = nil) throws -> URLRequest {
         guard var components = URLComponents(string: origin + "/api/drive" + path) else { throw DriveAPIError.server(500, "Bad API path") }
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else { throw DriveAPIError.server(500, "Bad API path") }
@@ -81,6 +90,7 @@ public final class PublicAPI: Sendable {
         request.httpShouldHandleCookies = false
         request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.setValue(origin, forHTTPHeaderField: "Origin")
+        if let token { request.setValue(token, forHTTPHeaderField: Self.linkTokenHeader) }
         request.timeoutInterval = 30
         return request
     }
@@ -110,20 +120,20 @@ public final class PublicAPI: Sendable {
     }
 
     public func openLink(token: String) async throws -> OpenedLink {
-        try await perform(try request("/links/\(token)/open"), as: OpenedLink.self)
+        try await perform(try request("/links/open", token: token), as: OpenedLink.self)
     }
 
     public func linkChildren(token: String, nodeId: String, after: String?) async throws -> Listing {
         let query = after.map { [URLQueryItem(name: "after", value: $0)] } ?? []
-        return try await perform(try request("/links/\(token)/nodes/\(nodeId)/children", query: query), as: Listing.self)
+        return try await perform(try request("/links/nodes/\(nodeId)/children", query: query, token: token), as: Listing.self)
     }
 
     public func linkVersionURL(token: String, versionId: String) async throws -> VersionURL {
-        try await perform(try request("/links/\(token)/versions/\(versionId)/url"), as: VersionURL.self)
+        try await perform(try request("/links/versions/\(versionId)/url", token: token), as: VersionURL.self)
     }
 
     public func linkThumbnails(token: String, versionIds: [String]) async throws -> ThumbnailUrls {
-        try await perform(try request("/links/\(token)/thumbnails", query: [URLQueryItem(name: "versions", value: versionIds.joined(separator: ","))]), as: ThumbnailUrls.self)
+        try await perform(try request("/links/thumbnails", query: [URLQueryItem(name: "versions", value: versionIds.joined(separator: ","))], token: token), as: ThumbnailUrls.self)
     }
 
     public func range(_ url: URL, _ range: ByteRange) async throws -> Data {

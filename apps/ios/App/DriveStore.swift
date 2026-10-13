@@ -70,11 +70,18 @@ final class DriveStore {
     var deepSiblings: [Opened] = []
     /* What others shared with this account, opened: the Shared tab and the folder picker read it. */
     /*
-     * Whose signatures this person can check (their own keys and their verified pins'); nil until
-     * loaded, and until then no item carries a mark: a mark drawn on a guess would be noise.
+     * Whose signatures this person can check (their own keys and their verified pins'). Until the
+     * first load answers no item carries a mark; once a load fails (the identity history, the
+     * settings, settings refused as rolled back), every item is marked "Couldn't check", never
+     * left unmarked, until a retry loads them.
      */
-    var signers: TrustedSigners?
-    @ObservationIgnored private var provenanceCache: [String: (stamp: String, value: Provenance?)] = [:]
+    var trust: TrustState = .pending
+    /* Everyone pinned, checked or not, by lowercase id: where an Unverified mark can offer "Check their words". */
+    var pins: [String: ContactPin] = [:]
+    @ObservationIgnored private var verdicts = VerdictCache()
+    /* Rotations that couldn't run because whom to trust didn't load: run again once it does. */
+    @ObservationIgnored private var rotationsWaiting: [String: Opened] = [:]
+    @ObservationIgnored private var loadingSigners = false
     var mounts: [ShareMount] = []
     var mountsError: String?
     var mountsLoaded = false
@@ -299,6 +306,8 @@ final class DriveStore {
         guard let touched = try? await vault.sync() else { return }
         // The feed answered: whatever the last request said, the server is reachable now.
         offline = false
+        // Reachable again after whom to trust failed to load: try once more, so "Couldn't check" clears by itself.
+        if case .failed = trust { Task { await refreshSigners() } }
         if touched.isEmpty { return }
         // Changes from other devices reach the Files location too, not only this device's own writes.
         FilesDomain.signal()
@@ -398,29 +407,40 @@ final class DriveStore {
         await refreshSigners()
     }
 
-    /* Reads whose signatures count again: after the pins change (someone added or checked) or the identity does. */
+    /*
+     * Reads whose signatures count again: after the pins change (someone added or checked) or the
+     * identity does, and as the retry when a load failed. A failure marks everything "Couldn't
+     * check"; it is never taken as no marks at all.
+     */
     func refreshSigners() async {
+        guard !loadingSigners else { return }
+        loadingSigners = true
+        defer { loadingSigners = false }
         await vault.forgetSigners()
-        guard let next = try? await vault.signers() else { return }
-        if next != signers {
-            provenanceCache = [:]
-            signers = next
+        let next = await TrustState.load { [vault] in try await vault.signers() }
+        pins = await vault.knownPins()
+        // Off the network a set already loaded stands: nothing new can arrive to check against it. Any other failure,
+        // a refused rollback included, replaces it, and every record says "Couldn't check".
+        if case .failed = next, case .loaded = trust, offline { return }
+        if next != trust {
+            verdicts.reset()
+            trust = next
+        }
+        if case .loaded = next, !rotationsWaiting.isEmpty {
+            let waiting = Array(rotationsWaiting.values)
+            rotationsWaiting = [:]
+            for item in waiting { try? await rotateAfterRevoke(item) }
         }
     }
 
-    /*
-     * The Unverified mark an item carries, or nil: verified, or not known yet. Kept per record
-     * (the signature, metadata version and current version), since rows ask on every draw.
-     */
+    /* The Unverified mark an item carries, or nil: verified, or not known yet (still loading). */
     func provenance(of item: Opened) -> Provenance? {
-        guard let signers else { return nil }
-        let node = item.node
-        let stamp = [node.workspaceId, String(node.metadataVersion), node.metadataSignature ?? "-", node.metadataSigner?.id ?? "-",
-                     node.currentVersion?.id ?? "-", node.currentVersion?.signature ?? "-", node.currentVersion?.signer?.id ?? "-"].joined(separator: "|")
-        if let cached = provenanceCache[node.id], cached.stamp == stamp { return cached.value }
-        let value = signers.provenance(of: node)
-        provenanceCache[node.id] = (stamp, value)
-        return value
+        verdicts.provenance(of: item.node, under: trust)
+    }
+
+    /* An earlier version's mark, in the versions list and the viewer. */
+    func provenance(of version: VersionListView, in item: Opened) -> Provenance? {
+        trust.provenance(of: version, in: item.node)
     }
 
     /* The nearest folder, from `folderId` up, that is shared: the one the access banner speaks for. */
@@ -721,7 +741,8 @@ final class DriveStore {
                     finish(ticket, failed: !ok, message: why)
                 } else {
                     // Across drives (into a shared folder) the object is fetched and uploaded again; a cut then trashes the original.
-                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                    // Out of someone's share it is a saved copy: re-sealed, never vouched for.
+                    let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder, resealed: !isOwn(item)) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
                     if ok && cut { await trash(item) }
                 }
@@ -987,6 +1008,11 @@ final class DriveStore {
                 let more = outcome.skipped.count > 1 ? " And \(outcome.skipped.count - 1) more not shared again." : ""
                 notify("Not shared again: " + first + more, important: true)
             }
+        } catch RotationError.untrusted {
+            // Nothing started: the keys change once whom to trust loads, rather than re-signing blind now.
+            rotation = nil
+            rotationsWaiting[item.id] = item
+            throw RotationError.untrusted
         } catch {
             rotation = nil
             // Half-rotated: what is on screen may not open any more, so those folders say so with Try again.
@@ -1072,7 +1098,7 @@ final class DriveStore {
                 across = true
                 let ticket = begin(.copy, item.name)
                 var why: String?
-                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
+                let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.copyAcross(item.id, to: folder, resealed: !isOwn(item)) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                 finish(ticket, failed: !ok, message: why)
                 if ok, await perform(in: item.node.parentId, { try await vault.trash(item.id) }) { moved.append(item) }
             }
@@ -1107,7 +1133,8 @@ final class DriveStore {
         let ticket = begin(.copy, item.name)
         var why: String?
         let ok = await perform(in: root, failed: { why = $0 }) {
-            _ = try await vault.copyAcross(item.id, to: root, name: name) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
+            // Someone else's: re-sealed, whatever its signatures said, since this person never vouched for them.
+            _ = try await vault.copyAcross(item.id, to: root, name: name, resealed: true) { fraction in Task { @MainActor in self.progress(ticket, fraction) } }
         }
         finish(ticket, failed: !ok, message: why)
     }
@@ -1129,7 +1156,8 @@ final class DriveStore {
         let taken = (try? await vault.children(of: parent))?.map(\.name) ?? []
         let name = Self.freeName(item.name, among: taken)
         if item.isFolder {
-            let made = try await vault.createFolder(in: parent, name: name)
+            // A visitor sees no signatures: everything saved from a link is re-sealed, never vouched for.
+            let made = try await vault.createFolder(in: parent, name: name, signing: .resealed)
             for child in try await link.children(of: item.id) { try await copy(from: link, item: child, into: made.id, ticket: ticket) }
             return
         }
@@ -1139,7 +1167,8 @@ final class DriveStore {
         let file = directory.appendingPathComponent(item.name)
         try await link.download(item, to: file) { fraction in Task { @MainActor in self.progress(ticket, fraction / 2) } }
         let thumbnail = try? await link.thumbnail(item)
-        _ = try await vault.upload(fileURL: file, name: name, mime: item.metadata.mime, in: parent, replacing: nil, thumbnail: thumbnail) { fraction in
+        _ = try await vault.upload(fileURL: file, name: name, mime: item.metadata.mime, in: parent, replacing: nil, thumbnail: thumbnail,
+                                   signing: (.resealed, .resealed)) { fraction in
             Task { @MainActor in self.progress(ticket, 0.5 + fraction / 2) }
         }
     }

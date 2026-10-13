@@ -79,8 +79,8 @@ struct FileViewer: View {
             Spacer(minLength: 0)
             VStack(spacing: 1) {
                 Text(current.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
-                if version == nil, let provenance = store.provenance(of: current) {
-                    // In place of the position or size: who wrote it comes first when it can't be checked.
+                if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
+                    // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
                     UnverifiedMark(provenance: provenance).frame(minHeight: 16)
                 } else {
                     Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)

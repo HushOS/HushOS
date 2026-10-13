@@ -1,7 +1,7 @@
 import Foundation
 import HushOSCore
 
-/* An operator as `GET /api/drive/reports/operators` lists them. */
+/* An operator as `GET /api/drive/reports/operators` lists them: the server's word, not a key anyone checked. */
 public struct ReportOperator: Codable, Sendable {
     public struct Kem: Codable, Sendable {
         public let publicKey: String
@@ -33,9 +33,12 @@ public enum Reports {
     ]
 
     /*
-     * The report body: the node key sealed to every operator with the
-     * report's context bound in, so the server, holding public keys only,
-     * cannot open it, and an operator can open only this report.
+     * The report body: the node key sealed to every operator with the report's
+     * context bound in, so an operator can open only this report. The operator
+     * keys come from the server and nothing here checks them against anyone
+     * this person verified: whoever runs the server can list keys of their own
+     * and open what is reported. That is what reporting means, and the report
+     * sheet says so.
      */
     static func body(api: PublicAPI, item: Opened, nodeKey: Data, category: String, reason: String, email: String?, via: [String: Any]) async throws -> [String: Any] {
         struct Operators: Decodable { let operators: [ReportOperator] }

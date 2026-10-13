@@ -18,6 +18,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         Unbacked.apply()
+        // Decrypted downloads (and partials) Files never took, older than a day.
+        TemporaryCopies.sweep()
         vault = Vault.fromKeychain()
         super.init()
     }

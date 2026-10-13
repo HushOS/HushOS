@@ -66,11 +66,20 @@ struct SignInView: View {
                             Alpine.rule.frame(height: 1).padding(.leading, Alpine.Space.s4)
                             row("Password") {
                                 HStack {
-                                    Group {
-                                        if showPassword { TextField("Required", text: $password) } else { SecureField("Required", text: $password) }
-                                    }
-                                    .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
-                                    .onSubmit { submit() }
+                                    // Always the secure field, which gets the system keyboard: an extension can't refuse
+                                    // third-party keyboards, so the password is never typed into a plain field. The eye
+                                    // only draws the characters over it.
+                                    SecureField("Required", text: $password)
+                                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                        .onSubmit { submit() }
+                                        .opacity(showPassword ? 0.011 : 1)
+                                        .overlay(alignment: .leading) {
+                                            if showPassword {
+                                                Text(password.isEmpty ? "Required" : password)
+                                                    .foregroundStyle(password.isEmpty ? Alpine.inkMuted : Alpine.ink)
+                                                    .lineLimit(1).truncationMode(.head).allowsHitTesting(false).accessibilityHidden(true)
+                                            }
+                                        }
                                     Button { showPassword.toggle() } label: {
                                         Image(systemName: showPassword ? "eye.slash" : "eye").foregroundStyle(Alpine.inkMuted).frame(width: 36, height: 36)
                                     }

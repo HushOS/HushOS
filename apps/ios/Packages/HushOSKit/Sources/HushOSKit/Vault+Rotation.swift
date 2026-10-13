@@ -86,7 +86,14 @@ struct RotationResults: Decodable, Sendable {
 
 public enum RotationError: Error, LocalizedError {
     case stuck
-    public var errorDescription: String? { "The rotation could not finish. Try again." }
+    /* Whom this person trusts didn't load: nothing is re-signed blind, and the rotation waits to be tried again. */
+    case untrusted
+    public var errorDescription: String? {
+        switch self {
+        case .stuck: "The rotation could not finish. Try again."
+        case .untrusted: "HushOS couldn’t check who wrote what’s in it, so its keys weren’t changed yet. It will try again."
+        }
+    }
 }
 
 /* What a rotation did: how many nodes it re-sealed, and why any person's share was not sealed again (each once). */
@@ -132,14 +139,15 @@ extension Vault {
     public func rotate(_ item: Opened, progress: @Sendable (Int) -> Void = { _ in }) async throws -> RotationOutcome {
         let ws = item.node.workspaceId
         let rootId = item.id
+        // Every record is checked as it was before it is signed again: without whom to trust, nothing starts.
+        let trusted: TrustedSigners
+        do { trusted = try await signers() } catch { throw RotationError.untrusted }
         let started = try await api.startRotation(workspaceId: ws, nodeId: rootId)
         let target = started.targetEpoch
         // The root's chain must be open: its parent key is what the new root key wraps under.
         if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
         // The identity, the pins and the ledger are only needed for shares and links: a subtree with none never asks for them.
         var sharing: (keys: IdentityKeys, pins: [String: ContactPin], ledger: SharingLedger)?
-        // Pins already followed along a grantee's succession chain in this rotation.
-        var followed: Set<String> = []
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
         var outcome = RotationOutcome()
@@ -210,16 +218,20 @@ extension Vault {
                 let metaCtx = MetadataContext(workspaceId: ws, nodeId: node.id, metadataVersion: node.metadataVersion)
                 let metadata = try metadataOpen(ctx: metaCtx, nodeKey: old, envelope: try base64urlDecode(value: node.metadataEnvelope))
                 let metadataEnvelope = try metadataSeal(ctx: metaCtx, nodeKey: fresh, metadata: metadata)
-                // Re-sealed here, so signed here: by the account running the rotation, over the unchanged metadata version.
+                // Re-sealed here, so signed here: by the account running the rotation, over the unchanged metadata version,
+                // ordinary only when the record verified as it was and re-sealed otherwise, so a rotation launders nothing.
                 let metadataSignature = try await signMetadata(workspaceId: ws, nodeId: node.id, kind: node.isFolder ? .folder : .file,
-                                                               version: node.metadataVersion, envelope: metadataEnvelope)
+                                                               version: node.metadataVersion, envelope: metadataEnvelope,
+                                                               signing: .after(trusted.metadata(of: node)))
                 var versions: [[String: Any]] = []
                 for version in entry.versions {
                     let ctx = VersionContext(workspaceId: ws, nodeId: node.id, versionId: version.id, objectId: version.objectId)
                     let content = try versionOpen(ctx: ctx, suite: version.contentSuite, nodeKey: old, envelope: try base64urlDecode(value: version.contentKeyEnvelope), rowSize: version.plaintextSize.flatMap { UInt64($0) })
                     let resealed = try versionReseal(ctx: ctx, suite: version.contentSuite, nodeKey: fresh, content: content)
+                    let prior = trusted.version(id: version.id, objectId: version.objectId, contentSuite: version.contentSuite,
+                                                contentKeyEnvelope: version.contentKeyEnvelope, signer: version.signer, signature: version.signature, of: node)
                     let signature = try await signVersion(workspaceId: ws, nodeId: node.id, versionId: version.id, objectId: version.objectId,
-                                                          suite: version.contentSuite, envelope: resealed)
+                                                          suite: version.contentSuite, envelope: resealed, signing: .after(prior))
                     versions.append(["id": version.id, "contentKeyEnvelope": base64urlEncode(bytes: resealed), "signature": signature])
                 }
                 var shares: [[String: Any]] = []
@@ -228,12 +240,7 @@ extension Vault {
                     sharing = (try await identityKeys(), settings.contacts, settings.ledger)
                 }
                 for share in sharing.map({ entry.ledgerShares($0.ledger) }) ?? [] {
-                    // A grantee who replaced their keys by a succession their pinned keys signed: the pin follows, once.
-                    if var current = sharing, let pin = current.pins[share.granteeUserId], !followed.contains(pin.userId) {
-                        followed.insert(pin.userId)
-                        current.pins[pin.userId] = await follow(pin, served: share.grantee.served)
-                        sharing = current
-                    }
+                    // Sealed only to the pinned keys: a grantee whose served keys moved on is left out until this person checks again.
                     guard let (keys, pins, _) = sharing else { continue }
                     let sealing: (publicKey: Data, kem: Data, newDigest: String?)
                     do {

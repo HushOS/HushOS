@@ -101,6 +101,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return configuration
     }
 
+    /*
+     * No third-party keyboards anywhere in the app: one with full access can send what is typed
+     * (passwords, the recovery phrase, link passwords, names) wherever it likes. Secure fields get
+     * the system keyboard regardless; this covers every other field. The extensions have no such
+     * switch, so their only free-text field, the Files sign-in's password, stays secure entry.
+     */
+    func application(_ application: UIApplication, shouldAllowExtensionPointIdentifier extensionPointIdentifier: UIApplication.ExtensionPointIdentifier) -> Bool {
+        extensionPointIdentifier != .keyboard
+    }
+
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
         guard identifier == BackgroundTransfers.sessionIdentifier || identifier == ShareHandoff.sessionIdentifier else { return completionHandler() }
         MainActor.assumeIsolated {
