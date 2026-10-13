@@ -43,6 +43,36 @@ import {
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/* Thrown to undo a transaction whose result is a refusal; carries the result out. */
+class Refusal extends Error {
+    constructor(readonly result: unknown) {
+        super('refused');
+    }
+}
+
+/*
+ * A transaction that commits only the outcomes named in `keep`; any other
+ * result is returned with every write before it undone. For writes that can
+ * be refused partway (an id already taken, a later folder in a batch), where a
+ * plain return would commit what came before: a storage reservation, a node
+ * with no version, the first folders of a batch that "lands whole or not at all".
+ */
+async function transactionKeeping<T extends { status: string }>(
+    keep: readonly T['status'][],
+    work: (tx: Tx) => Promise<T>,
+): Promise<T> {
+    try {
+        return await db.transaction(async (tx) => {
+            const result = await work(tx);
+            if (!keep.includes(result.status)) throw new Refusal(result);
+            return result;
+        });
+    } catch (error) {
+        if (error instanceof Refusal) return error.result as T;
+        throw error;
+    }
+}
+
 export const MAX_DEPTH = 64;
 export const WALK_CAP = 128;
 export const PAGE_SIZE = 500;
@@ -533,7 +563,7 @@ export async function createFolders(input: {
     userId: string;
     folders: (NewFolder & { parentId: string })[];
 }) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['created'], async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
         // Every folder's signature first: a batch lands whole or not at all.
         if (
@@ -1057,7 +1087,7 @@ export type UploadBegin = {
 };
 
 export async function beginUpload(input: UploadBegin) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['ok'], async (tx) => {
         await nextChangeSeq(tx, input.workspaceId);
         let keyEpoch: number;
         let expectedVersionId: string | null = null;
@@ -1146,28 +1176,40 @@ export async function beginUpload(input: UploadBegin) {
             if (!node) return { status: 'conflict' as const };
             void ancestors;
         }
-        await tx.insert(driveObjects).values({
-            id: input.object.id,
-            workspaceId: input.workspaceId,
-            objectKey: input.object.objectKey,
-            contentSuite: input.object.contentSuite,
-            chunkSize: input.object.chunkSize,
-            chunkCount: input.object.chunkCount,
-            contentNonce: input.object.contentNonce,
-            plaintextSize: null,
-            ciphertextSize: input.object.ciphertextSize,
-            status: 'pending',
-        });
-        await tx.insert(fileVersions).values({
-            id: input.version.id,
-            nodeId: input.node.id,
-            workspaceId: input.workspaceId,
-            objectId: input.object.id,
-            contentKeyEnvelope: input.version.contentKeyEnvelope,
-            signerId: input.userId,
-            signature: input.version.signature,
-            status: 'pending',
-        });
+        // Client-generated ids: one already taken, in this workspace or any other, is the
+        // same refusal as a taken node id, and undoes the reservation above.
+        const [object] = await tx
+            .insert(driveObjects)
+            .values({
+                id: input.object.id,
+                workspaceId: input.workspaceId,
+                objectKey: input.object.objectKey,
+                contentSuite: input.object.contentSuite,
+                chunkSize: input.object.chunkSize,
+                chunkCount: input.object.chunkCount,
+                contentNonce: input.object.contentNonce,
+                plaintextSize: null,
+                ciphertextSize: input.object.ciphertextSize,
+                status: 'pending',
+            })
+            .onConflictDoNothing()
+            .returning({ id: driveObjects.id });
+        if (!object) return { status: 'conflict' as const };
+        const [version] = await tx
+            .insert(fileVersions)
+            .values({
+                id: input.version.id,
+                nodeId: input.node.id,
+                workspaceId: input.workspaceId,
+                objectId: input.object.id,
+                contentKeyEnvelope: input.version.contentKeyEnvelope,
+                signerId: input.userId,
+                signature: input.version.signature,
+                status: 'pending',
+            })
+            .onConflictDoNothing()
+            .returning({ id: fileVersions.id });
+        if (!version) return { status: 'conflict' as const };
         const [upload] = await tx
             .insert(driveUploads)
             .values({
@@ -1754,7 +1796,7 @@ export type CopyFile = {
  * and the object retires when the last reference goes.
  */
 export async function copyFile(input: CopyFile) {
-    return db.transaction(async (tx) => {
+    return transactionKeeping(['ok'], async (tx) => {
         const changeSeq = await nextChangeSeq(tx, input.workspaceId);
         const source = await walk(tx, input.sourceNodeId);
         if (

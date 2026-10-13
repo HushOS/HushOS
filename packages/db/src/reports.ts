@@ -189,7 +189,11 @@ export async function createReport(input: CreateReport) {
                 itemCount: items.length,
                 itemsTruncated: truncated,
             })
+            // The id is the client's (sealed into every key envelope): one already taken is
+            // refused alike whoever filed it, before anything else is written.
+            .onConflictDoNothing()
             .returning();
+        if (!report) return { status: 'conflict' as const };
         await tx.insert(driveReportKeys).values(
             input.keys.map((key) => ({
                 reportId: input.id,

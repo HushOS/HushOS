@@ -2005,6 +2005,8 @@ export async function fileReport(
                 'The operators of this instance changed while you were writing. Please try again.',
                 409,
             );
+        case 'conflict':
+            throw new DriveError('conflict', 'A report with this id already exists.', 409);
         case 'duplicate':
             return { report: { id: result.reportId }, duplicate: true };
         case 'ok':
