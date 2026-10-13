@@ -23,6 +23,9 @@ import com.hushos.app.data.Vault
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
+import com.hushos.app.data.TrustState
+import com.hushos.app.data.markOf
+import com.hushos.core.Integrity
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -51,6 +54,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val session = Shared.session(ctx)
         vault?.let { if (session != null && it.api.session == session) return it }
         vault = null
+        trust = TrustState.Loading
         session ?: throw authenticationRequired()
         val created = Vault(ctx, com.hushos.app.data.DriveApi(session))
         vault = created
@@ -83,10 +87,34 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         throw FileNotFoundException(e.message ?: e.toString())
     }
 
+    /* Whom this account trusts, for the rows' Unverified label, and when it was last asked. */
+    @Volatile private var trust: TrustState = TrustState.Loading
+    @Volatile private var trustAt = 0L
+
+    /*
+     * The trust set, loaded at most every few minutes (a failed load is asked again sooner), as the app's own lists
+     * use it. A load that fails marks every row, never none (docs/integrity-design.md, "Checking fails closed").
+     */
+    private fun trustFor(vault: Vault): TrustState {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val current = trust
+        val fresh = if (current is TrustState.Ready) TRUST_TTL_MS else TRUST_RETRY_MS
+        if (current !is TrustState.Loading && now - trustAt < fresh) return current
+        val result = runCatching { vault.trust() }
+        if (result.exceptionOrNull() is NotAuthenticated) throw result.exceptionOrNull()!!
+        return current.after(result).also { trust = it; trustAt = now }
+    }
+
+    /* What Files shows under a row's name: nothing for a verified record, otherwise that it is unverified. */
+    private fun summaryOf(item: Opened, trust: TrustState): String? {
+        val mark = markOf(item.node, trust) ?: return null
+        return if (mark.integrity == Integrity.UNCHECKED) "Unverified: HushOS couldn’t check who wrote this" else "Unverified"
+    }
+
     private val rootColumns = arrayOf(Root.COLUMN_ROOT_ID, Root.COLUMN_FLAGS, Root.COLUMN_ICON, Root.COLUMN_TITLE, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_SUMMARY)
     private val documentColumns = arrayOf(
         Document.COLUMN_DOCUMENT_ID, Document.COLUMN_MIME_TYPE, Document.COLUMN_DISPLAY_NAME,
-        Document.COLUMN_LAST_MODIFIED, Document.COLUMN_FLAGS, Document.COLUMN_SIZE,
+        Document.COLUMN_LAST_MODIFIED, Document.COLUMN_FLAGS, Document.COLUMN_SIZE, Document.COLUMN_SUMMARY,
     )
 
     override fun queryRoots(projection: Array<out String>?): Cursor {
@@ -113,7 +141,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase()) ?: "application/octet-stream"
     }
 
-    private fun addRow(cursor: MatrixCursor, item: Opened, vault: Vault) {
+    private fun addRow(cursor: MatrixCursor, item: Opened, vault: Vault, trust: TrustState = trustFor(vault)) {
         var flags = Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME or Document.FLAG_SUPPORTS_MOVE
         if (item.isFolder) flags = flags or Document.FLAG_DIR_SUPPORTS_CREATE
         else {
@@ -127,6 +155,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             .add(Document.COLUMN_LAST_MODIFIED, item.modifiedMillis)
             .add(Document.COLUMN_FLAGS, flags)
             .add(Document.COLUMN_SIZE, item.size)
+            // The same verdict the app's rows show, so a planted file is not passed off as clean in a picker.
+            .add(Document.COLUMN_SUMMARY, if (item.id == vault.rootId) null else summaryOf(item, trust))
     }
 
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = guarded {
@@ -147,7 +177,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = guarded {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
-        for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault)
+        val trust = trustFor(vault)
+        for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault, trust)
         cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId))
         syncInBackground(vault, parentDocumentId)
         cursor
@@ -176,7 +207,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor = guarded {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
-        for (item in vault.recents(64)) addRow(cursor, item, vault)
+        val trust = trustFor(vault)
+        for (item in vault.recents(64)) addRow(cursor, item, vault, trust)
         cursor
     }
 
@@ -270,4 +302,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     }
 
     override fun removeDocument(documentId: String, parentDocumentId: String) = deleteDocument(documentId)
+
+    private companion object {
+        const val TRUST_TTL_MS = 5 * 60_000L
+        const val TRUST_RETRY_MS = 30_000L
+    }
 }
