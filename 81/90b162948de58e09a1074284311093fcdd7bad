@@ -1,0 +1,23 @@
+docs/groups-design.md
+  s_c56e31c87cddde::t_2f98e1b97574d8 120-123
+  s_c56e31c87cddde::t_b5882593822a47 196
+  s_c56e31c87cddde::t_327a27e549554f 1-8,19-84,90-119,124-132,143-145,158-160,167-190,192-195
+  s_c56e31c87cddde::t_a78e6c735ce8c9 9-18,85-89,133-142,146-157,161-166
+  s_c56e31c87cddde::t_ad764748e997e1 191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8190b162948de58e09a1074284311093fcdd7bad",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
