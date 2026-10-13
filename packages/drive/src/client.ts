@@ -155,7 +155,15 @@ export type Granter = SharedWithMeView['granter'];
  * only key a received share opens with. A share signed with a key the granter
  * has since replaced stays shut until they seal it again.
  */
-export type TrustedGranter = { signingPublicKey: string };
+export type TrustedGranter = {
+    signingPublicKey: string;
+    /*
+     * Set when the pin followed keys the granter has since replaced: a share
+     * that will not open under the current key is then most likely one sealed
+     * before, waiting for their re-seal, and is said so, by the pin's name.
+     */
+    replaced?: { name: string };
+};
 /* A grantee's keys as a pin vouches for them: share suite 3 needs the KEM key. */
 export type TrustedGrantee = { encryptionPublicKey: string; kemPublicKey: string | null };
 export type DriveClientOptions = {
@@ -768,9 +776,18 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return decorate(created.nodes);
     }
 
+    /*
+     * A rename re-signs the whole record, type, size and date carried over, so
+     * it is checked first, as a reading would: only metadata that verifies is
+     * signed again with the ordinary statement. Anything else (planted,
+     * unchecked, signed by someone not checked) is re-locked with the
+     * re-sealed one and stays Unverified, rather than turning into a record
+     * this person vouches for.
+     */
     async function rename(node: DriveNode, name: string) {
         const ws = node.workspaceId;
         const clean = checkName(name);
+        const checked = (await verify([node])).get(node.id);
         const { metadataEnvelope, metadataSignature } = await rpc('driveSealMetadata', {
             workspaceId: ws,
             nodeId: node.id,
@@ -780,6 +797,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 ...(node.metadata ?? { mime: null, size: null, modified: null }),
                 name: clean,
             },
+            resealed: checked?.metadata !== 'verified',
         });
         const result = await api.rename(ws, node.id, {
             metadataVersion: node.metadataVersion,
@@ -1547,20 +1565,30 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         throw new Error('Shares cannot be opened on this client.');
                     // The granter's current key only: a share signed before they replaced
                     // their keys waits for them to seal it again.
-                    const { signingPublicKey } = await options.trustGranter(received.granter);
-                    await rpc('driveOpenShare', {
-                        workspaceId: received.workspaceId,
-                        nodeId: received.node.id,
-                        keyEpoch: received.keyEpoch,
-                        granterUserId: received.granter.id,
-                        granterSigningPublicKey: signingPublicKey,
-                        granteeUserId,
-                        // Not recorded on the share: the worker tries this account's identities in turn.
-                        granteeKeyVersion: null,
-                        shareEnvelope: received.shareEnvelope,
-                        prevShareEnvelope: received.prevShareEnvelope,
-                        prevKeyEpoch: received.prevKeyEpoch,
-                    });
+                    const { signingPublicKey, replaced } = await options.trustGranter(
+                        received.granter,
+                    );
+                    try {
+                        await rpc('driveOpenShare', {
+                            workspaceId: received.workspaceId,
+                            nodeId: received.node.id,
+                            keyEpoch: received.keyEpoch,
+                            granterUserId: received.granter.id,
+                            granterSigningPublicKey: signingPublicKey,
+                            granteeUserId,
+                            // Not recorded on the share: the worker tries this account's identities in turn.
+                            granteeKeyVersion: null,
+                            shareEnvelope: received.shareEnvelope,
+                            prevShareEnvelope: received.prevShareEnvelope,
+                            prevKeyEpoch: received.prevKeyEpoch,
+                        });
+                    } catch (cause) {
+                        if (!replaced) throw cause;
+                        throw new Error(
+                            `${replaced.name} replaced their sharing keys since sharing this. Ask ${replaced.name} to share it again.`,
+                            { cause },
+                        );
+                    }
                 } catch (cause) {
                     error =
                         cause instanceof Error ? cause.message : 'This share could not be opened.';

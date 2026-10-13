@@ -333,13 +333,19 @@ export type CryptoRequests = {
     driveCreateNodes: { workspaceId: string; nodes: DriveNodeInput[] };
     /* Opens node keys and metadata, parents before children; keys stay cached. */
     driveOpenNodes: { workspaceId: string; nodes: DriveNodeEnvelopes[] };
-    /* A rename: the metadata sealed at its next version, and signed. */
+    /*
+     * A rename: the metadata sealed at its next version, and signed. `resealed`
+     * signs the re-sealed statement, for a record whose current metadata did
+     * not verify: the rest of it (type, size, date) is carried over from
+     * something this person cannot vouch for.
+     */
     driveSealMetadata: {
         workspaceId: string;
         nodeId: string;
         kind: NodeKind;
         metadataVersion: number;
         metadata: NodeMetadata;
+        resealed?: boolean;
     };
     /*
      * Who wrote each record, checked against keys the caller trusts: `signers`
@@ -2184,6 +2190,7 @@ export function createCryptoSession() {
                     metadataSignature: await signMetadata(
                         { workspaceId, nodeId, kind, metadataVersion },
                         metadataEnvelope,
+                        message.input.resealed === true,
                     ),
                 };
             }
