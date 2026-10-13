@@ -1078,9 +1078,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val metadata = item.metadata.copy(name = name)
         val next = item.node.metadataVersion + 1uL
+        // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind.
+        val prior = replacedNamePrior(item)
         val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, next), key, metadata)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
-            signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed))
+            signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
         return adoptWritten(node, key, metadata, item.node.workspaceId, id)
     }
 
