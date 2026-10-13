@@ -2831,8 +2831,18 @@ export async function listSharesForGrantee(userId: string) {
                 role: driveShares.role,
                 keyEpoch: driveShares.keyEpoch,
                 shareEnvelope: driveShares.shareEnvelope,
-                prevShareEnvelope: driveShares.prevShareEnvelope,
-                prevKeyEpoch: driveShares.prevKeyEpoch,
+                // The envelope a rotation in flight replaced, served only when it is suite 3
+                // too: a rotation that re-seals a row left from before keeps its suite 1 or 2
+                // envelope here, which opens on no client now.
+                prevShareEnvelope:
+                    sql<Buffer | null>`case when octet_length(${driveShares.prevShareEnvelope}) = ${SHARE_ENVELOPE_BYTES} then ${driveShares.prevShareEnvelope} end`.mapWith(
+                        driveShares.prevShareEnvelope,
+                    ),
+                prevKeyEpoch: sql<
+                    number | null
+                >`case when octet_length(${driveShares.prevShareEnvelope}) = ${SHARE_ENVELOPE_BYTES} then ${driveShares.prevKeyEpoch} end`.mapWith(
+                    driveShares.prevKeyEpoch,
+                ),
                 createdAt: driveShares.createdAt,
                 changeSeq: workspaces.changeSeq,
                 granter: {

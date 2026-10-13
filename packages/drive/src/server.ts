@@ -30,9 +30,8 @@ import {
     MAX_DEPTH,
     MAX_FOLDER_BATCH,
     MAX_PART_URLS_PER_REQUEST,
+    RETIRED_SHARE_ENVELOPE_BYTES,
     SHARE_ENVELOPE_BYTES,
-    SHARE_SUITE,
-    shareEnvelopeSuite,
     THUMBNAIL_BATCH,
     THUMBNAIL_MAX_BYTES,
     VERSION_ENVELOPE_BYTES,
@@ -46,7 +45,6 @@ import {
     UPLOAD_TTL_HOURS,
     type Capabilities,
     type DriveErrorCode,
-    type ShareSuite,
 } from './protocol';
 
 /*
@@ -221,10 +219,10 @@ const signature = (value: string) => decodeEnvelope(value, 64);
  * not a share envelope at all.
  */
 function shareEnvelope(value: string) {
-    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES[SHARE_SUITE]);
-    const suite = shareEnvelopeSuite(bytes.length);
-    if (suite === null) throw new DriveError('invalid', 'Invalid envelope.');
-    if (suite !== SHARE_SUITE) throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+    const bytes = decodeEnvelope(value, undefined, SHARE_ENVELOPE_BYTES);
+    if (RETIRED_SHARE_ENVELOPE_BYTES.includes(bytes.length))
+        throw new DriveError('unsupported', 'Update HushOS to share.', 409);
+    if (bytes.length !== SHARE_ENVELOPE_BYTES) throw new DriveError('invalid', 'Invalid envelope.');
     return bytes;
 }
 /* A version envelope for an upload of the current suite: the key sealed with the sizes. */
@@ -773,8 +771,9 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
-        // Told apart by length in the query: 1, 2 (hybrid) or 3 (signed).
-        suite: row.suite as ShareSuite,
+        // Told apart by length in the query. Only the granter sees a row of suite 1 or 2,
+        // which grants nothing now, so they can re-seal it in suite 3 or revoke it.
+        suite: row.suite as 1 | 2 | 3,
         grantee: row.grantee,
     };
 }
