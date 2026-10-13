@@ -1,0 +1,25 @@
+docs/groups-design.md
+  s_c56e31c87cddde::t_3c43e4299cc84a 9-22,97-106,142-154,196-207,233
+  s_c56e31c87cddde::t_93bd8798745aa1 219
+  s_c56e31c87cddde::t_179f010a16d422 208
+docs/groups-threat-model.md
+  s_c56e31c87cddde::t_93bd8798745aa1 82,89-97
+  s_c56e31c87cddde::t_0ba29cc5227d49 88,99,106
+  s_c56e31c87cddde::t_06a5fbcf06a1d1 98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5d635bd4df129eecd14603de45d03283c00ef56",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
