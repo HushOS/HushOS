@@ -48,17 +48,14 @@ class SettingsMark(private val file: File) {
     }
 
     /*
-     * The settings the server serves now, against this account's marks: refused when older than the newest seen. No
-     * document at all is refused only once this device has seen a version 2 one: the server serves a version 1 row as
-     * none (no client opens those any more), and the save that replaces it lands above every earlier sequence, so a
-     * device that saw only version 1 reads none as empty settings rather than locking itself out.
+     * The settings the server serves now, against this account's marks. `sequence` is the stored settings sequence,
+     * which the server serves with or without a document: below the newest this device has seen is a rollback,
+     * document or not. No document at a sequence at or above the mark is a version 1 row (served as none, since no
+     * client opens those any more), unless this device has seen a version 2 document: those are never served as none.
      */
-    fun checkSettings(userId: String, served: ULong?) {
-        if (served == null) {
-            if (seen(v2Key(userId)) > 0uL) throw SettingsRolledBack()
-            return
-        }
-        if (served < seen(key(userId))) throw SettingsRolledBack()
+    fun checkSettings(userId: String, sequence: ULong, present: Boolean) {
+        if (sequence < seen(key(userId))) throw SettingsRolledBack()
+        if (!present && seen(v2Key(userId)) > 0uL) throw SettingsRolledBack()
     }
 
     /* Raises the account's settings mark; `sealedV2` also raises the mark that makes "none" a rollback. */
