@@ -568,14 +568,20 @@ export const apiApp = new Elysia({ prefix: '/api' })
             params: t.Object({ userId: uuidSchema }),
             query: t.Object({ from: t.Numeric({ minimum: 1, maximum: 2147483646 }) }),
         },
-        ({ sessionToken, params, query }) =>
-            auth.contactSuccession(sessionToken, params.userId, query.from),
+        ({ request, sessionToken, params, query }) =>
+            auth.contactSuccession(
+                sessionToken,
+                params.userId,
+                query.from,
+                requestAddress(request),
+            ),
     )
     // A POST so the address is in the body: a query string sits in proxy and access logs.
     .post(
         '/auth/contacts/lookup',
         { body: t.Object({ email: emailSchema }) },
-        ({ sessionToken, body }) => auth.lookupContact(sessionToken, body.email),
+        ({ request, sessionToken, body }) =>
+            auth.lookupContact(sessionToken, body.email, requestAddress(request)),
     )
     .get('/auth/settings', ({ sessionToken }) => auth.getSettings(sessionToken))
     .put('/auth/settings-key', { body: settingsKeySchema }, ({ request, sessionToken, body }) => {

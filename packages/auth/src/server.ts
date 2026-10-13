@@ -577,17 +577,36 @@ export async function getIdentityHistory(sessionToken: string | null) {
 }
 
 /*
+ * Lookups walk the directory, so they are bounded per account and per client
+ * address: someone with many accounts behind one address gets no more than a
+ * busy household would, and one account cannot spread across addresses either.
+ */
+async function limitLookups(kind: 'lookup' | 'succession', userId: string, address: string) {
+    if (
+        !(await authRepository.consumeRateLimit(hash(`contacts:${kind}:${userId}`), 60, 60_000)) ||
+        !(await authRepository.consumeRateLimit(
+            hash(`contacts:${kind}:address:${address}`),
+            120,
+            60_000,
+        ))
+    )
+        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+}
+
+/*
  * How an account's identity got from key version `from` to the current one:
  * each succession with the keys on both sides and the old signing key's
  * signature. A contact whose pin is at `from` checks every link before taking
- * the new keys. Bounded per person like a lookup.
+ * the new keys. Bounded per person and per address like a lookup.
  */
-export async function contactSuccession(sessionToken: string | null, userId: string, from: number) {
+export async function contactSuccession(
+    sessionToken: string | null,
+    userId: string,
+    from: number,
+    address: string,
+) {
     const { user } = await requireSession(sessionToken, 'Sign in to look up a contact.');
-    if (
-        !(await authRepository.consumeRateLimit(hash(`contacts:succession:${user.id}`), 60, 60_000))
-    )
-        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+    await limitLookups('succession', user.id, address);
     if (!Number.isSafeInteger(from) || from < 1)
         throw new AuthError('Ask from a key version of 1 or more.', 400);
     const chain = await authRepository.successionChain(userId, from);
@@ -608,14 +627,13 @@ export async function contactSuccession(sessionToken: string | null, userId: str
 }
 
 /*
- * Another person's public identity, by email. Bounded per person so the
- * directory cannot be walked; an unknown address and an account without an
- * identity are the same answer.
+ * Another person's public identity, by email. Bounded per person and per
+ * address so the directory cannot be walked; an unknown address and an
+ * account without an identity are the same answer.
  */
-export async function lookupContact(sessionToken: string | null, email: string) {
+export async function lookupContact(sessionToken: string | null, email: string, address: string) {
     const { user } = await requireSession(sessionToken, 'Sign in to look up a contact.');
-    if (!(await authRepository.consumeRateLimit(hash(`contacts:lookup:${user.id}`), 60, 60_000)))
-        throw new AuthError('Too many lookups. Please try again shortly.', 429);
+    await limitLookups('lookup', user.id, address);
     const found = await authRepository.lookupIdentity(normalizeEmail(email));
     if (!found) throw new AuthError('No HushOS account with that email has finished setup.', 404);
     return {
