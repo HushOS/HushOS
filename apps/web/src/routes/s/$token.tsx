@@ -5,7 +5,6 @@ import { FileMark } from '@/components/drive/file-mark';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { Spinner } from '@/components/motion';
 import { Brand } from '@/components/brand';
-import { PersonAvatar } from '@/components/person-avatar';
 import { SiteFooter } from '@/components/site-header';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -32,7 +31,7 @@ import {
 import { linkApi, setActiveLink } from '@/lib/drive-api';
 import { saveCopy } from '@/lib/save-copy';
 import { guardUnloadWhileUploading } from '@/lib/transfers';
-import { sessionQueryOptions } from '@/lib/session';
+import { fetchSessionUser } from '@/lib/session';
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouteContext, useRouter } from '@tanstack/react-router';
@@ -69,6 +68,8 @@ export const Route = createFileRoute('/s/$token')({
     head: () => ({ meta: [{ title: 'Shared with a link · HushOS' }] }),
     component: LinkPage,
 });
+
+type SessionUser = NonNullable<Awaited<ReturnType<typeof fetchSessionUser>>>;
 
 type Opened = Awaited<ReturnType<typeof driveClient.openLink>> & {
     /* What opened it, kept so the key can be opened again after this device unlocks an account. */
@@ -138,23 +139,21 @@ function LinkPage() {
 }
 
 /*
- * A link page's own header: the logo, and either who is signed in or the two ways
- * in. Signing in from here comes back to this link, key and all.
+ * A link page's own header: the logo and the ways in. It never asks who is
+ * signed in: the link's routes go without the session cookie so the server
+ * cannot tie the link to an account, and a session lookup here would tie them
+ * anyway. A browser with a session cookie is offered its files instead of
+ * Sign in, from the cookie's presence alone. Signing in from here comes back
+ * to this link, key and all.
  */
 function LinkHeader() {
     const { hasSession } = useRouteContext({ from: '__root__' });
-    const session = useQuery({ ...sessionQueryOptions, enabled: Boolean(hasSession) });
-    const user = session.data ?? null;
     return (
         <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-rule bg-card px-4 sm:px-8">
-            <Brand to={user ? '/app/drive' : '/'} className="h-9 px-1" />
-            {user ? (
-                <Link
-                    to="/app/drive"
-                    className="flex items-center gap-2.5 rounded-full py-1 pr-3 pl-1 text-[13px] font-semibold hover:bg-muted"
-                >
-                    <PersonAvatar name={user.name} seed={user.id} size={32} />
-                    <span className="max-sm:hidden">{user.name}</span>
+            <Brand to="/" className="h-9 px-1" />
+            {hasSession ? (
+                <Link to="/app/drive" className={buttonVariants({ variant: 'outline' })}>
+                    My files
                 </Link>
             ) : (
                 <span className="flex items-center gap-2">
@@ -619,36 +618,32 @@ function SaveToDrive({ opened }: { opened: Opened }) {
     const node = opened.node;
     const { hasSession } = useRouteContext({ from: '__root__' });
     const queryClient = useQueryClient();
-    const session = useQuery({ ...sessionQueryOptions, enabled: Boolean(hasSession) });
+    const router = useRouter();
     const unlockedUserId = useStore(authClient.store, (state) => state.unlockedUserId);
     const [unlocking, setUnlocking] = useState(false);
     const [saving, setSaving] = useState(false);
-    const user = session.data ?? null;
+    // Who is signed in is asked only once the visitor presses Save: until then, nothing on
+    // this page ties the link to an account.
+    const [user, setUser] = useState<SessionUser | null>(null);
+    const signIn = () => {
+        // The link's key is after the '#': it is kept in this browser, never put in the URL.
+        rememberReturn(window.location.pathname + window.location.search + window.location.hash);
+    };
     if (!hasSession)
         return (
-            <Link
-                to="/login"
-                className={buttonVariants({ variant: 'outline' })}
-                // The link's key is after the '#': it is kept in this browser, never put in the URL.
-                onClick={() =>
-                    rememberReturn(
-                        window.location.pathname + window.location.search + window.location.hash,
-                    )
-                }
-            >
+            <Link to="/login" className={buttonVariants({ variant: 'outline' })} onClick={signIn}>
                 <CopyPlusIcon />
                 Sign in to save a copy
             </Link>
         );
-    if (!user) return null;
 
-    async function save() {
+    async function save(as: SessionUser) {
         setSaving(true);
         try {
             // Unlocking an account in the worker drops every key it held, the
             // link's among them: open the link again before reading through it.
             await driveClient.openLink(opened.token, opened.secret, opened.password);
-            const { root } = await driveClient.open(user!.id);
+            const { root } = await driveClient.open(as.id);
             const folder = (await queryClient.fetchQuery(folderQueryOptions(root.id))).folder;
             // The copy uploads from this page; leaving it early is what the guard asks about.
             guardUnloadWhileUploading();
@@ -672,13 +667,31 @@ function SaveToDrive({ opened }: { opened: Opened }) {
         }
     }
     async function start() {
-        if (unlockedUserId === user!.id) return save();
+        let signedIn: SessionUser | null;
         try {
-            await authClient.restore(user!, { validated: true });
+            signedIn = await fetchSessionUser(queryClient);
+        } catch (error) {
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t save a copy',
+                description: driveError(error),
+            });
+            return;
+        }
+        // The cookie was stale: sign in, and come back to this link.
+        if (!signedIn) {
+            signIn();
+            await router.navigate({ to: '/login' });
+            return;
+        }
+        setUser(signedIn);
+        if (unlockedUserId === signedIn.id) return save(signedIn);
+        try {
+            await authClient.restore(signedIn, { validated: true });
         } catch {
             /* No remembered device: the dialog below asks for the password. */
         }
-        if (authClient.store.getState().unlockedUserId === user!.id) return save();
+        if (authClient.store.getState().unlockedUserId === signedIn.id) return save(signedIn);
         setUnlocking(true);
     }
     return (
@@ -687,7 +700,7 @@ function SaveToDrive({ opened }: { opened: Opened }) {
                 <CopyPlusIcon />
                 {saving ? 'Saving…' : 'Save a copy to my files'}
             </Button>
-            <Dialog open={unlocking} onOpenChange={setUnlocking}>
+            <Dialog open={unlocking && user !== null} onOpenChange={setUnlocking}>
                 <DialogContent>
                     <DialogHeader>
                         <DialogTitle>Unlock HushOS on this browser</DialogTitle>
@@ -696,13 +709,15 @@ function SaveToDrive({ opened }: { opened: Opened }) {
                             first.
                         </DialogDescription>
                     </DialogHeader>
-                    <UnlockDevice
-                        user={user}
-                        onUnlocked={async () => {
-                            setUnlocking(false);
-                            await save();
-                        }}
-                    />
+                    {user && (
+                        <UnlockDevice
+                            user={user}
+                            onUnlocked={async () => {
+                                setUnlocking(false);
+                                await save(user);
+                            }}
+                        />
+                    )}
                 </DialogContent>
             </Dialog>
         </>
