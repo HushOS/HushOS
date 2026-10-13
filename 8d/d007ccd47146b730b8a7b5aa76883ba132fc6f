@@ -1,0 +1,33 @@
+packages/env/src/app.ts
+  s_091323b2bb70f0::t_d2ef4098cccced 17
+docs/opaque-auth-design.md
+  s_091323b2bb70f0::t_d2ef4098cccced 177
+DESIGN.md
+  s_091323b2bb70f0::t_d2ef4098cccced 315,357,389
+.env.example
+  s_091323b2bb70f0::t_d2ef4098cccced 33-34
+docs/self-hosting.md
+  s_091323b2bb70f0::t_d2ef4098cccced 280
+compose.yaml
+  s_091323b2bb70f0::t_d2ef4098cccced 95
+README.md
+  s_091323b2bb70f0::t_d2ef4098cccced 112
+docs/release/store-listing.md
+  s_091323b2bb70f0::t_e35df55014b2dd 171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8dd007ccd47146b730b8a7b5aa76883ba132fc6f",
+  "prompts": {},
+  "sessions": {
+    "s_091323b2bb70f0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08b13311-b515-44a0-a4d4-0c9017ad930b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
