@@ -6,9 +6,10 @@ import Foundation
  * opened or fetched (the app's temporary folder: opened files, link files, recovery kits,
  * staged uploads), the tree mirror with its sealed thumbnails and documents, the remembered
  * device that opens the account key, and recent searches. It belongs to the account that
- * signed in, recorded by user id in the app group, and goes on sign-out, on account
- * deletion, and before a different account signs in, so nothing of one account shows to
- * the next: Home, On this phone, Search, the Files app.
+ * signed in, recorded by user id and server (`AccountOwner`) in the app group, and goes on
+ * sign-out, on account deletion, and before a different account signs in, so nothing of one
+ * account shows to the next: Home, On this phone, Search, the Files app. The same user id on
+ * another server is a different account.
  *
  * Plain directories and a closure for the rest, so a test can hold the rule to the files.
  */
@@ -34,30 +35,56 @@ public struct AccountStore: Sendable {
         self.forgetStores = forgetStores
     }
 
-    /* The account whose data is on the phone, or nil when none is recorded. */
-    public func owner() -> String? {
-        guard let text = try? String(contentsOf: ownerFile, encoding: .utf8) else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /* What the owner file says: nothing, a bare user id (an older version, no server), or the account. */
+    private enum Recorded: Equatable {
+        case none
+        case legacy(String)
+        case owner(AccountOwner)
+    }
+
+    private func recorded() -> Recorded {
+        guard let data = try? Data(contentsOf: ownerFile) else { return .none }
+        if let owner = try? JSONDecoder().decode(AccountOwner.self, from: data) { return .owner(owner) }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? .none : .legacy(text.lowercased())
+    }
+
+    /* The account whose data is on the phone, or nil when none is recorded (or only a user id, without its server). */
+    public func owner() -> AccountOwner? {
+        if case let .owner(owner) = recorded() { return owner }
+        return nil
     }
 
     /*
-     * Before `userId` signs in: another account's data, or data nobody is recorded as owning
-     * (kept before this store existed), is removed first. The same account signing in again
+     * Before `owner` signs in: another account's data (another user, or the same user id on
+     * another server), or data nobody is recorded as owning (kept before this store existed,
+     * or recorded without its server), is removed first. The same account signing in again
      * (after its session ended) keeps what it kept. Returns whether anything was removed.
      */
     @discardableResult
-    public func claim(_ userId: String) -> Bool {
-        let owner = owner()
-        let other = owner == nil || owner?.caseInsensitiveCompare(userId) != .orderedSame
+    public func claim(_ owner: AccountOwner) -> Bool {
+        let other = recorded() != .owner(owner)
         if other { wipe() }
-        record(userId)
+        record(owner)
         return other
     }
 
-    /* A session already signed in when this store first runs: its data is its own. */
-    public func adopt(_ userId: String) {
-        if owner() == nil { record(userId) }
+    /*
+     * A session already signed in when this store first runs: its data is its own, and an
+     * older version's bare user id is completed with the server. Anything recorded for
+     * another account is claimed (removed) instead.
+     */
+    public func adopt(_ owner: AccountOwner) {
+        switch recorded() {
+        case .none:
+            record(owner)
+        case let .legacy(userId) where userId == owner.userId:
+            record(owner)
+        case let .owner(existing) where existing == owner:
+            break
+        default:
+            claim(owner)
+        }
     }
 
     /* Sign-out and account deletion: every account file, decrypted or not, and the owner. */
@@ -71,9 +98,9 @@ public struct AccountStore: Sendable {
         try? files.removeItem(at: ownerFile)
     }
 
-    private func record(_ userId: String) {
+    private func record(_ owner: AccountOwner) {
         try? FileManager.default.createDirectory(at: ownerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data(userId.utf8).write(to: ownerFile, options: .atomic)
+        try? JSONEncoder().encode(owner).write(to: ownerFile, options: .atomic)
     }
 
     /* This app's (or extension's) store: the group container, its temporary folder, and the stores behind them. */

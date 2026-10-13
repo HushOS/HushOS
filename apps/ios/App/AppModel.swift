@@ -6,8 +6,9 @@ import UIKit
 /*
  * Who is signed in and the vault that opens their drive. The session lives in
  * the shared keychain so the Files extensions see the same one; signing in
- * registers the Files location and signing out removes it. Links that open the
- * app wait here until someone is signed in to act on them.
+ * registers the Files location for that account (replacing another account's)
+ * and signing out removes it. Links that open the app wait here until someone is
+ * signed in to act on them.
  */
 @Observable
 @MainActor
@@ -24,6 +25,8 @@ final class AppModel {
     private(set) var state: State = .checking
     private(set) var user: SessionUser?
     private(set) var vault: Vault?
+    /* The account this model shows (user id and server), to notice a sign-in to another one from the Files sheet. */
+    private var owner: AccountOwner?
     var origin: String = SharedKeychain.config?.origin ?? AppModel.defaultOrigin
     /* The last address signed in with, so a sign-in after the session ended starts filled; out of backups (the defaults are not). */
     var lastEmail = LastEmail.load() ?? UserDefaults.standard.string(forKey: "lastEmail") ?? "" {
@@ -77,9 +80,9 @@ final class AppModel {
 
     func start() async {
         do {
-            if let user = try await Auth.currentUser() {
-                // Signed in before the store recorded owners: what is on the phone is this account's.
-                AccountStore.shared.adopt(user.id)
+            if let user = try await Auth.currentUser(), let session = SharedKeychain.session {
+                // Signed in before the store recorded owners: what is on the phone is this account's (another's goes).
+                AccountStore.shared.adopt(AccountOwner(session))
                 signedIn(user)
                 return
             }
@@ -88,6 +91,7 @@ final class AppModel {
             if SharedKeychain.session != nil, let session = SharedKeychain.session {
                 user = SessionUser(id: session.userId, name: "", email: "", credentialVersion: 0, role: "member")
                 vault = Vault.fromKeychain()
+                owner = AccountOwner(session)
                 state = .signedIn
                 return
             }
@@ -99,13 +103,20 @@ final class AppModel {
         let previous = AccountStore.shared.owner()
         // Auth.signIn removes another account's data (AccountStore.claim) before the new session is stored.
         let user = try await Auth.signIn(origin: origin, email: email, password: password)
-        if previous?.caseInsensitiveCompare(user.id) != .orderedSame {
-            // The other account's queued transfers would run under this session; Files forgets its listing.
-            await BackgroundTransfers.shared.cancelAll()
-            TransferNotices.shared.clear()
-            await FilesDomain.reimport()
-        }
+        await anotherAccount(since: previous)
         signedIn(user)
+    }
+
+    /*
+     * Another account (or the same user id on another server) than the one whose data was on
+     * the phone: the queue's transfers were its, and stop. The Files location is replaced by
+     * `signedIn` (FilesDomain.register), never reimported: a reimport hands what Files cached
+     * for the last account to this one's extension, which would create it in this drive.
+     */
+    private func anotherAccount(since previous: AccountOwner?) async {
+        guard previous != AccountOwner.signedIn else { return }
+        await BackgroundTransfers.shared.cancelAll()
+        TransferNotices.shared.clear()
     }
 
     private func signedIn(_ user: SessionUser) {
@@ -114,8 +125,26 @@ final class AppModel {
         self.user = user
         if !user.email.isEmpty { lastEmail = user.email }
         vault = Vault.fromKeychain()
+        owner = AccountOwner.signedIn
+        // Decrypted copies this process kept for another account go before this one opens anything.
+        TemporaryCopies.claim(owner)
         state = .signedIn
-        Task { await FilesDomain.register() }
+        if let owner { Task { await FilesDomain.register(for: owner) } }
+    }
+
+    /*
+     * Back on screen: someone may have signed in from the Files sheet meanwhile (another
+     * account, or the session ended). The drive this model shows is that account's no longer,
+     * so it starts again from the keychain: the new account's drive and Files location, or
+     * sign-in.
+     */
+    func checkAccount() async {
+        guard state == .signedIn, let owner, AccountOwner.signedIn != owner else { return }
+        user = nil
+        vault = nil
+        self.owner = nil
+        state = .checking
+        await start()
     }
 
     func signOut() async {
@@ -128,6 +157,7 @@ final class AppModel {
         lastEmail = ""
         user = nil
         vault = nil
+        owner = nil
         state = .signedOut
     }
 
@@ -141,6 +171,7 @@ final class AppModel {
         TransferNotices.shared.clear()
         user = nil
         vault = nil
+        owner = nil
         lastEmail = ""
         state = .deleted
     }
@@ -153,6 +184,7 @@ final class AppModel {
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         user = nil
         vault = nil
+        owner = nil
         state = .signedOut
     }
 
@@ -183,11 +215,7 @@ final class AppModel {
     func recover(_ enrollment: RecoveryEnrollment, password: String, phrase: [String]) async throws -> RecoveredAccount {
         let previous = AccountStore.shared.owner()
         let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
-        if previous?.caseInsensitiveCompare(account.user.id) != .orderedSame {
-            await BackgroundTransfers.shared.cancelAll()
-            TransferNotices.shared.clear()
-            await FilesDomain.reimport()
-        }
+        await anotherAccount(since: previous)
         signedIn(account.user)
         return account
     }

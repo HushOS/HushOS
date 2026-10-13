@@ -30,7 +30,13 @@ struct HushOSApp: App {
         .onChange(of: scenePhase) { _, phase in
             // Leaving the screen with something still unsealed: ask iOS for time with a network to start it.
             if phase == .background { BackgroundTransfers.shared.scheduleIfWaiting() }
-            if phase == .active { Task { await BackgroundTransfers.shared.pump() } }
+            if phase == .active {
+                Task {
+                    // A sign-in from the Files sheet while the app was away: show that account, not the last one.
+                    await model.checkAccount()
+                    await BackgroundTransfers.shared.pump()
+                }
+            }
         }
     }
 }

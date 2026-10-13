@@ -28,16 +28,19 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
     public let mime: String?
     public let size: Int64?
     public let sealed: Vault.SealedUpload
+    /* The account whose drive it goes to; the app adopts it only while that account is signed in (TransferOwnership). */
+    public let owner: AccountOwner?
     /* The extension is done with it; until then only the extension may finish it. */
     public var released = false
 
-    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload) {
+    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload, owner: AccountOwner) {
         self.id = id
         self.name = name
         self.folderId = folderId
         self.mime = mime
         self.size = size
         self.sealed = sealed
+        self.owner = owner
     }
 
     /* The queue's folder in the app group, the same one BackgroundTransfers keeps. */

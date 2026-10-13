@@ -120,7 +120,7 @@ public enum Auth {
         guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
         guard let token = finished.cookie else { throw AuthError.noSession }
         // Another account's data on this phone goes before this one's session exists.
-        AccountStore.shared.claim(user.id)
+        AccountStore.shared.claim(AccountOwner(userId: user.id, origin: origin))
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
 

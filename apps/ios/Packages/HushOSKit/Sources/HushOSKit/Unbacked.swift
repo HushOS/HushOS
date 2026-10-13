@@ -207,4 +207,26 @@ public enum TemporaryCopies {
             }
         }
     }
+
+    static let ownerMarker = "account-owner"
+
+    /*
+     * This process's temporary folder holds decrypted copies (opened files, Files' downloads not
+     * moved into place yet) and records whose they are. Another account in, or nobody: all of it
+     * goes before anything is answered, so one account's copies are never served to the next.
+     * Each process runs it for its own folder: the app at sign-in, the Files extension whenever
+     * the account it serves changes. A marker an older version wrote (a bare user id) is no owner.
+     */
+    public static func claim(_ owner: AccountOwner?, in temporary: URL = FileManager.default.temporaryDirectory) {
+        let files = FileManager.default
+        let marker = temporary.appendingPathComponent(ownerMarker)
+        let recorded = (try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode(AccountOwner.self, from: $0) }
+        if let owner, recorded == owner { return }
+        for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
+            try? files.removeItem(at: item)
+        }
+        guard let owner, let data = try? JSONEncoder().encode(owner) else { return }
+        try? files.createDirectory(at: temporary, withIntermediateDirectories: true)
+        try? data.write(to: marker, options: .atomic)
+    }
 }

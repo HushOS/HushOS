@@ -13,14 +13,23 @@ private let log = Logger(subsystem: "com.hushos.app.files", category: "extension
  */
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, NSFileProviderThumbnailing {
     private let domain: NSFileProviderDomain
-    private var vault: Vault?
+    /*
+     * Every call goes through the gate: the session must belong to the account this location was
+     * added for (FilesDomainOwner), or nothing is listed, read or sent, and a location still
+     * holding another account's pending folders and files is refused until the app replaces it.
+     */
+    private let gate = FilesGate<Vault>(
+        owner: { FilesDomainOwner.shared.read() },
+        session: { SharedKeychain.session },
+        changed: { TemporaryCopies.claim($0) },
+        make: { Vault(api: DriveAPI(session: $0), session: $0) }
+    )
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         Unbacked.apply()
         // Decrypted downloads (and partials) Files never took, older than a day.
         TemporaryCopies.sweep()
-        vault = Vault.fromKeychain()
         super.init()
     }
 
@@ -30,6 +39,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         // An error's text can carry decrypted names and paths: only its type is public.
         log.error("\(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
         switch error {
+        case let refused as NSFileProviderError:
+            // The gate's refusal (signed out, or another account's location) reaches Files as it is.
+            return refused
         case DriveAPIError.notAuthenticated:
             return NSFileProviderError(.notAuthenticated)
         case DriveAPIError.transport:
@@ -58,34 +70,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     /*
      * The session in the keychain wins: a sign-in from the Files sheet or the app, or a new
      * session after a password change or key reset, replaces a vault built on the old token.
-     * Signed out, or another account in: the files this extension decrypted for the last
-     * one go too, so Files never answers from an account that has left the phone.
+     * Signed out, or another account in: refused, and the files this extension decrypted for
+     * the last one go (TemporaryCopies.claim), so Files never answers from an account that has
+     * left the phone and never sends one account's pending changes under another's session.
      */
     private func requireVault() throws -> Vault {
-        let session = SharedKeychain.session
-        if let vault, let session, vault.api.session == session { return vault }
-        Self.forgetDecrypted(unlessOwnedBy: session?.userId)
-        guard session != nil, let fresh = Vault.fromKeychain() else {
-            vault = nil
-            throw NSFileProviderError(.notAuthenticated)
-        }
-        vault = fresh
-        return fresh
-    }
-
-    /*
-     * This extension's temporary folder holds decrypted downloads Files has not moved into
-     * place yet. It records whose they are; signed out, or another account in, they go.
-     */
-    private static func forgetDecrypted(unlessOwnedBy userId: String?) {
-        let temporary = FileManager.default.temporaryDirectory
-        let marker = temporary.appendingPathComponent("account-owner")
-        let owner = (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let userId, let owner, owner.caseInsensitiveCompare(userId) == .orderedSame { return }
-        for item in (try? FileManager.default.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
-            try? FileManager.default.removeItem(at: item)
-        }
-        if let userId { try? Data(userId.utf8).write(to: marker, options: .atomic) }
+        try gate.open()
     }
 
     func item(for identifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest,
@@ -279,7 +269,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
-        let vault = try requireVault()
-        return FileProviderEnumerator(container: containerItemIdentifier, vault: vault)
+        _ = try requireVault()
+        return FileProviderEnumerator(container: containerItemIdentifier, gate: gate)
     }
 }

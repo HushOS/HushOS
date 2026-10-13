@@ -58,20 +58,23 @@ extension OfflineStore {
 
     func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 
+    let alice = AccountOwner(userId: "alice", origin: "https://hushos.com")
+    let bob = AccountOwner(userId: "bob", origin: "https://hushos.com")
+
     @Test func anotherAccountSigningInRemovesTheFirstAccountsData() throws {
-        store.claim("alice")
+        store.claim(alice)
         try leaveAlicesData()
-        #expect(store.claim("bob"))
+        #expect(store.claim(bob))
         for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived another account's sign-in") }
         #expect(counter.count == 1)
-        #expect(store.owner() == "bob")
+        #expect(store.owner() == bob)
     }
 
     @Test func theSameAccountSigningInAgainKeepsWhatItKept() throws {
         // Its session ended (a password changed elsewhere) and it signs back in: kept files stay.
-        store.claim("alice")
+        store.claim(alice)
         try leaveAlicesData()
-        #expect(!store.claim("ALICE"))
+        #expect(!store.claim(AccountOwner(userId: "ALICE", origin: "https://HushOS.com/")))
         for file in alicesFiles { #expect(exists(file), "\(file.lastPathComponent) was lost on the same account's sign-in") }
         #expect(counter.count == 0)
     }
@@ -79,12 +82,12 @@ extension OfflineStore {
     @Test func dataNobodyIsRecordedAsOwningIsRemovedBeforeASignIn() throws {
         // Kept before the owner was recorded (an older version signed out without wiping).
         try leaveAlicesData()
-        store.claim("bob")
+        store.claim(bob)
         for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) of an unknown account survived") }
     }
 
     @Test func signingOutRemovesEverythingAndTheOwner() throws {
-        store.claim("alice")
+        store.claim(alice)
         try leaveAlicesData()
         store.wipe()
         for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived sign-out") }
@@ -95,11 +98,11 @@ extension OfflineStore {
     @Test func aSessionFromBeforeTheStoreKeepsItsOwnData() throws {
         // Already signed in when this version first runs: nothing is wiped, and it is recorded.
         try leaveAlicesData()
-        store.adopt("alice")
+        store.adopt(alice)
         for file in alicesFiles { #expect(exists(file)) }
-        #expect(store.owner() == "alice")
+        #expect(store.owner() == alice)
         // Then someone else signs in: Alice's data goes.
-        store.claim("bob")
+        store.claim(bob)
         for file in alicesFiles { #expect(!exists(file)) }
     }
 
@@ -109,9 +112,45 @@ extension OfflineStore {
         let preferences = root.appendingPathComponent("Library/Preferences/group.com.hushos.app.plist")
         try FileManager.default.createDirectory(at: preferences.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("settings".utf8).write(to: preferences)
-        store.claim("alice")
-        store.claim("bob")
+        store.claim(alice)
+        store.claim(bob)
         #expect(exists(preferences))
+    }
+
+    @Test func theSameUserIdOnAnotherServerIsAnotherAccount() throws {
+        // A staging server restored from production's database hands out the same user ids.
+        store.claim(alice)
+        try leaveAlicesData()
+        #expect(store.claim(AccountOwner(userId: "alice", origin: "https://staging.hushos.com")))
+        for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived a sign-in to another server") }
+    }
+
+    /* What an older version wrote: the user id alone, without its server. */
+    func recordBareUserId(_ userId: String) throws {
+        let file = root.appendingPathComponent("local/account-owner")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(userId.utf8).write(to: file)
+    }
+
+    @Test func anOwnerRecordedWithoutItsServerIsNobodyAtSignIn() throws {
+        // Which server the data came from is unknown, so a sign-in cannot claim it as its own.
+        try leaveAlicesData()
+        try recordBareUserId("alice")
+        #expect(store.owner() == nil)
+        #expect(store.claim(alice))
+        for file in alicesFiles { #expect(!exists(file)) }
+    }
+
+    @Test func aSessionAtLaunchCompletesItsOwnBareRecordButNotAnothers() throws {
+        try leaveAlicesData()
+        try recordBareUserId("alice")
+        store.adopt(alice)
+        for file in alicesFiles { #expect(exists(file), "\(file.lastPathComponent) was lost upgrading its own record") }
+        #expect(store.owner() == alice)
+        // The record says Alice, the session at launch is Bob's: Alice's data goes.
+        store.adopt(bob)
+        for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived another account's session at launch") }
+        #expect(store.owner() == bob)
     }
 
     /* A kept folder and the files it brought, as the store keeps them. */

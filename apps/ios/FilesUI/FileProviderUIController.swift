@@ -131,10 +131,10 @@ struct SignInView: View {
                 guard let origin = SharedKeychain.config?.origin else {
                     throw AuthError.message("Open the HushOS app once on this iPhone, then sign in here.")
                 }
-                let previous = AccountStore.shared.owner()
                 let user = try await Auth.signIn(origin: origin, email: address, password: password)
-                // Another account signed in here: Files forgets what it listed for the last one.
-                if previous?.caseInsensitiveCompare(user.id) != .orderedSame { await FilesDomain.reimport() }
+                // Another account signed in here: its location replaces the last one's (removed with everything
+                // Files kept in it, pending changes included); the same account keeps its own.
+                await FilesDomain.register(for: AccountOwner(userId: user.id, origin: origin))
                 onDone()
             } catch {
                 self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

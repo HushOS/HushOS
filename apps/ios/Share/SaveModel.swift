@@ -224,7 +224,8 @@ final class SaveModel {
                     thumbnail: Thumbnails.make(for: content, mime: item.mime), into: directory
                 )
                 try? FileManager.default.removeItem(at: content)
-                let note = ShareHandoff(id: id, name: name, folderId: target.id, mime: item.mime, size: item.size, sealed: sealed)
+                let note = ShareHandoff(id: id, name: name, folderId: target.id, mime: item.mime, size: item.size, sealed: sealed,
+                                        owner: AccountOwner(vault.api.session))
                 try note.write()
                 uploads.start(note)
                 notes.append(note)

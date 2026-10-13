@@ -4,13 +4,14 @@ import os
 
 private let log = Logger(subsystem: "com.hushos.app.files", category: "enumerator")
 
+/* Files keeps an enumerator open across sign-ins, so each pass goes through the gate again rather than keeping a vault. */
 final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     private let container: NSFileProviderItemIdentifier
-    private let vault: Vault
+    private let gate: FilesGate<Vault>
 
-    init(container: NSFileProviderItemIdentifier, vault: Vault) {
+    init(container: NSFileProviderItemIdentifier, gate: FilesGate<Vault>) {
         self.container = container
-        self.vault = vault
+        self.gate = gate
         super.init()
     }
 
@@ -19,6 +20,7 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
         Task {
             do {
+                let vault = try gate.open()
                 let rootId = try await vault.rootId()
                 if container == .workingSet || container == .trashContainer {
                     observer.finishEnumerating(upTo: nil)
@@ -45,6 +47,7 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         let since = Int(String(data: anchor.rawValue, encoding: .utf8) ?? "0") ?? 0
         Task {
             do {
+                let vault = try gate.open()
                 let rootId = try await vault.rootId()
                 guard let changes = try await vault.changes(since: since) else {
                     observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired))
@@ -64,6 +67,7 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
         Task {
+            guard let vault = try? gate.open() else { completionHandler(nil); return }
             let seq = (try? await vault.loadWorkspace().changeSeq) ?? 0
             completionHandler(NSFileProviderSyncAnchor(String(seq ?? 0).data(using: .utf8)!))
         }

@@ -55,6 +55,8 @@ final class BackgroundTransfers {
         /* A keep that belongs to a kept folder: the folder's id and name, so the panel shows one row for them all. */
         var group: String?
         var groupName: String?
+        /* Whose transfer it is: it runs only while that account is signed in, and is dropped once another is (TransferOwnership). */
+        var owner: AccountOwner?
 
         var total: Int { sealed?.partCount ?? plan?.chunkCount ?? 0 }
         var landed: Int { kind == .upload ? etags.count : fetched.count }
@@ -134,7 +136,8 @@ final class BackgroundTransfers {
 
     /* Queues a file for upload into `folderId`; the file is copied into the queue, so the picker's copy can go. */
     func upload(fileURL: URL, name: String, mime: String?, folderId: String, replacingId: String?) {
-        let record = Record(id: UUID(), kind: .upload, name: name, folderId: folderId, mime: mime, replacingId: replacingId)
+        var record = Record(id: UUID(), kind: .upload, name: name, folderId: folderId, mime: mime, replacingId: replacingId)
+        record.owner = AccountOwner.signedIn
         let directory = folder(record.id)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let content = directory.appendingPathComponent("content")
@@ -151,7 +154,9 @@ final class BackgroundTransfers {
     /* Queues a file to be kept downloaded; asking twice does not fetch it twice. */
     func keep(_ item: Opened) {
         guard !records.contains(where: { $0.kind == .keep && $0.nodeId == item.id && $0.state != .failed }) else { return }
-        records.append(Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id, size: item.size.map(Int64.init)))
+        var record = Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id, size: item.size.map(Int64.init))
+        record.owner = AccountOwner.signedIn
+        records.append(record)
         save()
         BackgroundAccess.shared.transferStarted()
         Task { await pump() }
@@ -170,6 +175,7 @@ final class BackgroundTransfers {
             var record = Record(id: UUID(), kind: .keep, name: item.name, nodeId: item.id, size: item.size.map(Int64.init))
             record.group = folder
             record.groupName = name
+            record.owner = AccountOwner.signedIn
             records.append(record)
             added = true
         }
@@ -205,7 +211,10 @@ final class BackgroundTransfers {
     func cancel(_ id: UUID) async {
         guard let record = records.first(where: { $0.id == id }) else { return }
         for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
-        if let sealed = record.sealed, let vault = currentVault() { await vault.abortUpload(sealed) }
+        // Aborted only under the session of the account that began it; another account's session never names its upload.
+        if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+            await vault.abortUpload(sealed)
+        }
         try? FileManager.default.removeItem(at: folder(id))
         records.removeAll { $0.id == id }
         inFlight[id] = nil
@@ -270,11 +279,12 @@ final class BackgroundTransfers {
         }
         guard let vault = currentVault() else { return }
         adoptHandoffs()
+        dropOthers()
         await vault.buildCatalogue()
         let running = Set(await allTasks().compactMap(\.taskDescription))
         for id in records.map(\.id) {
             takeLanded(id)
-            guard let record = records.first(where: { $0.id == id }) else { continue }
+            guard let record = records.first(where: { $0.id == id }), runnable(record) else { continue }
             do {
                 switch (record.kind, record.state) {
                 case (.upload, .waiting):
@@ -349,7 +359,7 @@ final class BackgroundTransfers {
 
     /* Hands every piece not landed and not already with the session to it; `after` holds a retry back. */
     private func start(_ id: UUID, skipping running: Set<String>, after delay: TimeInterval = 0) {
-        guard let record = records.first(where: { $0.id == id }) else { return }
+        guard let record = records.first(where: { $0.id == id }), runnable(record) else { return }
         let directory = folder(id)
         for piece in 0 ..< record.total {
             let description = "\(id.uuidString)|\(piece)"
@@ -443,8 +453,20 @@ final class BackgroundTransfers {
             notes.append(note)
         }
         var added = false
+        let signedIn = AccountOwner.signedIn
         for note in notes where !records.contains(where: { $0.id == note.id }) {
+            switch TransferOwnership.of(note.owner, signedIn: signedIn) {
+            case .run:
+                break
+            case .wait:
+                continue
+            case .drop:
+                // Sealed for another account's drive (or by a version that did not say whose): its parts stop and its files go.
+                drop(note.id, share: true)
+                continue
+            }
             var record = Record(id: note.id, kind: .upload, name: note.name, folderId: note.folderId, mime: note.mime)
+            record.owner = note.owner
             record.state = .sending
             record.sealed = note.sealed
             record.size = note.size
@@ -458,6 +480,42 @@ final class BackgroundTransfers {
         save()
         if UIApplication.shared.applicationState == .active { BackgroundAccess.shared.transferStarted() }
         Task { await pump() }
+    }
+
+    /* Whether a record may run now: only its own account's, and only while that account is signed in. */
+    private func runnable(_ record: Record) -> Bool {
+        TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run
+    }
+
+    /*
+     * Another account is signed in: what was queued for the one before (or by a version that
+     * did not record whose) is dropped, never sealed, sent or finished under this session. Its
+     * tasks stop and its files go; the server's half-begun upload is left for its own account's
+     * sweep, since only that account's session may name it.
+     */
+    private func dropOthers() {
+        let signedIn = AccountOwner.signedIn
+        let gone = records.filter { TransferOwnership.of($0.owner, signedIn: signedIn) == .drop }
+        guard !gone.isEmpty else { return }
+        records.removeAll { record in gone.contains { $0.id == record.id } }
+        for record in gone {
+            inFlight[record.id] = nil
+            drop(record.id)
+        }
+        save()
+    }
+
+    /*
+     * A transfer's tasks stopped and its folder removed, without a word to the server. `share`: a
+     * Save to HushOS note, whose parts are on the extension's session (released or old enough
+     * that the extension is gone, so the app may connect to it).
+     */
+    private func drop(_ id: UUID, share: Bool = false) {
+        try? FileManager.default.removeItem(at: folder(id))
+        if share { connectShare() }
+        Task {
+            for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
+        }
     }
 
     /* Parts the extension saw land after its upload was adopted (it may still be open). */
@@ -570,7 +628,9 @@ final class BackgroundTransfers {
 
     private func folder(_ id: UUID) -> URL { queue.appendingPathComponent(id.uuidString, isDirectory: true) }
 
+    /* The signed-in account's vault: one held for an account that is no longer signed in is let go. */
     private func currentVault() -> Vault? {
+        if let held = vault, held.api.session != SharedKeychain.session { vault = nil }
         if vault == nil { vault = Vault.fromKeychain() }
         return vault
     }
