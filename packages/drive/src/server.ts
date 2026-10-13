@@ -625,6 +625,19 @@ export async function purgeNode(userId: string, workspaceId: string, nodeId: str
     }
 }
 
+/*
+ * A write refused for space. The bytes left are the workspace's own business:
+ * a member is told them, an editor through a share or anyone else only that
+ * there is no room, so a refusal does not tell them how full the owner's
+ * drive is.
+ */
+async function overQuota(userId: string, workspaceId: string, free: bigint, message: string) {
+    const data = (await driveRepository.isMember(userId, workspaceId))
+        ? { freeBytes: free.toString() }
+        : undefined;
+    return new DriveError('over-quota', message, 402, data);
+}
+
 const unavailable = () =>
     new DriveError(
         'conflict',
@@ -678,11 +691,11 @@ export async function copyNode(
         case 'invalid':
             throw new DriveError('invalid', 'The envelope does not match how this file is stored.');
         case 'over-quota':
-            throw new DriveError(
-                'over-quota',
+            throw await overQuota(
+                userId,
+                workspaceId,
+                result.free,
                 'Not enough storage for a copy. Free some space or upgrade your plan.',
-                402,
-                { freeBytes: result.free.toString() },
             );
         case 'not-found':
             throw notFound();
@@ -1151,11 +1164,11 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
         await store.abortMultipart(key, multipartId).catch(() => {});
         switch (result.status) {
             case 'over-quota':
-                throw new DriveError(
-                    'over-quota',
+                throw await overQuota(
+                    userId,
+                    workspaceId,
+                    result.free,
                     'Not enough storage for this file. Free some space or upgrade your plan.',
-                    402,
-                    { freeBytes: result.free.toString() },
                 );
             case 'not-found':
                 throw notFound();
