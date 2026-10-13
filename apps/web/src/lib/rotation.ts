@@ -1,6 +1,7 @@
 import type { DriveNode } from '@hushos/drive/client';
 import type { QueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
+import { authClient } from '@/lib/auth-client';
 import { driveClient, driveError, driveKeys, folderQueryOptions } from '@/lib/drive';
 
 /*
@@ -14,38 +15,72 @@ let running: Promise<unknown> | null = null;
 let finished = 0;
 
 /*
+ * When a rotation stops (most often because the people this person trusts
+ * could not be loaded, and nothing is ever re-signed without them), it is
+ * tried again after these pauses, then left for the next time Drive opens.
+ */
+const RETRY_DELAYS_MS = [30_000, 2 * 60_000, 10 * 60_000];
+
+/*
  * Runs quietly: stopping a share or a link already said what happened, and the
  * re-keying behind it is not something a person acts on. Only a failure is
- * said, since it leaves the job for next time. Each finished rotation is
+ * said, once, since it is tried again on its own. Each finished rotation is
  * counted on the document, so a test can wait for the door to shut.
  */
 async function quietly(
     queryClient: QueryClient,
     name: string | null,
-    work: Promise<{ rotated: number } | null>,
-) {
+    work: () => Promise<{ rotated: number } | null>,
+    attempt = 0,
+): Promise<void> {
     try {
-        await work;
+        await work();
         finished++;
         document.documentElement.dataset.keyRotations = String(finished);
     } catch (error) {
-        toast.add({
-            type: 'error',
-            title: name
-                ? `Stopping access to “${name}” didn’t finish`
-                : 'Stopping access didn’t finish',
-            description: `${driveError(error)} HushOS finishes it the next time you open your files.`,
-        });
+        const last = attempt >= RETRY_DELAYS_MS.length;
+        if (attempt === 0 || last)
+            toast.add({
+                type: 'error',
+                title: name
+                    ? `Stopping access to “${name}” didn’t finish`
+                    : 'Stopping access didn’t finish',
+                description: `${driveError(error)} ${
+                    last
+                        ? 'HushOS finishes it the next time you open your files.'
+                        : 'HushOS tries again shortly.'
+                }`,
+            });
+        if (!last) retryLater(queryClient, name, work, attempt + 1);
     } finally {
         // Every envelope under the root changed: listings and shares are stale.
         await queryClient.invalidateQueries({ queryKey: driveKeys.all });
     }
 }
 
+function retryLater(
+    queryClient: QueryClient,
+    name: string | null,
+    work: () => Promise<{ rotated: number } | null>,
+    attempt: number,
+) {
+    const unlocked = authClient.store.getState().unlockedUserId;
+    setTimeout(
+        () => {
+            // Locked or signed out meanwhile: the next open resumes it instead.
+            if (!unlocked || authClient.store.getState().unlockedUserId !== unlocked) return;
+            const previous = running ?? Promise.resolve();
+            running = previous.then(() => quietly(queryClient, name, work, attempt));
+        },
+        RETRY_DELAYS_MS[attempt - 1],
+    );
+}
+
 /* Rotate after a revocation; a rotation already running in this tab finishes first. */
 export function rotateAfterRevoke(queryClient: QueryClient, node: DriveNode) {
     const previous = running ?? Promise.resolve();
-    running = previous.then(() => quietly(queryClient, node.name, driveClient.rotate(node)));
+    // Starting again learns of the rotation the server already holds for the node.
+    running = previous.then(() => quietly(queryClient, node.name, () => driveClient.rotate(node)));
     return running;
 }
 
@@ -71,7 +106,7 @@ export async function currentNode(queryClient: QueryClient, node: DriveNode): Pr
 /* On opening Drive: a rotation left unfinished, by this tab or another device. */
 export function resumePendingRotation(queryClient: QueryClient) {
     if (!driveClient.pendingRotation() || running) return;
-    running = quietly(queryClient, null, driveClient.resumeRotation()).finally(() => {
+    running = quietly(queryClient, null, () => driveClient.resumeRotation()).finally(() => {
         running = null;
     });
 }

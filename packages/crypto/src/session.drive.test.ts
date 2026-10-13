@@ -18,7 +18,13 @@ import {
 } from './drive';
 import { decode, encode } from './keys';
 import sodium from 'libsodium-wrappers';
-import { metadataStatement, signStatement, verifyStatement, versionStatement } from './signatures';
+import {
+    metadataResealedStatement,
+    metadataStatement,
+    signStatement,
+    verifyStatement,
+    versionStatement,
+} from './signatures';
 import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
 
 /*
@@ -1126,6 +1132,34 @@ describe('writer signatures', () => {
                     decode(renamed.metadataEnvelope),
                 ),
                 renamed.metadataSignature,
+            ),
+        ).toBe(true);
+        // Renaming a record that did not verify re-locks it: the re-sealed statement holds, the
+        // ordinary one does not, so the rename cannot launder the rest of the record.
+        const relocked = (await call('driveSealMetadata', {
+            workspaceId: WS,
+            nodeId: B,
+            kind: 'file',
+            metadataVersion: 3,
+            metadata: meta('c.txt'),
+            resealed: true,
+        })) as { metadataEnvelope: string; metadataSignature: string };
+        const relockedCtx = {
+            workspaceId: WS,
+            nodeId: B,
+            kind: 'file' as const,
+            metadataVersion: 3,
+        };
+        expect(
+            await holds(
+                await metadataStatement(relockedCtx, decode(relocked.metadataEnvelope)),
+                relocked.metadataSignature,
+            ),
+        ).toBe(false);
+        expect(
+            await holds(
+                await metadataResealedStatement(relockedCtx, decode(relocked.metadataEnvelope)),
+                relocked.metadataSignature,
             ),
         ).toBe(true);
         const prepared = (await call('driveUploadPrepare', {

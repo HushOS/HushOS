@@ -12,6 +12,7 @@ import { authClient } from '@/lib/auth-client';
 import { bindContactsToQueries } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, driveOpenQueryOptions } from '@/lib/drive';
 import { useChangeFeed } from '@/lib/feed';
+import { preloadViewers } from '@/lib/preload';
 import { resumePendingRotation } from '@/lib/rotation';
 import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
@@ -72,9 +73,12 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         resumePendingRotation(queryClient);
         // The catalogue: the tree mirrored on this device and opened, resumed from wherever it stopped.
         void driveClient.buildCatalogue(workspaceId);
-        // Shares in an older suite, or sealed to a contact's keys before their succession,
-        // are sealed again in suite 3; following a contact's succession happens here too.
+        // Shares sealed to a contact's keys before a succession this person followed, or to
+        // keys of their own they replaced, are sealed again. Nothing here follows a contact's
+        // served keys: only the person's own Check again does.
         void driveClient.upgradeShares().catch(() => {});
+        // Every viewer and grammar, at idle: what is fetched no longer says what was opened.
+        preloadViewers();
     }, [workspaceId, queryClient]);
     return null;
 }

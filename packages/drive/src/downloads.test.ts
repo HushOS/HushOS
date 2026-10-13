@@ -497,7 +497,7 @@ describe('download manager', () => {
         expect(sameBytes(concat(sink!.writes), chunkBytes('o-pad', 0, size))).toBe(true);
     });
 
-    test('a reader reads the file alone, and draining it fetches the padding after', async () => {
+    test('a read that reaches the file’s last chunk fetches the padding after it', async () => {
         const size = CHUNK - 10;
         const h = harness({ sealed: { 'o-rd': { plaintextSize: size, thumbnailBytes: 1000 } } });
         const reader = h.manager.openReader(paddedFile('rd', size, 1000));
@@ -505,11 +505,39 @@ describe('download manager', () => {
         const all = reader.read(0, size);
         await settle(100);
         expect((await all).byteLength).toBe(size);
-        expect([...h.attempts.keys()]).toEqual(['o-rd:0']);
+        // The padding chunk was asked for beside the file's last chunk, not left for a drain.
+        expect([...h.attempts.keys()].sort()).toEqual(['o-rd:0', 'o-rd:1']);
         const drained = reader.drain!();
         await settle(100);
         await drained;
-        expect([...h.attempts.keys()].sort()).toEqual(['o-rd:0', 'o-rd:1']);
+        // Draining after that fetches nothing more.
+        expect(h.attempts.get('o-rd:1')).toBe(1);
+        await reader.close();
+    });
+
+    test('a ranged read short of the file’s end fetches no padding; one at the end does', async () => {
+        // Two chunks of file and, with the trailer, a bucket that leaves a third of padding.
+        const size = 2 * CHUNK - 10;
+        const h = harness({ sealed: { 'o-sk': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        const reader = h.manager.openReader(paddedFile('sk', size, 1000), 1);
+        const head = reader.read(0, 100);
+        await settle(100);
+        await head;
+        expect([...h.attempts.keys()]).toEqual(['o-sk:0']);
+        // Seeking to the end, as a video's duration probe does, brings the padding with it.
+        const tail = reader.read(size - 100, 100);
+        await settle(100);
+        expect((await tail).byteLength).toBe(100);
+        expect([...h.attempts.keys()].sort()).toEqual(['o-sk:0', 'o-sk:1', 'o-sk:2']);
+        // The last chunk fetched again after leaving the cache fetches its padding again.
+        const back = reader.read(0, 1);
+        await settle(100);
+        await back;
+        const again = reader.read(size - 1, 1);
+        await settle(100);
+        await again;
+        expect(h.attempts.get('o-sk:1')).toBe(2);
+        expect(h.attempts.get('o-sk:2')).toBe(2);
         await reader.close();
     });
 

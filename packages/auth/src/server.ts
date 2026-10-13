@@ -675,17 +675,20 @@ export async function getSettings(sessionToken: string | null) {
         authRepository.getSettings(user.id),
         authRepository.getSettingsKey(user.id),
     ]);
-    // A version 1 document is served as none: clients open version 2 only, and the next save replaces it.
+    // A version 1 document is served as none, beside the stored sequence: clients open version 2
+    // only, and the next save names that sequence, is sealed at the one after, and replaces it.
+    const document = stored.document;
     return {
-        settings: stored
+        settings: document
             ? {
                   version: 2 as const,
-                  settingsVersion: stored.settingsVersion,
-                  nonce: stored.nonce.toString('base64url'),
-                  ciphertext: stored.ciphertext.toString('base64url'),
+                  settingsVersion: document.settingsVersion,
+                  nonce: document.nonce.toString('base64url'),
+                  ciphertext: document.ciphertext.toString('base64url'),
               }
             : null,
         settingsKey: encodeSettingsKey(settingsKey),
+        settingsVersion: stored.settingsVersion,
     };
 }
 

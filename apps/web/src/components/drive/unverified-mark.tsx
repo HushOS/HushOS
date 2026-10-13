@@ -1,9 +1,9 @@
 import type { DriveNode } from '@hushos/drive/client';
 import type { Signer } from '@hushos/drive/api';
-import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
-import { useQueryClient } from '@tanstack/react-query';
+import { integrityIssues, signersFromPins, type IntegrityIssue } from '@hushos/drive/trust';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useStore } from 'zustand';
 import { CheckContact } from '@/components/drive/check-contact';
 import { Button } from '@/components/ui/button';
@@ -17,15 +17,52 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
-import { afterTrustChanged, issueLines, reconsiderSigner } from '@/lib/integrity';
+import { settingsQueryOptions } from '@/lib/contacts';
+import {
+    afterTrustChanged,
+    checkSignerAgain,
+    issueLines,
+    markLabel,
+    retryChecks,
+    type SignerNames,
+} from '@/lib/integrity';
 
 /*
- * The Unverified mark: an item whose name or current version this person
- * cannot tie to someone they checked. One small mark per item, whatever
- * failed; hover or a click says which case it is and who the server says
- * wrote it, with "Check their words" where that clears it. Verified items,
- * and anything never checked (a link visitor's view), show nothing. It warns;
- * it never stops the item opening.
+ * Who this person can name as a writer: themselves, and the contacts whose
+ * words they checked. Read from their own pins only; the server names a
+ * writer by account id and nothing more. Loaded only where a mark shows.
+ */
+export function useSignerNames(userId: string | null, enabled: boolean): SignerNames {
+    const settings = useQuery({
+        ...settingsQueryOptions(userId ?? ''),
+        enabled: enabled && userId !== null,
+    });
+    const contacts = settings.data?.settings.contacts;
+    const checked = useQuery({
+        queryKey: ['contacts', 'checked', userId, settings.dataUpdatedAt],
+        queryFn: async () => {
+            const verified = await signersFromPins(contacts ?? {});
+            return Object.fromEntries(
+                Object.keys(verified).map((id) => [id.toLowerCase(), contacts![id]!.name]),
+            );
+        },
+        enabled: enabled && contacts !== undefined,
+        staleTime: Infinity,
+    });
+    return { userId, checked: checked.data ?? {} };
+}
+
+/*
+ * The mark on an item whose name or current version this person cannot tie
+ * to someone they checked: Unverified, or Couldn't check when the check
+ * itself could not run (the trust set did not load, or the check threw). One
+ * small mark per item, whatever failed; hover or a click says which case it
+ * is, naming the writer only from this person's own pins, with the way out
+ * where there is one: "Check their words" for a writer nobody checked,
+ * "Check again" for a checked contact whose signature does not hold, "Try
+ * again" for a check that did not run. Verified items, and anything with
+ * nothing to check (a link visitor's view), show nothing. It warns; it never
+ * stops the item opening.
  */
 export function UnverifiedMark({
     node,
@@ -40,17 +77,51 @@ export function UnverifiedMark({
     const issues = given ?? (node ? integrityIssues(node) : []);
     const queryClient = useQueryClient();
     const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const names = useSignerNames(userId, issues.length > 0);
     const [open, setOpen] = useState(false);
     const [checking, setChecking] = useState<Signer | null>(null);
-    // A contact's bad signature may be keys of theirs this device has not followed yet.
-    const suspect = issues.find((issue) => issue.integrity === 'bad-signature')?.signer ?? null;
-    useEffect(() => {
-        if (suspect && userId) void reconsiderSigner(queryClient, userId, suspect);
-    }, [suspect, userId, queryClient]);
+    const [busy, setBusy] = useState(false);
     if (!issues.length) return null;
-    const lines = issueLines(issues);
-    const check = lines.find((entry) => entry.check)?.check ?? null;
+    const lines = issueLines(issues, names);
+    const action = lines.find((entry) => entry.action)?.action ?? null;
     const worst = issues[0]!.integrity;
+    const label = markLabel(issues);
+
+    async function again(signer: Signer, name: string) {
+        if (!userId) return;
+        setBusy(true);
+        try {
+            const outcome = await checkSignerAgain(queryClient, userId, signer);
+            if (outcome === 'followed')
+                toast.add({
+                    type: 'success',
+                    title: `${name} replaced their sharing keys`,
+                    description:
+                        'The change is signed by their previous keys. Compare words in People you share with to be sure.',
+                });
+            else if (outcome === 'changed')
+                toast.add({
+                    type: 'error',
+                    title: `${name}’s keys have changed`,
+                    description: 'Check it’s them in People you share with.',
+                });
+            else
+                toast.add({
+                    type: 'error',
+                    title: `${name}’s keys haven’t changed`,
+                    description: 'The signature doesn’t match them. Don’t trust this item.',
+                });
+        } catch (cause) {
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t check again',
+                description: cause instanceof Error ? cause.message : undefined,
+            });
+        } finally {
+            setBusy(false);
+        }
+    }
+
     return (
         <>
             <Popover open={open} onOpenChange={setOpen}>
@@ -58,7 +129,7 @@ export function UnverifiedMark({
                     openOnHover
                     delay={150}
                     data-integrity={worst}
-                    aria-label={`Unverified: ${lines.map((entry) => entry.text).join(' ')}`}
+                    aria-label={`${label}: ${lines.map((entry) => entry.text).join(' ')}`}
                     onClick={(event) => {
                         // A click keeps it open; hover already opened it, so the default would shut it.
                         event.stopPropagation();
@@ -71,31 +142,42 @@ export function UnverifiedMark({
                         className,
                     )}
                 >
-                    Unverified
+                    {label}
                 </PopoverTrigger>
                 <PopoverContent
                     className="flex w-72 flex-col gap-2 p-3"
                     data-integrity-details
                     onClick={(event) => event.stopPropagation()}
                 >
-                    <p className="text-sm font-semibold">Unverified</p>
+                    <p className="text-sm font-semibold">{label}</p>
                     {lines.map((entry) => (
                         <p key={entry.text} className="text-[13px] leading-snug">
                             {entry.text}
                         </p>
                     ))}
-                    {check && userId && (
+                    {action && userId && (
                         <Button
                             size="sm"
                             variant="outline"
                             className="mt-1 self-start"
+                            disabled={busy}
                             onClick={(event) => {
                                 event.stopPropagation();
-                                setOpen(false);
-                                setChecking(check);
+                                if (action.kind === 'check') {
+                                    setOpen(false);
+                                    setChecking(action.signer);
+                                } else if (action.kind === 'again')
+                                    void again(action.signer, action.name);
+                                else void retryChecks(queryClient, userId);
                             }}
                         >
-                            Check their words
+                            {action.kind === 'check'
+                                ? 'Check their words'
+                                : action.kind === 'again'
+                                  ? busy
+                                      ? 'Checking…'
+                                      : 'Check again'
+                                  : 'Try again'}
                         </Button>
                     )}
                 </PopoverContent>
@@ -112,12 +194,14 @@ export function UnverifiedMark({
                         <DialogHeader>
                             <DialogTitle>Check who wrote this</DialogTitle>
                             <DialogDescription>
-                                Once their words match, what they add and change shows as verified.
+                                Enter the email they use for HushOS. Once their words match, what
+                                they add and change shows as verified.
                             </DialogDescription>
                         </DialogHeader>
                         {checking && (
                             <CheckContact
                                 userId={userId}
+                                writer={checking.id}
                                 onCancel={() => setChecking(null)}
                                 onAdded={(pin) => {
                                     setChecking(null);

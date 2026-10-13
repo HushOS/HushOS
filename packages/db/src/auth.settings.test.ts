@@ -33,7 +33,7 @@ async function identityFor(userId: string) {
 describe('settings', () => {
     test('the first save names version 0, every save bumps it, and a stale save is refused', async () => {
         const { userId } = await createTestAccount();
-        expect(await auth.getSettings(userId)).toBeNull();
+        expect(await auth.getSettings(userId)).toEqual({ document: null, settingsVersion: 0 });
         await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
         const first = await auth.putSettings({
             userId,
@@ -62,7 +62,8 @@ describe('settings', () => {
                 ciphertext: second,
             }),
         ).toEqual({ status: 'ok', settingsVersion: 2 });
-        const stored = await auth.getSettings(userId);
+        const { document: stored, settingsVersion } = await auth.getSettings(userId);
+        expect(settingsVersion).toBe(2);
         expect(stored?.settingsVersion).toBe(2);
         expect(stored?.ciphertext.equals(second)).toBe(true);
     });
@@ -82,10 +83,10 @@ describe('settings', () => {
             nonce: randomBytes(24),
             ciphertext: randomBytes(64),
         });
-        expect(await auth.getSettings(b.userId)).toBeNull();
-        expect(await auth.getSettings(a.userId)).not.toBeNull();
+        expect((await auth.getSettings(b.userId)).document).toBeNull();
+        expect((await auth.getSettings(a.userId)).document).not.toBeNull();
         await db.delete(users).where(eq(users.id, a.userId));
-        expect(await auth.getSettings(a.userId)).toBeNull();
+        expect(await auth.getSettings(a.userId)).toEqual({ document: null, settingsVersion: 0 });
     });
 });
 
@@ -135,37 +136,43 @@ describe('the settings key', () => {
                 status: 'unsupported',
                 settingsVersion: null,
             });
-        expect(await auth.getSettings(userId)).toBeNull();
+        expect((await auth.getSettings(userId)).document).toBeNull();
         expect(await save(0, 2)).toEqual({ status: 'ok', settingsVersion: 1 });
-        expect((await auth.getSettings(userId))?.version).toBe(2);
+        expect((await auth.getSettings(userId)).document?.version).toBe(2);
     });
 
-    test('a version 1 document reads as none and the next save replaces it, its sequence still rising', async () => {
+    test('a version 1 document reads as none at its sequence, and a save naming that sequence replaces it', async () => {
         const { userId } = await createTestAccount();
-        // Left from before: sealed the old way, at sequence 7.
+        // Left from before: sealed the old way, at sequence 5.
         await db.insert(userSettings).values({
             userId,
             version: 1,
-            settingsVersion: 7,
+            settingsVersion: 5,
             nonce: randomBytes(24),
             ciphertext: randomBytes(64),
         });
-        expect(await auth.getSettings(userId)).toBeNull();
+        // No document a client could open, but the sequence it must build on.
+        expect(await auth.getSettings(userId)).toEqual({ document: null, settingsVersion: 5 });
         await auth.putSettingsKey({ userId, nonce: randomBytes(24), ciphertext: randomBytes(48) });
-        const save = (expectedVersion: number) =>
+        const save = (expectedVersion: number, ciphertext = randomBytes(64)) =>
             auth.putSettings({
                 userId,
                 expectedVersion,
                 version: 2,
                 nonce: randomBytes(24),
-                ciphertext: randomBytes(64),
+                ciphertext,
             });
-        // The old sequence is not a precondition anyone could meet now: 0 is.
-        expect(await save(7)).toEqual({ status: 'conflict', settingsVersion: 0 });
-        // Above 7, so a device that once saw the old document never takes this for a rollback.
-        expect(await save(0)).toEqual({ status: 'ok', settingsVersion: 8 });
-        expect(await auth.getSettings(userId)).toMatchObject({ version: 2, settingsVersion: 8 });
-        expect(await save(0)).toEqual({ status: 'conflict', settingsVersion: 8 });
+        // Naming 0 over a stored sequence is a stale precondition, version 1 row or not.
+        expect(await save(0)).toEqual({ status: 'conflict', settingsVersion: 5 });
+        // The client sealed its fresh document at 6, the sequence after the one it read:
+        // stored at 6, so the version bound into the seal is the one the row carries.
+        const sealed = randomBytes(64);
+        expect(await save(5, sealed)).toEqual({ status: 'ok', settingsVersion: 6 });
+        const { document, settingsVersion } = await auth.getSettings(userId);
+        expect(settingsVersion).toBe(6);
+        expect(document).toMatchObject({ version: 2, settingsVersion: 6 });
+        expect(document?.ciphertext.equals(sealed)).toBe(true);
+        expect(await save(5)).toEqual({ status: 'conflict', settingsVersion: 6 });
     });
 });
 

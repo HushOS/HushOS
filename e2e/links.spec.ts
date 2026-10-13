@@ -77,10 +77,35 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
     browser,
 }) => {
     const visitor = await (await newContext(browser)).newPage();
+    // Every link API response the visitor's browser gets, to read back below.
+    const answers: { url: string; token: string | null; body: unknown }[] = [];
+    visitor.on('response', async (response) => {
+        if (!new URL(response.url()).pathname.startsWith('/api/drive/links')) return;
+        answers.push({
+            url: response.url(),
+            token: (await response.request().headerValue('x-link-token')) ?? null,
+            body: await response.json().catch(() => null),
+        });
+    });
     await visitor.goto(plainUrl);
     await expect(visitor.getByRole('heading', { name: 'Public' })).toBeVisible({ timeout: 60_000 });
     await expect(row(visitor, 'inner')).toBeVisible();
     await expect(row(visitor, 'payload.bin')).toBeVisible();
+    // The token travels in a header, never in an address a proxy would log.
+    const token = new URL(plainUrl).pathname.split('/').at(-1)!;
+    expect(answers.length).toBeGreaterThan(1);
+    for (const answer of answers) {
+        expect(answer.url).not.toContain(token);
+        expect(answer.token).toBe(token);
+    }
+    // A visitor has no keys to check a writer against, and gets no writer or signature to
+    // test against keys from a contact lookup: not even as null.
+    const leaked = JSON.stringify(answers.map((answer) => answer.body));
+    expect(leaked.includes('metadataEnvelope')).toBe(true);
+    for (const field of ['metadataSigner', 'metadataSignature', '"signer"', '"signature"'])
+        expect(leaked.includes(field), `${field} in a visitor's response`).toBe(false);
+    // Nor the owner's change sequence, which would say how busy their drive is.
+    expect(/"changeSeq":\d/.test(leaked), 'a change sequence in a visitor’s response').toBe(false);
     // Folders inside the link open; the breadcrumb stays inside it.
     await row(visitor, 'inner').locator('button').first().click(grip);
     await expect(visitor).toHaveURL(/folder=/);
@@ -116,10 +141,15 @@ test('a visitor with no account browses, previews and downloads byte-exact', asy
     await expect(visitor.getByRole('heading', { name: 'Public' })).toBeVisible({ timeout: 60_000 });
     await expect(row(visitor, 'payload.bin')).toBeVisible();
     // The API refuses a guessed token the way it refuses a stopped one.
-    const probe = await visitor.request.get(`/api/drive/links/${'A'.repeat(43)}/open`, {
-        headers: { 'HushOS-Client': 'web/1' },
+    const probe = await visitor.request.get('/api/drive/links/open', {
+        headers: { 'HushOS-Client': 'web/1', 'x-link-token': 'A'.repeat(43) },
     });
     expect(probe.status()).toBe(404);
+    // The token in the path, as clients before it sent it, is refused outright.
+    const old = await visitor.request.get(`/api/drive/links/${'A'.repeat(43)}/open`, {
+        headers: { 'HushOS-Client': 'web/1' },
+    });
+    expect(old.status()).toBe(410);
     await visitor.context().close();
 });
 
@@ -145,19 +175,42 @@ test('a signed-in visitor keeps a copy under their own keys', async ({ browser }
     const context = await newContext(browser);
     const linkPage = await context.newPage();
     await registerAccount(linkPage);
+    // The link page does not ask who is signed in until the visitor asks to keep a copy.
+    const sessionAsked: string[] = [];
+    linkPage.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/auth/session')
+            sessionAsked.push(request.url());
+    });
     await linkPage.goto(plainUrl);
     await expect(row(linkPage, 'payload.bin')).toBeVisible({ timeout: 60_000 });
+    await expect(linkPage.getByRole('button', { name: 'Save a copy to my files' })).toBeVisible();
+    expect(sessionAsked).toEqual([]);
     await linkPage.getByRole('button', { name: 'Save a copy to my files' }).click();
     await expect(linkPage.getByText(/to your files/)).toBeVisible({ timeout: 60_000 });
+    expect(sessionAsked.length).toBeGreaterThan(0);
     // The copy uploads from the link page, so that page stays open; a browser
     // that cannot stash the bytes (WebKit here) would lose it to a reload.
     // Their Drive, in another tab, sees the files land through the change feed.
     const keeper = await context.newPage();
     await keeper.goto('/app/drive');
     await expect(row(keeper, 'Public')).toBeVisible({ timeout: 90_000 });
+    // Nothing vouched for who wrote what was behind the link: the copy is re-locked, not theirs.
+    await expect(row(keeper, 'Public').locator('[data-integrity]')).toHaveAttribute(
+        'data-integrity',
+        'resealed',
+        { timeout: 60_000 },
+    );
     await row(keeper, 'Public').getByRole('link', { name: 'Public' }).click();
     await expect(row(keeper, 'payload.bin')).toBeVisible({ timeout: 90_000 });
     await expect(row(keeper, 'inner')).toBeVisible();
+    const copied = row(keeper, 'payload.bin').locator('[data-integrity]');
+    await expect(copied).toHaveAttribute('data-integrity', 'resealed', { timeout: 60_000 });
+    await expect(copied).toHaveText('Unverified');
+    await copied.hover();
+    await expect(keeper.locator('[data-integrity-details]')).toContainText(
+        'Re-locked by you; HushOS couldn’t confirm who wrote it before.',
+    );
+    await keeper.mouse.move(0, 0);
     // The copy is theirs: it shares no key with the link, so it downloads the same bytes through their own account.
     await row(keeper, 'payload.bin').locator('button').first().click(grip);
     const [download] = await Promise.all([

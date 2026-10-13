@@ -31,6 +31,17 @@ export function loadPdfjs() {
     return pdfjsModule;
 }
 
+/*
+ * pdf.js and its parsing worker's script, fetched ahead of the first PDF (see
+ * lib/preload.ts). The worker itself starts only with a document; its script
+ * is fetched here so that start does not ask the server for anything new.
+ */
+export async function preloadPdf() {
+    await loadPdfjs();
+    const { default: workerUrl } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+    await fetch(workerUrl, { cache: 'force-cache' }).then((response) => response.arrayBuffer());
+}
+
 const MAX_RENDER_SCALE = 2;
 
 export function PdfViewer({

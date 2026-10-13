@@ -241,31 +241,45 @@ An envelope moved to another folder, another version or another workspace fails 
         ],
         [
             'Size',
-            'The server records the size the store confirms for the encrypted object; the file’s own size is sealed in its envelope',
+            'The server records the size the store confirms for the encrypted object, which is padded (below); the file’s exact size is sealed in its envelope',
         ],
     ]}
 />
 
-Every name and every version is also signed by the account that wrote it. Your device checks each signature against your own keys and the people whose words you compared, and marks anything it can’t tie to one of them as **Unverified**, saying who the server says wrote it. A key that only opens a folder, such as a link’s, can no longer plant a file or rename one unnoticed. Unverified items still open: it is a warning, not a lock.
+File contents are padded before they are encrypted. Below 256 bytes, everything is 256 bytes. Above that, at most 6.25% is added, so the server learns a file’s size only to within roughly 2 KiB around 50 KB, 32 KiB around 1 MB, 2 MiB around 100 MB and 32 MiB around 1 GB.
+
+Every name and every version is also signed by the account that wrote it. Your device checks each signature against your own keys and the people whose words you compared, and marks anything it can’t tie to one of them as **Unverified**. It names the writer only from your own contacts: you, someone whose words you compared, or someone you haven’t checked; the server tells it nothing more than an account id. Keys someone has replaced no longer vouch for what they signed. If your device can’t run the check at all, because your contacts or your own earlier keys didn’t load, every item shows **Couldn’t check** until it can, never no mark. A key that only opens a folder, such as a link’s, can no longer plant a file or rename one unnoticed. Unverified items still open: it is a warning, not a lock.
 
 <Terms
     title="Padding and signatures"
     rows={[
         [
             'Padding',
-            'The file and its thumbnail are padded together to a Padmé bucket: at most 6.25% more up to 64 KiB, 3.125% up to 4 GiB, 1.5625% beyond. Padding is under the content key and counts towards storage',
+            'The file and its thumbnail are padded together to a Padmé bucket: 256 bytes at least, then at most 6.25% more up to 64 KiB, 3.125% up to 4 GiB, 1.5625% beyond. Padding is under the content key and counts towards storage',
         ],
         [
             'Fetching',
-            'Downloads and whole-file previews fetch the padding too, so the store does not see where the file ends',
+            'Downloads and whole-file previews fetch the padding too, and so does any read that reaches a file’s last chunk, such as seeking to the end of a video, so the store does not see where the file ends',
+        ],
+        [
+            'Viewers',
+            'After you unlock, the app fetches every viewer, syntax grammar and thumbnail renderer once, so which ones it fetched does not say what you opened',
         ],
         [
             'Signatures',
             'Ed25519 by the writer’s identity key over the workspace, item, kind, metadata version and SHA-256 of the metadata envelope; and over the item, version, object, content suite and SHA-256 of the content-key envelope',
         ],
         [
+            'Re-sealed',
+            'A rotation, a copy or a rename re-signs what it locks again. Only a record that verified is signed as the writer’s own; anything else gets a re-sealed statement that says it was re-locked, not vouched for, and stays Unverified',
+        ],
+        [
             'Checked',
-            'By the server against the writer’s current key before it stores a change, and again on your device against keys you trust',
+            'By the server against the writer’s current key before it stores a change, and again on your device against keys you trust; a check that cannot run shows as Couldn’t check',
+        ],
+        [
+            'Writer',
+            'Stored and served as an account id alone; your device names it from your contacts. Link visitors get no signatures and no writer',
         ],
         ['Not signed', 'Moves, trash and restore, which change no envelope; tags'],
     ]}
@@ -283,7 +297,7 @@ Sharing a folder or file with another HushOS account locks a copy of its key for
 
 Every share is locked with a fresh key made for it alone and signed by the person sharing, so a key stolen later doesn’t open what was shared before, and nobody else can pass a share off as theirs.
 
-We hand out the keys people share to, so HushOS lets you check them. When you add someone, their keys are remembered after you both compare twelve words. If they replace their sharing keys in HushOS, the change is signed by their old keys: your device checks that and follows it, and tells you so you can compare words again. Any other change shows a warning, and the new key is used only after you accept it.
+We hand out the keys people share to, so HushOS lets you check them. When you add someone, their keys are remembered after you both compare twelve words. If they replace their sharing keys in HushOS, the change is signed by their old keys: when you check them again, your device checks that signature, follows the change and tells you, so you can compare words again. It never follows on its own, so the server can’t learn whom you’ve added by watching what your device looks up. Any other change shows a warning, and the new key is used only after you accept it.
 
 <Exact>
 
@@ -301,7 +315,7 @@ The seal is hybrid: an X25519 agreement between a fresh key made for this share 
         ],
         [
             'Replacing keys',
-            'A new identity at the next key version, signed by the one it replaces; contacts check the chain from the keys they pinned and keep the earlier signing keys, so what was signed before still verifies',
+            'A new identity at the next key version, signed by the one it replaces; a contact’s device asks for the whole chain and checks it from the keys it pinned, only when the person checks them again. Replaced keys vouch for nothing: what they signed shows as Unverified, and a share they signed waits to be shared again',
         ],
         ['Whose key', 'A contact key you pinned, with a fingerprint you can compare in person'],
         ['Roles', 'Viewer, or editor; an editor’s uploads land in your storage'],
@@ -313,7 +327,7 @@ The seal is hybrid: an X25519 agreement between a fresh key made for this share 
     ]}
 />
 
-Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: a person’s keys are recorded in your encrypted settings when you add them after comparing words, and a later change is shown as a warning that you must accept, never applied silently. Nothing is pinned without that check: something shared with you by a person you have not added stays shut until you add them. The fingerprint covers the X25519 key and the signing key; the post-quantum key is vouched for by that signing key, checked on your device against the pinned one before it is used, and its digest joins the pin. Shares are only ever sealed hybrid: a person without a post-quantum key yet is not shared with until they have one. Every path that seals to a contact goes through the pin, and the re-keying that follows a revocation seals only to the shares and links your own encrypted record says you made, whatever the server lists. Your device also remembers the newest version of your settings it has seen and refuses an older copy, so the server cannot bring back a key you replaced.
+Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: a person’s keys are recorded in your encrypted settings when you add them after comparing words, and a later change is shown as a warning that you must accept, never applied silently. Nothing is pinned without that check: something shared with you by a person you have not added stays shut until you add them. The fingerprint covers the X25519 key and the signing key; the post-quantum key is vouched for by that signing key, checked on your device against the pinned one before it is used, and its digest joins the pin. Shares are only ever sealed hybrid: a person without a post-quantum key yet is not shared with until they have one. Every path that seals to a contact goes through the pin, and the re-keying that follows a revocation seals only to the shares and links your own encrypted record says you made, whatever the server lists. Your device also remembers the newest version of your settings it has seen, and the newest version of your own sharing keys it has opened, and refuses an older copy of either, so the server cannot bring back a key you replaced. A new browser has nothing to compare against yet.
 
 </Exact>
 
@@ -333,7 +347,14 @@ A link is a share without a recipient. The node key is sealed under a key derive
         ['Password', 'Argon2id (64 MiB, 3 iterations) with a per-link salt, mixed into the key'],
         ['Expiry', 'Optional, at most a year; revocation is immediate'],
         ['Visitor', 'Browses, previews and downloads in their own browser, with no account'],
-        ['Keeping a copy', 'A signed-in visitor re-encrypts each file under their own keys'],
+        [
+            'Requests',
+            'The link’s API requests carry its token in a header, not the address, and no session. They return no signatures and say nothing of who wrote what. The page itself is an ordinary page load: if you are signed in, it carries your session cookie, though the page does not ask who you are until you sign in or keep a copy',
+        ],
+        [
+            'Keeping a copy',
+            'A signed-in visitor re-encrypts each file under their own keys; the copy shows as re-locked by them, since nothing vouched for who wrote it',
+        ],
     ]}
 />
 
@@ -380,7 +401,7 @@ Anyone who can see something through a share or a link can report it. Reporting 
         ['Who can report', 'Anyone with access through a share or a link'],
         [
             'What is sealed',
-            'The reported item’s key, sealed on the reporter’s device to each operator’s X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone',
+            'The reported item’s key, sealed on the reporter’s device to each operator’s X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone. The operators and their keys come from the server',
         ],
         [
             'What is kept',
@@ -394,7 +415,7 @@ Anyone who can see something through a share or a link can report it. Reporting 
     ]}
 />
 
-An operator opens a report under their own identity.
+An operator opens a report under their own identity. Which operators a report is sealed to, and their keys, come from the server, so whoever runs the server can open what is reported to it.
 
 </Exact>
 
@@ -407,7 +428,7 @@ An operator opens a report under their own identity.
         ['Never', 'File names, contents, thumbnails, folder names, or any key'],
         [
             'Always',
-            'Your email, the shape of your tree (ids and parents), the size of each encrypted object, times, and how much you store',
+            'Your email, the shape of your tree (ids and parents), the size of each encrypted object (padded, so a file’s size only to within a few percent), times, how much you store, and which account wrote each change',
         ],
         ['Sharing', 'Which accounts you share with, and that a link exists; not what is behind it'],
         [
@@ -462,9 +483,10 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 - Signing out other browsers takes effect when they next check in with the server. It can’t erase keys a device already holds offline.
 - Replacing your recovery phrase stops the old one from resetting your password. A recovery kit you downloaded earlier still holds the old phrase and your account key as it was then, so it can still open that key offline. Password resets and a new recovery phrase keep the same account key; only replacing the account key makes a different one.
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
-- The server sees what’s listed above: your email, sizes, times and how your folders nest.
+- The server sees what’s listed above: your email, padded sizes, times, who wrote each change and how your folders nest. Padding hides a file’s exact size, not roughly how big it is.
 - A share made before the other person had a post-quantum key uses X25519 alone until your device locks it again with both.
-- Items written before HushOS signed changes show as Unverified until someone writes them again.
+- Items written before HushOS signed changes, and anything re-locked without a signature your device could verify, show as Unverified until someone writes them again.
+- Whoever runs the server chooses which operator keys a report is sealed to, so they can open anything reported to them.
 - Replacing sharing keys with stolen keys would look like a real replacement to the people you share with. That is why HushOS tells them, and suggests comparing words again.
 - Signatures say who wrote an item, not that it is the newest version: the server could still serve an older, signed state of it. A report to an operator without a post-quantum key uses X25519 alone.
 

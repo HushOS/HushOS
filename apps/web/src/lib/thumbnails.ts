@@ -46,6 +46,12 @@ function renderer() {
     };
     return worker;
 }
+/* Starts the renderer and has it fetch its PDF and video code ahead of any upload. */
+export function preloadThumbnailer() {
+    if (typeof OffscreenCanvas === 'undefined' || typeof Worker === 'undefined') return;
+    renderer().postMessage({ kind: 'preload' });
+}
+
 function renderInWorker(kind: 'image' | 'pdf' | 'video', file: Blob) {
     return new Promise<Blob | null>((resolve) => {
         const id = nextJob++;

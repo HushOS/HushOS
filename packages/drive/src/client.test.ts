@@ -64,6 +64,7 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
     const verified: { signers: unknown; nodes: unknown[] }[] = [];
     const opened: { granterSigningPublicKey: string | null }[] = [];
     const rotatedWith: unknown[] = [];
+    const sealedMetadata: { nodeId: string; resealed: unknown }[] = [];
     let workCalls = 0;
     const api = {
         workspace: async () => ({
@@ -117,6 +118,9 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
                       ],
                   }
                 : { done: true, nextCursor: null, nodes: [] },
+        rename: async (_ws: string, nodeId: string) => ({
+            node: node(nodeId, nodeId === ROOT ? null : ROOT),
+        }),
         rotateNodes: async (_ws: string, _root: string, nodes: unknown[]) => {
             wired.push(...nodes);
             return { results: [{ status: 'ok' }] };
@@ -178,6 +182,9 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
                 return { opened: true };
             case 'driveOpenLink':
                 return { opened: true };
+            case 'driveSealMetadata':
+                sealedMetadata.push({ nodeId: input.nodeId as string, resealed: input.resealed });
+                return { metadataEnvelope: 'renamed', metadataSignature: 'rsig' };
             case 'driveRotateNodes': {
                 const nodes = input.nodes as {
                     shares: { id: string }[];
@@ -220,6 +227,7 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
         wired,
         verified,
         opened,
+        sealedMetadata,
     };
 }
 
@@ -444,6 +452,52 @@ describe('signatures', () => {
         const { node: opened } = await client.openLink('token', 'secret', null);
         expect(opened.integrity).toBeNull();
         expect(h.verified).toEqual([]);
+    });
+
+    test('a rename re-signs as one’s own only metadata that verified', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, { signers: async () => ({}) });
+        await client.open('owner');
+        const listing = await client.listFolder(ROOT);
+        // The harness's worker calls A's metadata someone not checked, and the root's verified.
+        await client.rename(listing.children[0]!, 'renamed');
+        await client.rename(listing.folder, 'top');
+        expect(h.sealedMetadata).toEqual([
+            { nodeId: A, resealed: true },
+            { nodeId: ROOT, resealed: false },
+        ]);
+    });
+
+    test('a rename that cannot check the record re-locks it rather than vouch for it', async () => {
+        const h = harness();
+        let failing = false;
+        const client = createDriveClient(h.rpc, h.api, {
+            signers: async () => {
+                if (failing) throw new Error('settings refused as rolled back');
+                return {};
+            },
+        });
+        await client.open('owner');
+        const listing = await client.listFolder(ROOT);
+        failing = true;
+        await client.rename(listing.folder, 'top');
+        expect(h.sealedMetadata).toEqual([{ nodeId: ROOT, resealed: true }]);
+    });
+
+    test('a share sealed under keys the granter replaced asks for it to be shared again', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGranter: async () => ({
+                signingPublicKey: 'ed25519-granter-newer',
+                replaced: { name: 'Maya' },
+            }),
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        const [mount] = await client.mountShares();
+        expect(mount!.error).toBe(
+            'Maya replaced their sharing keys since sharing this. Ask Maya to share it again.',
+        );
     });
 
     test('a share is opened against the granter’s current key only', async () => {

@@ -1184,9 +1184,11 @@ export async function addIdentityKem(input: {
 }
 
 /*
- * The person's settings, when they are sealed the only way clients open now:
- * version 2, under the settings key. A version 1 document (under a key derived
- * from the identity) is as good as none; the next save replaces it.
+ * The person's settings: the document, when it is sealed the only way clients
+ * open now (version 2, under the settings key), and the stored sequence number
+ * whatever the document is (0 when there is none). A version 1 document (under
+ * a key derived from the identity) is served as no document at its sequence:
+ * the next save names that sequence and replaces it.
  */
 export async function getSettings(userId: string) {
     const [row] = await db
@@ -1198,16 +1200,19 @@ export async function getSettings(userId: string) {
         })
         .from(userSettings)
         .where(eq(userSettings.userId, userId));
-    return row && row.version === 2 ? row : null;
+    return {
+        document: row && row.version === 2 ? row : null,
+        settingsVersion: row?.settingsVersion ?? 0,
+    };
 }
 
 /*
- * Compare-and-set: the new document names the version it was built from, and
- * lands only if that is still the stored one (or none exists and it names 0).
- * Only envelope version 2 is taken, and only once the settings key it is
- * sealed under is stored. A version 1 document counts as none, so the save
- * that names 0 replaces it; the sequence still rises past it, so no device's
- * high-water mark is left above the new document.
+ * Compare-and-set: the new document names the stored sequence it was built
+ * from (0 when none is stored), and lands only if that is still the stored
+ * one, a version 1 document included. It is stored at that sequence plus one,
+ * which is the version the client sealed it at (the version is bound into the
+ * seal). Only envelope version 2 is taken, and only once the settings key it
+ * is sealed under is stored. A conflict reports the stored sequence.
  */
 export async function putSettings(input: {
     userId: string;
@@ -1220,21 +1225,17 @@ export async function putSettings(input: {
     if (input.version !== 2) return { status: 'unsupported' as const, settingsVersion: null };
     return db.transaction(async (tx) => {
         const [current] = await tx
-            .select({
-                version: userSettings.version,
-                settingsVersion: userSettings.settingsVersion,
-            })
+            .select({ settingsVersion: userSettings.settingsVersion })
             .from(userSettings)
             .where(eq(userSettings.userId, input.userId))
             .for('update');
         const stored = current?.settingsVersion ?? 0;
-        const visible = current?.version === 2 ? stored : 0;
-        if (visible !== input.expectedVersion)
-            return { status: 'conflict' as const, settingsVersion: visible };
+        if (stored !== input.expectedVersion)
+            return { status: 'conflict' as const, settingsVersion: stored };
         // Sealed under a settings key the server does not have: no device could open it again.
         if (!(await getSettingsKey(input.userId, tx)))
-            return { status: 'no-key' as const, settingsVersion: visible };
-        const settingsVersion = stored + 1;
+            return { status: 'no-key' as const, settingsVersion: stored };
+        const settingsVersion = input.expectedVersion + 1;
         await tx
             .insert(userSettings)
             .values({

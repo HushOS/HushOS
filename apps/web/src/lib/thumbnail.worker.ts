@@ -117,7 +117,24 @@ async function fromVideo(job: Job) {
     }
 }
 
-self.onmessage = async (event: MessageEvent<Job>) => {
+/*
+ * Fetches what rendering a PDF or a video loads on first use, without
+ * rendering anything: which of them a device fetches would otherwise say what
+ * kind of file it just uploaded (see lib/preload.ts).
+ */
+async function preload() {
+    const pdfjs = await loadPdfjs();
+    await fetch(pdfjs.GlobalWorkerOptions.workerSrc, { cache: 'force-cache' }).then((response) =>
+        response.arrayBuffer(),
+    );
+    await import('mediabunny');
+}
+
+self.onmessage = async (event: MessageEvent<Job | { kind: 'preload' }>) => {
+    if (event.data.kind === 'preload') {
+        await preload().catch(() => {});
+        return;
+    }
     const job = event.data;
     const reply = (message: Reply) => self.postMessage(message);
     try {

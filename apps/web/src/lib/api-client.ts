@@ -17,8 +17,13 @@ export function apiClient() {
     return client.api;
 }
 /*
- * For routes that take no session (a link's visitor routes): without the
- * cookie, so the server cannot tie the link someone opened to their account.
+ * For routes that take no session (a link's visitor routes): sent without the
+ * cookie, so these API requests do not tie the link to an account. That does
+ * not make the visit anonymous: the link page's own request (/s/<token>, a
+ * top-level navigation) still carries the session cookie beside the token in
+ * its path, as every page load does, so whoever runs the server can tie the
+ * two from that request alone. The page itself never asks who is signed in
+ * until the visitor presses Sign in or Save a copy.
  */
 let anonymous: ReturnType<typeof createClient> | undefined;
 export function anonymousApiClient() {
