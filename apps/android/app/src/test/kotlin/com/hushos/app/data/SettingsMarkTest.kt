@@ -18,36 +18,36 @@ class SettingsMarkTest {
 
     @Test
     fun anOlderVersionThanSeenIsRefused() {
-        mark().record("a", 7uL)
-        assertThrows(SettingsRolledBack::class.java) { mark().check("a", 6uL) }
-        mark().check("a", 7uL)
-        mark().check("a", 8uL)
+        mark().recordSettings("a", 7uL, sealedV2 = true)
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("a", 6uL) }
+        mark().checkSettings("a", 7uL)
+        mark().checkSettings("a", 8uL)
     }
 
     @Test
-    fun noSettingsAtAllAfterSomeWereSeenIsRefused() {
-        mark().check("a", null)
-        mark().record("a", 1uL)
-        assertThrows(SettingsRolledBack::class.java) { mark().check("a", null) }
+    fun noSettingsAtAllAfterAVersionTwoDocumentWasSeenIsRefused() {
+        mark().checkSettings("a", null)
+        mark().recordSettings("a", 1uL, sealedV2 = true)
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("a", null) }
     }
 
     @Test
     fun theMarkOnlyRisesAndSurvivesANewInstance() {
-        mark().record("a", 9uL)
-        mark().record("a", 3uL)
-        assertEquals(9uL, mark().seen("a"))
-        assertThrows(SettingsRolledBack::class.java) { mark().check("a", 8uL) }
+        mark().recordSettings("a", 9uL, sealedV2 = true)
+        mark().recordSettings("a", 3uL, sealedV2 = true)
+        assertEquals(9uL, mark().seen(SettingsMark.key("a")))
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("a", 8uL) }
     }
 
     @Test
     fun theMarkIsPerAccountSoASuccessionNeitherResetsNorSplitsIt() {
-        mark().record(SettingsMark.key("User-1"), 5uL)
+        mark().recordSettings("User-1", 5uL, sealedV2 = true)
         // Another account has its own count; the same account in other letter case does not.
-        mark().check(SettingsMark.key("user-2"), null)
-        assertThrows(SettingsRolledBack::class.java) { mark().check(SettingsMark.key("user-1"), 4uL) }
+        mark().checkSettings("user-2", null)
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-1", 4uL) }
         // The key names no identity: after the account replaced its sharing keys the same mark still refuses less.
         assertEquals(5uL, mark().settingsSeen("user-1", "enc-after-succession"))
-        assertThrows(SettingsRolledBack::class.java) { mark().check(SettingsMark.key("user-1"), 4uL) }
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-1", 4uL) }
         // The file names neither the account nor its key.
         assertFalse(SettingsMark.key("user-1").contains("user-1"))
     }
@@ -56,7 +56,7 @@ class SettingsMarkTest {
     fun aMarkAnEarlierAppKeptPerIdentityCarriesOverAndNeverLowersTheAccountsOwn() {
         mark().record(SettingsMark.legacyKey("user-1", "enc-a"), 9uL)
         assertEquals(9uL, mark().settingsSeen("user-1", "enc-a"))
-        assertThrows(SettingsRolledBack::class.java) { mark().check(SettingsMark.key("user-1"), 8uL) }
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-1", 8uL) }
         // A lower legacy count (another identity's) doesn't pull the account's mark down.
         mark().record(SettingsMark.legacyKey("user-1", "enc-b"), 2uL)
         assertEquals(9uL, mark().settingsSeen("user-1", "enc-b"))
@@ -74,6 +74,22 @@ class SettingsMarkTest {
         assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 3uL) }
         // Another account's identity has its own mark, and the settings mark is a separate count.
         mark().checkIdentity("user-2", 1uL)
-        mark().check(SettingsMark.key("user-1"), null)
+        mark().checkSettings("user-1", null)
+    }
+
+    @Test
+    fun aVersionOneRowServedAsNoneIsNotARollbackButNoneAfterVersionTwoIs() {
+        // This device saw the account's old version 1 document at sequence 7; the server now serves that row as none.
+        mark().recordSettings("user-1", 7uL, sealedV2 = false)
+        mark().checkSettings("user-1", null)
+        // The save over it (expectedVersion 0) lands above 7, so the mark never outranks the new document.
+        mark().recordSettings("user-1", 8uL, sealedV2 = true)
+        mark().checkSettings("user-1", 8uL)
+        // From now on none at all is a rollback, and so is anything older.
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-1", null) }
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-1", 7uL) }
+        // A version 1 document served below the mark is a rollback too.
+        mark().recordSettings("user-2", 5uL, sealedV2 = false)
+        assertThrows(SettingsRolledBack::class.java) { mark().checkSettings("user-2", 4uL) }
     }
 }

@@ -349,9 +349,6 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     // Contacts and shares to people
 
-    /* This device's settings mark for the account (see SettingsMark): per user, so a succession keeps it. */
-    private fun settingsMarkKey(): String = SettingsMark.key(api.session.userId)
-
     /* The settings key the server holds, opened under the account key; null until some device stored one. */
     private fun openSettingsKey(stored: Auth.StoredSettings): ByteArray? {
         settingsKey?.let { return it }
@@ -386,16 +383,17 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun loadSettings(): Settings {
         val mark = SettingsMark.of(context)
         val userId = api.session.userId
-        val markKey = settingsMarkKey()
         // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
         mark.settingsSeen(userId, identityKeys().encryptionPublicKey)
         val stored = Auth.settings(context)
         val envelope = stored.envelope
-        mark.check(markKey, envelope?.settingsVersion)
+        // None after a version 2 document was seen is a rollback; none after only version 1 is that row served as none.
+        mark.checkSettings(userId, envelope?.settingsVersion)
+        // Saved over with expectedVersion 0, which replaces a version 1 row at a sequence above any mark.
         if (envelope == null) return Settings.empty()
         val key = if (envelope.version == 2u) openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.") else null
         val settings = openSettingsText(userId, key, envelope)
-        mark.record(markKey, envelope.settingsVersion)
+        mark.recordSettings(userId, envelope.settingsVersion, sealedV2 = envelope.version == 2u)
         return settings
     }
 
@@ -414,7 +412,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
                 val saved = Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
-                SettingsMark.of(context).record(settingsMarkKey(), maxOf(saved, next))
+                // Always version 2: from here on, no document at all is a rollback.
+                SettingsMark.of(context).recordSettings(api.session.userId, maxOf(saved, next), sealedV2 = true)
                 return Settings(settings.json, saved)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error

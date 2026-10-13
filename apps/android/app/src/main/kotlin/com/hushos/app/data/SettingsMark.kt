@@ -23,12 +23,6 @@ class SettingsMark(private val file: File) {
 
     fun seen(key: String): ULong = synchronized(LOCK) { read().optLong(key, 0L).coerceAtLeast(0L).toULong() }
 
-    /* Refuses a served version older than the mark, or no document at all once one was seen. */
-    fun check(key: String, served: ULong?) {
-        val seen = seen(key)
-        if (seen > 0uL && (served == null || served < seen)) throw SettingsRolledBack()
-    }
-
     /* Raises the mark to `version`; never lowers it. */
     fun record(key: String, version: ULong) {
         synchronized(LOCK) {
@@ -54,6 +48,26 @@ class SettingsMark(private val file: File) {
     }
 
     /*
+     * The settings the server serves now, against this account's marks: refused when older than the newest seen. No
+     * document at all is refused only once this device has seen a version 2 one: the server serves a version 1 row as
+     * none (no client opens those any more), and the save that replaces it lands above every earlier sequence, so a
+     * device that saw only version 1 reads none as empty settings rather than locking itself out.
+     */
+    fun checkSettings(userId: String, served: ULong?) {
+        if (served == null) {
+            if (seen(v2Key(userId)) > 0uL) throw SettingsRolledBack()
+            return
+        }
+        if (served < seen(key(userId))) throw SettingsRolledBack()
+    }
+
+    /* Raises the account's settings mark; `sealedV2` also raises the mark that makes "none" a rollback. */
+    fun recordSettings(userId: String, version: ULong, sealedV2: Boolean) {
+        record(key(userId), version)
+        if (sealedV2) record(v2Key(userId), version)
+    }
+
+    /*
      * An own identity served as current: refused before it is opened when its key version is lower than one this
      * device already opened (an identity the account replaced, served again).
      */
@@ -72,6 +86,9 @@ class SettingsMark(private val file: File) {
 
         /* The account's settings mark: per user, whatever identity it holds now. */
         fun key(userId: String): String = keyDigest("settings\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))
+
+        /* The newest version 2 settings this device opened or saved: once there is one, none at all is a rollback. */
+        fun v2Key(userId: String): String = keyDigest("settings-v2\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))
 
         /* The highest own identity key version this device opened for the account. */
         fun identityKey(userId: String): String = keyDigest("identity\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))
