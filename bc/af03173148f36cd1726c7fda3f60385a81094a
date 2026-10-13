@@ -1,0 +1,63 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_7c0f424aad5a1e::t_4232d867e2f183 1-113
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Integrity.swift
+  s_7c0f424aad5a1e::t_013abd7b0badf4 6-10,13-22,24-26,29-43,45-46,48-53,60-64,66-73,75-77,80-95,99-100,103-111,116-119,121-126,130-141,143-149,152-155,168,174-176,178-180,184-194,197-198,200-202,211,213-286
+apps/ios/App/ActionSheets.swift
+  s_7c0f424aad5a1e::t_e34e62df86c93e 365-368
+apps/ios/App/DriveStore.swift
+  s_7c0f424aad5a1e::t_ffc858c516ed53 73-76,78-84,309-310,410-414,416-418,420-432,436,438-443,744-745,1011-1015,1101,1136-1137,1159-1160,1170-1171
+apps/ios/App/Received.swift
+  s_7c0f424aad5a1e::t_3c789e652be621 23-24,42-51,207-208,210-216,228
+apps/ios/App/Sharing.swift
+  s_7c0f424aad5a1e::t_f9d599e06e3206 694-696,724-731,799-815
+apps/ios/App/Unverified.swift
+  s_7c0f424aad5a1e::t_08ba81fafda933 16-37,45,51-52,60,65,68,70-73,77,79,93,101,116-118,122,124-128
+apps/ios/App/Viewer.swift
+  s_7c0f424aad5a1e::t_71e2da89fd3d51 82-83
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_7c0f424aad5a1e::t_225a672b252c25 36-39,41,63
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_7c0f424aad5a1e::t_cd17eb6b0c0001 29
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_7c0f424aad5a1e::t_76b5dad88bc7f1 72-73,171-174,177,184-194
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveModels.swift
+  s_7c0f424aad5a1e::t_0c6e2da05ec676 5-9,13,27,50
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_7c0f424aad5a1e::t_65b656cde8f4c4 56-60,79-95,235-237,242,244,247,249,252-253,272,283,290-294
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_7c0f424aad5a1e::t_10e2813ddfdc1b 13,18-22,27-34,41-42,47,49-53,58-61,66-69,74-76,81-85,88-89,130
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_7c0f424aad5a1e::t_43a04b64f66acc 7-9,106-111,113-121,123-124,126,128-149
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_7c0f424aad5a1e::t_81409006e9bbce 18-24,40-51,70-72,80-81,97-98,106,108-115,119,121-128,132-137,141,149-151,184-189,195,198,201,203-204,206-210,214,216-217,219-220,225,227,229,233,239,243,246,250-252
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_7c0f424aad5a1e::t_33df099b8a694c 89-96,142-144,221-222,224-225,231-232,234,243
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_7c0f424aad5a1e::t_570fba6015c9a4 11-12,25,76-78,82,90,115-117,119-120,200-201,239-240,255,313-316,319,322,386,489-495,499-501,503-504,506-507,509-510,513,520-521
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_7c0f424aad5a1e::t_8883b246d84530 98-100,248-252,256-257,259-261
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/GranterTrustTests.swift
+  s_7c0f424aad5a1e::t_b38b8e0f303578 14-20,34,38,43,47-57
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_7c0f424aad5a1e::t_1141865ee0d0ef 27-28,35,37-38,49-50,53-55,59-61,63,71,73-75,78,80-86,92-93,95,100,106,111,114,118,120-122,124-125,128,133,135-202,205-246,331-333,348-349,370,376,378-391,393-394,418,422-425,433-469
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_7c0f424aad5a1e::t_ffb8074f4bb43e 17-18,23-29,66-122,154-161,176-177,187-204,207-215,219-241,260-263,285-311,313,322-328,338,340,343-361,371
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_7c0f424aad5a1e::t_292d9d8109a3dc 100-101,104,106-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bcaf03173148f36cd1726c7fda3f60385a81094a",
+  "prompts": {},
+  "sessions": {
+    "s_7c0f424aad5a1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "066e0597-a3d8-4afa-aee3-223b44357bd3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
