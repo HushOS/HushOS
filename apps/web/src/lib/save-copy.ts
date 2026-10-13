@@ -1,4 +1,5 @@
 import { contentSize, type DriveNode } from '@hushos/drive/client';
+import { copySignatureForms } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
 import { driveClient, folderQueryOptions, invalidateFolders, nextName } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
@@ -14,6 +15,12 @@ import { transfers } from '@/lib/transfers';
  * Files are read whole first, so very large ones are refused rather than
  * held in memory. The bytes are also stashed in the browser's private storage,
  * because a copy has no file on disk to ask for again after a reload.
+ *
+ * Each copy is signed by where it came from (docs/integrity-design.md, "Saved
+ * copies"): from a link, the saved statements, files and folders alike; from
+ * a share or one's own drive, the ordinary ones for what verified and the
+ * re-sealed ones for anything else, so a copy of an Unverified item keeps
+ * its warning and a copy of a verified one carries none.
  */
 
 export const SAVE_COPY_MAX_BYTES = 256 * 1024 * 1024;
@@ -22,6 +29,7 @@ export async function saveCopy(
     queryClient: QueryClient,
     nodes: DriveNode[],
     destination: DriveNode,
+    source: 'link' | 'drive',
     onProgress?: (done: number) => void,
 ) {
     const listing = await queryClient.fetchQuery(folderQueryOptions(destination.id));
@@ -46,7 +54,14 @@ export async function saveCopy(
             });
             const stash = await stashBytes(bytes);
             transfers.enqueue([
-                { file, parent: into, name, origin: 'copy', stash: stash ?? undefined },
+                {
+                    file,
+                    parent: into,
+                    name,
+                    origin: 'copy',
+                    signAs: copySignatureForms(node, source),
+                    stash: stash ?? undefined,
+                },
             ]);
         } finally {
             await reader.close();
@@ -55,8 +70,9 @@ export async function saveCopy(
     }
     async function saveTree(node: DriveNode, into: DriveNode, name: string) {
         if (node.kind === 'file') return saveFile(node, into, name);
-        // Re-locked, not vouched for: the name comes from something this person did not write.
-        const [made] = await driveClient.createFolderPath(into, [name], { resealed: true });
+        const [made] = await driveClient.createFolderPath(into, [name], {
+            signAs: copySignatureForms(node, source).metadata,
+        });
         tick();
         const children = await driveClient.listFolder(node.id);
         for (const child of children.children) await saveTree(child, made!, child.name);

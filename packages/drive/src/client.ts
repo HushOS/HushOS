@@ -9,6 +9,7 @@ import type {
     NodeMetadata,
 } from '@hushos/crypto';
 import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
+import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { Catalogue, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
@@ -39,7 +40,7 @@ import {
     type NodeChange,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
-import type { Integrity, NodeIntegrity } from './trust';
+import { signatureFormFor, type Integrity, type NodeIntegrity, type SignatureForm } from './trust';
 
 /*
  * Browser orchestration for Drive. Keys live in the crypto worker and are reached
@@ -383,7 +384,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             let root = view.root;
             if (!root) {
                 const { from } = await api.allocateEpochs(view.workspaceId, 1);
-                const id = crypto.randomUUID();
+                const { id, seed } = await newId('node', view.workspaceId);
                 const { nodes } = await rpc('driveCreateNodes', {
                     workspaceId: view.workspaceId,
                     nodes: [
@@ -399,6 +400,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 });
                 const result = await api.createRoot(view.workspaceId, {
                     id,
+                    idSeed: seed,
                     keyEpoch: from,
                     parentKeyEpoch: view.grant.workspaceKeyVersion,
                     keyEnvelope: nodes[0]!.keyEnvelope,
@@ -729,14 +731,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     /*
      * Creates a chain of folders under `parent`: ["one", "two", "three"] becomes
      * one/two/three in a single request, each wrapped under the one before it.
-     * `resealed` signs them with the re-sealed statement, for names taken from
-     * something this person did not verify (a copy saved from a link or share,
-     * or of an unverified folder): they re-lock them, nothing more.
+     * `signAs` is the statement their names are signed with (see
+     * signatureFormFor): ordinary for folders this person makes, `saved` for
+     * those a save from a link recreates, `resealed` for names taken from
+     * something this person did not verify, which they re-lock, nothing more.
      */
     async function createFolderPath(
         parent: DriveNode,
         path: string[],
-        options: { resealed?: boolean } = {},
+        options: { signAs?: SignatureForm } = {},
     ) {
         const ws = parent.workspaceId;
         const names = path.map((name) => checkName(name));
@@ -744,11 +747,13 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (names.length > MAX_FOLDER_BATCH)
             throw new Error(`Create at most ${MAX_FOLDER_BATCH} folders at a time.`);
         const { from } = await api.allocateEpochs(ws, names.length);
-        const specs = names.map((name, index) => ({
-            id: crypto.randomUUID(),
-            keyEpoch: from + index,
-            name,
-        }));
+        const specs = await Promise.all(
+            names.map(async (name, index) => ({
+                ...(await newId('node', ws)),
+                keyEpoch: from + index,
+                name,
+            })),
+        );
         const { nodes } = await rpc('driveCreateNodes', {
             workspaceId: ws,
             nodes: specs.map((spec, index) => ({
@@ -758,13 +763,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
                 keyEpoch: spec.keyEpoch,
                 metadata: { name: spec.name, mime: null, size: null, modified: null },
-                resealed: options.resealed === true,
+                signAs: options.signAs ?? 'ordinary',
             })),
         });
         const created = await api.createFolders(
             ws,
             specs.map((spec, index) => ({
                 id: spec.id,
+                idSeed: spec.seed,
                 parentId: index === 0 ? parent.id : specs[index - 1]!.id,
                 parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
                 keyEpoch: spec.keyEpoch,
@@ -779,10 +785,11 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     /*
      * A rename re-signs the whole record, type, size and date carried over, so
      * it is checked first, as a reading would: only metadata that verifies is
-     * signed again with the ordinary statement. Anything else (planted,
-     * unchecked, signed by someone not checked) is re-locked with the
-     * re-sealed one and stays Unverified, rather than turning into a record
-     * this person vouches for.
+     * signed again with the ordinary statement, and only metadata that
+     * verified as saved from a link keeps the saved one. Anything else
+     * (planted, unchecked, signed by someone not checked) is re-locked with
+     * the re-sealed one and stays Unverified, rather than turning into a
+     * record this person vouches for.
      */
     async function rename(node: DriveNode, name: string) {
         const ws = node.workspaceId;
@@ -797,7 +804,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 ...(node.metadata ?? { mime: null, size: null, modified: null }),
                 name: clean,
             },
-            resealed: checked?.metadata !== 'verified',
+            signAs: signatureFormFor(checked?.metadata),
         });
         const result = await api.rename(ws, node.id, {
             metadataVersion: node.metadataVersion,
@@ -836,8 +843,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         const version = node.currentVersion;
         if (node.kind !== 'file' || !version) throw new Error(`“${node.name}” has no content yet.`);
         const { from } = await api.allocateEpochs(ws, 1);
-        const id = crypto.randomUUID();
-        const versionId = crypto.randomUUID();
+        const { id, seed } = await newId('node', ws);
+        const { id: versionId, seed: versionIdSeed } = await newId('version', ws);
         const signed = signedNodeOf(node, [version]);
         const sealed = await rpc('driveCopyFile', {
             workspaceId: ws,
@@ -869,6 +876,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             sourceVersionId: version.id,
             node: {
                 id,
+                idSeed: seed,
                 parentId: destination.id,
                 parentKeyEpoch: destination.keyEpoch,
                 keyEpoch: from,
@@ -877,6 +885,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 metadataSignature: sealed.metadataSignature,
             },
             versionId,
+            versionIdSeed,
             contentKeyEnvelope: sealed.contentKeyEnvelope,
             versionSignature: sealed.versionSignature,
         });
@@ -903,9 +912,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             tick();
             return done;
         }
-        // A folder's name is re-signed as this person's only when the source's verified.
-        const resealed = (folder: DriveNode) => folder.integrity?.metadata !== 'verified';
-        const [made] = await createFolderPath(destination, [name], { resealed: resealed(node) });
+        // A folder's name is re-signed as this person's only when the source's verified
+        // (and stays saved only when it verified as saved from a link).
+        const signAs = (folder: DriveNode) => signatureFormFor(folder.integrity?.metadata);
+        const [made] = await createFolderPath(destination, [name], { signAs: signAs(node) });
         tick();
         const stack: { source: DriveNode; target: DriveNode }[] = [{ source: node, target: made! }];
         while (stack.length) {
@@ -914,7 +924,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             for (const child of listing.children) {
                 if (child.kind === 'folder') {
                     const [folder] = await createFolderPath(target, [child.name], {
-                        resealed: resealed(child),
+                        signAs: signAs(child),
                     });
                     stack.push({ source: child, target: folder! });
                 } else if (child.currentVersion) await copyFile(child, target, child.name);
@@ -1119,7 +1129,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         node: DriveNode,
         input: { password: string | null; expiresAt: string | null },
     ) {
-        const linkId = crypto.randomUUID();
+        const { id: linkId, seed: linkIdSeed } = await newId('link', node.workspaceId);
         const sealed = await rpc('driveSealLink', {
             workspaceId: node.workspaceId,
             nodeId: node.id,
@@ -1131,6 +1141,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // token only as a hash and the sealed copy it cannot open.
         const { link } = await api.createLink(node.workspaceId, node.id, {
             linkId,
+            linkIdSeed,
             token: sealed.token,
             keyEpoch: node.keyEpoch,
             linkEnvelope: sealed.linkEnvelope,
@@ -1243,7 +1254,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         const { operators } = await api.reportOperators();
         if (!operators.length)
             throw new Error('This instance has no operator yet, so it cannot take reports.');
-        const id = crypto.randomUUID();
+        // Made in the reported item's workspace, which is the one the server derives it in.
+        const { id, seed } = await newId('report', node.workspaceId);
         const { envelopes } = await rpc('driveSealReport', {
             workspaceId: node.workspaceId,
             nodeId: node.id,
@@ -1253,6 +1265,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         });
         return api.report({
             id,
+            reportIdSeed: seed,
             workspaceId: node.workspaceId,
             nodeId: node.id,
             keyEpoch: node.keyEpoch,

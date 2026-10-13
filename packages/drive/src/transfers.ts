@@ -1,10 +1,23 @@
-import type { NodeMetadata, UploadPartProgress, UploadPartResult } from '@hushos/crypto';
+import type {
+    NodeMetadata,
+    SignatureForm,
+    UploadPartProgress,
+    UploadPartResult,
+} from '@hushos/crypto';
 import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
+import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
 import { DriveApiError } from './api';
 import type { DriveNode, Rpc } from './client';
-import type { JournalEntry, QueuedEntry, UploadJournal, UploadOrigin } from './journal';
+import type {
+    IdSeeds,
+    JournalEntry,
+    QueuedEntry,
+    UploadJournal,
+    UploadOrigin,
+    UploadSignatures,
+} from './journal';
 
 /*
  * The upload engine. One queue for the whole app, independent of any page: a
@@ -83,6 +96,11 @@ export type EnqueueInput = {
     handle?: FileSystemFileHandle;
     /* A copy of something shared, rather than a file the person holds. */
     origin?: UploadOrigin;
+    /*
+     * The statements a copy's metadata and version are signed with, by where
+     * it came from (see signatureFormFor in ./trust); ordinary when absent.
+     */
+    signAs?: UploadSignatures;
     /* The stash the app wrote this upload's bytes to, so a reload can reopen them. */
     stash?: string;
 };
@@ -131,6 +149,8 @@ export type TransferManagerOptions = {
     random?: () => number;
     /* Whether the device has no network: a failed part then waits for one without spending a try. Tests stub it. */
     offline?: () => boolean;
+    /* Mints an id and its seed in a workspace; @hushos/crypto's newId unless a test pins it. */
+    newId?: (kind: IdKind, workspaceId: string) => Promise<{ id: string; seed: string }>;
 };
 
 type Internal = {
@@ -139,9 +159,13 @@ type Internal = {
     handle: FileSystemFileHandle | null;
     parent: DriveNode | null;
     replaces: DriveNode | undefined;
+    /* Empty until minted in the folder's workspace at prepare (see mintIds). */
     nodeId: string;
     versionId: string;
     objectId: string;
+    /* The seeds the ids were derived from, sent with begin; null until minted. */
+    seeds: IdSeeds | null;
+    signAs: UploadSignatures;
     uploadId: string | null;
     keyEpoch: number;
     /* The journal row, once begin has succeeded; null before, and for finished uploads. */
@@ -165,6 +189,17 @@ type Internal = {
     backoff: Set<ReturnType<typeof setTimeout>>;
     generation: number;
 };
+
+/*
+ * What an upload signs when nothing says otherwise: ordinary for a file the
+ * person holds; for a copy journaled before copies said how to sign, re-sealed,
+ * as every copy was then.
+ */
+function signaturesOf(origin: UploadOrigin, signAs: UploadSignatures | undefined) {
+    if (signAs) return signAs;
+    const form: SignatureForm = origin === 'copy' ? 'resealed' : 'ordinary';
+    return { metadata: form, version: form };
+}
 
 /* Every upload lands in its folder's workspace: the owner's, for a folder shared with an editor. */
 function workspaceOf(u: Internal) {
@@ -280,6 +315,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         maxAttempts = 8,
         now = () => Date.now(),
         offline = isOffline,
+        newId = mintScopedId,
     } = options;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
@@ -524,6 +560,22 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
 
     /* Begin: node envelopes (new file), content key, and the server's reservation. */
+    /*
+     * The upload's ids, derived in the workspace it lands in (the owner's, for a
+     * folder shared with an editor) from fresh seeds the server derives again.
+     * Minted once per attempt: a begin sent again reuses them and their seeds.
+     */
+    async function mintIds(u: Internal, workspaceId: string) {
+        if (u.seeds) return;
+        const node = u.replaces ? null : await newId('node', workspaceId);
+        const version = await newId('version', workspaceId);
+        const object = await newId('object', workspaceId);
+        u.nodeId = node ? node.id : u.replaces!.id;
+        u.versionId = version.id;
+        u.objectId = object.id;
+        u.seeds = { node: node?.seed ?? null, version: version.seed, object: object.seed };
+    }
+
     async function prepare(u: Internal) {
         const generation = u.generation;
         const file = u.file;
@@ -542,6 +594,9 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (options.thumbnail && !u.thumbnail)
             u.thumbnail = options.thumbnail(file, u.item.mime).catch(() => null);
         const workspaceId = workspaceOf(u);
+        await mintIds(u, workspaceId);
+        if (u.generation !== generation) return;
+        const seeds = u.seeds!;
         const metadata: NodeMetadata = {
             name: u.item.name,
             mime: u.item.mime,
@@ -570,8 +625,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                         parentKeyEpoch: parent.keyEpoch,
                         keyEpoch: from,
                         metadata,
-                        // A saved copy re-locks someone else's file: it vouches for nothing more.
-                        resealed: u.item.origin === 'copy',
+                        // A saved copy is signed by where it came from: saved from a link,
+                        // re-locked when the original did not verify, ordinary when it did.
+                        signAs: u.signAs.metadata,
                     },
                 ],
             });
@@ -584,6 +640,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             node = {
                 existing: false,
                 id: u.nodeId,
+                idSeed: seeds.node!,
                 parentId: parent.id,
                 parentKeyEpoch: parent.keyEpoch,
                 keyEpoch: from,
@@ -605,7 +662,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             plaintextSize: u.item.size,
             thumbnail:
                 thumbnail && thumbnail.size ? new Uint8Array(await thumbnail.arrayBuffer()) : null,
-            resealed: u.item.origin === 'copy',
+            signAs: u.signAs.version,
         });
         u.prepared = true;
         if (u.generation !== generation) return;
@@ -614,7 +671,9 @@ export function createTransferManager(options: TransferManagerOptions) {
         const begun = await api.beginUpload(workspaceId, {
             node,
             versionId: u.versionId,
+            versionIdSeed: seeds.version,
             objectId: u.objectId,
+            objectIdSeed: seeds.object,
             contentKeyEnvelope: prepared.contentKeyEnvelope,
             versionSignature: prepared.versionSignature,
             contentNonce: prepared.contentNonce,
@@ -635,6 +694,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             nodeId: u.nodeId,
             versionId: u.versionId,
             objectId: u.objectId,
+            idSeeds: seeds,
             parentId: parent.id,
             parentName: parent.name,
             parentKeyEpoch: parent.keyEpoch,
@@ -656,6 +716,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             },
             handle: u.handle,
             origin: u.item.origin,
+            signAs: u.signAs,
             stash: u.stash,
             parts: {},
             expiresAt: begun.upload.expiresAt,
@@ -847,7 +908,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 objectId: u.objectId,
                 nodeId: replaces.id,
                 versionId: u.versionId,
-                resealed: u.item.origin === 'copy',
+                signAs: u.signAs.version,
             });
             try {
                 return await api.attachUpload(workspaceId, u.uploadId, {
@@ -862,7 +923,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             }
         }
         const from = await takeEpoch(workspaceId);
-        const nodeId = crypto.randomUUID();
+        const { id: nodeId, seed: nodeIdSeed } = await newId('node', workspaceId);
         const name = conflictCopyName(u.item.name);
         const { nodes } = await rpc('driveCreateNodes', {
             workspaceId,
@@ -881,7 +942,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                             ? new Date(u.file.lastModified).toISOString()
                             : null,
                     },
-                    resealed: u.item.origin === 'copy',
+                    signAs: u.signAs.metadata,
                 },
             ],
         });
@@ -890,12 +951,13 @@ export function createTransferManager(options: TransferManagerOptions) {
             objectId: u.objectId,
             nodeId,
             versionId: u.versionId,
-            resealed: u.item.origin === 'copy',
+            signAs: u.signAs.version,
         });
         const result = await api.attachUpload(workspaceId, u.uploadId, {
             mode: 'sibling',
             node: {
                 id: nodeId,
+                idSeed: nodeIdSeed,
                 parentId: parent.id,
                 parentKeyEpoch: parent.keyEpoch,
                 keyEpoch: from,
@@ -974,9 +1036,11 @@ export function createTransferManager(options: TransferManagerOptions) {
             handle: null,
             parent,
             replaces: undefined,
-            nodeId: crypto.randomUUID(),
-            versionId: crypto.randomUUID(),
-            objectId: crypto.randomUUID(),
+            nodeId: '',
+            versionId: '',
+            objectId: '',
+            seeds: null,
+            signAs: signaturesOf(item.origin, undefined),
             uploadId: null,
             keyEpoch: 0,
             entry: null,
@@ -1031,6 +1095,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.replaces = input.replaces;
             u.handle = input.handle ?? null;
             u.stash = input.stash ?? null;
+            u.signAs = signaturesOf(u.item.origin, input.signAs);
             if (input.replaces) u.nodeId = input.replaces.id;
             // On disk before anything else happens, so a reload forgets no file that was waiting.
             u.queued = {
@@ -1048,6 +1113,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 },
                 handle: u.handle,
                 origin: u.item.origin,
+                signAs: u.signAs,
                 stash: u.stash,
                 createdAt: now(),
                 updatedAt: now(),
@@ -1154,9 +1220,11 @@ export function createTransferManager(options: TransferManagerOptions) {
         u.generation++;
         u.uploadId = null;
         u.prepared = false;
-        u.versionId = crypto.randomUUID();
-        u.objectId = crypto.randomUUID();
-        if (!u.replaces) u.nodeId = crypto.randomUUID();
+        // Fresh ids, minted again in the folder's workspace at the next prepare.
+        u.seeds = null;
+        u.versionId = '';
+        u.objectId = '';
+        if (!u.replaces) u.nodeId = '';
         u.parts.clear();
         u.digests.clear();
         u.urls.clear();
@@ -1484,9 +1552,12 @@ export function createTransferManager(options: TransferManagerOptions) {
             );
             u.handle = entry.handle;
             u.stash = stash;
+            u.signAs = signaturesOf(u.item.origin, entry.signAs);
             u.nodeId = entry.nodeId;
             u.versionId = entry.versionId;
             u.objectId = entry.objectId;
+            // Kept so a begin sent again for these ids carries the seeds that made them.
+            u.seeds = entry.idSeeds ?? null;
             u.uploadId = entry.uploadId;
             u.keyEpoch = entry.keyEpoch;
             u.entry = entry;
@@ -1533,6 +1604,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             );
             u.handle = queued.handle;
             u.stash = queued.stash;
+            u.signAs = signaturesOf(u.item.origin, queued.signAs);
             u.queued = queued;
             if (queued.replacesId) u.nodeId = queued.replacesId;
             restoredItem(u);

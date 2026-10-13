@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
+import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
 import {
     Notice,
     Opening,
@@ -148,6 +148,9 @@ export function Preview({
                                               .filter(Boolean)
                                               .join(' · ')}
                                 </DialogDescription>
+                                {!version && (
+                                    <SavedFromLinkLine node={current} className="leading-snug" />
+                                )}
                             </div>
                             {access && !version && (
                                 <span className="hidden h-8 max-w-56 shrink-0 items-center rounded-full bg-muted px-3 lg:flex">

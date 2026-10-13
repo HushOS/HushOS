@@ -1,5 +1,5 @@
 import type { Signer } from '@hushos/drive/api';
-import type { IntegrityIssue } from '@hushos/drive/trust';
+import { integrityIssues, type IntegrityIssue, type NodeIntegrity } from '@hushos/drive/trust';
 
 /*
  * The words behind an Unverified or Couldn't check mark, one verdict at a
@@ -131,4 +131,40 @@ export function markLabel(issues: IntegrityIssue[]) {
     return issues.length > 0 && issues.every((issue) => issue.integrity === 'unchecked')
         ? 'Couldn’t check'
         : 'Unverified';
+}
+
+/*
+ * The neutral line for a copy saved from a link (docs/integrity-design.md,
+ * "Saved copies"): no mark, only who saved it, named from this person's own
+ * pins, and that the original's writer is unknown. Null when there is a mark
+ * to show instead (any record that did not verify), or nothing was saved.
+ */
+export function savedLine(
+    node: {
+        integrity: NodeIntegrity | null;
+        metadataSigner?: Signer | null;
+        currentVersion: { signer?: Signer | null } | null;
+    },
+    names: SignerNames,
+): string | null {
+    const integrity = node.integrity;
+    if (!integrity) return null;
+    const issues = integrityIssues({
+        metadataSigner: node.metadataSigner ?? null,
+        currentVersion: node.currentVersion ? { signer: node.currentVersion.signer ?? null } : null,
+        integrity,
+    });
+    if (issues.length) return null;
+    const signer =
+        integrity.metadata === 'saved-from-link'
+            ? (node.metadataSigner ?? null)
+            : integrity.version === 'saved-from-link'
+              ? (node.currentVersion?.signer ?? null)
+              : undefined;
+    if (signer === undefined) return null;
+    const named = nameSigner(signer, names);
+    // A saved signature reads as saved only from someone trusted; anyone else is never named.
+    const by = named.kind === 'you' ? 'you' : named.kind === 'contact' ? named.name : null;
+    if (!by) return null;
+    return `Saved from a link by ${by}. HushOS can’t confirm who made the original.`;
 }

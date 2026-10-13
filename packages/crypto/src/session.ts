@@ -335,10 +335,11 @@ export type CryptoRequests = {
     /* Opens node keys and metadata, parents before children; keys stay cached. */
     driveOpenNodes: { workspaceId: string; nodes: DriveNodeEnvelopes[] };
     /*
-     * A rename: the metadata sealed at its next version, and signed. `resealed`
-     * signs the re-sealed statement, for a record whose current metadata did
-     * not verify: the rest of it (type, size, date) is carried over from
-     * something this person cannot vouch for.
+     * A rename: the metadata sealed at its next version, and signed. `signAs`
+     * is the statement (ordinary by default): `resealed` for a record whose
+     * current metadata did not verify, since the rest of it (type, size, date)
+     * is carried over from something this person cannot vouch for, and `saved`
+     * for one that verified as saved from a link.
      */
     driveSealMetadata: {
         workspaceId: string;
@@ -346,7 +347,7 @@ export type CryptoRequests = {
         kind: NodeKind;
         metadataVersion: number;
         metadata: NodeMetadata;
-        resealed?: boolean;
+        signAs?: SignatureForm;
     };
     /*
      * Who wrote each record, checked against keys the caller trusts: `signers`
@@ -384,8 +385,8 @@ export type CryptoRequests = {
         plaintextSize: number;
         /* The rendered thumbnail, sealed here as the object's trailer; null or empty for none. */
         thumbnail?: Uint8Array | null;
-        /* Sign the re-sealed version statement: the bytes are a copy of something not verified (see DriveNodeInput). */
-        resealed?: boolean;
+        /* The version statement to sign (see DriveNodeInput): a saved copy signs `saved` or `resealed`. */
+        signAs?: SignatureForm;
     };
     /*
      * Reopen reinstates an upload after a reload or a lock from what the journal
@@ -416,8 +417,8 @@ export type CryptoRequests = {
         objectId: string;
         nodeId: string;
         versionId: string;
-        /* As for prepare: a copy of something not verified is signed re-sealed. */
-        resealed?: boolean;
+        /* As for prepare. */
+        signAs?: SignatureForm;
     };
     /* The plaintext digest of one chunk, to prove a re-read file is the one that was journaled. */
     driveUploadDigest: { objectId: string; file: Blob; index: number };
@@ -508,12 +509,13 @@ export type DriveNodeInput = {
     /* Signed with the metadata: a folder's name cannot be passed off as a file's. */
     kind: NodeKind;
     /*
-     * Sign the re-sealed statement rather than the ordinary one: the metadata
-     * comes from a record this person did not verify (a folder saved from a
-     * link or a share, a copy of an unverified one), so they re-lock it
-     * without vouching for who wrote it.
+     * The statement the metadata is signed with, ordinary by default: `saved`
+     * for what a save from a link creates (its files and folders), `resealed`
+     * for metadata taken from a record this person did not verify (a copy of
+     * an unverified item), which they re-lock without vouching for who wrote
+     * it. See copyForm in ./signatures.
      */
-    resealed?: boolean;
+    signAs?: SignatureForm;
     parentId: string;
     parentKeyEpoch: number;
     keyEpoch: number;
@@ -2064,7 +2066,7 @@ export function createCryptoSession() {
                                     metadataVersion: 1,
                                 },
                                 metadataEnvelope,
-                                node.resealed === true ? 'resealed' : 'ordinary',
+                                node.signAs ?? 'ordinary',
                             ),
                         });
                         created.push({ id: node.id, key, epoch: node.keyEpoch });
@@ -2184,7 +2186,7 @@ export function createCryptoSession() {
                     metadataSignature: await signMetadata(
                         { workspaceId, nodeId, kind, metadataVersion },
                         metadataEnvelope,
-                        message.input.resealed === true ? 'resealed' : 'ordinary',
+                        message.input.signAs ?? 'ordinary',
                     ),
                 };
             }
@@ -2300,7 +2302,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
-                        message.input.resealed === true ? 'resealed' : 'ordinary',
+                        message.input.signAs ?? 'ordinary',
                     ),
                     chunkCount: chunkCount(length),
                     ciphertextSize: ciphertextSize(CONTENT_SUITE, plaintextSize, thumbnailBytes),
@@ -2398,7 +2400,7 @@ export function createCryptoSession() {
                     versionSignature: await signVersion(
                         { workspaceId, nodeId, versionId, objectId, contentSuite: CONTENT_SUITE },
                         envelope,
-                        message.input.resealed === true ? 'resealed' : 'ordinary',
+                        message.input.signAs ?? 'ordinary',
                     ),
                 };
             }

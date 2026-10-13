@@ -3,8 +3,10 @@ import { fingerprint, keyDigest } from '@hushos/crypto/fingerprint';
 import { pinVerified } from '@hushos/crypto/pins';
 import {
     comparePin,
+    copySignatureForms,
     granterKeysOf,
     integrityIssues,
+    signatureFormFor,
     pinAfterSuccession,
     replacementUnseen,
     signersFromPins,
@@ -195,6 +197,23 @@ describe('what an item shows', () => {
         ]);
     });
 
+    test('a copy saved from a link is no issue; a saved name over an unverified version still is', () => {
+        expect(
+            integrityIssues({
+                metadataSigner: maya,
+                currentVersion: { signer: maya },
+                integrity: { metadata: 'saved-from-link', version: 'saved-from-link' },
+            }),
+        ).toEqual([]);
+        expect(
+            integrityIssues({
+                metadataSigner: maya,
+                currentVersion: { signer: sam },
+                integrity: { metadata: 'saved-from-link', version: 'resealed' },
+            }),
+        ).toEqual([{ record: 'version', integrity: 'resealed', signer: sam }]);
+    });
+
     test('every verdict but verified is an issue: unsigned, re-sealed, retired and unchecked included', () => {
         for (const integrity of [
             'unsigned',
@@ -219,5 +238,64 @@ describe('what an item shows', () => {
                 integrity: { metadata: 'unchecked', version: 'bad-signature' },
             })[0]!.integrity,
         ).toBe('bad-signature');
+    });
+});
+
+describe('what a copy, a rename or a recreated folder is signed with', () => {
+    const issues = [
+        'resealed',
+        'retired-key',
+        'unknown-signer',
+        'bad-signature',
+        'unsigned',
+        'unchecked',
+    ] as const;
+
+    test('from a link: saved, files and folders alike, whatever the original showed', () => {
+        for (const prior of [...issues, 'verified', 'saved-from-link', null] as const) {
+            expect(signatureFormFor(prior, 'link')).toBe('saved');
+            expect(
+                copySignatureForms(
+                    { kind: 'file', integrity: prior ? { metadata: prior, version: prior } : null },
+                    'link',
+                ),
+            ).toEqual({ metadata: 'saved', version: 'saved' });
+        }
+        expect(copySignatureForms({ kind: 'folder', integrity: null }, 'link').metadata).toBe(
+            'saved',
+        );
+    });
+
+    test('otherwise: ordinary only for what verified, saved only for what verified as saved', () => {
+        expect(signatureFormFor('verified')).toBe('ordinary');
+        expect(signatureFormFor('saved-from-link')).toBe('saved');
+        // Unverified, Couldn't check, re-sealed, retired keys, never checked: re-sealed.
+        for (const prior of [...issues, null, undefined])
+            expect(signatureFormFor(prior)).toBe('resealed');
+    });
+
+    test('a file’s two records are chosen apart, so a verified name never covers unverified content', () => {
+        expect(
+            copySignatureForms(
+                { kind: 'file', integrity: { metadata: 'verified', version: 'unknown-signer' } },
+                'drive',
+            ),
+        ).toEqual({ metadata: 'ordinary', version: 'resealed' });
+        expect(
+            copySignatureForms(
+                { kind: 'file', integrity: { metadata: 'verified', version: null } },
+                'drive',
+            ),
+        ).toEqual({ metadata: 'ordinary', version: 'resealed' });
+        expect(
+            copySignatureForms(
+                { kind: 'file', integrity: { metadata: 'verified', version: 'verified' } },
+                'drive',
+            ),
+        ).toEqual({ metadata: 'ordinary', version: 'ordinary' });
+        expect(copySignatureForms({ kind: 'file', integrity: null }, 'drive')).toEqual({
+            metadata: 'resealed',
+            version: 'resealed',
+        });
     });
 });

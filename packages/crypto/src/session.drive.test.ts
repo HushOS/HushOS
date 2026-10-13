@@ -20,9 +20,11 @@ import { decode, encode } from './keys';
 import sodium from 'libsodium-wrappers';
 import {
     metadataResealedStatement,
+    metadataSavedStatement,
     metadataStatement,
     signStatement,
     verifyStatement,
+    versionSavedStatement,
     versionStatement,
 } from './signatures';
 import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
@@ -36,10 +38,10 @@ import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const WS = '22222222-2222-4222-8222-222222222222';
-const ids = ['a', 'b', 'c', 'd', 'f'].map(
+const ids = ['a', 'b', 'c', 'd', 'f', 'e'].map(
     (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
 );
-const [A, B, C, D, E] = ids as [string, string, string, string, string];
+const [A, B, C, D, E, F] = ids as [string, string, string, string, string, string];
 
 async function unlockedSession() {
     const root = crypto.getRandomValues(new Uint8Array(32));
@@ -1142,7 +1144,7 @@ describe('writer signatures', () => {
             kind: 'file',
             metadataVersion: 3,
             metadata: meta('c.txt'),
-            resealed: true,
+            signAs: 'resealed',
         })) as { metadataEnvelope: string; metadataSignature: string };
         const relockedCtx = {
             workspaceId: WS,
@@ -1197,6 +1199,51 @@ describe('writer signatures', () => {
                 rewrapped.versionSignature,
             ),
         ).toBe(true);
+        // A save from a link signs the saved statements, and only those, on both records.
+        const saved = (await call('driveSealMetadata', {
+            workspaceId: WS,
+            nodeId: B,
+            kind: 'file',
+            metadataVersion: 4,
+            metadata: meta('d.txt'),
+            signAs: 'saved',
+        })) as { metadataEnvelope: string; metadataSignature: string };
+        const savedCtx = { workspaceId: WS, nodeId: B, kind: 'file' as const, metadataVersion: 4 };
+        const savedEnvelope = decode(saved.metadataEnvelope);
+        expect(
+            await holds(
+                await metadataSavedStatement(savedCtx, savedEnvelope),
+                saved.metadataSignature,
+            ),
+        ).toBe(true);
+        for (const other of [
+            await metadataStatement(savedCtx, savedEnvelope),
+            await metadataResealedStatement(savedCtx, savedEnvelope),
+        ])
+            expect(await holds(other, saved.metadataSignature)).toBe(false);
+        const savedVersion = (await call('driveUploadRewrap', {
+            workspaceId: WS,
+            objectId: D,
+            nodeId: B,
+            versionId: F,
+            signAs: 'saved',
+        })) as { contentKeyEnvelope: string; versionSignature: string };
+        const savedVersionCtx = { ...versionCtx, versionId: F };
+        expect(
+            await holds(
+                await versionSavedStatement(
+                    savedVersionCtx,
+                    decode(savedVersion.contentKeyEnvelope),
+                ),
+                savedVersion.versionSignature,
+            ),
+        ).toBe(true);
+        expect(
+            await holds(
+                await versionStatement(savedVersionCtx, decode(savedVersion.contentKeyEnvelope)),
+                savedVersion.versionSignature,
+            ),
+        ).toBe(false);
     });
 
     test('nothing is written unsigned: without the identity open, writes are refused', async () => {

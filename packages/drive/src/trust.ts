@@ -2,7 +2,7 @@ import type { DriveSigners } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
 import { fingerprint, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
 import { pinVerified } from '@hushos/crypto/pins';
-import type { Integrity } from '@hushos/crypto/signatures';
+import type { Integrity, SignatureForm } from '@hushos/crypto/signatures';
 import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
 
 /*
@@ -12,7 +12,41 @@ import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
  * Pure, Web Crypto only, so it runs on the main thread and in tests alike.
  */
 
-export type { Integrity };
+export type { Integrity, SignatureForm };
+
+/*
+ * The statement a record written again is signed with, from what the original
+ * checked as (docs/integrity-design.md, "Saved copies, by where they came
+ * from"). A copy saved from a link is `saved`, whatever the original was: a
+ * visitor has nothing to check it against. Otherwise, for a copy, a rename or
+ * a folder recreated by a copy: a verified original stays ordinary, one that
+ * verified as saved from a link stays saved, and anything else (Unverified,
+ * Couldn't check, re-sealed, retired keys, never checked) is re-sealed, so
+ * writing it again never turns it into a record this person vouches for.
+ */
+export function signatureFormFor(
+    prior: Integrity | null | undefined,
+    source: 'link' | 'drive' = 'drive',
+): SignatureForm {
+    if (source === 'link') return 'saved';
+    if (prior === 'verified') return 'ordinary';
+    if (prior === 'saved-from-link') return 'saved';
+    return 'resealed';
+}
+
+/* Both records of a file written again from `node` (see signatureFormFor): its metadata and its current version. */
+export function copySignatureForms(
+    node: { kind: 'folder' | 'file'; integrity: NodeIntegrity | null },
+    source: 'link' | 'drive',
+): { metadata: SignatureForm; version: SignatureForm } {
+    return {
+        metadata: signatureFormFor(node.integrity?.metadata, source),
+        version: signatureFormFor(
+            node.kind === 'file' ? node.integrity?.version : node.integrity?.metadata,
+            source,
+        ),
+    };
+}
 
 /*
  * A pin after a followed succession, as every client keeps it:

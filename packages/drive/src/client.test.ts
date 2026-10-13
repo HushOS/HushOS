@@ -56,7 +56,11 @@ function ledgerOf(state: Awaited<ReturnType<SharingLedger['read']>>): SharingLed
     };
 }
 
-function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
+function harness(
+    shareSuites: Record<string, 1 | 2 | 3> = {},
+    /* What the worker calls the root's metadata; A's is always someone not checked. */
+    rootVerdict = 'verified',
+) {
     const sealedFor: string[] = [];
     const resealed: string[] = [];
     const rotated: { shares: string[]; links: string[] }[] = [];
@@ -64,7 +68,7 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
     const verified: { signers: unknown; nodes: unknown[] }[] = [];
     const opened: { granterSigningPublicKey: string | null }[] = [];
     const rotatedWith: unknown[] = [];
-    const sealedMetadata: { nodeId: string; resealed: unknown }[] = [];
+    const sealedMetadata: { nodeId: string; signAs: unknown }[] = [];
     let workCalls = 0;
     const api = {
         workspace: async () => ({
@@ -168,7 +172,7 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
                 return {
                     nodes: nodes.map((n) => ({
                         id: n.id,
-                        metadata: n.id === A ? 'unknown-signer' : 'verified',
+                        metadata: n.id === A ? 'unknown-signer' : rootVerdict,
                         versions: n.versions.map((v) => ({ id: v.id, integrity: 'bad-signature' })),
                     })),
                 };
@@ -183,7 +187,7 @@ function harness(shareSuites: Record<string, 1 | 2 | 3> = {}) {
             case 'driveOpenLink':
                 return { opened: true };
             case 'driveSealMetadata':
-                sealedMetadata.push({ nodeId: input.nodeId as string, resealed: input.resealed });
+                sealedMetadata.push({ nodeId: input.nodeId as string, signAs: input.signAs });
                 return { metadataEnvelope: 'renamed', metadataSignature: 'rsig' };
             case 'driveRotateNodes': {
                 const nodes = input.nodes as {
@@ -463,8 +467,21 @@ describe('signatures', () => {
         await client.rename(listing.children[0]!, 'renamed');
         await client.rename(listing.folder, 'top');
         expect(h.sealedMetadata).toEqual([
-            { nodeId: A, resealed: true },
-            { nodeId: ROOT, resealed: false },
+            { nodeId: A, signAs: 'resealed' },
+            { nodeId: ROOT, signAs: 'ordinary' },
+        ]);
+    });
+
+    test('a rename keeps a copy saved from a link saved only when it verified as saved', async () => {
+        const h = harness({}, 'saved-from-link');
+        const client = createDriveClient(h.rpc, h.api, { signers: async () => ({}) });
+        await client.open('owner');
+        const listing = await client.listFolder(ROOT);
+        await client.rename(listing.folder, 'top');
+        await client.rename(listing.children[0]!, 'renamed');
+        expect(h.sealedMetadata).toEqual([
+            { nodeId: ROOT, signAs: 'saved' },
+            { nodeId: A, signAs: 'resealed' },
         ]);
     });
 
@@ -481,7 +498,7 @@ describe('signatures', () => {
         const listing = await client.listFolder(ROOT);
         failing = true;
         await client.rename(listing.folder, 'top');
-        expect(h.sealedMetadata).toEqual([{ nodeId: ROOT, resealed: true }]);
+        expect(h.sealedMetadata).toEqual([{ nodeId: ROOT, signAs: 'resealed' }]);
     });
 
     test('a share sealed under keys the granter replaced asks for it to be shared again', async () => {
