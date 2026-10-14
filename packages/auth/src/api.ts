@@ -6,7 +6,7 @@ import type {
 } from '@hushos/crypto';
 import type { SettingsEnvelope } from '@hushos/crypto/contacts';
 export type { ContactPin, Settings, SettingsEnvelope } from '@hushos/crypto/contacts';
-import type { IdentityEnvelope, IdentityKem } from '@hushos/crypto/identity';
+import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
 import type { AccountKeyEnvelope, AuthUser, SessionUser, SignupIntent } from './protocol';
 
@@ -48,10 +48,22 @@ export type ContactIdentity = {
     email: string;
     /* Raised by each succession; a pin remembers it to ask for the chain from there. */
     keyVersion: number;
+} & PublicIdentity;
+
+/*
+ * Someone's public keys as the server serves them (docs/identity-pq-design.md).
+ * A version 2 identity carries all four keys and its keys statement; a version
+ * 1 identity (not yet upgraded) has no ML-DSA key and no statement, and is
+ * trusted with nothing.
+ */
+export type PublicIdentity = {
+    keyVersion: number;
+    identityVersion: 1 | 2;
     encryptionPublicKey: string;
     signingPublicKey: string;
-    /* The ML-KEM key and the signing key's binding of it; null until the person unlocks on the new code. */
-    kem: { publicKey: string; signature: string } | null;
+    mlDsaPublicKey: string | null;
+    kemPublicKey: string | null;
+    keysSignature: string | null;
 };
 
 /*
@@ -65,9 +77,12 @@ export type SuccessionLink = {
     newKeyVersion: number;
     oldEncryptionPublicKey: string;
     oldSigningPublicKey: string;
+    oldMlDsaPublicKey: string;
     newEncryptionPublicKey: string;
     newSigningPublicKey: string;
+    newMlDsaPublicKey: string;
     newKemPublicKey: string;
+    /* The old identity's hybrid signature (3373 bytes). Only version 2 links are served. */
     signature: string;
 };
 
@@ -105,8 +120,12 @@ export interface AuthApi {
     }): Promise<{ keyVersion: number }>;
     /* A contact's successions from key version `from` to the current one, in order. */
     contactSuccession(userId: string, from: number): Promise<{ links: SuccessionLink[] }>;
-    /* Gives an identity made before hybrid sharing its KEM key, once; 409 when it already has one. */
-    addIdentityKem(kem: IdentityKem): Promise<{ ok: true }>;
+    /*
+     * The upgrade of a version 1 identity to version 2 (same keys, plus ML-DSA
+     * and the keys statement). 409 when another device upgraded first: read
+     * the identity again and open that one.
+     */
+    upgradeIdentity(input: { identity: IdentityEnvelope }): Promise<{ identity: IdentityEnvelope }>;
     lookupContact(email: string): Promise<{ contact: ContactIdentity }>;
     /*
      * `settingsVersion` is the stored sequence whatever is stored (0 for

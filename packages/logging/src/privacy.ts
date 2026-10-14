@@ -104,7 +104,7 @@ const authActions = new Set([
     'delete/start',
     'delete/finish',
     'identity',
-    'identity/kem',
+    'identity/upgrade',
     'identity/succession',
     'identity/history',
     'contacts/lookup',

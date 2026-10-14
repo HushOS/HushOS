@@ -116,9 +116,11 @@ export type RotationWorkNode = NodeRow & {
         granteeUserId: string;
         granteePublicKey: Buffer;
         granteeSigningPublicKey: Buffer;
+        granteeMlDsaPublicKey: Buffer | null;
         granteeKemPublicKey: Buffer | null;
-        granteeKemSignature: Buffer | null;
+        granteeKeysSignature: Buffer | null;
         granteeKeyVersion: number;
+        granteeIdentityVersion: number;
     }[];
     links: { id: string; hasPassword: boolean; secretEnvelope: Buffer | null }[];
 };
@@ -183,9 +185,11 @@ export async function listRotationWork(input: {
                       granteeUserId: driveShares.granteeUserId,
                       granteePublicKey: accountIdentities.encryptionPublicKey,
                       granteeSigningPublicKey: accountIdentities.signingPublicKey,
+                      granteeMlDsaPublicKey: accountIdentities.mlDsaPublicKey,
                       granteeKemPublicKey: accountIdentities.kemPublicKey,
-                      granteeKemSignature: accountIdentities.kemSignature,
+                      granteeKeysSignature: accountIdentities.keysSignature,
                       granteeKeyVersion: accountIdentities.keyVersion,
+                      granteeIdentityVersion: accountIdentities.version,
                   })
                   .from(driveShares)
                   .innerJoin(
@@ -230,9 +234,11 @@ export async function listRotationWork(input: {
                             granteeUserId: s.granteeUserId,
                             granteePublicKey: s.granteePublicKey,
                             granteeSigningPublicKey: s.granteeSigningPublicKey,
+                            granteeMlDsaPublicKey: s.granteeMlDsaPublicKey,
                             granteeKemPublicKey: s.granteeKemPublicKey,
-                            granteeKemSignature: s.granteeKemSignature,
+                            granteeKeysSignature: s.granteeKeysSignature,
                             granteeKeyVersion: s.granteeKeyVersion,
+                            granteeIdentityVersion: s.granteeIdentityVersion,
                         })),
                     links: links
                         .filter((l) => l.nodeId === row.id)

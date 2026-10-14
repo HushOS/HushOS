@@ -60,7 +60,7 @@ async function shareWithGuest(node: { id: string; keyEpoch: number }) {
         granteeUserId: guest.userId,
         role: 'viewer',
         keyEpoch: node.keyEpoch,
-        shareEnvelope: randomBytes(1256),
+        shareEnvelope: randomBytes(4565),
     });
     if (shared.status !== 'ok') throw new Error(shared.status);
     return shared.share.id;

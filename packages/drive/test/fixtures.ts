@@ -155,7 +155,7 @@ export async function share(
         granteeUserId: grantee.userId,
         role,
         keyEpoch: node.keyEpoch,
-        shareEnvelope: randomBytes(1256),
+        shareEnvelope: randomBytes(4565),
     });
     if (made.status !== 'ok') throw new Error(made.status);
     return made.share.id;

@@ -196,6 +196,39 @@ describe('creating', () => {
         expect(genuine.root.metadataSignature).toHaveLength(64);
     });
 
+    test('an account still on a version 1 identity signs nothing, even with its own key', async () => {
+        await resetDatabase();
+        owner = await createTestAccount();
+        // Before the post-quantum release: no ML-DSA key, no keys statement. Its client must
+        // upgrade on unlock before writing; a write that skips that is an outdated client.
+        ownerKey = await createTestIdentity(owner.userId, {
+            version: 1,
+            kemPublicKey: null,
+            kemSeedNonce: null,
+            encryptedKemSeed: null,
+            mlDsaPublicKey: null,
+            mlDsaSeedNonce: null,
+            encryptedMlDsaSeed: null,
+            keysSignature: null,
+        });
+        const id = randomUUID();
+        const envelope = metadataEnvelope();
+        const created = await drive.createRoot({
+            workspaceId: owner.workspaceId,
+            userId: owner.userId,
+            id,
+            envelopes: {
+                keyEpoch: await epoch(),
+                parentKeyEpoch: 1,
+                keyEnvelope: keyEnvelope(),
+                metadataEnvelope: envelope,
+                metadataSignature: signMetadata(ownerKey, id, 'folder', envelope),
+            },
+        });
+        expect(created.status).toBe('bad-signature');
+        expect(await nodeRow(id)).toBeNull();
+    });
+
     test('one bad signature refuses the whole folder batch', async () => {
         const good = { id: randomUUID(), envelope: metadataEnvelope() };
         const bad = { id: randomUUID(), envelope: metadataEnvelope() };

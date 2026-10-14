@@ -337,7 +337,7 @@ export async function selectNodes(tx: Tx, ids: string[]) {
 
 /*
  * Whether every statement carries a valid signature by `userId`'s current
- * identity signing key, in either form (ordinary, or re-sealed for a record
+ * version 2 identity's Ed25519 key, in either form (ordinary, or re-sealed for a record
  * the writer re-locked without vouching for it). Checked inside the writing
  * transaction, before any row changes, so a write either lands signed or not
  * at all.
@@ -345,10 +345,15 @@ export async function selectNodes(tx: Tx, ids: string[]) {
 export type { SignedStatement };
 export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
     const [identity] = await tx
-        .select({ signingPublicKey: accountIdentities.signingPublicKey })
+        .select({
+            version: accountIdentities.version,
+            signingPublicKey: accountIdentities.signingPublicKey,
+        })
         .from(accountIdentities)
         .where(eq(accountIdentities.userId, userId));
-    if (!identity) return false;
+    // A version 1 identity signs nothing: clients upgrade it on unlock before any write
+    // (docs/identity-pq-design.md 5), so only an outdated client gets here.
+    if (!identity || identity.version !== 2) return false;
     return statements.every((statement) => verifySigned(identity.signingPublicKey, statement));
 }
 /* The metadata statement for a node's envelope as it is about to be stored. */
@@ -2767,15 +2772,31 @@ export async function authorizeUpload(userId: string, workspaceId: string, uploa
 }
 
 /*
- * A suite 3 share envelope, 1256 bytes, the only kind written or served: a
- * row of suite 1 or 2 left from before grants nothing and is shown to nobody
- * but its granter, who can re-seal or revoke it.
+ * A suite 4 share envelope, 4565 bytes (the granter's hybrid signature,
+ * docs/identity-pq-design.md), the only kind written or served: a row of suite
+ * 1, 2 or 3 left from before grants nothing and is shown to nobody but its
+ * granter, whose next upgrade pass re-seals it, or who revokes it.
  */
-export const SHARE_ENVELOPE_BYTES = 1256;
+export const SHARE_ENVELOPE_BYTES = 4565;
 const servedShare = sql`octet_length(${driveShares.shareEnvelope}) = ${SHARE_ENVELOPE_BYTES}`;
 
-/* A share's suite, told apart by length: 72 bytes is 1, 1160 is 2 (hybrid), 1256 is 3 (signed). */
-const shareSuite = sql<number>`case octet_length(${driveShares.shareEnvelope}) when 72 then 1 when 1160 then 2 else 3 end`;
+/* A share's suite, told apart by length: 72 bytes is 1, 1160 is 2 (hybrid), 1256 is 3 (signed), 4565 is 4 (hybrid signature). */
+const shareSuite = sql<number>`case octet_length(${driveShares.shareEnvelope}) when 72 then 1 when 1160 then 2 when 1256 then 3 else 4 end`;
+
+/*
+ * Someone's public identity as a share shows it (docs/identity-pq-design.md):
+ * all four public keys and a version 2 identity's keys statement; a version 1
+ * identity has no ML-DSA key and no statement, and clients trust it with nothing.
+ */
+export const publicIdentityColumns = {
+    keyVersion: accountIdentities.keyVersion,
+    identityVersion: accountIdentities.version,
+    encryptionPublicKey: accountIdentities.encryptionPublicKey,
+    signingPublicKey: accountIdentities.signingPublicKey,
+    mlDsaPublicKey: accountIdentities.mlDsaPublicKey,
+    kemPublicKey: accountIdentities.kemPublicKey,
+    keysSignature: accountIdentities.keysSignature,
+};
 
 export type CreateShare = {
     workspaceId: string;
@@ -2887,15 +2908,13 @@ export async function listSharesForGrantee(userId: string) {
                 ),
                 createdAt: driveShares.createdAt,
                 changeSeq: workspaces.changeSeq,
+                // A suite 4 share is signed by the granter: the grantee checks both halves
+                // against the pin, and after a succession asks for the chain from the pinned version.
                 granter: {
                     id: users.id,
                     name: users.name,
                     email: users.email,
-                    encryptionPublicKey: accountIdentities.encryptionPublicKey,
-                    // A suite 3 share is signed by the granter: the grantee checks it against
-                    // the pin, and after a succession asks for the chain from the pinned version.
-                    signingPublicKey: accountIdentities.signingPublicKey,
-                    keyVersion: accountIdentities.keyVersion,
+                    ...publicIdentityColumns,
                 },
             })
             .from(driveShares)
@@ -2955,14 +2974,8 @@ export async function listSharesByGranter(userId: string) {
                 suite: shareSuite,
                 grantee: { id: users.id, name: users.name, email: users.email },
                 // The grantee's served identity, for the owner to check against the pin
-                // and re-seal a suite 1 share to a KEM key that appeared since.
-                granteeIdentity: {
-                    encryptionPublicKey: accountIdentities.encryptionPublicKey,
-                    signingPublicKey: accountIdentities.signingPublicKey,
-                    kemPublicKey: accountIdentities.kemPublicKey,
-                    kemSignature: accountIdentities.kemSignature,
-                    keyVersion: accountIdentities.keyVersion,
-                },
+                // before re-sealing an older share in suite 4.
+                granteeIdentity: publicIdentityColumns,
             })
             .from(driveShares)
             .innerJoin(users, eq(users.id, driveShares.granteeUserId))

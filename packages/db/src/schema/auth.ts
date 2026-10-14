@@ -273,17 +273,32 @@ export const accountIdentities = pgTable(
         kemPublicKey: bytea('kem_public_key'),
         kemSeedNonce: bytea('kem_seed_nonce'),
         encryptedKemSeed: bytea('encrypted_kem_seed'),
+        // Version 1 only: the Ed25519 binding, no longer a path to trust.
         kemSignature: bytea('kem_signature'),
+        /*
+         * Version 2 (docs/identity-pq-design.md): the ML-DSA-65 half of the
+         * person's hybrid signature, its 32-byte seed wrapped under the root,
+         * and the keys statement over all four public keys, signed with both
+         * signing keys (3373 bytes). Null on a version 1 identity.
+         */
+        mlDsaPublicKey: bytea('ml_dsa_public_key'),
+        mlDsaSeedNonce: bytea('ml_dsa_seed_nonce'),
+        encryptedMlDsaSeed: bytea('encrypted_ml_dsa_seed'),
+        keysSignature: bytea('keys_signature'),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [
         check(
             'account_identities_versions_valid',
-            sql`${table.version} = 1 and ${table.keyVersion} > 0`,
+            sql`${table.version} in (1, 2) and ${table.keyVersion} > 0`,
         ),
         check(
             'account_identities_kem_valid',
-            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (${table.kemPublicKey} is not null and ${table.kemSeedNonce} is not null and ${table.encryptedKemSeed} is not null and ${table.kemSignature} is not null and octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and octet_length(${table.kemSignature}) = 64)`,
+            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (${table.kemPublicKey} is not null and ${table.kemSeedNonce} is not null and ${table.encryptedKemSeed} is not null and octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and (${table.kemSignature} is null or octet_length(${table.kemSignature}) = 64))`,
+        ),
+        check(
+            'account_identities_ml_dsa_valid',
+            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null) or (${table.version} = 2 and ${table.kemPublicKey} is not null and ${table.kemSignature} is null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373)`,
         ),
         check(
             'account_identities_lengths_valid',
@@ -319,6 +334,10 @@ export const accountIdentityHistory = pgTable(
         kemSeedNonce: bytea('kem_seed_nonce'),
         encryptedKemSeed: bytea('encrypted_kem_seed'),
         kemSignature: bytea('kem_signature'),
+        mlDsaPublicKey: bytea('ml_dsa_public_key'),
+        mlDsaSeedNonce: bytea('ml_dsa_seed_nonce'),
+        encryptedMlDsaSeed: bytea('encrypted_ml_dsa_seed'),
+        keysSignature: bytea('keys_signature'),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
         replacedAt: timestamp('replaced_at', { withTimezone: true }).defaultNow().notNull(),
         // The succession: what replaced this identity, signed by this identity's signing key.
@@ -326,21 +345,28 @@ export const accountIdentityHistory = pgTable(
         newEncryptionPublicKey: bytea('new_encryption_public_key').notNull(),
         newSigningPublicKey: bytea('new_signing_public_key').notNull(),
         newKemPublicKey: bytea('new_kem_public_key').notNull(),
+        // Null on successions from a version 1 identity, made before hybrid signatures.
+        newMlDsaPublicKey: bytea('new_ml_dsa_public_key'),
+        // 64 bytes (Ed25519, version 1 statements) or 3373 (hybrid, version 2).
         successionSignature: bytea('succession_signature').notNull(),
     },
     (table) => [
         primaryKey({ columns: [table.userId, table.keyVersion] }),
         check(
             'account_identity_history_versions_valid',
-            sql`${table.version} = 1 and ${table.keyVersion} > 0 and ${table.replacedByKeyVersion} > ${table.keyVersion}`,
+            sql`${table.version} in (1, 2) and ${table.keyVersion} > 0 and ${table.replacedByKeyVersion} > ${table.keyVersion}`,
         ),
         check(
             'account_identity_history_kem_valid',
-            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and octet_length(${table.kemSignature}) = 64)`,
+            sql`(${table.kemPublicKey} is null and ${table.kemSeedNonce} is null and ${table.encryptedKemSeed} is null and ${table.kemSignature} is null) or (octet_length(${table.kemPublicKey}) = 1184 and octet_length(${table.kemSeedNonce}) = 24 and octet_length(${table.encryptedKemSeed}) = 80 and (${table.kemSignature} is null or octet_length(${table.kemSignature}) = 64))`,
+        ),
+        check(
+            'account_identity_history_ml_dsa_valid',
+            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null and ${table.newMlDsaPublicKey} is null and octet_length(${table.successionSignature}) = 64) or (${table.version} = 2 and ${table.kemPublicKey} is not null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373 and octet_length(${table.newMlDsaPublicKey}) = 1952 and octet_length(${table.successionSignature}) = 3373)`,
         ),
         check(
             'account_identity_history_lengths_valid',
-            sql`octet_length(${table.wrappingSalt}) = 32 and octet_length(${table.encryptionPublicKey}) = 32 and octet_length(${table.encryptionPrivateKeyNonce}) = 24 and octet_length(${table.encryptedEncryptionPrivateKey}) = 48 and octet_length(${table.signingPublicKey}) = 32 and octet_length(${table.signingSeedNonce}) = 24 and octet_length(${table.encryptedSigningSeed}) = 48 and octet_length(${table.newEncryptionPublicKey}) = 32 and octet_length(${table.newSigningPublicKey}) = 32 and octet_length(${table.newKemPublicKey}) = 1184 and octet_length(${table.successionSignature}) = 64`,
+            sql`octet_length(${table.wrappingSalt}) = 32 and octet_length(${table.encryptionPublicKey}) = 32 and octet_length(${table.encryptionPrivateKeyNonce}) = 24 and octet_length(${table.encryptedEncryptionPrivateKey}) = 48 and octet_length(${table.signingPublicKey}) = 32 and octet_length(${table.signingSeedNonce}) = 24 and octet_length(${table.encryptedSigningSeed}) = 48 and octet_length(${table.newEncryptionPublicKey}) = 32 and octet_length(${table.newSigningPublicKey}) = 32 and octet_length(${table.newKemPublicKey}) = 1184`,
         ),
     ],
 );

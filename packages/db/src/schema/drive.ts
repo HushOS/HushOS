@@ -308,9 +308,10 @@ export const driveSweeps = pgTable('drive_sweeps', {
 /*
  * A share: one node's key sealed to one grantee, with a role. The envelope's
  * length names its suite: 72 bytes sealed between the two identities' X25519
- * keys (1), 1160 with an ML-KEM-768 ciphertext beside it (2), and 1256 with an
- * ephemeral X25519 key and the granter's signature (3, the only one written
- * now; see docs/integrity-design.md). The server holds only public halves. Revocation is a timestamp the walk consults live; the previous envelope
+ * keys (1), 1160 with an ML-KEM-768 ciphertext beside it (2), 1256 with an
+ * ephemeral X25519 key and the granter's Ed25519 signature (3), and 4565 with
+ * the granter's hybrid signature (4, the only one written or served now; see
+ * docs/identity-pq-design.md). The server holds only public halves. Revocation is a timestamp the walk consults live; the previous envelope
  * exists for rotations, which re-seal the remaining shares under both keys.
  */
 export const driveShares = pgTable(
@@ -350,7 +351,7 @@ export const driveShares = pgTable(
         check('drive_shares_not_self', sql`${table.granterUserId} <> ${table.granteeUserId}`),
         check(
             'drive_shares_envelopes_valid',
-            sql`${table.keyEpoch} >= 1 and octet_length(${table.shareEnvelope}) in (72, 1160, 1256) and (${table.prevShareEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevShareEnvelope} is null or octet_length(${table.prevShareEnvelope}) in (72, 1160, 1256))`,
+            sql`${table.keyEpoch} >= 1 and octet_length(${table.shareEnvelope}) in (72, 1160, 1256, 4565) and (${table.prevShareEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevShareEnvelope} is null or octet_length(${table.prevShareEnvelope}) in (72, 1160, 1256, 4565))`,
         ),
     ],
 );

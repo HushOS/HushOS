@@ -58,10 +58,12 @@ export async function listOperators() {
     return db
         .select({
             userId: users.id,
+            identityVersion: accountIdentities.version,
             encryptionPublicKey: accountIdentities.encryptionPublicKey,
             signingPublicKey: accountIdentities.signingPublicKey,
+            mlDsaPublicKey: accountIdentities.mlDsaPublicKey,
             kemPublicKey: accountIdentities.kemPublicKey,
-            kemSignature: accountIdentities.kemSignature,
+            keysSignature: accountIdentities.keysSignature,
             keyVersion: accountIdentities.keyVersion,
         })
         .from(users)

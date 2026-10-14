@@ -225,11 +225,18 @@ describe('filing a report', () => {
     test('a key envelope is a sealed box or a hybrid envelope, and nothing between', async () => {
         const inner = await folder(rootId, rootEpoch);
         const operators = await reports.listOperators();
-        // The reporter needs each operator's full identity to seal a hybrid envelope and check the binding.
+        // The reporter needs each operator's full identity to seal a hybrid envelope and check
+        // the keys statement before it uses the KEM key.
         for (const operator of operators) {
             expect(operator.encryptionPublicKey).toHaveLength(32);
             expect(operator.signingPublicKey).toHaveLength(32);
-            expect('kemPublicKey' in operator && 'kemSignature' in operator).toBe(true);
+            for (const field of [
+                'identityVersion',
+                'mlDsaPublicKey',
+                'kemPublicKey',
+                'keysSignature',
+            ])
+                expect(field in operator).toBe(true);
         }
         const hybrid = await report(inner, {
             keys: operators.map((o) => ({
@@ -447,7 +454,7 @@ describe('removal', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: project.keyEpoch,
-            shareEnvelope: randomBytes(1256),
+            shareEnvelope: randomBytes(4565),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const linked = await drive.createLink({
@@ -720,7 +727,7 @@ describe('release', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: project.keyEpoch,
-            shareEnvelope: randomBytes(1256),
+            shareEnvelope: randomBytes(4565),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const byGuest = {
