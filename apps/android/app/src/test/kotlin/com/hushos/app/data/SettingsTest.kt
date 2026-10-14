@@ -19,7 +19,7 @@ class SettingsTest {
          "sharing":{"shares":{"node-1":["u-1"]},"links":{"link-1":"node-1"},"later":true}}
     """.trimIndent()
 
-    private fun pin(id: String, name: String) = ContactPin(id, "$name@example.org", name, "enc-$id", "sig-$id", "f-$id", "2026-10-02T00:00:00Z", null)
+    private fun pin(id: String, name: String) = ContactPin(id, "$name@example.org", name, "enc-$id", "sig-$id", "f-$id", "2026-10-02T00:00:00Z", null, null)
 
     /* What a save writes, read back as the next device would. */
     private fun roundTrip(settings: Settings) = Settings.parse(settings.text(), settings.version + 1uL)
@@ -82,13 +82,5 @@ class SettingsTest {
         assertFalse(ledger.hasLink("link-7", "node-8"))
         settings.removeLink("link-7")
         assertFalse(roundTrip(settings).ledger.hasLink("link-7", "node-7"))
-    }
-
-    @Test
-    fun aFirstPostQuantumKeyIsRememberedButNeverReplacesOneAlreadyPinned() {
-        val settings = Settings.parse(document, 4uL)
-        settings.rememberKem("u-1", "hash-a")
-        settings.rememberKem("u-1", "hash-b")
-        assertEquals("hash-a", roundTrip(settings).contacts.getValue("u-1").kemPublicKeyHash)
     }
 }

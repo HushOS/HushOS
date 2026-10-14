@@ -214,7 +214,15 @@ object Auth {
     }
 
     /*
-     * A contact's whole succession chain, in order, for the device to check link by link. Asked from the first version
+     * The upgrade of a version 1 identity to version 2 (the same X25519, Ed25519 and ML-KEM keys and key version, plus
+     * ML-DSA and the keys statement); returns the identity the server stored. A 409 (`status`) means another device
+     * upgraded first: read the identity again and open that one.
+     */
+    fun upgradeIdentity(context: Context, identity: com.hushos.core.IdentityEnvelope): com.hushos.core.IdentityEnvelope =
+        identityEnvelope(call(context, "/api/auth/identity/upgrade", JSONObject().put("identity", json(identity))).getJSONObject("identity"))
+
+    /*
+     * A contact's whole succession chain (version 2 links only), in order, for the device to check link by link. Asked from the first version
      * whatever the pin holds, so the request does not say which version this device pinned.
      */
     fun succession(context: Context, userId: String): List<com.hushos.core.SuccessionLink> {
@@ -223,28 +231,47 @@ object Auth {
             val link = links.getJSONObject(index)
             com.hushos.core.SuccessionLink(
                 link.getLong("oldKeyVersion").toULong(), link.getLong("newKeyVersion").toULong(),
-                link.getString("oldEncryptionPublicKey"), link.getString("oldSigningPublicKey"),
-                link.getString("newEncryptionPublicKey"), link.getString("newSigningPublicKey"),
+                link.getString("oldEncryptionPublicKey"), link.getString("oldSigningPublicKey"), link.getString("oldMlDsaPublicKey"),
+                link.getString("newEncryptionPublicKey"), link.getString("newSigningPublicKey"), link.getString("newMlDsaPublicKey"),
                 link.getString("newKemPublicKey"), link.getString("signature"),
             )
         }
     }
 
-    private fun identityEnvelope(json: JSONObject): com.hushos.core.IdentityEnvelope {
-        val kem = json.optJSONObject("kem")?.let { com.hushos.core.IdentityKem(it.getString("publicKey"), it.getString("seedNonce"), it.getString("encryptedSeed"), it.getString("signature")) }
+    /* An identity envelope as served: version 1 (a KEM binding at most) or 2 (ML-DSA and the keys statement). */
+    internal fun identityEnvelope(json: JSONObject): com.hushos.core.IdentityEnvelope {
+        fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
+        val kem = json.optJSONObject("kem")?.let { com.hushos.core.IdentityKem(it.getString("publicKey"), it.getString("seedNonce"), it.getString("encryptedSeed"), it.text("signature")) }
+        val mlDsa = json.optJSONObject("mlDsa")?.let { com.hushos.core.IdentityMlDsa(it.getString("publicKey"), it.getString("seedNonce"), it.getString("encryptedSeed")) }
         return com.hushos.core.IdentityEnvelope(
             json.getInt("version").toUInt(), json.getLong("keyVersion").toULong(), json.getString("wrappingSalt"),
             json.getString("encryptionPublicKey"), json.getString("encryptionPrivateKeyNonce"), json.getString("encryptedEncryptionPrivateKey"),
             json.getString("signingPublicKey"), json.getString("signingSeedNonce"), json.getString("encryptedSigningSeed"), kem,
+            mlDsa, json.text("keysSignature"),
         )
     }
 
-    private fun json(identity: com.hushos.core.IdentityEnvelope): JSONObject = JSONObject()
-        .put("version", identity.version.toInt()).put("keyVersion", identity.keyVersion.toLong()).put("wrappingSalt", identity.wrappingSalt)
-        .put("encryptionPublicKey", identity.encryptionPublicKey).put("encryptionPrivateKeyNonce", identity.encryptionPrivateKeyNonce)
-        .put("encryptedEncryptionPrivateKey", identity.encryptedEncryptionPrivateKey).put("signingPublicKey", identity.signingPublicKey)
-        .put("signingSeedNonce", identity.signingSeedNonce).put("encryptedSigningSeed", identity.encryptedSigningSeed)
-        .put("kem", identity.kem?.let { JSONObject().put("publicKey", it.publicKey).put("seedNonce", it.seedNonce).put("encryptedSeed", it.encryptedSeed).put("signature", it.signature) } ?: JSONObject.NULL)
+    /*
+     * The wire form the server's schema takes: version 2 with its ML-DSA half and keys signature and a KEM half without
+     * a binding; version 1 (only ever rewrapped, in the history) with its KEM binding when it has one.
+     */
+    internal fun json(identity: com.hushos.core.IdentityEnvelope): JSONObject {
+        val out = JSONObject()
+            .put("version", identity.version.toInt()).put("keyVersion", identity.keyVersion.toLong()).put("wrappingSalt", identity.wrappingSalt)
+            .put("encryptionPublicKey", identity.encryptionPublicKey).put("encryptionPrivateKeyNonce", identity.encryptionPrivateKeyNonce)
+            .put("encryptedEncryptionPrivateKey", identity.encryptedEncryptionPrivateKey).put("signingPublicKey", identity.signingPublicKey)
+            .put("signingSeedNonce", identity.signingSeedNonce).put("encryptedSigningSeed", identity.encryptedSigningSeed)
+        val kem = identity.kem?.let { kem ->
+            JSONObject().put("publicKey", kem.publicKey).put("seedNonce", kem.seedNonce).put("encryptedSeed", kem.encryptedSeed)
+                .also { if (identity.version == 1u && kem.signature != null) it.put("signature", kem.signature) }
+        }
+        out.put("kem", kem ?: JSONObject.NULL)
+        if (identity.version >= 2u) {
+            identity.mlDsa?.let { out.put("mlDsa", JSONObject().put("publicKey", it.publicKey).put("seedNonce", it.seedNonce).put("encryptedSeed", it.encryptedSeed)) }
+            identity.keysSignature?.let { out.put("keysSignature", it) }
+        }
+        return out
+    }
 
     private fun recoveryEnvelope(json: JSONObject) = com.hushos.core.RecoveryEnvelope(
         json.getInt("version").toUInt(), json.getLong("keyVersion").toULong(), json.getLong("recoveryVersion").toULong(),
@@ -266,10 +293,7 @@ object Auth {
     fun lookupContact(context: Context, email: String): Contact {
         val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email)).optJSONObject("contact")
             ?: throw AuthFailure("No HushOS account uses that email.")
-        val kem = json.optJSONObject("kem")
-        return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), json.getString("encryptionPublicKey"),
-            json.getString("signingPublicKey"), kem?.getString("publicKey"), kem?.getString("signature"),
-            if (json.isNull("keyVersion")) null else json.optLong("keyVersion").takeIf { it >= 1 }?.toULong())
+        return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), ServedIdentity.from(json))
     }
 
     /* The settings as stored, and the settings key wrapped under the root (null until a device stored one). */

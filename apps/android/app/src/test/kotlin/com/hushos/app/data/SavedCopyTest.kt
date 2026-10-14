@@ -6,7 +6,6 @@ import com.hushos.core.NodeKind
 import com.hushos.core.TrustedKeys
 import com.hushos.core.VersionStatement
 import com.hushos.core.base64urlEncode
-import com.hushos.core.identityFingerprint
 import com.hushos.core.metadataIntegrity
 import com.hushos.core.metadataSavedSign
 import com.hushos.core.metadataSign
@@ -41,8 +40,7 @@ class SavedCopyTest {
     private val keyEnvelope = randomBytes(84u)
 
     private val mayaPin = randomBytes(32u).let { enc ->
-        ContactPin(maya, "maya@example.org", "Maya", base64urlEncode(enc), base64urlEncode(signingPublicKey(mayaSeed)),
-            identityFingerprint(enc, signingPublicKey(mayaSeed)), "2026-10-01T00:00:00Z", null)
+        TestPins.verified(maya, "maya@example.org", "Maya", base64urlEncode(enc), base64urlEncode(signingPublicKey(mayaSeed)))
     }
     private fun trust() = Trust.of(me, myKey, emptyList(), mapOf(maya to mayaPin))
 

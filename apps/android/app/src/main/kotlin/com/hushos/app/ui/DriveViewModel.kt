@@ -455,6 +455,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadRoot() = viewModelScope.launch {
         if (state.value.rootId != null) return@launch
+        // The identity first: a version 1 identity is upgraded here, before anything is signed (the root may be made).
+        io { it.identityKeys() }
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
         refreshTrust()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
@@ -973,7 +975,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun ownFingerprint(): String? = io { it.ownFingerprint() }
     suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
         .also { result -> if (result.getOrNull()?.followed == true) refreshTrust() }
-    suspend fun pin(contact: Contact): Boolean = (io { it.pin(contact); true } ?: false).also { if (it) refreshTrust() }
+    /* Pins the contact whose words were just compared; `failure` hears why not (they haven't upgraded, say). */
+    suspend fun pin(contact: Contact, failure: ((String) -> Unit)? = null): Boolean = (io(failure) { it.pin(contact); true } ?: false).also { if (it) refreshTrust() }
     suspend fun unpin(pin: ContactPin): Boolean = (io { it.unpin(pin); true } ?: false).also { if (it) refreshTrust() }
     suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }

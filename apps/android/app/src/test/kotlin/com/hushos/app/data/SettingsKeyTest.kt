@@ -64,7 +64,7 @@ class SettingsKeyTest {
         assertTrue(read.contacts.isEmpty())
         // The save names 7 and seals at 8, the version the server stores it at: read back at 8, it opens.
         assertEquals(7uL, read.version)
-        read.pin(ContactPin("u-1", "ada@example.org", "Ada", "enc", "sig", "f", "2026-10-01T00:00:00Z", null))
+        read.pin(ContactPin("u-1", "ada@example.org", "Ada", "enc", "sig", "f", "2026-10-01T00:00:00Z", null, null))
         val saved = settingsSeal(userId, rawKey, read.version + 1uL, read.text())
         mark.recordSettings(userId, saved.settingsVersion, sealedV2 = true)
         val again = readServedSettings(userId, saved, 8uL, mark) { rawKey }
@@ -88,7 +88,7 @@ class SettingsKeyTest {
     fun aSaveHereReadsBackOnTheNextDeviceWithEverythingInIt() {
         val made = settingsKeyCreate(userId, root)
         val document = Settings.parse("""{"version":1,"theme":"dark","contacts":{},"sharing":{"shares":{"n-1":["u-1"]},"links":{}}}""", 4uL)
-        document.pin(ContactPin("u-1", "ada@example.org", "Ada", "enc", "sig", "f", "2026-10-01T00:00:00Z", "h", keyVersion = 2uL,
+        document.pin(ContactPin("u-1", "ada@example.org", "Ada", "enc", "sig", "f", "2026-10-01T00:00:00Z", "h", "m", keyVersion = 2uL,
             previousSigningKeys = listOf("sig-0"), keysReplacedAt = "2026-10-02T00:00:00Z"))
         val sealed = settingsSeal(userId, made.key, 5uL, document.text())
         assertEquals(2u, sealed.version)
@@ -98,7 +98,12 @@ class SettingsKeyTest {
         val read = Settings.parse(settingsOpen(userId.lowercase(), key, sealed)!!, sealed.settingsVersion)
         assertEquals("dark", read.json.getString("theme"))
         assertTrue(read.ledger.hasShare("n-1", "u-1"))
+        // Read as version 1, always written as version 2: clients from before refuse it whole rather than drop the new fields.
+        assertEquals(2, read.json.getInt("version"))
         val pin = read.contacts.getValue("u-1")
+        // The version 3 pin's ML-DSA digest survives the save; without it the pin would trust nothing on the next device.
+        assertEquals("m", pin.mlDsaPublicKeyHash)
+        assertEquals("h", pin.kemPublicKeyHash)
         assertEquals(2uL, pin.keyVersion)
         assertEquals(listOf("sig-0"), pin.previousSigningKeys)
         assertEquals("2026-10-02T00:00:00Z", pin.keysReplacedAt)

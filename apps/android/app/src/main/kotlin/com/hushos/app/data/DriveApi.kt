@@ -101,13 +101,11 @@ data class VersionListView(
 data class StorageBreakdown(val trashBytes: Long, val trashItems: Int, val supersededBytes: Long, val supersededVersions: Int)
 data class ShareView(
     val id: String, val workspaceId: String, val role: String, val createdAt: String, val keyEpoch: ULong, val shareEnvelope: String,
-    val granterId: String, val granterName: String, val granterEmail: String, val granterPublicKey: String, val node: NodeView,
-    /* The granter's current signing key and identity version: what a suite 3 share is checked against, and where a succession chain starts. */
-    val granterSigningKey: String = "", val granterKeyVersion: ULong? = null,
+    val granterId: String, val granterName: String, val granterEmail: String, val node: NodeView,
+    /* The granter's identity as served now: the Ed25519 and ML-DSA keys a suite 4 share is checked against (by the pin), and where a succession chain starts. */
+    val granter: ServedIdentity,
 ) {
     val isFolder get() = node.isFolder
-    /* The granter's identity as served now, for the pin check. */
-    val granter: ServedIdentity get() = ServedIdentity(granterKeyVersion, granterPublicKey, granterSigningKey, null)
 }
 
 private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
@@ -228,9 +226,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun sharedWithMe(): List<ShareView> = get("/shares").getJSONArray("shares").objects().map {
         val granter = it.getJSONObject("granter")
         ShareView(it.getString("id"), it.getString("workspaceId"), it.getString("role"), it.getString("createdAt"), it.getLong("keyEpoch").toULong(),
-            it.getString("shareEnvelope"), granter.getString("id"), granter.optString("name"), granter.optString("email"), granter.getString("encryptionPublicKey"),
-            NodeView.from(it.getJSONObject("node")), granter.optString("signingPublicKey"),
-            if (granter.has("keyVersion") && !granter.isNull("keyVersion")) granter.getLong("keyVersion").toULong() else null)
+            it.getString("shareEnvelope"), granter.getString("id"), granter.optString("name"), granter.optString("email"),
+            NodeView.from(it.getJSONObject("node")), ServedIdentity.from(granter))
     }
 
     fun links(nodeId: String, workspaceId: String): List<LinkView> =

@@ -46,8 +46,7 @@ class IntegrityTest {
     }
 
     private fun pin(userId: String, signing: String, encryption: String = writerEncryption, fingerprint: String? = null, previous: List<String> = emptyList(), name: String = "Maya Lindqvist") =
-        ContactPin(userId, "x@example.org", name, encryption, signing,
-            fingerprint ?: identityFingerprint(base64urlDecode(encryption), base64urlDecode(signing)), "2026-10-01T00:00:00Z", null, previousSigningKeys = previous)
+        TestPins.verified(userId, "x@example.org", name, encryption, signing, previous = previous).let { if (fingerprint != null) it.copy(fingerprint = fingerprint) else it }
 
     private fun trust(vararg pins: ContactPin) = Trust.of(me, ByteArray(32) { 9 }, emptyList(), pins.associateBy { it.userId })
 
@@ -104,10 +103,14 @@ class IntegrityTest {
 
     @Test
     fun aPinWhoseWordsWereNeverCheckedOverBothKeysVouchesForNothingAndLendsNoName() {
-        val stale = pin(maya.id, writerKey, fingerprint = identityFingerprint(base64urlDecode(writerEncryption), ByteArray(32) { 7 }))
+        val stale = pin(maya.id, writerKey, fingerprint = identityFingerprint(base64urlDecode(writerEncryption), ByteArray(32) { 7 }, ByteArray(32) { 3 }, ByteArray(32) { 4 }))
         val result = unverifiedOf(node(), trust(stale))!!
         assertEquals(Integrity.UNKNOWN_SIGNER, result.integrity)
         assertFalse(result.explanation().contains("Maya"))
+        // Pinned before the release (words over two keys): their records read as from someone not yet checked.
+        val preRelease = TestPins.preRelease(pin(maya.id, writerKey))
+        assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(preRelease))?.integrity)
+        assertEquals("x@example.org", unverifiedOf(node(), trust(preRelease))?.checkEmail)
         assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(stale.copy(signingPublicKey = "", fingerprint = "")))?.integrity)
     }
 

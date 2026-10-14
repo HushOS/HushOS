@@ -61,14 +61,17 @@ class ShareSeals(private val file: File) {
     }
 }
 
+/* The only share suite written and opened: hybrid sealing, signed with Ed25519 and ML-DSA-65. */
+const val SHARE_SUITE = 4
+
 /*
- * Whether a ledger share must be sealed again: anything but suite 3; one this device has no record of; one signed
+ * Whether a ledger share must be sealed again: anything but suite 4 (docs/identity-pq-design.md 3); one this device has no record of; one signed
  * by an identity older than the current one (this account replaced its keys); or one sealed to grantee keys older
  * than the ones their pin holds now (they replaced theirs, and the person checked them again, which moved the pin).
  * Served keys alone never trigger it: a pin follows a succession only when the person asks.
  */
 fun needsReseal(suite: Int, seal: ShareSeals.Seal?, currentKeyVersion: ULong, pinnedGranteeKeyVersion: ULong?): Boolean {
-    if (suite != 3 || seal == null) return true
+    if (suite != SHARE_SUITE || seal == null) return true
     if (seal.granterKeyVersion < currentKeyVersion) return true
     val pinned = pinnedGranteeKeyVersion ?: return false
     return seal.granteeKeyVersion == null || pinned > seal.granteeKeyVersion

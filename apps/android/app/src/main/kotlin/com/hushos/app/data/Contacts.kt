@@ -1,43 +1,101 @@
 package com.hushos.app.data
 
+import com.hushos.core.HybridPublicKey
 import com.hushos.core.IdentityKeys
 import com.hushos.core.PinnedKeys
+import com.hushos.core.PublicIdentity
 import com.hushos.core.ServedKeys
 import com.hushos.core.SettingsEnvelope
 import com.hushos.core.ShareContext
 import com.hushos.core.SuccessionLink
 import com.hushos.core.base64urlDecode
-import com.hushos.core.identityFingerprint
-import com.hushos.core.kemBindingVerify
+import com.hushos.core.identityFingerprintOfKeys
+import com.hushos.core.identityVerifyKeys
 import com.hushos.core.keyDigest
+import com.hushos.core.pinVerified
 import com.hushos.core.settingsOpen
 import com.hushos.core.shareOpen
 import com.hushos.core.successionChainVerify
 import org.json.JSONArray
 import org.json.JSONObject
 
-/* A person as `POST /api/auth/contacts/lookup` describes them. */
-data class Contact(
-    val userId: String, val name: String, val email: String, val encryptionPublicKey: String, val signingPublicKey: String,
-    val kemPublicKey: String?, val kemSignature: String?,
-    /* The identity's generation: a succession raises it, and a pin remembers it to ask for the chain from there. */
-    val keyVersion: ULong? = null,
+/*
+ * Someone's public identity as the server serves it (contact lookups, a share's granter, shared-by-me grantees,
+ * rotation work, report operators; docs/identity-pq-design.md): all four public keys and a version 2 identity's keys
+ * statement. A version 1 identity (not upgraded yet) has no ML-DSA key and no statement and is trusted with nothing;
+ * only a version 3 pin vouches for any of these.
+ */
+data class ServedIdentity(
+    /* The identity's generation: a succession raises it, and a pin remembers it. Null when the server sent none. */
+    val keyVersion: ULong?,
+    val encryptionPublicKey: String,
+    val signingPublicKey: String,
+    val mlDsaPublicKey: String? = null,
+    val kemPublicKey: String? = null,
+    val identityVersion: Int = 1,
+    val keysSignature: String? = null,
 ) {
-    val served: ServedIdentity get() = ServedIdentity(keyVersion, encryptionPublicKey, signingPublicKey, kemPublicKey)
+    /*
+     * Whether this is a version 2 identity whose keys statement holds (both halves of its hybrid signature, over all
+     * four keys, the account and the key version): the only kind words can be compared over. Not by itself a reason
+     * to trust anyone; a words check over the version 3 fingerprint is.
+     */
+    fun keysHold(userId: String): Boolean {
+        if (identityVersion != 2) return false
+        val version = keyVersion ?: return false
+        val mlDsa = mlDsaPublicKey ?: return false
+        val kem = kemPublicKey ?: return false
+        val signature = keysSignature ?: return false
+        return runCatching { identityVerifyKeys(userId, PublicIdentity(version, encryptionPublicKey, signingPublicKey, mlDsa, kem, signature)) }.getOrDefault(false)
+    }
 
-    /* Ten groups of four hex digits over both public keys, to compare over another channel. */
-    val fingerprint: String get() = identityFingerprint(base64urlDecode(encryptionPublicKey), base64urlDecode(signingPublicKey))
-    /* Whether the post-quantum key carries a signature by the signing key served with it. Vouches only for a contact
-     * not pinned yet, whose words cover that signing key; for a pinned one, see `granteeKem`. */
-    val kemSigned: Boolean get() = kemPublicKey != null && kemSignature != null &&
-        kemBindingVerify(userId, encryptionPublicKey, signingPublicKey, kemPublicKey, kemSignature)
-    val kemHash: String? get() = kemPublicKey?.let { keyDigest(base64urlDecode(it)) }
+    /* As the API serves it, for code that takes the wire shape (planReseal). */
+    fun toJson(): JSONObject = JSONObject().put("keyVersion", keyVersion?.toLong() ?: JSONObject.NULL).put("identityVersion", identityVersion)
+        .put("encryptionPublicKey", encryptionPublicKey).put("signingPublicKey", signingPublicKey)
+        .put("mlDsaPublicKey", mlDsaPublicKey ?: JSONObject.NULL).put("kemPublicKey", kemPublicKey ?: JSONObject.NULL)
+        .put("keysSignature", keysSignature ?: JSONObject.NULL)
+
+    companion object {
+        private fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
+
+        fun from(json: JSONObject) = ServedIdentity(
+            if (!json.has("keyVersion") || json.isNull("keyVersion")) null else json.optLong("keyVersion").takeIf { it >= 1 }?.toULong(),
+            json.optString("encryptionPublicKey"), json.optString("signingPublicKey"),
+            json.text("mlDsaPublicKey"), json.text("kemPublicKey"),
+            json.optInt("identityVersion", 1), json.text("keysSignature"),
+        )
+    }
 }
 
-/* What a pin keeps of a contact, as the settings document stores it. */
+/* A person as `POST /api/auth/contacts/lookup` describes them. */
+data class Contact(val userId: String, val name: String, val email: String, val served: ServedIdentity) {
+    val encryptionPublicKey: String get() = served.encryptionPublicKey
+    val signingPublicKey: String get() = served.signingPublicKey
+    val keyVersion: ULong? get() = served.keyVersion
+
+    /*
+     * Whether their identity is version 2 with a keys statement that holds: false for someone who has not signed in
+     * since the post-quantum release, whose words cannot be compared yet.
+     */
+    val upgraded: Boolean by lazy { served.keysHold(userId) }
+
+    /* The version 3 fingerprint over their four keys, to compare over another channel; null until they upgraded. */
+    val fingerprint: String? by lazy {
+        if (!upgraded) null else runCatching {
+            identityFingerprintOfKeys(base64urlDecode(served.encryptionPublicKey), base64urlDecode(served.signingPublicKey),
+                base64urlDecode(served.mlDsaPublicKey!!), base64urlDecode(served.kemPublicKey!!))
+        }.getOrNull()
+    }
+}
+
+/*
+ * What a pin keeps of a contact, as the settings document stores it. A version 3 pin (docs/identity-pq-design.md 2)
+ * holds the X25519 and Ed25519 keys, the SHA-256 (hex) of the ML-DSA and ML-KEM keys, and the version 3 fingerprint
+ * over all four; it is version 3 exactly when it carries `mlDsaPublicKeyHash`. Pins made before trust nothing.
+ */
 data class ContactPin(
     val userId: String, val email: String, val name: String, val encryptionPublicKey: String, val signingPublicKey: String,
-    val fingerprint: String, val pinnedAt: String, val kemPublicKeyHash: String?,
+    val fingerprint: String, val pinnedAt: String, val kemPublicKeyHash: String?, val mlDsaPublicKeyHash: String?,
     /* The identity version the pin was made or last followed at; null on pins made before successions. */
     val keyVersion: ULong? = null,
     /* Signing keys this person held before, each vouched for by a checked succession: what they signed then still verifies. */
@@ -46,20 +104,13 @@ data class ContactPin(
     val keysReplacedAt: String? = null,
 ) {
     /*
-     * Whether the words were checked against both keys as they are now: a pin from before signing keys were
-     * kept, or one whose stored fingerprint is not the current one over the pinned keys, vouches for nothing.
+     * Whether the words were compared over all four keys: a version 3 pin whose stored fingerprint is the version 3 one
+     * over its X25519 and Ed25519 keys and the two digests. A pin from before the release (no ML-DSA digest), or one
+     * whose fingerprint is not the current one over the pinned keys, vouches for nothing.
      */
-    val verified: Boolean by lazy {
-        signingPublicKey.isNotEmpty() && runCatching {
-            identityFingerprint(base64urlDecode(encryptionPublicKey), base64urlDecode(signingPublicKey)) == fingerprint
-        }.getOrDefault(false)
-    }
+    val verified: Boolean by lazy { pinVerified(encryptionPublicKey, signingPublicKey, mlDsaPublicKeyHash, kemPublicKeyHash, fingerprint) }
 
     val displayName: String get() = name.ifEmpty { email }
-
-    /* Whether the keys served now are the pinned ones; a pin from before signing keys were kept compares its X25519 key alone. */
-    fun matches(served: ServedIdentity): Boolean =
-        encryptionPublicKey == served.encryptionPublicKey && (signingPublicKey.isEmpty() || served.signingPublicKey.isEmpty() || signingPublicKey == served.signingPublicKey)
 
     /* Writes the pin's fields into `json`, leaving any field another client added as it was. */
     fun writeInto(json: JSONObject): JSONObject {
@@ -67,6 +118,7 @@ data class ContactPin(
             .put("encryptionPublicKey", encryptionPublicKey).put("signingPublicKey", signingPublicKey).put("fingerprint", fingerprint)
             .put("pinnedAt", pinnedAt).put("kemPublicKeyHash", kemPublicKeyHash ?: JSONObject.NULL)
             .put("keyVersion", keyVersion?.toLong() ?: JSONObject.NULL)
+        if (mlDsaPublicKeyHash == null) json.remove("mlDsaPublicKeyHash") else json.put("mlDsaPublicKeyHash", mlDsaPublicKeyHash)
         if (previousSigningKeys.isEmpty()) json.remove("previousSigningKeys") else json.put("previousSigningKeys", JSONArray(previousSigningKeys))
         if (keysReplacedAt == null) json.remove("keysReplacedAt") else json.put("keysReplacedAt", keysReplacedAt)
         return json
@@ -76,11 +128,27 @@ data class ContactPin(
         fun from(json: JSONObject) = ContactPin(
             json.getString("userId"), json.optString("email"), json.optString("name"), json.getString("encryptionPublicKey"),
             json.optString("signingPublicKey"), json.optString("fingerprint"), json.optString("pinnedAt"),
-            if (json.isNull("kemPublicKeyHash")) null else json.optString("kemPublicKeyHash"),
+            if (json.isNull("kemPublicKeyHash")) null else json.optString("kemPublicKeyHash").ifEmpty { null },
+            if (json.isNull("mlDsaPublicKeyHash")) null else json.optString("mlDsaPublicKeyHash").ifEmpty { null },
             if (!json.has("keyVersion") || json.isNull("keyVersion")) null else json.optLong("keyVersion").takeIf { it >= 1 }?.toULong(),
             json.optJSONArray("previousSigningKeys")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).ifEmpty { null } } }.orEmpty(),
             if (json.isNull("keysReplacedAt")) null else json.optString("keysReplacedAt").ifEmpty { null },
         )
+
+        /*
+         * The version 3 pin of keys whose words were just compared: their X25519 and Ed25519 keys, the digests of their
+         * ML-DSA and ML-KEM keys, and the fingerprint over all four. Null when the served identity has no ML-DSA or
+         * ML-KEM key (not upgraded): words are never compared over fewer than four keys.
+         */
+        fun ofServed(userId: String, email: String, name: String, served: ServedIdentity, pinnedAt: String): ContactPin? {
+            val mlDsa = served.mlDsaPublicKey ?: return null
+            val kem = served.kemPublicKey ?: return null
+            val print = runCatching {
+                identityFingerprintOfKeys(base64urlDecode(served.encryptionPublicKey), base64urlDecode(served.signingPublicKey), base64urlDecode(mlDsa), base64urlDecode(kem))
+            }.getOrNull() ?: return null
+            return ContactPin(userId, email, name, served.encryptionPublicKey, served.signingPublicKey, print, pinnedAt,
+                keyDigest(base64urlDecode(kem)), keyDigest(base64urlDecode(mlDsa)), served.keyVersion)
+        }
     }
 }
 
@@ -95,31 +163,47 @@ data class OwnedShare(val id: String, val role: String, val keyEpoch: ULong, val
     }
 }
 
-/*
- * The lookup's verdict against the pin: `changed` when a key differs from it, `recheck` when the pin itself vouches for
- * nothing, `followed` when the keys changed by a succession the old keys signed and the pin now holds the new ones.
- */
-data class Lookup(val contact: Contact, val pinned: ContactPin?, val changed: Boolean, val recheck: Boolean = false, val followed: Boolean = false)
 
-/* An identity as the server serves it (lookup, shared-with-me, rotation work): what a pin is checked against. */
-data class ServedIdentity(val keyVersion: ULong?, val encryptionPublicKey: String, val signingPublicKey: String, val kemPublicKey: String?) {
-    companion object {
-        fun from(json: JSONObject) = ServedIdentity(
-            if (!json.has("keyVersion") || json.isNull("keyVersion")) null else json.getLong("keyVersion").toULong(),
-            json.optString("encryptionPublicKey"), json.optString("signingPublicKey"),
-            json.optJSONObject("kem")?.optString("publicKey")?.ifEmpty { null },
-        )
-    }
+/*
+ * The lookup's verdict against the pin: `changed` when the served keys differ from it and no signed chain explains it,
+ * `recheck` when the pin itself vouches for nothing over keys that did not change ("Check words again"), `followed`
+ * when the keys changed by a succession the old keys signed and the pin now holds the new ones. `upgraded` says whether
+ * words can be compared at all (see Contact.upgraded).
+ */
+data class Lookup(val contact: Contact, val pinned: ContactPin?, val changed: Boolean, val recheck: Boolean = false, val followed: Boolean = false) {
+    val upgraded: Boolean get() = contact.upgraded
 }
 
+/* SHA-256 (hex) of a base64url public key, or null when it does not decode. */
+private fun digestOf(publicKey: String): String? = runCatching { keyDigest(base64urlDecode(publicKey)) }.getOrNull()
+
 /*
- * Whether the served keys are worth a succession chain: the pin vouches for its keys, and other keys are served at a
- * higher version than the pin's (any version, for a pin from before successions). Anything else is the changed-key
- * warning without asking.
+ * What a pin says about the keys the server serves for that person now (docs/identity-pq-design.md 2), as
+ * packages/drive's comparePin:
+ * - SAME: a version 3 pin, the served X25519 and Ed25519 keys are the pinned ones, and the served ML-DSA and ML-KEM
+ *   keys match its digests;
+ * - RECHECK: a pin from before the release (or one whose words never covered its keys) over the same X25519 and
+ *   Ed25519 keys: only comparing words again trusts them; until then, nothing is trusted;
+ * - SUCCESSION: other keys at a higher key version, which a signed chain from a version 3 pin may explain;
+ * - CHANGED: anything else, including a served identity with no ML-DSA key, or one whose ML-DSA or ML-KEM key
+ *   differs, beside the pinned classical keys.
  */
-fun needsChain(pin: ContactPin, served: ServedIdentity): Boolean {
-    val version = served.keyVersion ?: return false
-    return pin.verified && !pin.matches(served) && version > (pin.keyVersion ?: 0uL)
+enum class PinComparison { SAME, RECHECK, SUCCESSION, CHANGED }
+
+fun comparePin(pin: ContactPin, served: ServedIdentity): PinComparison {
+    val sameKeys = pin.encryptionPublicKey == served.encryptionPublicKey && pin.signingPublicKey == served.signingPublicKey
+    if (sameKeys) {
+        if (!pin.verified) return PinComparison.RECHECK
+        val mlDsa = served.mlDsaPublicKey ?: return PinComparison.CHANGED
+        val kem = served.kemPublicKey ?: return PinComparison.CHANGED
+        return if (digestOf(mlDsa) == pin.mlDsaPublicKeyHash && digestOf(kem) == pin.kemPublicKeyHash) PinComparison.SAME else PinComparison.CHANGED
+    }
+    // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
+    if (served.mlDsaPublicKey == null || served.kemPublicKey == null) return PinComparison.CHANGED
+    val version = served.keyVersion ?: return PinComparison.CHANGED
+    // A pin with no version: the chain is then looked for from 1.
+    if (version > (pin.keyVersion ?: 1uL) && pin.verified) return PinComparison.SUCCESSION
+    return PinComparison.CHANGED
 }
 
 /*
@@ -130,27 +214,27 @@ const val CHAIN_FROM: ULong = 1uL
 
 /*
  * The pin after a succession, or null when the chain does not carry it from the pinned keys to the served ones (the
- * core checks every link: continuity by keys, each signed by the key it replaces, versions rising, the served keys at
- * the end). A pin that follows takes the new keys, fingerprint, post-quantum key and version, keeps every signing key
- * the chain passed through (what they signed before still verifies), and is marked so People can suggest comparing
- * words again: a succession made with a stolen key is still a change the person did not make.
+ * core checks every link, version 2 only: continuity by keys, ML-DSA included, each signed with both halves by the
+ * keys it replaces, versions rising, the served four keys at the end). A pin that follows becomes the version 3 pin of
+ * the served keys, keeps every signing key the chain passed through (what they signed before still verifies), and is
+ * marked so People can suggest comparing words again: a succession made with stolen keys is still a change the person
+ * did not make.
  */
 fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<SuccessionLink>, now: String): ContactPin? {
-    if (!needsChain(pin, served)) return null
-    // Shared-with-me serves no post-quantum key: the last link's is the one its signed statement names (by digest).
-    val kem = served.kemPublicKey ?: links.lastOrNull()?.newKemPublicKey ?: return null
+    if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
+    val mlDsaHash = pin.mlDsaPublicKeyHash ?: return null
     val version = served.keyVersion ?: return null
+    val mlDsa = served.mlDsaPublicKey ?: return null
+    val kem = served.kemPublicKey ?: return null
     val holds = runCatching {
-        successionChainVerify(pin.userId, PinnedKeys(pin.keyVersion, pin.encryptionPublicKey, pin.signingPublicKey),
-            ServedKeys(version, served.encryptionPublicKey, served.signingPublicKey, kem), links)
+        successionChainVerify(pin.userId, PinnedKeys(pin.keyVersion, pin.encryptionPublicKey, pin.signingPublicKey, mlDsaHash),
+            ServedKeys(version, served.encryptionPublicKey, served.signingPublicKey, mlDsa, kem), links)
     }.getOrDefault(false)
     if (!holds) return null
+    val next = ContactPin.ofServed(pin.userId, pin.email, pin.name, served, pin.pinnedAt) ?: return null
     val start = links.indexOfFirst { it.oldEncryptionPublicKey == pin.encryptionPublicKey && it.oldSigningPublicKey == pin.signingPublicKey }
     val passed = links.drop(start).map { it.oldSigningPublicKey }
-    return pin.copy(
-        encryptionPublicKey = served.encryptionPublicKey, signingPublicKey = served.signingPublicKey,
-        fingerprint = identityFingerprint(base64urlDecode(served.encryptionPublicKey), base64urlDecode(served.signingPublicKey)),
-        kemPublicKeyHash = keyDigest(base64urlDecode(kem)), keyVersion = version,
+    return next.copy(
         previousSigningKeys = (pin.previousSigningKeys + passed).distinct().filter { it != served.signingPublicKey },
         keysReplacedAt = now,
     )
@@ -190,12 +274,6 @@ class Settings(val json: JSONObject, val version: ULong) {
 
     fun unpin(userId: String) { contactsJson().remove(userId) }
 
-    /* The first post-quantum key seen signed by a pinned identity, remembered so a different one later is refused; one remembered already stays. */
-    fun rememberKem(userId: String, hash: String) {
-        val pin = json.optJSONObject("contacts")?.optJSONObject(userId) ?: return
-        if (pin.isNull("kemPublicKeyHash")) pin.put("kemPublicKeyHash", hash)
-    }
-
     val ledger: SharingLedger get() {
         val sharing = json.optJSONObject("sharing") ?: return SharingLedger(emptyMap(), emptyMap())
         val shares = HashMap<String, Set<String>>()
@@ -224,11 +302,13 @@ class Settings(val json: JSONObject, val version: ULong) {
 
     fun removeLink(linkId: String) { json.optJSONObject("sharing")?.optJSONObject("links")?.remove(linkId) }
 
-    fun text(): String = json.toString()
+    /* The document to seal: always version 2, whatever was read (the core raises it too). */
+    fun text(): String = json.put("version", 2).toString()
 
     companion object {
         fun parse(text: String, version: ULong) = Settings(JSONObject(text), version)
-        fun empty(version: ULong = 0uL) = Settings(JSONObject().put("version", 1).put("contacts", JSONObject()), version)
+        /* Version 2, the only document version written (docs/identity-pq-design.md 2): it may hold version 3 pins. */
+        fun empty(version: ULong = 0uL) = Settings(JSONObject().put("version", 2).put("contacts", JSONObject()), version)
     }
 }
 
@@ -266,9 +346,12 @@ class SharingRefused(message: String) : Refused("Nothing was shared", message)
 /* Why a received share stays shut until the person acts in People you share with. */
 sealed class GranterTrust(message: String) : Exception(message) {
     class Unverified(name: String) : GranterTrust("Add $name in People you share with and check their words to open what they shared.")
-    class Changed(name: String) : GranterTrust("$name’s key has changed since you added them. Check it’s them in People you share with before opening what they shared.")
-    /* Pinned, but the pin vouches for nothing (an old pin, or a fingerprint that isn't the current one): treated like Unverified. */
-    class Recheck(name: String) : GranterTrust("Check $name’s words again in People you share with to open what they shared.")
+    class Changed(name: String) : GranterTrust("$name’s keys have changed since you checked them. Check it’s them in People you share with before opening what they shared.")
+    /*
+     * Pinned, but the pin vouches for nothing: one made before the words covered all four keys (or one whose fingerprint
+     * isn't the current one). Shares from them open once both people have compared words again.
+     */
+    class Recheck(name: String) : GranterTrust("$name’s keys were upgraded. Compare words with them again in People you share with; shares from $name open once you’ve both done it.")
     /*
      * Other keys served at a newer version than the pin's: maybe a succession, but only checking says so (the server
      * picks the version), and a pin follows only when the person checks them again, never on its own.
@@ -278,35 +361,56 @@ sealed class GranterTrust(message: String) : Exception(message) {
     class Reshare(name: String) : GranterTrust("$name replaced their sharing keys since sharing this. Ask $name to share it again.")
 }
 
-/* The one key a share from this granter opens under, and whether the pin followed keys they replaced (so an older share may wait for a re-seal). */
-class GranterKey(val signingPublicKey: ByteArray, val replacedKeys: Boolean)
-
 /*
- * The key to open a share from this granter with: the pinned current signing key, and only when the server served
- * those same keys and the pin was checked against both (docs/integrity-design.md, "Retired keys"). Keys the granter
- * replaced open nothing: a share sealed under one waits for their re-seal. Newer keys served than the pin's are not
- * followed here; the person checks them again. Taking the served keys of someone not pinned would let a server fake
- * a share "from" anyone with keys of its own, so that is refused, and nothing is pinned here.
+ * The keys a granter's share must be signed with: the pin's current Ed25519 key, and the served ML-DSA key only if its
+ * digest is the pin's (packages/drive's granterKeysOf). Null when the pin has no ML-DSA digest or the served key is not
+ * the pinned one.
  */
-fun granterKey(granterId: String, granterName: String, served: ServedIdentity, pins: Map<String, ContactPin>): GranterKey {
-    val pin = pins[granterId] ?: throw GranterTrust.Unverified(granterName)
-    if (!pin.verified) throw GranterTrust.Recheck(granterName)
-    if (!pin.matches(served)) throw if (needsChain(pin, served)) GranterTrust.Replaced(granterName) else GranterTrust.Changed(granterName)
-    return GranterKey(base64urlDecode(pin.signingPublicKey), pin.previousSigningKeys.isNotEmpty())
+fun granterKeysOf(pin: ContactPin, served: ServedIdentity): HybridPublicKey? {
+    val pinned = pin.mlDsaPublicKeyHash ?: return null
+    val mlDsa = served.mlDsaPublicKey ?: return null
+    if (digestOf(mlDsa) != pinned) return null
+    return runCatching { HybridPublicKey(base64urlDecode(pin.signingPublicKey), base64urlDecode(mlDsa)) }.getOrNull()
+}
+
+/* The keys a share from this granter opens under, and whether the pin followed keys they replaced (so an older share may wait for a re-seal). */
+class GranterKey(val keys: HybridPublicKey, val replacedKeys: Boolean) {
+    val signingPublicKey: ByteArray get() = keys.signingPublicKey
 }
 
 /*
- * A received share's node key: the granter's current key against each of this account's identities, the current one
- * first. A share row does not say which identity it was sealed to, and after a succession shares sealed to earlier
- * keys open only with them. Suite 3 checks the granter's signature before anything is decapsulated, so a share signed
- * by anyone else, or under a key the granter replaced, never opens; the first refusal is what is said, unless the
- * granter replaced keys, when the share is waiting for their re-seal.
+ * The keys to open a share from this granter with: the pinned current Ed25519 key and the served ML-DSA key whose
+ * digest the pin holds, and only when the pin is version 3 and the server serves the pinned keys
+ * (docs/identity-pq-design.md 2 and 3). Keys the granter replaced open nothing: a share sealed under one waits for
+ * their re-seal. Newer keys served than the pin's are not followed here; the person checks them again. Taking the
+ * served keys of someone not pinned would let a server fake a share "from" anyone with keys of its own, so that is
+ * refused, and nothing is pinned here.
+ */
+fun granterKey(granterId: String, granterName: String, served: ServedIdentity, pins: Map<String, ContactPin>): GranterKey {
+    val pin = pins[granterId] ?: throw GranterTrust.Unverified(granterName)
+    when (comparePin(pin, served)) {
+        PinComparison.SAME -> Unit
+        PinComparison.RECHECK -> throw GranterTrust.Recheck(granterName)
+        PinComparison.SUCCESSION -> throw GranterTrust.Replaced(granterName)
+        // A pin that vouches for nothing, served other keys: still a words check first.
+        PinComparison.CHANGED -> throw if (!pin.verified) GranterTrust.Recheck(granterName) else GranterTrust.Changed(granterName)
+    }
+    val keys = granterKeysOf(pin, served) ?: throw GranterTrust.Changed(granterName)
+    return GranterKey(keys, pin.previousSigningKeys.isNotEmpty())
+}
+
+/*
+ * A received share's node key: the granter's keys against each of this account's identities, the current one first.
+ * A share row does not say which identity it was sealed to, and after a succession shares sealed to earlier keys open
+ * only with them. Suite 4 checks both halves of the granter's signature before anything is decapsulated, so a share
+ * signed by anyone else, under a key the granter replaced, or in an older suite never opens; the first refusal is what
+ * is said, unless the granter replaced keys, when the share is waiting for their re-seal.
  */
 fun openShare(envelope: ByteArray, granter: GranterKey, granterName: String, identities: List<IdentityKeys>, ctx: ShareContext): ByteArray {
     var refusal: Exception? = null
     for (identity in identities) {
         try {
-            return shareOpen(envelope, granter.signingPublicKey, identity, ctx)
+            return shareOpen(envelope, granter.keys, identity, ctx)
         } catch (error: Exception) {
             if (refusal == null) refusal = error
         }
@@ -315,28 +419,23 @@ fun openShare(envelope: ByteArray, granter: GranterKey, granterName: String, ide
     throw refusal ?: ShareRefused("This share could not be opened.")
 }
 
-/* The post-quantum key a share to `pin` is sealed to, and its digest when it is the first one the pin vouches for. */
-class GranteeKem(val publicKey: ByteArray, val firstHash: String?)
-
 /*
- * Checks the person's served post-quantum key against their pin before anything is sealed to them:
- * on share, on rotation, never falling back to X25519 alone. A pin that vouches for nothing, a missing
- * key, a key other than the one remembered, or a first key not signed by the pinned identity is refused.
+ * The ML-KEM key a share to `pin` is sealed to, checked against the pin before anything is sealed to them: on share,
+ * on rotation, on the re-seal pass, never falling back to X25519 alone (packages/drive's trustGrantee). The pin must be
+ * version 3 and the served keys the pinned ones, the ML-KEM key by its digest; anything else is refused with what to do.
  */
-fun granteeKem(pin: ContactPin, kemPublicKey: String?, kemSignature: String?): GranteeKem {
+fun granteeKem(pin: ContactPin, served: ServedIdentity): ByteArray {
     val name = pin.displayName
-    if (!pin.verified) throw SharingRefused("Check $name’s words again in People you share with before you share with them.")
-    if (kemPublicKey == null) throw SharingRefused("$name hasn’t set up post-quantum keys yet.")
-    val bytes = base64urlDecode(kemPublicKey)
-    val hash = keyDigest(bytes)
-    pin.kemPublicKeyHash?.let { pinned ->
-        if (pinned != hash) throw SharingRefused("$name’s post-quantum key has changed since you pinned it. Check with them before sharing.")
-        return GranteeKem(bytes, null)
+    if (!pin.verified) throw SharingRefused("Check $name’s words again in People you share with: this pin was made before the words covered all their keys.")
+    when (comparePin(pin, served)) {
+        PinComparison.SAME -> Unit
+        PinComparison.RECHECK -> throw SharingRefused("$name’s keys were upgraded. Compare words with them again in People you share with.")
+        PinComparison.SUCCESSION -> throw SharingRefused("$name’s sharing keys changed since you checked them. Check them again in People you share with.")
+        PinComparison.CHANGED -> throw SharingRefused("$name’s keys have changed since you checked them. Check it’s them in People you share with.")
     }
-    // Only the pinned signing key may vouch: the words compared cover it, the served one could be anyone's.
-    val signed = kemSignature != null && runCatching { kemBindingVerify(pin.userId, pin.encryptionPublicKey, pin.signingPublicKey, kemPublicKey, kemSignature) }.getOrDefault(false)
-    if (!signed) throw SharingRefused("$name’s post-quantum key is not signed by their identity.")
-    return GranteeKem(bytes, hash)
+    // comparePin said SAME: the served ML-KEM key is the one the version 3 pin's digest names.
+    val kem = served.kemPublicKey ?: throw SharingRefused("$name hasn’t got post-quantum keys yet. They get them the next time they sign in.")
+    return base64urlDecode(kem)
 }
 
 fun settingsEnvelope(json: JSONObject) = SettingsEnvelope(

@@ -1,12 +1,12 @@
 package com.hushos.app.data
 
 import com.hushos.core.NodeMetadata
-import com.hushos.core.OperatorKem
 import com.hushos.core.deriveId
 import com.hushos.core.identityCreate
 import com.hushos.core.randomBytes
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
@@ -57,11 +57,26 @@ class ScopedIdsTest {
         // of the reporter's, since that is the workspace the server derives it for.
         val operatorId = "55555555-5555-4555-8555-555555555555"
         val envelope = identityCreate(operatorId, randomBytes(32u), 1uL)
-        val kem = envelope.kem!!
-        val operator = ReportOperator(operatorId, envelope.encryptionPublicKey, envelope.signingPublicKey, OperatorKem(kem.publicKey, kem.signature))
+        val operator = ReportOperator(operatorId, WebFixture.served(envelope))
         val node = NodeView("dc94437c-d237-4f94-bef8-9caeb51bea5e", elsewhere, "parent", "file", 2uL, 1uL, "k", 1uL, "m", null, null, null, null)
         val body = Reports.body(listOf(operator), Opened(node, NodeMetadata("a.txt", null, null, null)), randomBytes(32u), "other", "", null, JSONObject().put("link", "t"))
         assertEquals(elsewhere, body.getString("workspaceId"))
         assertEquals(body.getString("id"), deriveId(IdField.REPORT.kind, elsewhere, body.getString("reportIdSeed")))
+    }
+
+    @Test
+    fun aVersionTwoOperatorIsSealedToOnlyOnceItsKeysStatementHolds() {
+        // The served identity reaches the core whole: an ML-KEM key the operator's keys statement does not name (a
+        // server swapping in its own) is refused, where dropping the statement on the way would seal to it unchecked.
+        val operatorId = "55555555-5555-4555-8555-555555555555"
+        val served = WebFixture.served(identityCreate(operatorId, randomBytes(32u), 1uL))
+        val other = identityCreate(operatorId, randomBytes(32u), 1uL).kem!!.publicKey
+        val node = NodeView("dc94437c-d237-4f94-bef8-9caeb51bea5e", elsewhere, "parent", "file", 2uL, 1uL, "k", 1uL, "m", null, null, null, null)
+        fun report(identity: ServedIdentity) = Reports.body(listOf(ReportOperator(operatorId, identity)), Opened(node, NodeMetadata("a.txt", null, null, null)),
+            randomBytes(32u), "other", "", null, JSONObject().put("link", "t"))
+        report(served)
+        assertThrows(Exception::class.java) { report(served.copy(kemPublicKey = other)) }
+        // An operator with no ML-KEM key is refused rather than sealed to X25519 alone.
+        assertThrows(Exception::class.java) { report(ServedIdentity(1uL, served.encryptionPublicKey, served.signingPublicKey, null, null, 1, null)) }
     }
 }

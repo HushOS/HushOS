@@ -39,7 +39,6 @@ import com.hushos.core.recoveryPhrase
 import com.hushos.core.settingsOpen
 import com.hushos.core.settingsSeal
 import com.hushos.core.shareSeal
-import com.hushos.core.identityFingerprint
 import com.hushos.core.versionReseal
 import com.hushos.core.ContentKey
 import com.hushos.core.MetadataStatement
@@ -226,19 +225,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * The identity's private keys, opened once under the account key. One served as current with a lower key version
-     * than this device already opened is an identity the account replaced, served again: refused before it opens.
+     * The identity's private keys, opened once under the account key (see openOwnIdentity): a version 1 identity is
+     * upgraded to version 2 here, before anything is signed with it, since the server refuses signed writes from a
+     * version 1 identity. One served as current with a lower key version than this device already opened, or in its
+     * version 1 form once this device has seen version 2, is refused. After this device's own upgrade the re-seal pass
+     * runs at the next Drive open, to seal the ledger's shares in suite 4 where pins allow.
      */
-    internal fun identityKeys(): IdentityKeys = identity ?: run {
-        val userId = api.session.userId
-        val envelope = Auth.identity(context)
-        val marks = SettingsMark.of(context)
-        marks.checkIdentity(userId, envelope.keyVersion)
-        identityOpen(userId, unlockAccount(), envelope).also { opened ->
-            marks.recordIdentity(userId, opened.keyVersion)
-            identity = opened
-        }
+    internal fun identityKeys(): IdentityKeys = identity ?: synchronized(identityLock) {
+        identity ?: openOwnIdentity(api.session.userId, unlockAccount(), SettingsMark.of(context),
+            served = { Auth.identity(context) },
+            store = { Auth.upgradeIdentity(context, it) },
+            upgraded = { ShareSeals.of(context).lastPass = 0L },
+        ).also { identity = it }
     }
+    private val identityLock = Any()
 
     /*
      * Every identity this account has held, the current one first, then the earlier ones newest first, each opened (and
@@ -429,7 +429,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun contacts(): List<ContactPin> = loadSettings().contacts.values.sortedByDescending { it.pinnedAt }
 
     /* This account's own fingerprint, for the other person to check. */
-    fun ownFingerprint(): String = identityKeys().let { identityFingerprint(base64urlDecode(it.encryptionPublicKey), base64urlDecode(it.signingPublicKey)) }
+    fun ownFingerprint(): String = ownFingerprint(identityKeys())
 
     /*
      * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
@@ -437,32 +437,33 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun lookup(email: String): Lookup {
         val contact = Auth.lookupContact(context, email)
-        val pinned = loadSettings().contacts[contact.userId]
+        val pinned = loadSettings().contacts[contact.userId] ?: return Lookup(contact, null, changed = false)
+        val comparison = comparePin(pinned, contact.served)
         // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
-        if (pinned != null && !pinned.matches(contact.served)) followPin(pinned, contact.served)?.let { return Lookup(contact, it, changed = false, followed = true) }
-        var changed = false
-        if (pinned != null) {
-            // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
-            // A pin from before signing keys were kept has none to differ: it is checked again, not called changed.
-            if (pinned.encryptionPublicKey != contact.encryptionPublicKey) changed = true
-            if (pinned.signingPublicKey.isNotEmpty() && pinned.signingPublicKey != contact.signingPublicKey) changed = true
-            if (pinned.kemPublicKeyHash != null && pinned.kemPublicKeyHash != contact.kemHash) changed = true
-        }
-        return Lookup(contact, pinned, changed, recheck = pinned != null && !pinned.verified)
+        if (comparison == PinComparison.SUCCESSION) followPin(pinned, contact.served)?.let { return Lookup(contact, it, changed = false, followed = true) }
+        // A changed key, or a chain that does not hold: the words no longer vouch for the account.
+        val changed = comparison == PinComparison.CHANGED || comparison == PinComparison.SUCCESSION
+        // A pin from before the release (or never checked) over keys that did not change: "Check words again".
+        return Lookup(contact, pinned, changed, recheck = !changed && !pinned.verified)
     }
 
     /*
-     * Trusts the keys shown now: what the person does after checking the words. A fresh fingerprint and signing key
-     * replace an old pin's. The earlier keys a succession vouched for stay only when the words were compared over the
-     * same keys again (the notice after a succession); a different key accepted by hand vouches for none of them.
+     * Trusts the keys shown now: what the person does after comparing the words. Writes the version 3 pin of the served
+     * keys (both digests and the fingerprint over all four), and only for an upgraded identity whose keys statement
+     * holds: words are never compared over fewer keys. The earlier keys a succession vouched for stay only when the
+     * words were compared over the same keys again (the notice after a succession); a different key accepted by hand
+     * vouches for none of them. Shares to them may now be sealed in suite 4, so the re-seal pass runs next.
      */
     fun pin(contact: Contact) {
+        val fresh = ContactPin.ofServed(contact.userId, contact.email, contact.name, contact.served, Instant.now().toString())
+            ?.takeIf { contact.upgraded }
+            ?: throw AuthFailure("${contact.name.ifEmpty { contact.email }} needs to sign in to HushOS once more before you can compare words.")
         updateSettings { settings ->
             val before = settings.contacts[contact.userId]
-            val previous = if (before != null && before.signingPublicKey == contact.signingPublicKey) before.previousSigningKeys else emptyList()
-            settings.pin(ContactPin(contact.userId, contact.email, contact.name, contact.encryptionPublicKey, contact.signingPublicKey,
-                contact.fingerprint, Instant.now().toString(), if (contact.kemSigned) contact.kemHash else null, contact.keyVersion, previous, null))
+            val moved = before != null && (before.encryptionPublicKey != contact.encryptionPublicKey || before.signingPublicKey != contact.signingPublicKey)
+            settings.pin(fresh.copy(previousSigningKeys = if (before != null && !moved) before.previousSigningKeys else emptyList()))
         }
+        ShareSeals.of(context).lastPass = 0L
     }
 
     /*
@@ -471,13 +472,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * "Check it's them" calls this. A share to them sealed to the old keys is sealed again at the next pass.
      */
     private fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
-        if (!needsChain(pin, served)) return null
+        if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
         val links = runCatching { Auth.succession(context, pin.userId) }.getOrNull() ?: return null
         val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
         updateSettings { settings ->
             // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
             val now = settings.contacts[pin.userId]
-            if (now == null || now.encryptionPublicKey == pin.encryptionPublicKey) settings.pin(next)
+            if (now == null || (now.encryptionPublicKey == pin.encryptionPublicKey && now.signingPublicKey == pin.signingPublicKey)) settings.pin(next)
         }
         ShareSeals.of(context).lastPass = 0L
         return next
@@ -490,30 +491,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun shares(item: Opened): List<OwnedShare> = api.shares(item.id, item.node.workspaceId)
 
     /*
-     * Shares an item with a pinned contact: the pin must vouch for their keys (words checked against
-     * both), the served X25519 key must be the pinned one, and the post-quantum key must be the one
-     * remembered or, the first time, signed by the pinned identity. Only then is the node key sealed
-     * to them (always hybrid, never X25519 alone), and the share goes in the ledger once the server took it.
+     * Shares an item with a pinned contact: the pin must be version 3 (words compared over all four keys) and the
+     * served keys the pinned ones, the ML-KEM key by its digest (granteeKem). Only then is the node key sealed to them,
+     * in suite 4 (hybrid, signed with both halves of this account's identity), and the share goes in the ledger once
+     * the server took it.
      */
     fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         // The pin as the settings hold it now, not as the sheet last read it.
         val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in People you share with before you share with them.")
-        if (!current.verified) throw SharingRefused("Check ${current.displayName}’s words again in People you share with before you share with them.")
         val contact = Auth.lookupContact(context, current.email)
         if (contact.userId != current.userId) throw ContactChanged()
         // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.
-        if (!current.matches(contact.served)) {
-            if (needsChain(current, contact.served)) throw SharingRefused("${current.displayName}’s sharing keys changed since you checked them. Check them again in People you share with before you share.")
-            throw ContactChanged()
-        }
-        val checked = current
-        val kem = granteeKem(checked, contact.kemPublicKey, contact.kemSignature)
-        kem.firstHash?.let { hash -> updateSettings { it.rememberKem(checked.userId, hash) } }
+        val kem = granteeKem(current, contact.served)
         val keys = identityKeys()
-        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, checked.userId, api.session.userId)
-        // Suite 3: a fresh X25519 key and ML-KEM to the pinned keys, signed by this account's identity.
-        val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(checked.encryptionPublicKey), kem.publicKey)
+        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, current.userId, api.session.userId)
+        // Suite 4: a fresh X25519 key and ML-KEM to the pinned keys, signed by this account's Ed25519 and ML-DSA keys.
+        val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(current.encryptionPublicKey), kem)
         val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
         ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
@@ -532,10 +526,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * (docs/integrity-design.md, section 4): people who checked the old words follow it without comparing again. The
      * settings move to their own key first if they are still sealed under the identity, the new identity is stored,
      * opened (the old one joins the history, which still opens what was shared to it), and every share in the ledger
-     * is sealed again in suite 3 under the new keys. Returns how many shares were sealed again and who was left out.
+     * is sealed again in suite 4 under the new keys. Returns how many shares were sealed again and who was left out.
      */
     fun replaceSharingKeys(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
         val userId = api.session.userId
+        // A succession is signed with both halves: a version 1 identity is upgraded first.
+        identityKeys()
         val current = Auth.identity(context)
         val succession = identitySucceed(userId, unlockAccount(), current)
         Auth.succeedIdentity(context, succession)
@@ -556,7 +552,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /*
      * The re-seal pass: every share in the ledger that needs it (see needsReseal) is sealed again with this account's
-     * current identity, in suite 3, only to pins that vouch for the keys served now, never to X25519 alone. It finishes
+     * current identity, in suite 4, only to version 3 pins that vouch for the keys served now, never to X25519 alone. It finishes
      * a key replacement that failed or was cut short, upgrades older suites, and seals to grantees whose replaced keys
      * the person checked again. It follows nobody on its own, and looks up only the grantees of shares it seals. What
      * it sealed is recorded (ShareSeals); a pass with no failures clears the waiting replacement and is not run again
@@ -569,7 +565,6 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val pins = settings.contacts
         val keys = identityKeys()
         val skipped = LinkedHashSet<String>()
-        val firstKems = HashMap<String, String>()
         val served = HashMap<String, Contact?>()
         val todo = ledger.shares.filterValues { it.isNotEmpty() }
         var done = 0
@@ -589,13 +584,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
                     // The post-quantum key to seal to is only in a lookup; keys other than the pin's are left out by the plan.
                     val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email) }.getOrNull() }
                     val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
-                    JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", JSONObject()
-                        .put("encryptionPublicKey", grantee.encryptionPublicKey).put("signingPublicKey", grantee.signingPublicKey)
-                        .put("kem", grantee.kemPublicKey?.let { JSONObject().put("publicKey", it).put("signature", grantee.kemSignature ?: "") } ?: JSONObject.NULL))
+                    JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", grantee.served.toJson())
                 }
                 val plan = planReseal(item.id, wire, emptyList(), ledger, pins)
                 skipped.addAll(plan.skipped)
-                firstKems.putAll(plan.firstKems)
                 for (share in plan.shares) {
                     val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, share.granteeUserId, api.session.userId)
                     api.resealShare(share.id, item.node.workspaceId, item.node.keyEpoch, base64urlEncode(shareSeal(ctx, nodeKey, keys, share.publicKey, share.kemPublicKey)))
@@ -616,7 +608,6 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
         if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
         else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
-        if (firstKems.isNotEmpty()) runCatching { updateSettings { s -> firstKems.forEach { (user, hash) -> s.rememberKem(user, hash) } } }
         return RotationResult(done, skipped.toList())
     }
 

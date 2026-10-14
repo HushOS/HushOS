@@ -65,15 +65,24 @@ class SettingsMark(private val file: File) {
     }
 
     /*
-     * An own identity served as current: refused before it is opened when its key version is lower than one this
-     * device already opened (an identity the account replaced, served again).
+     * An own identity served as current, once opened: refused when its key version is lower than one this device
+     * already opened (an identity the account replaced, served again), or when it is the version 1 form once this
+     * device has seen version 2, at any key version. The upgrade keeps the key version, so the key version alone does
+     * not see that rollback, and opening the version 1 form would mint a second ML-DSA key (docs/identity-pq-design.md 2).
      */
-    fun checkIdentity(userId: String, keyVersion: ULong) {
-        if (keyVersion < seen(identityKey(userId))) throw IdentityRolledBack()
+    fun checkIdentity(userId: String, keyVersion: ULong, identityVersion: UInt) {
+        val seenKey = seen(identityKey(userId))
+        if (keyVersion < seenKey) throw IdentityRolledBack()
+        // Once version 2 has been seen, the version 1 form is a rollback at any key version: every
+        // identity made since the post-quantum release is version 2 (docs/identity-pq-design.md 2).
+        if (identityVersion.toULong() < seen(identityVersionKey(userId))) throw IdentityRolledBack()
     }
 
     /* Raised only once the identity opened under the account key, which binds its key version: a forged one can't lift it. */
-    fun recordIdentity(userId: String, keyVersion: ULong) = record(identityKey(userId), keyVersion)
+    fun recordIdentity(userId: String, keyVersion: ULong, identityVersion: UInt) {
+        record(identityKey(userId), keyVersion)
+        record(identityVersionKey(userId), identityVersion.toULong())
+    }
 
     companion object {
         private val LOCK = Any()
@@ -89,6 +98,9 @@ class SettingsMark(private val file: File) {
 
         /* The highest own identity key version this device opened for the account. */
         fun identityKey(userId: String): String = keyDigest("identity\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))
+
+        /* The highest own identity version (1, or 2 once upgraded) this device opened for the account. */
+        fun identityVersionKey(userId: String): String = keyDigest("identity-version\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))
 
         /* How an earlier app named the settings mark: per account and identity. Read once, to carry it over. */
         fun legacyKey(userId: String, encryptionPublicKey: String): String = keyDigest("${userId.lowercase()}\n$encryptionPublicKey".toByteArray(Charsets.UTF_8))
