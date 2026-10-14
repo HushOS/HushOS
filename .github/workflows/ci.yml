@@ -3,7 +3,9 @@ name: CI
 on:
     push:
         branches: [main]
+    # `labeled` so that adding `full-ci` to a pull request runs the jobs it unlocks.
     pull_request:
+        types: [opened, synchronize, reopened, labeled]
 
 permissions:
     contents: read
@@ -146,8 +148,11 @@ jobs:
     # pages mid sign-up and differs in drag and drop, so its results said little about
     # Safari. macOS runners have no Docker: the infrastructure runs natively. It does
     # not gate deploys until it has proved steady here.
+    # On pull requests only with the `full-ci` label: four macOS shards are the most
+    # expensive part of a run, and every push to main still runs them.
     e2e-webkit:
         name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
+        if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
         runs-on: macos-15
         timeout-minutes: 40
         strategy:
@@ -213,9 +218,12 @@ jobs:
                       ${{ runner.temp }}/hushos-infra/*.log
                   retention-days: 7
 
+    # Built on pull requests only with the `full-ci` label (a Dockerfile change wants it);
+    # every push to main builds and publishes them.
     images:
         name: Image ${{ matrix.image }}
         needs: check
+        if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
         runs-on: ubuntu-latest
         permissions:
             contents: read
