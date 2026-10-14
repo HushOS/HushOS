@@ -1,0 +1,71 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/OwnIdentity.kt
+  s_c56e31c87cddde::t_1c704025f1d180 1-59
+apps/android/AGENTS.md
+  s_c56e31c87cddde::t_ff35496e9371b8 52-58
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_c56e31c87cddde::t_fa43d0e66bc7fe 217-225,234-235,241-245,250,254-274,296
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_c56e31c87cddde::t_17d2dc0f93e297 3,6,12-13,15,22-36,38-88,91-95,98,107-109,111,121,131-132,137-151,166,168-171,173-174,177-179,181-189,191-206,217-221,224-225,227-228,230-231,234,237,305-306,310-311,349-354,364-379,382-387,391-399,403-407,413,423-425,427,429-434,436-438
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c56e31c87cddde::t_15b55be48e10d3 104-106,229-230
+apps/android/app/src/main/kotlin/com/hushos/app/data/Links.kt
+  s_c56e31c87cddde::t_4633cf8661b1f1 76-84,111,202
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_c56e31c87cddde::t_40fd9b2f320884 42,45-46,63,65-66,71
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_c56e31c87cddde::t_83425d438ea240 68-71,73-78,82-85,102-104
+apps/android/app/src/main/kotlin/com/hushos/app/data/ShareSeals.kt
+  s_c56e31c87cddde::t_8e08529ae8f289 64-66,68,74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c56e31c87cddde::t_c1a072b71717ec 228-232,234-239,241,432,440-441,443-447,451-455,458-460,463-464,466,475,481,494-497,506,508-510,529,533-534,555,587
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_16a86891200c23 458-459,978-979
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_c56e31c87cddde::t_85a8da28b6b294 657-658,665-667,672,676,680-681
+apps/android/app/src/test/kotlin/com/hushos/app/data/GranterTrustTest.kt
+  s_c56e31c87cddde::t_cbe60199169d5f 12-15,22-23,25,29,34-40,46,49-52,56-57,59,62
+apps/android/app/src/test/kotlin/com/hushos/app/data/IntegrityTest.kt
+  s_c56e31c87cddde::t_6479ebcb4212c5 49,106,110-113
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeCacheTest.kt
+  s_c56e31c87cddde::t_f3dcd612e823d3 27
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  s_c56e31c87cddde::t_f8a1c803c9dfc0 1-125
+apps/android/app/src/test/kotlin/com/hushos/app/data/ResealTest.kt
+  s_c56e31c87cddde::t_5cff4749457be0 104
+apps/android/app/src/test/kotlin/com/hushos/app/data/SavedCopyTest.kt
+  s_c56e31c87cddde::t_ea12c3cd7ac3eb 43
+apps/android/app/src/test/kotlin/com/hushos/app/data/ScopedIdsTest.kt
+  s_c56e31c87cddde::t_9983f9f7297e8a 9,60,66-81
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_c56e31c87cddde::t_3e20a52bfd0cdc 67,91,101-102,104-106
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_c56e31c87cddde::t_3b2fd0c2a3cfa4 67-69,71-74,76,80-95
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsTest.kt
+  s_c56e31c87cddde::t_1027489d3bd657 22
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareOpenTest.kt
+  s_c56e31c87cddde::t_281c6ae0974c4b 14-17,26,34-35,37-39,48-50,54-58,60-94,100-101,107
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareSealsTest.kt
+  s_c56e31c87cddde::t_d9f13e1c48f862 23,25,30-31,34-35,40-41,43
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharingTrustTest.kt
+  s_c56e31c87cddde::t_8e0c88bac9b7c2 13,15-16,25-28,33-37,40-42,44-45,48-62,66-70,75-83,88-91,95-124,129,135,142,149,153-162,166-172,174-175
+apps/android/app/src/test/kotlin/com/hushos/app/data/SuccessionPinTest.kt
+  s_c56e31c87cddde::t_c42de81c464b3c 3-4,8,18-19,28-29,32-33,36-37,41,43-45,50,55,60-64,69-76,79-81,84-97,104-107,112,114,117,119,129,147-148,152-154
+apps/android/app/src/test/kotlin/com/hushos/app/data/WebFixture.kt
+  s_c56e31c87cddde::t_3b63df7b50a167 5,13-14,18-19,22-47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6c61e1292ad2afd06a6e2088527ee8d002dde175",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
