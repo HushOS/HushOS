@@ -1,0 +1,24 @@
+docs/groups-crypto-review.md
+  s_c56e31c87cddde::t_03fb8200e35305 13-31
+  s_c56e31c87cddde::t_6365e100e5358e 1-2,6-8,10-12,32-34,41,44-46
+  s_c56e31c87cddde::t_4c599569e4d403 49
+  s_c56e31c87cddde::t_b739229fbc2f23 3-4
+  s_c56e31c87cddde::t_e941cb346a6aac 5,9,48,51
+  s_c56e31c87cddde::t_fae83c0aa6a019 35-40,42-43,47,50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2d6e9212a28878a69e08f1fb22948c14a10006a3",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
