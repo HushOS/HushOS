@@ -31,6 +31,8 @@ thiserror = "2"
 uniffi = { version = "0.32", optional = true, default-features = false }
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 ml-kem = { version = "0.3", features = ["zeroize"] }
+# Exactly this release: the FIPS 204 ACVP vectors in fixtures/ml-dsa-65-acvp.json must pass again before any other.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
 crypto_secretbox = "0.1"
 salsa20 = "0.10"
 ed25519-dalek = "3"

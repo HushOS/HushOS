@@ -239,43 +239,109 @@ fn identity(value: &Value) -> IdentityEnvelope {
             public_key: kem["publicKey"].as_str().unwrap().into(),
             seed_nonce: kem["seedNonce"].as_str().unwrap().into(),
             encrypted_seed: kem["encryptedSeed"].as_str().unwrap().into(),
-            signature: kem["signature"].as_str().unwrap().into(),
+            signature: kem.get("signature").and_then(Value::as_str).map(Into::into),
         }),
+        ml_dsa: value["mlDsa"].as_object().map(|ml_dsa| IdentityMlDsa {
+            public_key: ml_dsa["publicKey"].as_str().unwrap().into(),
+            seed_nonce: ml_dsa["seedNonce"].as_str().unwrap().into(),
+            encrypted_seed: ml_dsa["encryptedSeed"].as_str().unwrap().into(),
+        }),
+        keys_signature: value["keysSignature"].as_str().map(Into::into),
+    }
+}
+
+fn public_identity_of(value: &Value) -> PublicIdentity {
+    PublicIdentity {
+        key_version: n(value, "keyVersion"),
+        encryption_public_key: s(value, "encryptionPublicKey"),
+        signing_public_key: s(value, "signingPublicKey"),
+        ml_dsa_public_key: s(value, "mlDsaPublicKey"),
+        kem_public_key: s(value, "kemPublicKey"),
+        keys_signature: s(value, "keysSignature"),
     }
 }
 
 #[test]
-fn the_identity_opens_a_suite_3_share_and_refuses_suites_1_and_2() {
+fn the_web_s_version_2_identity_opens_here_with_all_four_keys() {
     let fixture = fixture();
     let account = &fixture["account"];
-    let share = &fixture["share"];
-    let keys =
-        identity_open(s(account, "userId"), b(account, "accountKey"), identity(&share["identity"])).unwrap();
-    assert_eq!(keys.kem_seed.len(), 64, "the web minted a KEM key");
-    let ctx = &share["ctx"];
-    let ctx = ShareContext {
+    let envelope = identity(&fixture["share"]["identity"]);
+    assert_eq!(envelope.version, 2);
+    let keys = identity_open(s(account, "userId"), b(account, "accountKey"), envelope.clone()).unwrap();
+    assert_eq!((keys.identity_version, keys.kem_seed.len(), keys.ml_dsa_seed.len()), (2, 64, 32));
+    assert_eq!(keys.ml_dsa_public_key, envelope.ml_dsa.clone().map(|k| k.public_key));
+    // Its keys statement is the one this core builds, and verifies here.
+    assert!(identity_verify_keys(s(account, "userId"), public_identity(envelope.clone()).unwrap()));
+    // Under another account's id it is not the web's identity.
+    assert!(identity_open("someone-else".into(), b(account, "accountKey"), envelope).is_err());
+}
+
+fn share_ctx(ctx: &Value) -> ShareContext {
+    ShareContext {
         workspace_id: s(ctx, "workspaceId"),
         node_id: s(ctx, "nodeId"),
         key_epoch: n(ctx, "keyEpoch"),
         grantee_user_id: s(ctx, "granteeUserId"),
         granter_user_id: s(ctx, "granterUserId"),
+    }
+}
+
+#[test]
+fn the_identity_opens_a_suite_4_share_from_its_signer_only_and_refuses_suites_1_2_and_3() {
+    let fixture = fixture();
+    let account = &fixture["account"];
+    let share = &fixture["share"];
+    let keys =
+        identity_open(s(account, "userId"), b(account, "accountKey"), identity(&share["identity"])).unwrap();
+    let ctx = share_ctx(&share["ctx"]);
+    let granter = HybridPublicKey {
+        signing_public_key: b(share, "granterSigningPublicKey"),
+        ml_dsa_public_key: b(share, "granterMlDsaPublicKey"),
     };
-    let granter = b(share, "granterSigningPublicKey");
+    let signed = b(share, "signed");
+    assert_eq!(signed.len(), 4565);
     assert_eq!(
-        share_open(b(share, "signed"), granter.clone(), keys.clone(), ctx.clone()).unwrap(),
+        share_open(signed.clone(), granter.clone(), keys.clone(), ctx.clone()).unwrap(),
         b(share, "nodeKey")
     );
-    assert_eq!(b(share, "signed").len(), 1256);
-    // Genuine suite 1 and 2 shares the web made: refused, whatever key is offered.
-    for suite in ["classic", "hybrid"] {
-        assert!(share_open(b(share, suite), granter.clone(), keys.clone(), ctx.clone()).is_err(), "{suite}");
+    // The web's hybrid signature over the share statement this core builds, both halves.
+    let statement = share_statement(ctx.clone(), signed[..signed.len() - 3373].to_vec()).unwrap();
+    assert!(hybrid_verify(granter.clone(), statement, signed[signed.len() - 3373..].to_vec()));
+    // Only from its signer: the grantee's own keys, or either half swapped, open nothing.
+    let own = HybridPublicKey {
+        signing_public_key: base64url_decode(keys.signing_public_key.clone()).unwrap(),
+        ml_dsa_public_key: base64url_decode(keys.ml_dsa_public_key.clone().unwrap()).unwrap(),
+    };
+    for other in [
+        own.clone(),
+        HybridPublicKey { signing_public_key: own.signing_public_key.clone(), ..granter.clone() },
+        HybridPublicKey { ml_dsa_public_key: own.ml_dsa_public_key.clone(), ..granter.clone() },
+    ] {
+        assert!(matches!(
+            share_open(signed.clone(), other, keys.clone(), ctx.clone()),
+            Err(CoreError::Sealed(message)) if message.contains("not signed")
+        ));
+    }
+    assert!(share_open(
+        signed.clone(),
+        granter.clone(),
+        keys.clone(),
+        ShareContext { key_epoch: 6, ..ctx.clone() }
+    )
+    .is_err());
+    // Cut to suite 3's length, it opens nothing.
+    assert!(share_open(signed[..1256].to_vec(), granter.clone(), keys.clone(), ctx.clone()).is_err());
+    // Genuine suite 1, 2 and 3 shares the web made: refused, whatever key is offered.
+    assert_eq!(b(share, "suite3").len(), 1256);
+    for suite in ["classic", "hybrid", "suite3"] {
         assert!(
-            share_open(b(share, suite), b(share, "granterPublicKey"), keys.clone(), ctx.clone()).is_err(),
+            matches!(
+                share_open(b(share, suite), granter.clone(), keys.clone(), ctx.clone()),
+                Err(CoreError::Input(message)) if message.contains("Invalid share envelope")
+            ),
             "{suite}"
         );
     }
-    // Suite 3 needs the granter's signing key, and the right one.
-    assert!(share_open(b(share, "signed"), vec![7; 32], keys, ctx).is_err());
 }
 
 #[test]
@@ -373,37 +439,92 @@ fn link(value: &Value) -> SuccessionLink {
         new_key_version: n(value, "newKeyVersion"),
         old_encryption_public_key: s(value, "oldEncryptionPublicKey"),
         old_signing_public_key: s(value, "oldSigningPublicKey"),
+        old_ml_dsa_public_key: s(value, "oldMlDsaPublicKey"),
         new_encryption_public_key: s(value, "newEncryptionPublicKey"),
         new_signing_public_key: s(value, "newSigningPublicKey"),
+        new_ml_dsa_public_key: s(value, "newMlDsaPublicKey"),
         new_kem_public_key: s(value, "newKemPublicKey"),
         signature: s(value, "signature"),
     }
 }
 
+fn old_signer(link: &SuccessionLink) -> SuccessionSigner {
+    SuccessionSigner {
+        signing_public_key: link.old_signing_public_key.clone(),
+        ml_dsa_public_key: link.old_ml_dsa_public_key.clone(),
+    }
+}
+
 #[test]
-fn the_web_s_succession_link_holds_and_its_new_identity_opens_here() {
+fn the_web_s_hybrid_succession_holds_here_and_its_new_identity_opens() {
     let succession = &fixture()["succession"];
     let user = s(succession, "userId");
     let link = link(&succession["link"]);
-    assert!(succession_verify(user.clone(), link.clone()));
+    // The statement bytes are the web's, byte for byte.
+    assert_eq!(succession_statement(user.clone(), link.clone()).unwrap(), b(succession, "statement"));
+    assert_eq!(base64url_decode(link.signature.clone()).unwrap().len(), 3373);
+    assert!(succession_verify(user.clone(), link.clone(), old_signer(&link)));
+    assert!(!succession_verify("someone-else".into(), link.clone(), old_signer(&link)));
+    // Only under the old keys: never under the keys the link brings in.
+    let new_signer = SuccessionSigner {
+        signing_public_key: link.new_signing_public_key.clone(),
+        ml_dsa_public_key: link.new_ml_dsa_public_key.clone(),
+    };
+    assert!(!succession_verify(user.clone(), link.clone(), new_signer));
+    // Its Ed25519 half alone, or either half broken: not a succession.
+    let signature = base64url_decode(link.signature.clone()).unwrap();
+    let stripped = SuccessionLink { signature: base64url_encode(signature[..64].to_vec()), ..link.clone() };
+    assert!(!succession_verify(user.clone(), stripped, old_signer(&link)));
+    for at in [7, 64 + 7] {
+        let mut broken = signature.clone();
+        broken[at] ^= 1;
+        let broken = SuccessionLink { signature: base64url_encode(broken), ..link.clone() };
+        assert!(!succession_verify(user.clone(), broken, old_signer(&link)), "byte {at}");
+    }
     let next = identity(&succession["identity"]);
-    let keys = identity_open(user.clone(), b(succession, "accountKey"), next.clone()).unwrap();
-    assert_eq!(keys.key_version, link.new_key_version);
+    let keys = identity_open(user, b(succession, "accountKey"), next).unwrap();
+    assert_eq!((keys.key_version, keys.identity_version), (link.new_key_version, 2));
+}
+
+#[test]
+fn the_web_s_chain_holds_from_the_version_3_pin_to_the_served_keys_and_a_forged_one_does_not() {
+    let succession = &fixture()["succession"];
+    let user = s(succession, "userId");
+    let chain = &succession["chain"];
+    let links: Vec<SuccessionLink> = chain["links"].as_array().unwrap().iter().map(link).collect();
+    let pin = &chain["pinned"];
     let pinned = PinnedKeys {
-        key_version: Some(link.old_key_version),
-        encryption_public_key: link.old_encryption_public_key.clone(),
-        signing_public_key: link.old_signing_public_key.clone(),
+        key_version: Some(n(pin, "keyVersion")),
+        encryption_public_key: s(pin, "encryptionPublicKey"),
+        signing_public_key: s(pin, "signingPublicKey"),
+        ml_dsa_public_key_hash: s(pin, "mlDsaPublicKeyHash"),
     };
+    assert_eq!(
+        pinned.ml_dsa_public_key_hash,
+        key_digest(base64url_decode(links[0].old_ml_dsa_public_key.clone()).unwrap())
+    );
+    let now = &chain["served"];
     let served = ServedKeys {
-        key_version: next.key_version,
-        encryption_public_key: next.encryption_public_key.clone(),
-        signing_public_key: next.signing_public_key.clone(),
-        kem_public_key: next.kem.unwrap().public_key,
+        key_version: n(now, "keyVersion"),
+        encryption_public_key: s(now, "encryptionPublicKey"),
+        signing_public_key: s(now, "signingPublicKey"),
+        ml_dsa_public_key: s(now, "mlDsaPublicKey"),
+        kem_public_key: s(now, "kemPublicKey"),
     };
-    assert!(succession_chain_verify(user.clone(), pinned.clone(), served.clone(), vec![link.clone()]));
-    let mut forged = link;
-    forged.new_signing_public_key = forged.old_signing_public_key.clone();
-    assert!(!succession_chain_verify(user, pinned, served, vec![forged]));
+    assert!(succession_chain_verify(user.clone(), pinned.clone(), served.clone(), links.clone()));
+    // A gap, a served key beside the chain's, a pin whose ML-DSA digest is another key's.
+    assert!(!succession_chain_verify(user.clone(), pinned.clone(), served.clone(), links[1..].to_vec()));
+    let beside = ServedKeys { ml_dsa_public_key: links[0].old_ml_dsa_public_key.clone(), ..served.clone() };
+    assert!(!succession_chain_verify(user.clone(), pinned.clone(), beside, links.clone()));
+    let other_pin = PinnedKeys {
+        ml_dsa_public_key_hash: key_digest(base64url_decode(links[1].new_ml_dsa_public_key.clone()).unwrap()),
+        ..pinned.clone()
+    };
+    assert!(!succession_chain_verify(user.clone(), other_pin, served.clone(), links.clone()));
+    // The second link with its old ML-DSA key swapped for another: the chain breaks there.
+    let mut forged = links.clone();
+    forged[1].old_ml_dsa_public_key = links[1].new_ml_dsa_public_key.clone();
+    assert!(!succession_chain_verify(user, pinned, served, forged));
 }
 
 #[test]
@@ -485,33 +606,83 @@ fn the_recovery_phrase_the_web_made_opens_the_account_key_and_reads_back() {
 }
 
 #[test]
-fn the_identity_kem_binding_the_web_signed_verifies_and_a_swapped_key_does_not() {
+fn the_web_s_keys_statement_is_this_core_s_byte_for_byte_and_its_signature_verifies() {
+    let keys = &fixture()["keys"];
+    let user = s(keys, "userId");
+    let public = public_identity_of(&keys["identity"]);
+    let statement = keys_statement(
+        user.clone(),
+        public.key_version,
+        public.encryption_public_key.clone(),
+        public.signing_public_key.clone(),
+        public.ml_dsa_public_key.clone(),
+        public.kem_public_key.clone(),
+    )
+    .unwrap();
+    assert_eq!(statement, b(keys, "statement"));
+    assert!(identity_verify_keys(user.clone(), public.clone()));
+    assert!(!identity_verify_keys("someone-else".into(), public.clone()));
+    let mut signature = base64url_decode(public.keys_signature.clone()).unwrap();
+    signature[64 + 9] ^= 1;
+    assert!(!identity_verify_keys(
+        user,
+        PublicIdentity { keys_signature: base64url_encode(signature), ..public }
+    ));
+}
+
+#[test]
+fn the_web_s_upgrades_keep_the_version_1_keys_and_open_here() {
+    let upgrade = &fixture()["upgrade"];
+    let (user, root) = (s(upgrade, "userId"), b(upgrade, "accountKey"));
+    for (from, to) in [("legacy", "upgraded"), ("legacyNoKem", "upgradedNoKem")] {
+        let legacy = identity(&upgrade[from]);
+        let upgraded = identity(&upgrade[to]);
+        assert_eq!((legacy.version, upgraded.version), (1, 2));
+        assert_eq!(upgraded.key_version, legacy.key_version);
+        assert_eq!(upgraded.encryption_public_key, legacy.encryption_public_key);
+        assert_eq!(upgraded.signing_public_key, legacy.signing_public_key);
+        if let Some(kem) = &legacy.kem {
+            assert!(kem.signature.is_some(), "a genuine version 1 binding");
+            assert_eq!(upgraded.kem.as_ref().unwrap().public_key, kem.public_key);
+        }
+        assert_eq!(upgraded.kem.as_ref().unwrap().signature, None, "the binding is dropped");
+        let before = identity_open(user.clone(), root.clone(), legacy.clone()).unwrap();
+        let after = identity_open(user.clone(), root.clone(), upgraded.clone()).unwrap();
+        assert_eq!(before.identity_version, 1);
+        assert_eq!(after.encryption_private_key.to_vec(), before.encryption_private_key.to_vec());
+        assert_eq!(after.signing_seed.to_vec(), before.signing_seed.to_vec());
+        assert!(identity_verify_keys(user.clone(), public_identity(upgraded.clone()).unwrap()));
+        // Already version 2: no second ML-DSA key here either.
+        assert!(identity_upgrade(user.clone(), root.clone(), upgraded).is_err());
+    }
+}
+
+#[test]
+fn the_fingerprint_is_the_web_s_version_3() {
     let fixture = fixture();
-    let account = &fixture["account"];
-    let identity = &fixture["share"]["identity"];
-    let kem = &identity["kem"];
-    assert!(kem_binding_verify(
-        s(account, "userId"),
-        s(identity, "encryptionPublicKey"),
-        s(identity, "signingPublicKey"),
-        s(kem, "publicKey"),
-        s(kem, "signature")
-    ));
-    assert!(!kem_binding_verify(
-        "someone-else".into(),
-        s(identity, "encryptionPublicKey"),
-        s(identity, "signingPublicKey"),
-        s(kem, "publicKey"),
-        s(kem, "signature")
-    ));
-    let mut other = base64url_decode(s(kem, "publicKey")).unwrap();
-    other[0] ^= 1;
-    assert!(!kem_binding_verify(
-        s(account, "userId"),
-        s(identity, "encryptionPublicKey"),
-        s(identity, "signingPublicKey"),
-        base64url_encode(other),
-        s(kem, "signature")
+    let prints = &fixture["fingerprints"];
+    assert_eq!(
+        identity_fingerprint(vec![1; 32], vec![2; 32], vec![3; 32], vec![4; 32]).unwrap(),
+        s(prints, "vector")
+    );
+    let envelope = identity(&fixture["share"]["identity"]);
+    let print = identity_fingerprint_of_keys(
+        base64url_decode(envelope.encryption_public_key.clone()).unwrap(),
+        base64url_decode(envelope.signing_public_key.clone()).unwrap(),
+        base64url_decode(envelope.ml_dsa.clone().unwrap().public_key).unwrap(),
+        base64url_decode(envelope.kem.clone().unwrap().public_key).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(print, s(prints, "identity"));
+    // The web's version 3 pin in its settings verifies here.
+    let settings: Value = serde_json::from_str(&s(&fixture["settings"], "json")).unwrap();
+    let (_, pin) = settings["contacts"].as_object().unwrap().iter().next().unwrap();
+    assert!(pin_verified(
+        s(pin, "encryptionPublicKey"),
+        s(pin, "signingPublicKey"),
+        pin["mlDsaPublicKeyHash"].as_str().map(Into::into),
+        pin["kemPublicKeyHash"].as_str().map(Into::into),
+        s(pin, "fingerprint"),
     ));
 }
 
@@ -533,10 +704,13 @@ fn the_web_s_settings_open_as_version_2_under_its_settings_key_and_version_1_rea
     assert_eq!(key, b(settings, "settingsKeyRaw"));
     let v2 = envelope(&settings["v2"]);
     assert_eq!(v2.version, 2);
-    assert_eq!(
-        settings_open(user.clone(), Some(key.clone()), v2.clone()).unwrap(),
-        Some(s(settings, "json"))
-    );
+    // The web read the document as version 1 and sealed it as version 2, as both must.
+    let opened = settings_open(user.clone(), Some(key.clone()), v2.clone()).unwrap();
+    assert_eq!(opened, Some(s(settings, "json")));
+    let read: Value = serde_json::from_str(&s(settings, "readJson")).unwrap();
+    let written: Value = serde_json::from_str(&opened.unwrap()).unwrap();
+    assert_eq!((read["version"].clone(), written["version"].clone()), (Value::from(1), Value::from(2)));
+    assert_eq!(read["contacts"], written["contacts"]);
     // The identity's private key is no settings key.
     assert!(settings_open(user.clone(), Some(b(settings, "identityPrivateKey")), v2).is_err());
     // A genuine version 1 document the web sealed under the identity's key: never opened.

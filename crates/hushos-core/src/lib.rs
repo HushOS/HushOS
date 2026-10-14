@@ -20,6 +20,7 @@ mod identity;
 mod ids;
 mod links;
 mod opaque;
+mod pq;
 mod recovery;
 mod reports;
 mod shares;

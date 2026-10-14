@@ -1,18 +1,24 @@
 //! A share: one node's key sealed to one grantee, as `packages/crypto/shares.ts`
-//! writes it. Suite 3 (1256 bytes), the only one sealed: a fresh X25519 key
-//! agreed with the grantee's identity key beside an ML-KEM-768 encapsulation,
-//! HKDF over both secrets salted with a digest of the KEM ciphertext and both
-//! X25519 public keys, and the granter's Ed25519 signature over the sealed
-//! bytes, checked against the granter's current signing key before anything
-//! is decapsulated. Suites 1 (72 bytes, the static pair key) and 2 (1160
-//! bytes, the pair key and ML-KEM) are refused: a stolen granter key
-//! reproduced their key agreement.
+//! writes it. Suite 4 (4565 bytes, docs/identity-pq-design.md 3) is the only
+//! one sealed or opened: a fresh X25519 key agreed with the grantee's identity
+//! key beside an ML-KEM-768 encapsulation, HKDF over both secrets salted with
+//! a digest of the KEM ciphertext and both X25519 public keys, and the
+//! granter's hybrid signature (Ed25519 and ML-DSA-65) over the sealed bytes,
+//! both halves checked against the granter's pinned keys before anything is
+//! decapsulated. The suite number is in the key derivation, the associated
+//! data and the signed statement, so an envelope cut down to an older suite's
+//! length opens as nothing. Suite 3 (1256 bytes, the same with an Ed25519
+//! signature alone) and suites 1 and 2 are refused.
 
 use crate::bytes::{expect_len, random, KEY_BYTES, NONCE_BYTES, TAG_BYTES};
 use crate::envelope::{context, open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
-use crate::identity::{kem_decapsulate, kem_encapsulate, IdentityKeys, KEM_CIPHERTEXT_BYTES, KEM_SEED_BYTES};
-use crate::signatures::{digest, sign, verify, SIGNATURE_BYTES};
+use crate::identity::{
+    kem_decapsulate, kem_encapsulate, IdentityKeys, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES,
+    KEM_SEED_BYTES,
+};
+use crate::pq::{ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SEED_BYTES};
+use crate::signatures::{digest, sign_hybrid, verify_hybrid, HybridPublicKey, HYBRID_SIGNATURE_BYTES};
 use hkdf::Hkdf;
 use serde_json::json;
 use sha2::Digest as _;
@@ -20,9 +26,10 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
+const SUITE: u32 = 4;
 const SIGNED_PART_BYTES: usize = 32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES + KEY_BYTES + TAG_BYTES;
-const SIGNED_SHARE_ENVELOPE_BYTES: usize = SIGNED_PART_BYTES + SIGNATURE_BYTES; // 1256
-const SIGNED_SHARE_KEY_INFO: &[u8] = b"hushos/drive/share-key/v3";
+const SIGNED_SHARE_ENVELOPE_BYTES: usize = SIGNED_PART_BYTES + HYBRID_SIGNATURE_BYTES; // 4565
+const SIGNED_SHARE_KEY_INFO: &[u8] = b"hushos/drive/share-key/v4";
 
 /// What binds a share to its node, epoch and the two people.
 #[derive(Debug, Clone)]
@@ -47,19 +54,32 @@ fn share_context(ctx: &ShareContext, suite: u32) -> Vec<u8> {
     ])
 }
 
-/* ["hushos/drive/sig/share",3,ws,node,epoch,grantee,granter,sha256(eph || kemCt || nonce || body)] */
+/// `["hushos/drive/sig/share",4,workspaceId,nodeId,keyEpoch,granteeUserId,granterUserId,sha256(eph || kemCt || nonce || body)]`:
+/// what the granter's hybrid signature covers. `sealed` is the envelope
+/// without its signature: everything the signature follows.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn share_statement(ctx: ShareContext, sealed: Vec<u8>) -> CoreResult<Vec<u8>> {
+    share_message(&ctx, &sealed)
+}
+
 fn share_message(ctx: &ShareContext, sealed: &[u8]) -> CoreResult<Vec<u8>> {
     if ctx.key_epoch < 1 {
         return Err(input("Invalid key epoch."));
     }
+    let id = |value: &str| {
+        if value.is_empty() {
+            return Err(input("Invalid share context."));
+        }
+        Ok(json!(value.to_lowercase()))
+    };
     Ok(context(&[
         json!("hushos/drive/sig/share"),
-        json!(3),
-        json!(ctx.workspace_id.to_lowercase()),
-        json!(ctx.node_id.to_lowercase()),
+        json!(SUITE),
+        id(&ctx.workspace_id)?,
+        id(&ctx.node_id)?,
         json!(ctx.key_epoch),
-        json!(ctx.grantee_user_id.to_lowercase()),
-        json!(ctx.granter_user_id.to_lowercase()),
+        id(&ctx.grantee_user_id)?,
+        id(&ctx.granter_user_id)?,
         json!(digest(sealed)),
     ]))
 }
@@ -76,7 +96,7 @@ fn agree(my_private: &[u8], their_public: &[u8]) -> CoreResult<Zeroizing<[u8; 32
     Ok(Zeroizing::new(*shared.as_bytes()))
 }
 
-/* HKDF(salt = SHA-256(kemCt || eph || granteePublic), ikm = dh || kemSs, info v3) */
+/* HKDF(salt = SHA-256(kemCt || eph || granteePublic), ikm = dh || kemSs, info v4) */
 fn signed_share_key(
     dh: &[u8],
     kem_secret: &[u8],
@@ -99,24 +119,27 @@ fn signed_share_key(
     Ok(key)
 }
 
-/// Seals a node key to a grantee in suite 3, signed by the granter's identity
-/// (its signing seed; nothing else of the granter's is secret here). Both of
-/// the grantee's keys must be the pinned ones: sealing to an unchecked key is
-/// sealing to a stranger.
+/// Seals a node key to a grantee in suite 4, signed with the granter's hybrid
+/// signature (its signing and ML-DSA seeds; nothing else of the granter's is
+/// secret here). A granter whose identity is still version 1 is refused:
+/// upgrade it first. Both of the grantee's keys must be the pinned ones:
+/// sealing to an unchecked key is sealing to a stranger.
 ///
 /// ```
 /// use hushos_core::*;
 /// let (root_a, root_b) = (random_bytes(32)?, random_bytes(32)?);
 /// let granter = identity_open("a".into(), root_a.clone(), identity_create("a".into(), root_a, 1)?)?;
-/// let grantee_envelope = identity_create("b".into(), root_b.clone(), 1)?;
-/// let grantee = identity_open("b".into(), root_b, grantee_envelope.clone())?;
+/// let grantee = identity_open("b".into(), root_b.clone(), identity_create("b".into(), root_b, 1)?)?;
 /// let ctx = ShareContext { workspace_id: "w".into(), node_id: "n".into(), key_epoch: 1, grantee_user_id: "b".into(), granter_user_id: "a".into() };
 /// let node_key = random_bytes(32)?;
 /// let envelope = share_seal(ctx.clone(), node_key.clone(), granter.clone(),
 ///     base64url_decode(grantee.encryption_public_key.clone())?, base64url_decode(grantee.kem_public_key.clone().unwrap())?)?;
-/// assert_eq!(envelope.len(), 1256);
-/// // The granter's current signing key, as the grantee's pin vouches for it.
-/// let pinned = base64url_decode(granter.signing_public_key.clone())?;
+/// assert_eq!(envelope.len(), 4565);
+/// // The granter's current keys, as the grantee's version 3 pin vouches for them.
+/// let pinned = HybridPublicKey {
+///     signing_public_key: base64url_decode(granter.signing_public_key.clone())?,
+///     ml_dsa_public_key: base64url_decode(granter.ml_dsa_public_key.clone().unwrap())?,
+/// };
 /// assert_eq!(share_open(envelope, pinned, grantee, ctx)?, node_key);
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
@@ -129,7 +152,16 @@ pub fn share_seal(
     grantee_kem_public_key: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
     expect_len("node key", &node_key, KEY_BYTES)?;
+    if granter.ml_dsa_seed.len() != ML_DSA_SEED_BYTES {
+        return Err(input("Your keys need upgrading first. Unlock again and retry."));
+    }
     expect_len("identity public key", &grantee_public_key, 32).map_err(|_| input("Invalid identity key."))?;
+    // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target.
+    if grantee_kem_public_key.is_empty() {
+        return Err(input("This person has no post-quantum key yet, so nothing was shared."));
+    }
+    expect_len("kem public key", &grantee_kem_public_key, KEM_PUBLIC_KEY_BYTES)
+        .map_err(|_| input("Invalid identity key."))?;
     let ephemeral = Zeroizing::new(random(32));
     let ephemeral_public =
         PublicKey::from(&StaticSecret::from(<[u8; 32]>::try_from(ephemeral.as_slice()).expect("32 bytes")))
@@ -148,16 +180,17 @@ pub fn share_seal(
     out.extend_from_slice(&ephemeral_public);
     out.extend_from_slice(&ciphertext);
     out.extend_from_slice(&nonce);
-    out.extend(seal_with_nonce(key.as_slice(), &nonce, &node_key, &share_context(&ctx, 3))?);
-    let signature = sign(&granter.signing_seed, &share_message(&ctx, &out)?)?;
+    out.extend(seal_with_nonce(key.as_slice(), &nonce, &node_key, &share_context(&ctx, SUITE))?);
+    let signature = sign_hybrid(&granter.signing_seed, &granter.ml_dsa_seed, &share_message(&ctx, &out)?)?;
     out.extend_from_slice(&signature);
+    debug_assert_eq!(out.len(), SIGNED_SHARE_ENVELOPE_BYTES);
     Ok(out)
 }
 
-/// Opens a share sealed to this identity: the node key inside. Only suite 3
-/// opens, and only once its signature verifies under
-/// `granter_signing_public_key`, the granter's **current** signing key as the
-/// pin vouches for it (followed through a verified succession); nothing is
+/// Opens a share sealed to this identity: the node key inside. Only suite 4
+/// opens, and only once both halves of its signature verify under `granter`,
+/// the granter's **current** Ed25519 and ML-DSA keys as a version 3 pin
+/// vouches for them (followed through a verified succession); nothing is
 /// decapsulated before. A key the granter has since replaced opens nothing:
 /// such a share waits for the granter to seal it again. After the grantee's
 /// own succession, try each of the account's identities ([`IdentityKeys`] of
@@ -165,18 +198,18 @@ pub fn share_seal(
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn share_open(
     envelope: Vec<u8>,
-    granter_signing_public_key: Vec<u8>,
+    granter: HybridPublicKey,
     grantee: IdentityKeys,
     ctx: ShareContext,
 ) -> CoreResult<Vec<u8>> {
     if envelope.len() != SIGNED_SHARE_ENVELOPE_BYTES {
         return Err(input("Invalid share envelope."));
     }
-    if granter_signing_public_key.len() != 32 {
+    if granter.signing_public_key.len() != 32 || granter.ml_dsa_public_key.len() != ML_DSA_PUBLIC_KEY_BYTES {
         return Err(input("This share needs the key of the person who shared it."));
     }
     let (sealed, signature) = envelope.split_at(SIGNED_PART_BYTES);
-    if !verify(&granter_signing_public_key, &share_message(&ctx, sealed)?, signature) {
+    if !verify_hybrid(&granter, &share_message(&ctx, sealed)?, signature) {
         return Err(CoreError::Sealed("This share is not signed by the person who shared it.".into()));
     }
     if grantee.kem_seed.len() != KEM_SEED_BYTES {
@@ -194,7 +227,7 @@ pub fn share_open(
         crate::bytes::decode("identity public key", &grantee.encryption_public_key, Some(32))?;
     let key =
         signed_share_key(dh.as_slice(), secret.as_slice(), ciphertext, ephemeral_public, &grantee_public)?;
-    let node_key = open_with_nonce(key.as_slice(), nonce, body, &share_context(&ctx, 3))?;
+    let node_key = open_with_nonce(key.as_slice(), nonce, body, &share_context(&ctx, SUITE))?;
     expect_len("node key", &node_key, KEY_BYTES)
         .map_err(|_| CoreError::Sealed("Invalid share envelope.".into()))?;
     Ok(node_key)
@@ -204,7 +237,8 @@ pub fn share_open(
 mod tests {
     use super::*;
     use crate::bytes::{decode, random};
-    use crate::identity::{identity_create, identity_open};
+    use crate::identity::{identity_create, identity_open, identity_succeed};
+    use crate::signatures::sign;
 
     fn ctx() -> ShareContext {
         ShareContext {
@@ -230,52 +264,75 @@ mod tests {
         decode("k", keys.kem_public_key.as_ref().unwrap(), None).unwrap()
     }
 
-    /* What a share opens against: the granter's current signing key, as pinned. */
-    fn pinned(keys: &IdentityKeys) -> Vec<u8> {
-        decode("k", &keys.signing_public_key, Some(32)).unwrap()
+    /* What a share opens against: the granter's current signing keys, as pinned. */
+    fn pinned(keys: &IdentityKeys) -> HybridPublicKey {
+        HybridPublicKey {
+            signing_public_key: decode("k", &keys.signing_public_key, Some(32)).unwrap(),
+            ml_dsa_public_key: decode("k", keys.ml_dsa_public_key.as_ref().unwrap(), None).unwrap(),
+        }
+    }
+
+    fn not_signed(result: CoreResult<Vec<u8>>) -> bool {
+        matches!(result, Err(CoreError::Sealed(message)) if message.contains("not signed"))
     }
 
     #[test]
-    fn suite_3_opens_for_the_grantee_from_the_granter_who_signed_it() {
+    fn suite_4_opens_for_the_grantee_from_the_granter_who_signed_it() {
         let (owner, guest) = (person("granter"), person("grantee"));
         let node_key = random(32);
         let envelope =
             share_seal(ctx(), node_key.clone(), owner.clone(), public(&guest), kem(&guest)).unwrap();
-        assert_eq!(envelope.len(), SIGNED_SHARE_ENVELOPE_BYTES);
+        assert_eq!(envelope.len(), 4565);
         assert_eq!(share_open(envelope.clone(), pinned(&owner), guest.clone(), ctx()).unwrap(), node_key);
         let again = share_seal(ctx(), node_key, owner, public(&guest), kem(&guest)).unwrap();
         assert_ne!(again[..32], envelope[..32], "every share has its own ephemeral key");
     }
 
     #[test]
-    fn suite_3_is_refused_before_decapsulating_unless_the_pinned_granter_signed_it() {
+    fn suite_4_needs_both_halves_of_the_granter_s_signature_each_way_round() {
         let (owner, guest, intruder) = (person("granter"), person("grantee"), person("intruder"));
+        let envelope = share_seal(ctx(), random(32), owner.clone(), public(&guest), kem(&guest)).unwrap();
+        // A broken Ed25519 half beside a valid ML-DSA one, and the reverse.
+        for at in [SIGNED_PART_BYTES + 5, SIGNED_PART_BYTES + 64 + 100] {
+            let mut broken = envelope.clone();
+            broken[at] ^= 1;
+            assert!(not_signed(share_open(broken, pinned(&owner), guest.clone(), ctx())), "byte {at}");
+        }
+        // Either of the pinned keys swapped for someone else's.
+        let ed_only =
+            HybridPublicKey { ml_dsa_public_key: pinned(&intruder).ml_dsa_public_key, ..pinned(&owner) };
+        let lattice_only =
+            HybridPublicKey { signing_public_key: pinned(&intruder).signing_public_key, ..pinned(&owner) };
+        for granter in [ed_only, lattice_only] {
+            assert!(not_signed(share_open(envelope.clone(), granter, guest.clone(), ctx())));
+        }
+        // An intruder's two halves, or the real Ed25519 half beside an intruder's ML-DSA half
+        // (what a quantum forger of Ed25519 alone could make): not the pinned granter's.
+        let planted = share_seal(ctx(), random(32), intruder.clone(), public(&guest), kem(&guest)).unwrap();
+        assert!(not_signed(share_open(planted.clone(), pinned(&owner), guest.clone(), ctx())));
+        let statement = share_message(&ctx(), &planted[..SIGNED_PART_BYTES]).unwrap();
+        let mut forged = planted[..SIGNED_PART_BYTES].to_vec();
+        forged.extend(sign_hybrid(&owner.signing_seed, &intruder.ml_dsa_seed, &statement).unwrap());
+        assert!(not_signed(share_open(forged, pinned(&owner), guest, ctx())));
+    }
+
+    #[test]
+    fn suite_4_is_refused_before_decapsulating_unless_the_pinned_granter_signed_it() {
+        let (owner, guest) = (person("granter"), person("grantee"));
         let envelope = share_seal(ctx(), random(32), owner.clone(), public(&guest), kem(&guest)).unwrap();
         // Without a KEM key the grantee still hears the signature is wrong: it is checked first.
         let no_kem = IdentityKeys { kem_seed: Vec::new().into(), ..guest.clone() };
-        assert!(matches!(
-            share_open(envelope.clone(), pinned(&intruder), no_kem.clone(), ctx()),
-            Err(CoreError::Sealed(message)) if message.contains("not signed")
-        ));
+        assert!(not_signed(share_open(envelope.clone(), pinned(&person("x")), no_kem.clone(), ctx())));
         assert!(matches!(
             share_open(envelope.clone(), pinned(&owner), no_kem, ctx()),
             Err(CoreError::Input(_))
         ));
-        // A key of someone else's choosing sealed in the granter's name.
-        let planted = share_seal(ctx(), random(32), intruder, public(&guest), kem(&guest)).unwrap();
-        assert!(share_open(planted, pinned(&owner), guest.clone(), ctx()).is_err());
         for at in
             [0, 32 + 5, 32 + KEM_CIPHERTEXT_BYTES + 3, SIGNED_PART_BYTES - 1, SIGNED_SHARE_ENVELOPE_BYTES - 1]
         {
             let mut tampered = envelope.clone();
             tampered[at] ^= 1;
-            assert!(
-                matches!(
-                    share_open(tampered, pinned(&owner), guest.clone(), ctx()),
-                    Err(CoreError::Sealed(message)) if message.contains("not signed")
-                ),
-                "byte {at}"
-            );
+            assert!(not_signed(share_open(tampered, pinned(&owner), guest.clone(), ctx())), "byte {at}");
         }
         for change in [
             ShareContext { key_epoch: 4, ..ctx() },
@@ -283,21 +340,19 @@ mod tests {
             ShareContext { grantee_user_id: "other".into(), ..ctx() },
             ShareContext { granter_user_id: "other".into(), ..ctx() },
         ] {
-            assert!(share_open(envelope.clone(), pinned(&owner), guest.clone(), change).is_err());
+            assert!(not_signed(share_open(envelope.clone(), pinned(&owner), guest.clone(), change)));
         }
+        let missing = HybridPublicKey { signing_public_key: vec![], ml_dsa_public_key: vec![] };
         assert!(matches!(
-            share_open(envelope.clone(), Vec::new(), guest.clone(), ctx()),
+            share_open(envelope.clone(), missing, guest.clone(), ctx()),
             Err(CoreError::Input(_))
         ));
-        // The granter's X25519 key is no signing key.
-        assert!(matches!(
-            share_open(envelope, public(&owner), guest, ctx()),
-            Err(CoreError::Sealed(message)) if message.contains("not signed")
-        ));
+        let ed_alone = HybridPublicKey { ml_dsa_public_key: vec![], ..pinned(&owner) };
+        assert!(matches!(share_open(envelope, ed_alone, guest, ctx()), Err(CoreError::Input(_))));
     }
 
     #[test]
-    fn suite_3_needs_both_of_the_grantee_s_halves_and_the_granter_s_keys_open_nothing() {
+    fn suite_4_needs_both_of_the_grantee_s_halves_and_the_granter_s_keys_open_nothing() {
         let (owner, guest, stranger) = (person("granter"), person("grantee"), person("stranger"));
         let envelope = share_seal(ctx(), random(32), owner.clone(), public(&guest), kem(&guest)).unwrap();
         for keys in [
@@ -315,60 +370,141 @@ mod tests {
     }
 
     #[test]
-    fn a_share_signed_with_a_key_the_granter_replaced_does_not_open_against_the_current_one() {
+    fn a_granter_still_on_version_1_or_a_grantee_without_a_kem_key_seals_nothing() {
+        let (owner, guest) = (person("granter"), person("grantee"));
+        let legacy = IdentityKeys {
+            identity_version: 1,
+            ml_dsa_seed: Vec::new().into(),
+            ml_dsa_public_key: None,
+            ..owner
+        };
+        assert!(matches!(
+            share_seal(ctx(), random(32), legacy.clone(), public(&guest), kem(&guest)),
+            Err(CoreError::Input(message)) if message.contains("upgrading")
+        ));
+        assert!(matches!(
+            share_seal(ctx(), random(32), person("granter"), public(&guest), vec![]),
+            Err(CoreError::Input(message)) if message.contains("post-quantum")
+        ));
+    }
+
+    #[test]
+    fn a_share_signed_with_keys_the_granter_replaced_does_not_open_against_the_current_ones() {
         let guest = person("grantee");
         let root = random(32);
         let first = identity_create("granter".into(), root.clone(), 1).unwrap();
         let earlier = identity_open("granter".into(), root.clone(), first.clone()).unwrap();
-        let next = crate::identity::identity_succeed("granter".into(), root.clone(), first).unwrap();
+        let next = identity_succeed("granter".into(), root.clone(), first).unwrap();
         let current = identity_open("granter".into(), root, next.identity).unwrap();
         let node_key = random(32);
-        let envelope =
-            share_seal(ctx(), node_key.clone(), earlier.clone(), public(&guest), kem(&guest)).unwrap();
-        assert!(matches!(
-            share_open(envelope.clone(), pinned(&current), guest.clone(), ctx()),
-            Err(CoreError::Sealed(message)) if message.contains("not signed")
-        ));
-        // Sealed again by the granter's current keys, it opens.
+        let envelope = share_seal(ctx(), node_key.clone(), earlier, public(&guest), kem(&guest)).unwrap();
+        assert!(not_signed(share_open(envelope, pinned(&current), guest.clone(), ctx())));
         let resealed =
             share_seal(ctx(), node_key.clone(), current.clone(), public(&guest), kem(&guest)).unwrap();
         assert_eq!(share_open(resealed, pinned(&current), guest, ctx()).unwrap(), node_key);
+    }
+
+    /* Suite 3 as clients sealed it before this release: the same layout with an Ed25519 signature alone. */
+    fn suite_3(granter: &IdentityKeys, grantee: &IdentityKeys, node_key: &[u8]) -> Vec<u8> {
+        let ephemeral: [u8; 32] = random(32).try_into().unwrap();
+        let ephemeral_public = PublicKey::from(&StaticSecret::from(ephemeral)).to_bytes();
+        let dh = agree(&ephemeral, &public(grantee)).unwrap();
+        let (ciphertext, secret) = kem_encapsulate(&kem(grantee)).unwrap();
+        let salt = Sha256::new()
+            .chain_update(&ciphertext)
+            .chain_update(ephemeral_public)
+            .chain_update(public(grantee))
+            .finalize();
+        let mut key = [0u8; 32];
+        Hkdf::<Sha256>::new(Some(&salt), &[dh.as_slice(), secret.as_slice()].concat())
+            .expand(b"hushos/drive/share-key/v3", &mut key)
+            .unwrap();
+        let nonce = random(NONCE_BYTES);
+        let mut out = [ephemeral_public.as_slice(), &ciphertext, &nonce].concat();
+        out.extend(seal_with_nonce(&key, &nonce, node_key, &share_context(&ctx(), 3)).unwrap());
+        let c = ctx();
+        let statement = context(&[
+            json!("hushos/drive/sig/share"),
+            json!(3),
+            json!(c.workspace_id.to_lowercase()),
+            json!(c.node_id.to_lowercase()),
+            json!(c.key_epoch),
+            json!(c.grantee_user_id.to_lowercase()),
+            json!(c.granter_user_id.to_lowercase()),
+            json!(digest(&out)),
+        ]);
+        out.extend(sign(&granter.signing_seed, &statement).unwrap());
+        out
+    }
+
+    #[test]
+    fn suite_3_is_refused_even_when_genuine_and_suite_4_cut_to_its_length_opens_nothing() {
+        let (owner, guest) = (person("granter"), person("grantee"));
+        let node_key = random(32);
+        let three = suite_3(&owner, &guest, &node_key);
+        assert_eq!(three.len(), 1256);
+        assert!(matches!(
+            share_open(three, pinned(&owner), guest.clone(), ctx()),
+            Err(CoreError::Input(message)) if message.contains("Invalid share envelope")
+        ));
+        // Stripped of its ML-DSA half: suite 3's length, and nothing opens.
+        let four = share_seal(ctx(), node_key.clone(), owner.clone(), public(&guest), kem(&guest)).unwrap();
+        let cut = four[..1256].to_vec();
+        assert!(share_open(cut.clone(), pinned(&owner), guest.clone(), ctx()).is_err());
+        // Nor does the cut envelope pass for suite 3 under suite 3's own rules: the suite is in
+        // the key derivation and the associated data, so its body opens under neither.
+        let sealed = &cut[..SIGNED_PART_BYTES];
+        let dh = agree(&guest.encryption_private_key, &sealed[..32]).unwrap();
+        let secret = kem_decapsulate(&guest.kem_seed, &sealed[32..32 + KEM_CIPHERTEXT_BYTES]).unwrap();
+        let salt = Sha256::new()
+            .chain_update(&sealed[32..32 + KEM_CIPHERTEXT_BYTES])
+            .chain_update(&sealed[..32])
+            .chain_update(public(&guest))
+            .finalize();
+        let mut key = [0u8; 32];
+        Hkdf::<Sha256>::new(Some(&salt), &[dh.as_slice(), secret.as_slice()].concat())
+            .expand(b"hushos/drive/share-key/v3", &mut key)
+            .unwrap();
+        let nonce = &sealed[32 + KEM_CIPHERTEXT_BYTES..32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES];
+        let body = &sealed[32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES..];
+        assert!(open_with_nonce(&key, nonce, body, &share_context(&ctx(), 3)).is_err());
+        // And the real suite 4 still opens: the cut was the only defect.
+        assert_eq!(share_open(four, pinned(&owner), guest, ctx()).unwrap(), node_key);
     }
 
     #[test]
     fn suites_1_and_2_are_refused_even_when_genuine() {
         let guest = person("grantee");
         let granter_secret: [u8; 32] = random(32).try_into().unwrap();
-        let granter_signing = pinned(&person("granter"));
+        let granter = pinned(&person("granter"));
         // Built as clients once made them: the static pair key (libsodium crypto_box_beforenm).
         let shared = StaticSecret::from(granter_secret)
             .diffie_hellman(&PublicKey::from(<[u8; 32]>::try_from(public(&guest)).unwrap()));
         let pair =
             salsa20::hsalsa::<salsa20::cipher::consts::U10>(shared.as_bytes().into(), &[0u8; 16].into());
         let nonce = random(NONCE_BYTES);
-        let legacy_context = |suite: u32| {
-            context(&[
-                json!("hushos/drive/share"),
-                json!(suite),
-                json!("ws"),
-                json!("n1"),
-                json!(3),
-                json!("grantee"),
-                json!("granter"),
-            ])
-        };
         let mut one = nonce.clone();
-        one.extend(seal_with_nonce(pair.as_slice(), &nonce, &random(32), &legacy_context(1)).unwrap());
+        one.extend(seal_with_nonce(pair.as_slice(), &nonce, &random(32), &share_context(&ctx(), 1)).unwrap());
         let (ciphertext, _) = kem_encapsulate(&kem(&guest)).unwrap();
         let mut two = nonce.clone();
         two.extend_from_slice(&ciphertext);
-        two.extend(seal_with_nonce(pair.as_slice(), &nonce, &random(32), &legacy_context(2)).unwrap());
+        two.extend(seal_with_nonce(pair.as_slice(), &nonce, &random(32), &share_context(&ctx(), 2)).unwrap());
         assert_eq!((one.len(), two.len()), (72, 1160));
         for envelope in [one, two] {
             assert!(matches!(
-                share_open(envelope, granter_signing.clone(), guest.clone(), ctx()),
+                share_open(envelope, granter.clone(), guest.clone(), ctx()),
                 Err(CoreError::Input(message)) if message.contains("Invalid share envelope")
             ));
         }
+    }
+
+    #[test]
+    fn the_statement_is_the_web_s_array_at_suite_4() {
+        let sealed = b"sealed";
+        assert_eq!(
+            String::from_utf8(share_statement(ctx(), sealed.to_vec()).unwrap()).unwrap(),
+            format!(r#"["hushos/drive/sig/share",4,"ws","n1",3,"grantee","granter","{}"]"#, digest(sealed))
+        );
+        assert!(share_statement(ShareContext { key_epoch: 0, ..ctx() }, sealed.to_vec()).is_err());
     }
 }
