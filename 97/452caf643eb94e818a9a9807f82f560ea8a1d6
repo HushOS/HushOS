@@ -1,0 +1,58 @@
+docs/envelope-migrations.md
+  s_c56e31c87cddde::t_e55a672641ecc2 3,17,20,36
+  s_c56e31c87cddde::t_b287d9f8534202 220-221,225-227,231,233,236-237,240-242,251-253
+  s_c56e31c87cddde::t_9b8be7b93eb699 68
+  s_c56e31c87cddde::t_a4550bf54cdc7e 25-35
+  s_c56e31c87cddde::t_8c67f0d926113f 55,57,60-61,67,70,77,86-87,108-111
+  s_c56e31c87cddde::t_8782aa91ddb4be 125-127,135,150-152
+  s_c56e31c87cddde::t_a5da198388d477 120,128-133,137-141,145,148,156-157,163-164,166,168,170-171,173,176-186
+  s_c56e31c87cddde::t_f70cdd9bbec718 112,134,187
+docs/groups-threat-model.md
+  s_c56e31c87cddde::t_a1b3a4d9d56bda 5,100,104,134,140
+  s_c56e31c87cddde::t_a4550bf54cdc7e 56,94-99,101-102
+  s_c56e31c87cddde::t_0984a350b6524b 103
+docs/devices-design.md
+  s_c56e31c87cddde::t_cb4bb8666940d8 394
+  s_c56e31c87cddde::t_a4550bf54cdc7e 184-191,225-233,311-332
+  s_c56e31c87cddde::t_e226ead05dd239 18,205-206,208
+  s_c56e31c87cddde::t_d15e35f3d67954 102
+  s_c56e31c87cddde::t_c1a67e3f3071fd 5-6,12,16-17,28,43,45,49,61,63,67-68,70-80,83,86,88-92,95,98-100,104,106-111,115-120,135-145,149,155-156,159-160,163-166,170-179,182,195-204,207,241-245,250-252,261-263,265,270,274,278,282,286,288,290-295,301,304,333-334,340,342-346,348-351,353,356-359,368-370,374-381,386,388,391-393
+  s_c56e31c87cddde::t_f22cab1a18e874 183
+docs/groups-design.md
+  s_c56e31c87cddde::t_d0959cc88c77ba 213
+  s_c56e31c87cddde::t_c04f3bfeac0587 207,221,328-329,363
+  s_c56e31c87cddde::t_471305286e9c03 5,23,41,52,78,85-87,129,132,136
+  s_c56e31c87cddde::t_a4550bf54cdc7e 270-282
+docs/identity-pq-design.md
+  s_c56e31c87cddde::t_e226ead05dd239 249
+  s_c56e31c87cddde::t_a9c9a82aa2cb06 190
+  s_c56e31c87cddde::t_a206d6f14c7c26 72-74,79-84
+  s_c56e31c87cddde::t_98290a434b8cbb 90-92,94,96-97,99-100,106,109-112
+  s_c56e31c87cddde::t_7c254d444cc587 216-217,220-221,224,227-228,231-233,235-238
+  s_c56e31c87cddde::t_0cad7a08decdda 199
+  s_c56e31c87cddde::t_91445e3c6a3325 24-27
+  s_c56e31c87cddde::t_9fc24418d734f5 98,101-105,107-108
+  s_c56e31c87cddde::t_ea84f235be1716 157-159
+  s_c56e31c87cddde::t_bba80b10c2d1d2 136-137
+  s_c56e31c87cddde::t_a65513ed2bacd0 78
+  s_c56e31c87cddde::t_9b8be7b93eb699 86,226,248
+  s_c56e31c87cddde::t_f4c9509fe49e39 123-130
+  s_c56e31c87cddde::t_c870127894acb7 234,239
+  s_c56e31c87cddde::t_13f3cff6f40ff8 85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "97452caf643eb94e818a9a9807f82f560ea8a1d6",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
