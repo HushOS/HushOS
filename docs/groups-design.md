@@ -2,7 +2,7 @@
 
 This document fixes the group core: groups, members, invitations, the signed roster that lets members trust each other, shared areas, spaces, pooled storage, the payer and child accounts. Family plans ship on it alone; company plans add the custody key, admin browse, policies, audit, offboarding, storage control, domains and SSO on top (see the build plan, "HushOS for Companies — Build Plan", whose decisions this follows). Each statement below is the exact byte layout the web (`packages/crypto`) and the Rust core (`crates/hushos-core`) must produce and accept, pinned by shared fixtures.
 
-Revised on 14 October after the independent review in `docs/groups-crypto-review.md`: every finding there is applied, and group signatures are post-quantum from the first version.
+Revised on 14 October after the independent review in `docs/groups-crypto-review.md`: every finding there is applied, and group signatures are post-quantum from the first version. Revised again on 15 October after `docs/pq-devices-crypto-review.md`: roster entries carry each member's ML-DSA key digest, and every conversion waits 7 days.
 
 Nothing here changes what the server can read. It learns who is in which group, which it must know to authorise anything; every key it handles stays sealed.
 
@@ -20,7 +20,7 @@ Nothing here changes what the server can read. It learns who is in which group, 
 | `group_storage`           | `group_id`, pooled `quota_bytes` from the plan and entitlements                                                                                                                                      |
 | `account_guardians`       | `(child_user_id, guardian_user_id)`, the child's account root sealed to the guardian (2.9), `child_root_version`, `guardian_key_version`; deleted on conversion, release or guardian removal         |
 | `account_guardian_events` | Each time a guardian's device fetches a guardian seal, recorded by the server and shown to the child                                                                                                 |
-| `account_devices`         | Device signing keys a child account's devices register at sign-up, used to authorise conversion (3.6)                                                                                                |
+| `account_devices`         | Every account's devices and their signing keys (`docs/devices-design.md` 1); a child account's device keys authorise conversion (3.6)                                                                |
 
 `users` gains `account_kind` (`adult` or `child`) and `adult_from`, the date a child account may convert; HushOS stores that date, never a birth date.
 
@@ -38,7 +38,7 @@ Statements are canonical JSON arrays as in `docs/integrity-design.md`, with thes
 - **The empty digest** (`previousRosterDigest` of version 1) is the JSON string `""`; otherwise it is base64url of 32 bytes.
 - **Lists** (roster members, roles) are sorted strictly ascending by the bytes of their sort key, with no duplicates.
 - **Verifiers re-encode.** A verifier rebuilds the statement from the parsed fields and refuses any document whose bytes differ, so no two encodings of one statement exist.
-- **`kemPublicKeyDigest`** is SHA-256 of the 1184-byte ML-KEM-768 public key, base64url; a signer checks the identity's KEM binding before putting the digest in a statement.
+- **`kemPublicKeyDigest`** is SHA-256 of the 1184-byte ML-KEM-768 public key, and **`mlDsaPublicKeyDigest`** SHA-256 of the 1952-byte ML-DSA-65 public key, both base64url. A signer checks the identity's keys statement (`docs/identity-pq-design.md` 1), which binds all four keys, before putting either digest in a statement. Version 2 identities carry no KEM binding.
 
 ### 2.2 Group signatures are post-quantum
 
@@ -49,7 +49,7 @@ The group key is a pair: an Ed25519 key and an ML-DSA-65 key (FIPS 204; `ml_dsa6
 
 A group signature is valid only if both verify. A quantum adversary must break ML-DSA, a classical one Ed25519; neither alone forges a roster or a succession.
 
-People's own identity signatures, which sign writer statements, seals (2.3, 2.6, 2.9), rosters' signer signatures and identity successions, are hybrid too: `docs/identity-pq-design.md` adds an ML-DSA-65 identity key (context `hushos/identity/v1`) and ships before group milestone 1, so no roster, seal or succession is ever signed by Ed25519 alone. File and folder signatures inside areas stay Ed25519, as everywhere, until their planned upgrade (`docs/identity-pq-design.md` 7). A signer identity signature below is that hybrid signature (3373 bytes).
+People's own identity signatures on seals (2.3, 2.6, 2.9), rosters' signer signatures and identity successions are hybrid too: `docs/identity-pq-design.md` adds an ML-DSA-65 identity key (context `hushos/identity/v1`) and ships before group milestone 1, so no roster, seal or succession is ever signed by Ed25519 alone. A reader checks a member's ML-DSA half only under a key whose digest is the member's roster entry's `mlDsaPublicKeyDigest` (2.4) or the reader's version 3 pin of them, never under a key the server serves on its own. Writer statements, the file and folder signatures inside areas, are not hybrid: they stay Ed25519, as everywhere, until their planned upgrade (`docs/identity-pq-design.md` 7). A signer identity signature below is that hybrid signature (3373 bytes).
 
 ### 2.3 The group key and its seals
 
@@ -75,14 +75,16 @@ One signed document names every member, their keys and their roles:
 
 ```
 ["hushos/group/roster",1,groupId,kind,rosterVersion,previousRosterDigest,groupKeyVersion,signerUserId,members]
-members = [[userId,keyVersion,encryptionPublicKey,signingPublicKey,kemPublicKeyDigest,status,roles,sinceVersion], ...]
+members = [[userId,keyVersion,encryptionPublicKey,signingPublicKey,mlDsaPublicKeyDigest,kemPublicKeyDigest,status,roles,sinceVersion], ...]
 ```
 
 - `members` is sorted by `userId`; `roles` is a sorted subset of `billing`, `guardian`, `members` (companies add `data_admin`, `recovery`); `status` is `active` or `left`; `sinceVersion` is the roster version the entry last changed at. Entries for former members stay.
 - `previousRosterDigest` is SHA-256 of the previous roster's statement bytes, so rosters form a chain; `rosterVersion` is always the previous one plus one.
 - It carries a group signature (2.2) by the group key at `groupKeyVersion`, and the signer's own identity signature over the same bytes, so every roster says who made it. The signer must be active with `members` on the previous roster (the creator, for version 1).
 
-**Folding in changes.** Before signing, the signer's client checks every changed entry: a new member's keys are the ones the word check confirmed; a member whose identity changed is followed by verifying their succession chain from the entry's keys to the served ones (`verifySuccessionChain`); an entry whose chain fails stays as it was, and the member is shown as needing a check. The server checks a member's identity only on entries that are new or changed in that version. Each member's own client checks its own entry on every roster and raises a hard warning if it is wrong.
+**Folding in changes.** Before signing, the signer's client checks every changed entry: a new member's keys, the ML-DSA and ML-KEM keys by digest, are the ones the word check confirmed; a member whose identity changed is followed by verifying their version 2 succession chain from the entry's keys, ML-DSA digest included, to the served ones (`verifySuccessionChain`, `docs/identity-pq-design.md` 2); an entry whose chain fails stays as it was, and the member is shown as needing a check.
+
+**Checking a member's signature through the roster.** The reader takes the Ed25519 key from the entry and the ML-DSA key from the server, and uses the served key only if its SHA-256 equals the entry's `mlDsaPublicKeyDigest`; otherwise the signature does not verify. This covers every member signature checked through a roster: key seals, area grants, guardian seals and rosters' signer signatures. The server checks a member's identity only on entries that are new or changed in that version. Each member's own client checks its own entry on every roster and raises a hard warning if it is wrong.
 
 **Accepting a roster.** A client accepts rosters only as a chain joined to one it already holds:
 
@@ -124,14 +126,14 @@ A grantee opens a grant only if: the granter is `active` (not `left`) on this gr
 The settings document gains, per group:
 
 ```
-groups: { [groupId]: { firstEd25519PublicKey, firstMlDsaPublicKey, checkedAt, keyVersion, rosterVersion, rosterDigest, areas: { [workspaceId]: highestKeyVersion } } }
+groups: { [groupId]: { firstEd25519PublicKey, firstMlDsaPublicKeyDigest, checkedAt, keyVersion, rosterVersion, rosterDigest, areas: { [workspaceId]: highestKeyVersion } } }
 ```
 
-Older clients keep it as an unknown field. Each device also keeps the same marks locally; the marks in use are the higher of the two. A new device joins the chain at the settings pin's version and digest.
+`firstMlDsaPublicKeyDigest` is SHA-256 of the version 1 ML-DSA key, which the client compares with `firstKeys` as served; the settings document has no room for the key itself (`docs/envelope-migrations.md` 2). The `groups` field makes the document version 2, which older clients refuse rather than save over (`docs/envelope-migrations.md` 2). Each device also keeps the same marks locally; the marks in use are the higher of the two. A new device joins the chain at the settings pin's version and digest.
 
 ### 2.8 What readers show
 
-Roster trust is scoped to its group: **a roster vouches only for records in that group's areas and for grants naming that group.** Elsewhere, such as a colleague's personal share, a colleague who is not personally checked shows as Unverified with the hint "In Acme". One click, "Trust as Acme does", writes a personal pin of the keys the roster names, as an explicit act by the reader.
+Roster trust is scoped to its group: **a roster vouches only for records in that group's areas and for grants naming that group.** Elsewhere, such as a colleague's personal share, a colleague who is not personally checked shows as Unverified with the hint "In Acme". One click, "Trust as Acme does", writes a version 3 personal pin from the roster's entry (its X25519 and Ed25519 keys and its ML-DSA and ML-KEM digests) and the served keys that match them, as an explicit act by the reader.
 
 Inside a group's areas, in order:
 
@@ -202,13 +204,13 @@ The organizer's client derives the group id, makes the group key, signs roster v
 
 Built after the family core. A child account is a separate account type; a family stays without any browse of its adult members.
 
-1. **Created only as child accounts.** A `guardian` starts "Add a child" in the family; the child signs up on their own device (or the guardian's) through a link, choosing a password. Each device the child signs in on registers a device signing key. An existing account can never become a child account.
+1. **Created only as child accounts.** A `guardian` starts "Add a child" in the family; the child signs up through a link, choosing a password. The flow asks for the child's own device, but nothing enforces it: the link is returned to the guardian, and whoever opens it registers the enrolment device (`docs/devices-design.md` 6). Each device the child signs in on registers a device signing key. An existing account can never become a child account.
 2. **Ages.** Teens 13 to 17 first: `adult_from` must fall within five years of sign-up. Accounts for children under 13 come later, once verifiable parental consent, the terms and the privacy policy are in place (COPPA in the US, GDPR in the EU).
 3. **The family check comes first.** The child's sign-up compares the family's words with the guardian, as a newcomer's join does; only then does the child's device seal its root to the roster's `guardian` entries (2.9) and join the family. Registration of a child account without a seal for every `guardian` entry is refused.
 4. **What a guardian can do before `adult_from`:** reset the child's password (the guardian's device re-wraps the child's root under the new password's key; the reset ends the child's password sessions and tells them), open the child's personal space, and loosen the child's sharing defaults. **From `adult_from`, the server refuses guardian resets and policy changes.**
 5. **Defaults:** no public links and no shares outside the family, enforced by the server, until a guardian allows them.
 6. **Always disclosed.** The child sees a permanent notice: "Your parent can see your files." The record shows every time a guardian's device fetches a seal.
-7. **Adulthood.** Access does not end on its own. From `adult_from`, the account holder may convert at any time; a guardian cannot block, delay or undo it. Conversion is authorised by a device key the child's devices registered, so it works even if a guardian reset the password earlier (the device still holds the root through its device memory). The person is prompted on `adult_from`, the notice then also says how to make the account fully theirs, and they stay in the family plan as an adult member.
+7. **Adulthood.** Access does not end on its own. From `adult_from`, the account holder may convert at any time; a guardian has no control that blocks or undoes it, and every conversion waits 7 days, with notices to the account's email and devices (`docs/envelope-migrations.md` 7). A hostile guardian who holds a device of the account or its mailbox can still cancel each attempt; that is a stated residual (`docs/groups-threat-model.md`), not something this design prevents. Conversion is authorised by a device key the child's devices registered, so it works even if a guardian reset the password earlier (the device still holds the root through its device memory). The person is prompted on `adult_from`, the notice then also says how to make the account fully theirs, and they stay in the family plan as an adult member.
 8. **Conversion is a full re-key**, because a guardian who opened the root holds everything it wraps. In one resumable run the child's device:
     1. makes a new account root;
     2. makes new identity keys and signs an identity succession with the old ones;
@@ -216,7 +218,7 @@ Built after the family core. A child account is a separate account type; a famil
     4. bumps the personal workspace key version and runs a full `drive_rotations` of the personal tree;
     5. re-seals its outgoing shares (the sharing ledger) to their grantees.
 
-    The run also registers a new password and a new recovery phrase and signs out every other device in the switch, in that order (switch first, rotation after); see `docs/envelope-migrations.md` 7, which also sets the device-approval rule that stops a guardian's device from taking over the account at conversion.
+    The run also registers a new password and a new recovery phrase, rewraps every workspace grant and self-grant, and signs out every other device in the switch, in that order (switch first, rotation after); see `docs/envelope-migrations.md` 7, which also sets the 7-day hold and lists what conversion does not stop against a hostile guardian.
 
     The server deletes every guardian seal in the transaction that switches the account to the new root; family holders then fold the new identity into the next roster (its succession chain verifies) and re-grant the family areas to it.
 
@@ -265,17 +267,19 @@ Base64url without padding everywhere; ids lowercase UUIDs. All routes need a ses
 
 ### Child accounts
 
-| Route                                                    | Body → response                                                                                                                | Notes                                                                                                                     |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/groups/:id/children` (`guardian` role)        | `{ adultFrom }` → `{ link }`                                                                                                   | Starts a child sign-up; one-time token in the fragment                                                                    |
-| `POST /api/auth/register/child`                          | As adult registration, plus `{ token, groupId, deviceKey, guardianSeals: [{ guardianUserId, guardianKeyVersion, envelope }] }` | Refused without a seal for every `guardian` entry on the roster                                                           |
-| `POST /api/auth/devices`                                 | `{ deviceKey, signature }`                                                                                                     | A child account's device registers its key                                                                                |
-| `GET /api/children/:userId/guardian-seal` (guardians)    | → `{ childRootVersion, envelope }`                                                                                             | Each fetch is an `account_guardian_events` entry                                                                          |
-| `GET /api/auth/guardian-events`                          | → the record of guardian seal fetches                                                                                          | The child's own view                                                                                                      |
-| `POST /api/children/:userId/reset` (guardians)           | As a password change, wrapped by the guardian                                                                                  | Refused from `adultFrom`; ends the child's password sessions                                                              |
-| `PATCH /api/children/:userId/policies` (guardians)       | `{ publicLinks, sharesOutsideFamily }`                                                                                         | Refused from `adultFrom`                                                                                                  |
-| `POST /api/auth/convert` (device key, no session needed) | `{ deviceKey, signature, newRoot, identitySuccession, settingsKey, rotation }`                                                 | The account holder's device only, from `adultFrom`; deletes every guardian seal in the transaction that switches the root |
-| `DELETE /api/children/:userId/guardians` (guardians)     |                                                                                                                                | Early release; the child's device re-keys at its next sign-in                                                             |
+| Route                                                    | Body → response                                                                                                                | Notes                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `POST /api/groups/:id/children` (`guardian` role)        | `{ adultFrom }` → `{ link }`                                                                                                   | Starts a child sign-up; one-time token in the fragment                                                            |
+| `POST /api/auth/register/child`                          | As adult registration, plus `{ token, groupId, deviceKey, guardianSeals: [{ guardianUserId, guardianKeyVersion, envelope }] }` | Refused without a seal for every `guardian` entry on the roster                                                   |
+| `POST /api/auth/devices`                                 | `{ kind, name, signingPublicKey }`                                                                                             | Every account's devices register their key (`docs/devices-design.md` 8)                                           |
+| `GET /api/children/:userId/guardian-seal` (guardians)    | → `{ childRootVersion, envelope }`                                                                                             | Each fetch is an `account_guardian_events` entry                                                                  |
+| `GET /api/auth/guardian-events`                          | → the record of guardian seal fetches                                                                                          | The child's own view                                                                                              |
+| `POST /api/children/:userId/reset` (guardians)           | As a password change, wrapped by the guardian                                                                                  | Refused from `adultFrom`; ends the child's password sessions                                                      |
+| `PATCH /api/children/:userId/policies` (guardians)       | `{ publicLinks, sharesOutsideFamily }`                                                                                         | Refused from `adultFrom`                                                                                          |
+| `POST /api/auth/convert` (device key, no session needed) | `{ deviceKey, attemptId, signature }` → `{ attemptId, completesAt }`                                                           | From `adultFrom`; starts the 7-day hold and notifies the email and every device                                   |
+| `DELETE /api/auth/convert/:attemptId`                    | `{ token }` or a device session                                                                                                | Cancels a held conversion; a security notice                                                                      |
+| `POST /api/auth/convert/:attemptId/switch` (device key)  | `{ signature, newRoot, identitySuccession, settingsKey, workspaceGrants, rotation }`                                           | The requesting device only, after the hold; deletes every guardian seal in the transaction that switches the root |
+| `DELETE /api/children/:userId/guardians` (guardians)     |                                                                                                                                | Early release; the child's device re-keys at its next sign-in                                                     |
 
 Every grant, seal, roster and succession is checked by the server for shape and signatures before it is stored, and refused with one uniform 400 otherwise; clients verify again and never rely on that.
 
@@ -321,6 +325,8 @@ Each fails on a defect a person would notice (see AGENTS.md):
     - a roster or succession whose Ed25519 signature is valid but whose ML-DSA signature is not, or the reverse, is refused;
     - the fingerprint changes when either public key changes.
 - **Roster:**
+    - a member signature checked through the roster is refused when its ML-DSA half verifies only under a served key whose digest is not the entry's `mlDsaPublicKeyDigest`;
+    - "Trust as Acme does" writes a version 3 pin with the roster's ML-DSA and ML-KEM digests;
     - refused: a forged signature, a version that is not previous + 1, a wrong previous digest, a signer who is not an active `members` holder on the previous roster, and a missing or wrong signer identity signature;
     - an entry whose identity changed without a verifiable succession chain stays unchanged;
     - two rosters with one version, or a chain that does not join, raise the hard warning and drop roster verdicts.
@@ -354,6 +360,7 @@ Each fails on a defect a person would notice (see AGENTS.md):
     - no seal is made to an entry without the `guardian` role;
     - guardian resets and policy changes from `adult_from` are refused;
     - conversion authorised by a registered device key succeeds after a guardian reset;
+    - every conversion completes only after 7 days, and the email link or any device cancels it;
     - after conversion the old identity, settings key and personal workspace key open nothing new;
     - every seal fetch appears in the child's record;
     - an existing adult account cannot become a child account.

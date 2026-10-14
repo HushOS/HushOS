@@ -21,8 +21,10 @@ Forgery needs the break to exist when the attack is made, but trust anchored tod
 
 A version 2 identity is a version 1 identity plus an ML-DSA-65 key (FIPS 204, the pure form, not HashML-DSA):
 
-- `@noble/post-quantum` `ml_dsa65` on the web and the server, which already supplies ML-KEM on the web;
-- the RustCrypto `ml-dsa` crate in the core, the one the group key uses.
+- `@noble/post-quantum` `ml_dsa65` on the web and the server, which already supplies ML-KEM on the web, pinned at exactly 0.7.1;
+- the RustCrypto `ml-dsa` crate in the core, the one the group key uses, pinned at an exact version (`ml-dsa = "=0.1.1"`, the current release) when it is added to `crates/hushos-core/Cargo.toml`.
+
+Neither is upgraded without the shared fixtures passing again. The fixtures include the FIPS 204 ACVP vectors for ML-DSA-65: key generation from ξ, signing with a context string, and verification that refuses malformed hints. Both implementations must pass all three.
 
 The private side is the 32-byte FIPS 204 key generation seed ξ, wrapped under the account root exactly as the Ed25519 seed is, with its own label in the associated data. On open, the client re-derives the public key from the seed and refuses a mismatch, as it does for the ML-KEM seed.
 
@@ -67,21 +69,47 @@ The twelve words are made as today (`fingerprintWords`: the first 132 bits of th
 On the first unlock after the release, a client whose account has a version 1 identity:
 
 1. makes an ML-DSA seed and wraps it under the account root;
-2. signs the keys statement with the new hybrid signature;
-3. calls `POST /api/auth/identity/upgrade` with the version 2 envelope.
+2. opens the wrapped seed again, re-derives the public key and refuses to go on if it differs, so a seed that does not open is never uploaded;
+3. signs the keys statement with the new hybrid signature;
+4. calls `POST /api/auth/identity/upgrade` with the version 2 envelope.
 
 The X25519, Ed25519 and ML-KEM keys and the `keyVersion` stay as they are; the identity is replaced in place, with no history row and no succession link. The server checks that the three existing keys are unchanged and the keys statement verifies. Several devices upgrading at once: the server takes the first and answers the others 409 `stale` with the new identity, which they open and adopt.
 
-Keeping the existing keys means shares sealed to the person keep opening and file signatures keep verifying under the same Ed25519 key; nothing has to be re-sealed to them or re-signed.
+An account whose unusable seed got through anyway can never sign again: version 1 successions are refused, and a version 2 succession needs the old hybrid signature. Start over with new keys recovers it, writing a new identity without a succession on the recovery phrase's authority (`docs/devices-design.md` 3; section 10).
+
+### The device's own marks
+
+Because the upgrade keeps `keyVersion`, a mark of `keyVersion` alone does not see it. Each device marks its own identity as `(keyVersion, identityVersion)` and refuses a version 1 identity for its account once it has seen version 2. Otherwise a server could serve a new device the version 1 form, and that device would make a second ML-DSA key and try to upload it.
+
+A device computes its own words only from public keys it re-derived from all four seeds, never from the served ones.
+
+Keeping the existing keys means file signatures keep verifying under the same Ed25519 key and nothing has to be re-signed or sealed to new keys. Shares to the person still have to be re-sealed in suite 4, which waits on a words check (section 3).
 
 ### Contacts compare words again
 
-A pin made before the release holds X25519 and Ed25519 and a version 2 fingerprint. It is **not** carried forward by any signature, because only Ed25519 could sign that carry-over, and that is exactly the key this change stops trusting alone.
+A pin made before the release holds X25519 and Ed25519 and a version 2 fingerprint. It is **not** carried forward by any signature. A carry-over signed with Ed25519 and verified now would be as trustworthy as Ed25519 is now; it becomes forgeable only later, and a cutoff could handle that, as section 7 argues for file signatures. Pins are not carried forward because production holds mostly test accounts, and a words check is simpler than a carry-over format with its own cutoff.
 
-- When the served identity is version 2 and its X25519 and Ed25519 keys equal the pin's, the contact shows as **Check words again** ("Maya's keys were upgraded. Compare words to keep trusting them"). Until then the pin trusts nothing: the contact reads as someone not yet checked, for records, shares and verdicts alike.
+After the release, **a version 2 pin trusts nothing, whatever the server serves**: a version 2 identity, or the version 1 form with the same X25519 and Ed25519 keys and no ML-DSA key.
+
+- When the served X25519 and Ed25519 keys equal the pin's, the contact shows as **Check words again** ("Maya's keys were upgraded. Compare words to keep trusting them"). Until then the contact reads as someone not yet checked, for records, shares and verdicts alike.
 - When the keys differ, it is the changed-key warning, as today.
-- Comparing words writes a version 3 pin: all four public keys and the version 3 fingerprint.
-- A version 3 pin refuses any identity for that contact without an ML-DSA key: that is a downgrade, shown as the changed-key warning.
+- `pinVerified` requires the version 3 fingerprint. The KEM binding (`identityVerifyKem`) is no longer a path to trust: a KEM key is trusted only through a version 3 pin or a verified keys statement under one.
+
+**Version 3 pins** hold digests of the two large keys, not the keys. The keys themselves would take 4268 base64url characters per contact, and the settings document, which the sharing ledger and group pins share, is capped at 64 KiB:
+
+```
+ContactPin v3 = { userId, email, name, keyVersion, pinnedAt,
+                  encryptionPublicKey (X25519), signingPublicKey (Ed25519),
+                  mlDsaPublicKeyHash = base64url(SHA-256(mlDsaPublicKey)),
+                  kemPublicKeyHash   = base64url(SHA-256(mlKemPublicKey)),
+                  fingerprint        = the version 3 fingerprint }
+```
+
+A pin is version 3 exactly when it carries `mlDsaPublicKeyHash`; `kemPublicKeyHash` is the existing field, now required.
+
+- Comparing words writes a version 3 pin from the served keys, after the client has computed the words from them.
+- The client compares every served ML-DSA and ML-KEM key with the pin's digests.
+- A version 3 pin refuses any identity for that contact without an ML-DSA key, and any served ML-DSA key whose digest differs, even beside the same X25519 and Ed25519 keys. Both are shown as the changed-key warning.
 
 ### Succession version 2
 
@@ -92,11 +120,20 @@ Every succession from here on is hybrid:
  oldX25519,oldEd25519,oldMlDsa,newX25519,newEd25519,newMlDsa,sha256(newKemPublicKey)]
 ```
 
-It is signed with the old identity's hybrid signature (3373 bytes); the new identity's keys statement, uploaded with it, proves the new keys are held. `verifySuccessionChain` keeps its continuity rules (by keys, versions only rising, the last link's keys equal to the served ones) and follows only version 2 links. A version 1 link no longer carries a pin anywhere: an account that replaced its keys before this release is a words check, like everyone else.
+It is signed with the old identity's hybrid signature (3373 bytes); the new identity's keys statement, uploaded with it, proves the new keys are held. `verifySuccessionChain` follows only version 2 links, under these rules:
+
+- The chain starts only at a link whose `oldX25519`, `oldEd25519` and `oldMlDsa` equal the version 3 pin's (the ML-DSA key by its digest).
+- Each link's old keys equal the previous link's new keys, ML-DSA included, and versions only rise.
+- Each half of each signature verifies under the pinned key or the previous link's new key, never under a key that only the link itself names.
+- The chain ends at the served X25519, Ed25519, ML-DSA and ML-KEM keys; the last link's `sha256(newKemPublicKey)` equals the served ML-KEM key's digest.
+
+`PinnedKeys` gains the ML-DSA digest in both twins. A version 1 link no longer carries a pin anywhere: an account that replaced its keys before this release is a words check, like everyone else.
 
 ## 3. What is signed, and how
 
 A signature's statement version says whether it is hybrid. That makes the ML-DSA half impossible to strip: an Ed25519 signature alone never verifies over a hybrid statement.
+
+The verifier takes the version from context: the statement kind and the route or record it came from, never the signature's length. History rows hold both 64-byte and 3373-byte signatures, and a verifier that chose the form by length would make stripping possible again. Version 1 of the statements in the table below is refused.
 
 | Statement                                                        | Before               | Now                              |
 | ---------------------------------------------------------------- | -------------------- | -------------------------------- |
@@ -117,7 +154,9 @@ signed   = ["hushos/drive/sig/share", 4, workspaceId, nodeId, keyEpoch, granteeU
 envelope = eph.public (32) || kemCt (1088) || nonce (24) || body (48) || sig (3373)   // 4565 bytes
 ```
 
-Everything else is as in suite 3: the grantee checks the signature against the granter's pinned keys before it decapsulates, and the server tells suites apart by length. Suite 3 is no longer written or opened; the upgrade pass re-seals each account's ledger in suite 4 (`upgradeShares({ all: true })`), so a share opens again once its granter has signed in. The group seals in `docs/groups-design.md` (key seal, area grant, guardian seal) use this construction under their own `info` and associated data.
+Everything else is as in suite 3: the grantee checks the signature against the granter's pinned keys before it decapsulates, and the server tells suites apart by length. Suite 3 is no longer written or opened. The group seals in `docs/groups-design.md` (key seal, area grant, guardian seal) use this construction under their own `info` and associated data.
+
+**Existing shares need both sides to compare words.** The upgrade pass re-seals each account's ledger in suite 4 (`upgradeShares({ all: true })`), but re-sealing goes through `trustGrantee`, which needs a version 3 pin of the grantee, and the grantee checks suite 4 against a version 3 pin of the granter. Every pin is version 2 at the release, so a share stays shut until the granter and the grantee have each compared words with the other and the granter's device has signed in since. That is acceptable while production holds mostly test accounts. People shows the hint "Shares from Maya open once you've both compared words."
 
 ### Verdicts
 
@@ -148,7 +187,7 @@ Base64url without padding; ids lowercase UUIDs.
 - **`POST /api/auth/identity/upgrade`** takes `{ identity }`, a version 2 envelope whose X25519, Ed25519 and ML-KEM keys and `keyVersion` equal the current identity's and whose keys statement verifies. 409 `stale` with the current identity when it is already version 2.
 - **`POST /api/auth/identity/succession`** takes version 2 statements with a 3373-byte signature only.
 - **`GET /api/auth/identity`** and contact lookups serve `mlDsaPublicKey`, `keysSignature` and `identityVersion` beside the existing fields.
-- **Master-key rotation** (`/auth/security/finish`) rewraps the ML-DSA seed in the identity and in every history row that has one; the server checks each public key is unchanged.
+- **Master-key rotation** (`/auth/security/finish`) rewraps the ML-DSA seed in the identity and in every history row that has one; the server checks each public key is unchanged, and refuses a changed `keyVersion` for a version 2 identity, since the keys statement binds it and the identity would stop verifying.
 - **Shares** take 4565-byte envelopes only.
 
 ## 7. Later: file and folder signatures
@@ -157,7 +196,7 @@ File and folder signatures stay Ed25519 (decision 3). They are what stops someon
 
 Because every account will already hold an ML-DSA key and every pin will already cover it, the later upgrade needs no words check. It is:
 
-1. **Format:** the drive statements at version 2 with the 3373-byte hybrid signature, so a stripped signature fails; listings carry SHA-256 digests of signatures, and each device fetches and checks a signature once, caching the fact that it verified (keyed by the statement bytes it computes itself and the signature digest), never the verdict.
+1. **Format:** the drive statements at version 2 with the 3373-byte hybrid signature, so a stripped signature fails; listings carry SHA-256 digests of signatures, and each device fetches and checks a signature once, caching the fact that it verified (keyed by the statement bytes it computes itself, the signature digest and the verifying public keys), never the verdict. Without the public keys in the key, a cached "verified" would survive the server changing who it says signed.
 2. **Re-signing:** each owner's device re-signs its workspaces' classical records under Round 3's rules (verified becomes ordinary, saved stays saved, anything else re-sealed), with the owner as signer, as rotation does.
 3. **Cutoff:** a release after which a classical record reads `classical` (Unverified). It must land well before anyone can break Ed25519: after that, a forged "old" record cannot be told from a real one.
 
@@ -174,19 +213,30 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
 - **Hybrid signatures:**
     - a valid Ed25519 half with a broken ML-DSA half, and the reverse, are refused, for the keys statement, successions and shares;
     - an ML-DSA signature made with the group context does not verify as an identity signature, and the reverse;
-    - TS and Rust verify each other's signatures over every fixture statement.
+    - TS and Rust verify each other's signatures over every fixture statement;
+    - both implementations pass the FIPS 204 ACVP vectors for ML-DSA-65 key generation from ξ, signing with a context, and refusing malformed hints.
 - **Stripping and old forms:**
     - a suite 4 share cut down to 1256 bytes does not open, and a suite 3 share does not open;
-    - a version 2 succession with only an Ed25519 signature is refused.
+    - a version 2 succession with only an Ed25519 signature is refused;
+    - a hybrid statement presented with a 64-byte signature is refused, and the verifier never picks the version from the signature's length.
 - **Upgrade:**
     - an upgrade whose X25519, Ed25519, ML-KEM key or `keyVersion` differs from the current identity is refused;
+    - a device whose wrapped ML-DSA seed does not open again to the same public key does not call the upgrade;
     - two devices upgrading at once end with one identity, and the loser adopts it;
-    - shares sealed to the person before the upgrade still open, and their earlier file signatures still verify;
-    - a master-key rotation after the upgrade keeps the ML-DSA seed openable.
+    - their earlier file signatures still verify, and shares to them open again in suite 4 once both sides have compared words and the granter has signed in, and not before;
+    - a master-key rotation after the upgrade keeps the ML-DSA seed openable, and a rotation that changes a version 2 identity's `keyVersion` is refused;
+    - a device that has seen its version 2 identity refuses the version 1 form served for its account, and does not make a second ML-DSA key.
 - **Pins:**
     - a version 2 pin of an upgraded contact trusts nothing until words are compared, and that contact's records read `unknown-signer`;
-    - a version 3 pin refuses a served identity without an ML-DSA key;
-    - a version 1 succession link is not followed.
+    - a version 2 pin trusts nothing when the server serves the version 1 form with the pinned X25519 and Ed25519 keys, and a KEM key vouched for only by the Ed25519 KEM binding is not trusted;
+    - a version 3 pin refuses a served identity without an ML-DSA key, and one whose ML-DSA key's digest differs beside the same X25519 and Ed25519 keys;
+    - a version 1 succession link is not followed;
+    - a settings document holding 50 contacts' version 3 pins saves under the 64 KiB cap.
+- **Succession chain:**
+    - a link whose ML-DSA half is valid under any key other than the pinned one, or the previous link's new key, is refused;
+    - a chain that starts at the pinned X25519 and Ed25519 keys with a different `oldMlDsa` is refused;
+    - a chain that ends at keys other than the served four is refused.
+- **Signature cache** (with section 7): a cached "verified" is not reused when the server serves a different signing key for the same statement and signature.
 - **Fingerprint:** version 3 words change when any of the four keys changes, ML-KEM included.
 - **Server:** a suite 3 share, a version 1 succession, and any signed write from a version 1 identity are refused.
 
@@ -195,4 +245,5 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
 1. **One release, no transition:** production is mostly test accounts.
 2. **ML-DSA-65 everywhere,** matching ML-KEM-768 and the group key.
 3. **File and folder signatures stay Ed25519 for now,** with the upgrade in section 7.
-4. **The upgrade keeps the existing keys** and replaces the identity in place, so shares keep opening and file signatures keep verifying.
+4. **The upgrade keeps the existing keys** and replaces the identity in place, so file signatures keep verifying and no one seals to new keys.
+5. **An unusable ML-DSA seed** is recovered by Start over with new keys (`docs/devices-design.md` 3), which writes a new identity without a succession, authorised by the recovery phrase; contacts compare words again.
