@@ -1,0 +1,37 @@
+apps/web/src/components/drive/check-contact.tsx
+  s_c56e31c87cddde::t_09adfe16d06735 105-106,185-189,202-206,246
+apps/web/src/components/drive/unverified-mark.tsx
+  s_c56e31c87cddde::t_9de341ead1e28e 134-139
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_16c96fa7f43706 199-201,207,235-240,319-320,329-366,570,592-599,601,604,1928-1933,1935-1945,1965
+apps/web/src/lib/auth-api.ts
+  s_c56e31c87cddde::t_9fd41938feb9c3 36
+apps/web/src/lib/contacts.ts
+  s_c56e31c87cddde::t_57fd039d68dee9 3,14,26,58,60-67,81-84,103-121,123,125-126,136-138,141,144-145,277,279,282-283,329,361-363,370,376,382-386,414,432-433,441-442,451-456,459-471,474-479,492-500,505,514,518-534,554,586,598-599,603,640-642,651,653-659,661
+apps/web/src/lib/rollback-marks.test.ts
+  s_c56e31c87cddde::t_cafaf6ab3aab0b 5,41-43,45-66
+apps/web/src/lib/rollback-marks.ts
+  s_c56e31c87cddde::t_d3e3052944ca91 57-61,63,65-78
+apps/web/src/routes/_authenticated/app/_drive/people.tsx
+  s_c56e31c87cddde::t_e7102f621fdfeb 299
+e2e/contacts.spec.ts
+  s_c56e31c87cddde::t_9631e7b806bb5d 66
+e2e/sharing.spec.ts
+  s_c56e31c87cddde::t_c9154991a496b7 61,82,85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2c430ce4cc498313e1b7d8731ea51269472456e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
