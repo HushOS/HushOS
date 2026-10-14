@@ -25,6 +25,7 @@ struct SettingsDocumentTests {
         let pin = try #require(settings.contacts["ana"])
         var renamed = pin
         renamed.kemPublicKeyHash = "digest"
+        renamed.mlDsaPublicKeyHash = "ml-dsa-digest"
         settings.setPin(renamed)
         settings.setPin(ContactPin(userId: "bo", email: "bo@example.com", name: "Bo", encryptionPublicKey: "e2", signingPublicKey: "s2",
                                    fingerprint: "f2", pinnedAt: "2026-10-02T00:00:00Z", kemPublicKeyHash: nil))
@@ -36,11 +37,14 @@ struct SettingsDocumentTests {
         let ana = try #require((document["contacts"] as? [String: Any])?["ana"] as? [String: Any])
         #expect(ana["note"] as? String == "met at the conference")
         #expect(ana["kemPublicKeyHash"] as? String == "digest")
+        #expect(ana["mlDsaPublicKeyHash"] as? String == "ml-dsa-digest")
         let sharing = try #require(document["sharing"] as? [String: Any])
         #expect(sharing["also"] as? Int == 1)
         #expect((sharing["shares"] as? [String: [String]])?["node-a"] == ["ana"])
         #expect((sharing["links"] as? [String: String]) == ["link-1": "node-a", "link-2": "node-b"])
-        #expect(document["version"] as? Int == 1)
+        // Read as version 1, always written as version 2: the only document version that may hold version 3 pins.
+        #expect(document["version"] as? Int == 2)
+        #expect(try Settings(json: try settings.json(), version: 5).contacts["ana"]?.mlDsaPublicKeyHash == "ml-dsa-digest")
     }
 
     @Test func pinningAgainWithoutAPostQuantumKeyClearsTheOldDigest() throws {
@@ -147,8 +151,10 @@ struct SettingsMarksTests {
 }
 
 /*
- * The highest own identity key version this device opened: an identity served as current
- * with a lower one (keys the account replaced) is refused.
+ * The highest own identity key version and identity version this device opened: an identity
+ * served as current with a lower key version (keys the account replaced), or the version 1
+ * form once version 2 was opened (which would be upgraded again into a second ML-DSA key), is
+ * refused.
  */
 struct IdentityMarksTests {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent("identity-marks-\(UUID().uuidString).json")
@@ -156,70 +162,32 @@ struct IdentityMarksTests {
 
     @Test func anIdentityServedBelowTheHighestOpenedHereIsRefused() throws {
         defer { try? FileManager.default.removeItem(at: file) }
-        try marks.check(userId: "user-1", keyVersion: 1)
-        marks.record(userId: "User-1", keyVersion: 3)
-        try marks.check(userId: "user-1", keyVersion: 3)
-        try marks.check(userId: "user-1", keyVersion: 4)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2) }
+        try marks.check(userId: "user-1", keyVersion: 1, identityVersion: 2)
+        marks.record(userId: "User-1", keyVersion: 3, identityVersion: 2)
+        try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 2)
+        try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 2)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2, identityVersion: 2) }
         // Never lowered by a later, lower record, and per account.
-        marks.record(userId: "user-1", keyVersion: 1)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2) }
-        try marks.check(userId: "user-2", keyVersion: 1)
+        marks.record(userId: "user-1", keyVersion: 1, identityVersion: 1)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2, identityVersion: 2) }
+        try marks.check(userId: "user-2", keyVersion: 1, identityVersion: 1)
+    }
+
+    @Test func theVersionOneFormIsRefusedOnceVersionTwoWasOpenedEvenAtTheSameKeyVersion() throws {
+        defer { try? FileManager.default.removeItem(at: file) }
+        // Before the upgrade: version 1 at key version 3 is what the account has.
+        marks.record(userId: "user-1", keyVersion: 3, identityVersion: 1)
+        try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 1)
+        // Upgraded in place: the key version stays 3, so only the identity version tells the forms apart.
+        marks.record(userId: "user-1", keyVersion: 3, identityVersion: 2)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 1) }
+        // Nor at a higher key version: every identity made since the release is version 2.
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 1) }
+        try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 2)
     }
 }
 
-/*
- * A pin vouches for keys only when it was made after a words check over both keys. And a
- * share is never sealed to X25519 alone: a missing, changed or unsigned post-quantum key is
- * refused with the person's name, not quietly downgraded.
- */
-struct PinTrustTests {
-    let encryption = try! randomBytes(length: 32)
-    let signing = try! randomBytes(length: 32)
-    /* An ML-KEM-768 public key's length; the core hands out at most 1024 random bytes at a time. */
-    static func kemSized() throws -> Data { try randomBytes(length: 1024) + randomBytes(length: 160) }
-    let kem = try! kemSized()
-
-    func pin(fingerprint: String? = nil, signingKey: String? = nil, kemHash: String? = nil) -> ContactPin {
-        let print = fingerprint ?? (try! identityFingerprint(encryptionPublicKey: encryption, signingPublicKey: signing))
-        return ContactPin(userId: "ana", email: "ana@example.com", name: "Ana", encryptionPublicKey: base64urlEncode(bytes: encryption),
-                          signingPublicKey: signingKey ?? base64urlEncode(bytes: signing), fingerprint: print,
-                          pinnedAt: "2026-10-01T00:00:00Z", kemPublicKeyHash: kemHash)
-    }
-
-    var served: String { base64urlEncode(bytes: encryption) }
-
-    @Test func aPinWithoutTheCurrentFingerprintOverBothKeysIsNotVerified() {
-        #expect(pin().verified)
-        #expect(!pin(signingKey: "").verified)
-        #expect(!pin(fingerprint: "0000 0000 0000 0000 0000 0000 0000 0000 0000 0000").verified)
-        // A fingerprint over another signing key than the one pinned.
-        let other = try! identityFingerprint(encryptionPublicKey: encryption, signingPublicKey: try! randomBytes(length: 32))
-        #expect(!pin(fingerprint: other).verified)
-    }
-
-    @Test func nothingIsSealedToAnUnverifiedPinOrWithoutAVouchedPostQuantumKey() throws {
-        let kemKey = base64urlEncode(bytes: kem)
-        #expect(throws: ContactError.recheck("Ana")) {
-            try pin(signingKey: "").sealKeys(encryptionPublicKey: served, kemPublicKey: kemKey, kemSignature: nil)
-        }
-        #expect(throws: ContactError.changed) {
-            try pin().sealKeys(encryptionPublicKey: base64urlEncode(bytes: try randomBytes(length: 32)), kemPublicKey: kemKey, kemSignature: nil)
-        }
-        #expect(throws: ContactError.noKem("Ana")) { try pin().sealKeys(encryptionPublicKey: served, kemPublicKey: nil, kemSignature: nil) }
-        // First seen and not signed by the pinned signing key (a forged signature, or none).
-        #expect(throws: ContactError.kemUnsigned("Ana")) {
-            try pin().sealKeys(encryptionPublicKey: served, kemPublicKey: kemKey, kemSignature: base64urlEncode(bytes: Data(repeating: 7, count: 64)))
-        }
-        #expect(throws: ContactError.kemUnsigned("Ana")) { try pin().sealKeys(encryptionPublicKey: served, kemPublicKey: kemKey, kemSignature: nil) }
-        // Remembered before: a different one is refused, the same one is used.
-        #expect(throws: ContactError.kemChanged("Ana")) {
-            try pin(kemHash: keyDigest(publicKey: try Self.kemSized())).sealKeys(encryptionPublicKey: served, kemPublicKey: kemKey, kemSignature: nil)
-        }
-        let sealing = try pin(kemHash: keyDigest(publicKey: kem)).sealKeys(encryptionPublicKey: served, kemPublicKey: kemKey, kemSignature: nil)
-        #expect(sealing.kem == kem && sealing.publicKey == encryption && sealing.newDigest == nil)
-    }
-
+struct LinkKdfTests {
     @Test func aLinkFromAnotherKeyDerivationIsRefused() throws {
         #expect(throws: DriveAPIError.self) { try LinkKdf.check(nil) }
         #expect(throws: DriveAPIError.self) { try LinkKdf.check(1) }

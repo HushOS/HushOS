@@ -87,9 +87,13 @@ public struct SettingsMarks: Sendable {
 }
 
 /*
- * The highest key version of this account's own identity this device has opened. A server
- * serving an older identity as current (keys the account replaced because they may have been
- * exposed) is refused, rather than signed with and shared to again.
+ * The highest key version of this account's own identity this device has opened, and the
+ * highest identity version (1, or 2 once upgraded). A server serving an older identity as
+ * current (keys the account replaced because they may have been exposed) is refused, rather
+ * than signed with and shared to again. The post-quantum upgrade keeps the key version, so
+ * the key version alone does not see it undone: once this device has opened a version 2
+ * identity for the account, a version 1 one is refused too (docs/identity-pq-design.md 2),
+ * or a server could have it upgraded again and a second ML-DSA key minted.
  */
 public struct IdentityMarks: Sendable {
     let marks: HighWaterMarks
@@ -104,12 +108,28 @@ public struct IdentityMarks: Sendable {
         keyDigest(publicKey: Data("hushos/identity-mark\n\(userId.lowercased())".utf8))
     }
 
-    func mark(userId: String) -> UInt64 { marks.value(Self.key(userId: userId)) }
-
-    /* An identity served as current, refused when its key version is below the highest opened here. */
-    func check(userId: String, keyVersion: UInt64) throws {
-        guard keyVersion >= mark(userId: userId) else { throw AuthError.message(Self.downgraded) }
+    static func versionKey(userId: String) -> String {
+        keyDigest(publicKey: Data("hushos/identity-version-mark\n\(userId.lowercased())".utf8))
     }
 
-    func record(userId: String, keyVersion: UInt64) { marks.raise(Self.key(userId: userId), to: keyVersion) }
+    func mark(userId: String) -> UInt64 { marks.value(Self.key(userId: userId)) }
+
+    func versionMark(userId: String) -> UInt64 { marks.value(Self.versionKey(userId: userId)) }
+
+    /*
+     * An identity served as current, refused when its key version is below the highest opened
+     * here, or when it is version 1 and this device has opened version 2 for the account. Every
+     * identity made since the release is version 2 (a succession or a fresh start included), so
+     * no version 1 identity can legitimately follow one.
+     */
+    func check(userId: String, keyVersion: UInt64, identityVersion: UInt32) throws {
+        guard keyVersion >= mark(userId: userId), UInt64(identityVersion) >= versionMark(userId: userId) else {
+            throw AuthError.message(Self.downgraded)
+        }
+    }
+
+    func record(userId: String, keyVersion: UInt64, identityVersion: UInt32) {
+        marks.raise(Self.key(userId: userId), to: keyVersion)
+        marks.raise(Self.versionKey(userId: userId), to: UInt64(identityVersion))
+    }
 }

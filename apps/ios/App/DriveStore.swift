@@ -269,6 +269,10 @@ final class DriveStore {
     func loadRoot() async -> String? {
         if let rootId { return rootId }
         do {
+            // The identity first: a version 1 identity is upgraded here, before anything is signed
+            // (docs/identity-pq-design.md 2). Off the network the tree still opens from the phone;
+            // every signed write opens (and upgrades) it again before it signs.
+            do { try await vault.prepareIdentity() } catch { if !(error is URLError) { report(error) } }
             let id = try await vault.rootId()
             rootId = id
             names[id] = "HushOS"

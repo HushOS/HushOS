@@ -57,16 +57,21 @@ struct RotationWorkNode: Decodable, Sendable {
     }
 }
 
+/*
+ * Someone's public identity as the server serves it (a rotation's grantee, a share's grantee,
+ * a report's operator): all four public keys and a version 2 identity's keys statement. A
+ * version 1 identity has no ML-DSA key and no statement, and is trusted with nothing; only a
+ * version 3 pin vouches for any of these.
+ */
 public struct ServedIdentity: Codable, Sendable {
-    public struct Kem: Codable, Sendable {
-        public let publicKey: String
-        public let signature: String
-    }
-    /* Raised by each succession; absent from an older server. */
+    /* Raised by each succession. */
     public var keyVersion: UInt64? = nil
+    public var identityVersion: Int? = nil
     public let encryptionPublicKey: String
     public let signingPublicKey: String
-    public let kem: Kem?
+    public var mlDsaPublicKey: String? = nil
+    public var kemPublicKey: String? = nil
+    public var keysSignature: String? = nil
 }
 
 struct RotationWork: Decodable, Sendable {
@@ -151,7 +156,6 @@ extension Vault {
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
         var outcome = RotationOutcome()
-        var newDigests: [String: String] = [:]
         var cursor: String? = nil
         var idle = 0
         var touched: Set<String> = [rootId]
@@ -242,18 +246,15 @@ extension Vault {
                 for share in sharing.map({ entry.ledgerShares($0.ledger) }) ?? [] {
                     // Sealed only to the pinned keys: a grantee whose served keys moved on is left out until this person checks again.
                     guard let (keys, pins, _) = sharing else { continue }
-                    let sealing: (publicKey: Data, kem: Data, newDigest: String?)
+                    let sealing: (publicKey: Data, kem: Data)
                     do {
                         guard let pin = pins[share.granteeUserId] else { throw ContactError.unpinned }
-                        let known = newDigests[pin.userId].map { digest in var copy = pin; copy.kemPublicKeyHash = digest; return copy } ?? pin
-                        sealing = try known.sealKeys(encryptionPublicKey: share.grantee.encryptionPublicKey,
-                                                     kemPublicKey: share.grantee.kem?.publicKey, kemSignature: share.grantee.kem?.signature)
+                        sealing = try pin.sealKeys(share.grantee.served)
                     } catch {
                         let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                         if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }
                         continue
                     }
-                    if let digest = sealing.newDigest { newDigests[share.granteeUserId] = digest }
                     let ctx = ShareContext(workspaceId: ws, nodeId: node.id, keyEpoch: target, granteeUserId: share.granteeUserId, granterUserId: session.userId)
                     let sealed = try shareSeal(ctx: ctx, nodeKey: fresh, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
                     shares.append(["id": share.id, "shareEnvelope": base64urlEncode(bytes: sealed)])
@@ -308,8 +309,6 @@ extension Vault {
         // The catalogue holds the old rows too; the next sync rebuilds it from the feed.
         for id in touched { opened[ref(id)] = nil }
         catalogueState = .idle
-        // Post-quantum keys first vouched for during the rotation join their pins, as a share would add them.
-        for (userId, digest) in newDigests { try? await rememberKem(digest, for: userId) }
         return outcome
     }
 }

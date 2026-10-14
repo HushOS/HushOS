@@ -8,6 +8,17 @@ extension Auth {
         return (reply["identities"] as? [[String: Any]] ?? []).map { identityEnvelope(from: $0) }
     }
 
+    /*
+     * Replaces a version 1 identity by its version 2 form (the same keys, plus ML-DSA and the
+     * keys statement) and returns what the server stored; 409 (`AuthError.conflict`) when
+     * another device upgraded first.
+     */
+    static func upgradeIdentity(_ identity: IdentityEnvelope) async throws -> IdentityEnvelope {
+        let reply = try await call("/api/auth/identity/upgrade", method: "POST", body: ["identity": json(identity)])
+        guard let stored = reply["identity"] as? [String: Any] else { throw AuthError.message("HushOS returned no identity.") }
+        return identityEnvelope(from: stored)
+    }
+
     /* Installs a successor identity the current signing key vouched for; 409 when another device moved first. */
     static func succeedIdentity(_ succession: IdentitySuccession) async throws {
         _ = try await call("/api/auth/identity/succession", method: "POST", body: [
@@ -28,8 +39,10 @@ extension Auth {
                 newKeyVersion: (link["newKeyVersion"] as? NSNumber)?.uint64Value ?? 0,
                 oldEncryptionPublicKey: link["oldEncryptionPublicKey"] as? String ?? "",
                 oldSigningPublicKey: link["oldSigningPublicKey"] as? String ?? "",
+                oldMlDsaPublicKey: link["oldMlDsaPublicKey"] as? String ?? "",
                 newEncryptionPublicKey: link["newEncryptionPublicKey"] as? String ?? "",
                 newSigningPublicKey: link["newSigningPublicKey"] as? String ?? "",
+                newMlDsaPublicKey: link["newMlDsaPublicKey"] as? String ?? "",
                 newKemPublicKey: link["newKemPublicKey"] as? String ?? "",
                 signature: link["signature"] as? String ?? ""
             )
@@ -90,7 +103,8 @@ extension Vault {
         if identity != nil, identityCheckedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true,
            let served = try? await Auth.identity() {
             identityCheckedAt = Date()
-            if served.signingPublicKey != identity?.signingPublicKey || served.keyVersion != identity?.keyVersion {
+            if served.signingPublicKey != identity?.signingPublicKey || served.keyVersion != identity?.keyVersion
+                || served.version != identity?.identityVersion {
                 identity = nil
                 earlierIdentities = nil
                 trustedSigners = nil
@@ -164,14 +178,16 @@ extension Vault {
      * signing key (docs/integrity-design.md, "Identity succession"): people who checked the
      * old keys follow the chain instead of comparing words from scratch. The old identity
      * stays openable through the history, so shares sealed to it still open; every share
-     * the ledger holds is sealed again in suite 3 under the new signing key.
+     * the ledger holds is sealed again in suite 4 under the new signing keys.
      */
     public func replaceSharingKeys() async throws -> RotationOutcome {
         // Settings sealed under the identity (version 1) would be stranded with it: sealed under the settings key first.
         try await ensureSettingsKeyed()
-        let current = try await Auth.identity()
+        // Opened (and upgraded to version 2, which a succession needs) before the served one is read back.
         let opened = try await identityKeys()
-        guard opened.signingPublicKey == current.signingPublicKey, opened.keyVersion == current.keyVersion else {
+        let current = try await Auth.identity()
+        guard opened.signingPublicKey == current.signingPublicKey, opened.keyVersion == current.keyVersion,
+              opened.identityVersion == current.version else {
             identity = nil
             earlierIdentities = nil
             throw AuthError.message("Your keys changed on another device. Try again.")
@@ -188,8 +204,9 @@ extension Vault {
     }
 
     /*
-     * The upgrade pass, run when Drive opens and right after a succession: every share the
-     * ledger holds is sealed again in suite 3 under the identity in use when this device's own
+     * The upgrade pass, run when Drive opens, after a words check and right after a succession:
+     * every share the ledger holds in an older suite is sealed again in suite 4 (once a version
+     * 3 pin vouches for the grantee), and every one is under the identity in use when this device's own
      * succession left re-sealing unfinished, or when this person followed the grantee's
      * succession ("Check again") and their shares still hold the old keys. Sealed only to keys
      * the pin vouches for; a grantee whose served keys differ from the pin is not followed here
@@ -206,40 +223,36 @@ extension Vault {
         let pins = settings.contacts
         let keys = try await identityKeys()
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
-        var looked: [String: (keys: ServedContactKeys, kemSignature: String?)] = [:]
+        var looked: [String: ServedContactKeys] = [:]
         var unfinished = false
         var resealedTo: Set<String> = []
         var failedFor: Set<String> = []
         for share in reply.shares where ledger.holdsShare(node: share.node.id, grantee: share.grantee.id) {
             let grantee = share.grantee.id.lowercased()
             let followed = ResealTo.contains(grantee)
-            guard pending || share.suite != 3 || followed else { continue }
+            guard pending || share.suite != 4 || followed else { continue }
             guard let pin = pins[share.grantee.id] else {
                 outcome.note(ContactError.unpinned)
                 continue
             }
             do {
-                var served: ServedContactKeys
-                var kemSignature: String?
+                let served: ServedContactKeys
                 if let identity = share.granteeIdentity {
                     served = identity.served
-                    kemSignature = identity.kem?.signature
                 } else if let known = looked[grantee] {
-                    (served, kemSignature) = known
+                    served = known
                 } else {
                     // An older server serves no grantee identity here: look them up, once.
                     let contact = try await Auth.lookupContact(email: pin.email)
                     guard contact.userId == pin.userId else { throw ContactError.changed }
                     served = contact.served
-                    kemSignature = contact.kem?.signature
-                    looked[grantee] = (served, kemSignature)
+                    looked[grantee] = served
                 }
-                guard pin.matches(served) else { throw ContactError.changed }
+                // Checked before anything is opened: only keys the version 3 pin vouches for are sealed to.
+                let sealing = try pin.sealKeys(served)
                 guard let item = await openAnywhere(share.node), let nodeKey = nodeKey(of: item) else {
                     throw DriveAPIError.notFound("A shared item couldn’t be opened to seal it again.")
                 }
-                let sealing = try pin.sealKeys(encryptionPublicKey: served.encryptionPublicKey, kemPublicKey: served.kemPublicKey, kemSignature: kemSignature)
-                if let digest = sealing.newDigest { try await rememberKem(digest, for: pin.userId) }
                 let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: pin.userId, granterUserId: session.userId)
                 let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
                 try await api.resealShare(share.id, workspaceId: item.node.workspaceId, keyEpoch: item.node.keyEpoch, envelope: envelope)
@@ -285,7 +298,7 @@ extension RotationOutcome {
 }
 
 extension DriveAPI {
-    /* Replaces a live share's envelope at the node's current epoch; suite 3 only. */
+    /* Replaces a live share's envelope at the node's current epoch; suite 4 only. */
     func resealShare(_ shareId: String, workspaceId: String, keyEpoch: UInt64, envelope: Data) async throws {
         struct Resealed: Decodable {}
         _ = try await performPublic(try mutationPublic("/shares/\(shareId)/envelope", method: "PUT", body: [

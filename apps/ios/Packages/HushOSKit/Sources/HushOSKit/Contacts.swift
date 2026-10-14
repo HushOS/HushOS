@@ -3,23 +3,26 @@ import HushOSCore
 
 /* A person as `POST /api/auth/contacts/lookup` describes them. */
 public struct Contact: Sendable, Equatable {
-    public struct Kem: Sendable, Equatable {
-        public let publicKey: String
-        public let signature: String
-    }
     public let userId: String
     public let name: String
     public let email: String
-    /* Raised by each succession; absent from an older server. */
+    /* Raised by each succession. */
     public var keyVersion: UInt64? = nil
+    /* 1 until they sign in after the post-quantum release, 2 after. */
+    public let identityVersion: Int
     public let encryptionPublicKey: String
     public let signingPublicKey: String
-    public let kem: Kem?
-    /* Ten groups of four hex digits over both public keys, to compare over another channel. */
-    public let fingerprint: String
-    /* Whether the post-quantum key carries a signature by the signing key served with it. Vouches only for a
-     * contact not pinned yet, whose words cover that signing key; a pinned contact's KEM key is checked against the pin. */
-    public let kemSigned: Bool
+    public let mlDsaPublicKey: String?
+    public let kemPublicKey: String?
+    public let keysSignature: String?
+    /*
+     * Whether their identity is version 2 and its keys statement holds: both signing keys signed
+     * all four public keys. The only kind words can be compared over; not by itself a reason to
+     * trust anyone, which only the words are.
+     */
+    public let upgraded: Bool
+    /* Ten groups of four hex digits over all four public keys (fingerprint version 3); nil until they upgraded. */
+    public let fingerprint: String?
 }
 
 /* What a pin keeps of a contact, as the settings document stores it. */
@@ -31,7 +34,10 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
     public let signingPublicKey: String
     public let fingerprint: String
     public let pinnedAt: String
+    /* Hex SHA-256 of their ML-KEM key. */
     public var kemPublicKeyHash: String?
+    /* Hex SHA-256 of their ML-DSA key: a pin is version 3 exactly when it has one, and only a version 3 pin trusts anything. */
+    public var mlDsaPublicKeyHash: String? = nil
     /* The identity key version the pin is at, so a later change is followed along the succession chain from here; absent on older pins. */
     public var keyVersion: UInt64? = nil
     /* Signing keys this person used before, vouched for by a succession chain the pin followed: what they signed then is still theirs. */
@@ -63,33 +69,46 @@ struct ShareCreated: Codable, Sendable { let share: ShareView }
 public struct Lookup: Sendable {
     public let contact: Contact
     public let pinned: ContactPin?
-    /* The served key differs from the pin: nothing is trusted until the person re-pins. */
+    /* The served keys differ from the pin and no followed chain explains them: nothing is trusted until the person re-pins. */
     public let changed: Bool
-    /* Pinned, but the pin vouches for nothing (no current fingerprint over both keys): compare the words again. */
+    /* Pinned over these same X25519 and Ed25519 keys, but the pin vouches for nothing (made before the release): compare the words again. */
     public var recheck: Bool = false
     /* The pin just followed their succession to the keys served now: said quietly, with comparing the words again offered. */
     public var followed: Bool = false
-    /* Changed, and the served keys are newer than the pin's: "Check again" may find a succession their pinned keys signed. */
+    /* Changed, and the served keys are newer than a version 3 pin's: "Check again" may find a succession their pinned keys signed. */
     public var canFollow: Bool = false
+    /* Words can be compared only over an upgraded identity whose keys statement holds. */
+    public var upgraded: Bool { contact.upgraded }
 }
 
 public enum ContactError: Error, LocalizedError, Equatable {
     case unpinned, changed, message(String)
-    /* A pin without a current fingerprint over both keys: made before the words covered the signing key, or edited. */
+    /* A pin that vouches for nothing (from before the release, or edited): its words must be compared again. */
     case recheck(String)
-    /* Never sealed to X25519 alone: no post-quantum key, a different one than pinned, or one their identity did not sign. */
-    case noKem(String), kemChanged(String), kemUnsigned(String)
+    /* Their identity is not version 2 yet, or its keys statement does not hold: no words to compare, nothing to seal to. */
+    case notUpgraded(String)
     public var errorDescription: String? {
         switch self {
         case .unpinned: return "Add them to your contacts before sharing with them."
         case .changed: return "Their account changed since you added them. Check it’s them in People you share with before you share."
-        case .recheck(let name): return "Check \(name)’s words again in People you share with before you share with them."
-        case .noKem(let name): return "\(name) hasn’t set up post-quantum keys yet."
-        case .kemChanged(let name): return "\(name)’s post-quantum key has changed since you pinned it. Check with them before sharing."
-        case .kemUnsigned(let name): return "\(name)’s post-quantum key is not signed by their identity."
+        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in People you share with before you share."
+        case .notUpgraded(let name): return "\(name) needs to sign in to HushOS once more before you can compare words."
         case .message(let text): return text
         }
     }
+}
+
+/*
+ * Whether a served identity is version 2 and its keys statement holds (the core checks both
+ * halves of the hybrid signature over all four keys, the account and the key version).
+ */
+func keysHold(userId: String, _ served: ServedContactKeys, identityVersion: Int?, keysSignature: String?) -> Bool {
+    guard identityVersion == 2, let version = served.keyVersion, let mlDsa = served.mlDsaPublicKey, let kem = served.kemPublicKey,
+          let keysSignature else { return false }
+    return identityVerifyKeys(userId: userId, identity: PublicIdentity(
+        keyVersion: version, encryptionPublicKey: served.encryptionPublicKey, signingPublicKey: served.signingPublicKey,
+        mlDsaPublicKey: mlDsa, kemPublicKey: kem, keysSignature: keysSignature
+    ))
 }
 
 extension Auth {
@@ -99,14 +118,25 @@ extension Auth {
         guard let json = reply["contact"] as? [String: Any], let userId = json["userId"] as? String,
               let encryption = json["encryptionPublicKey"] as? String, let signing = json["signingPublicKey"] as? String
         else { throw ContactError.message("No HushOS account uses that email.") }
-        let kem = (json["kem"] as? [String: Any]).map { Contact.Kem(publicKey: $0["publicKey"] as? String ?? "", signature: $0["signature"] as? String ?? "") }
-        let signed = kem.map { kemBindingVerify(userId: userId, encryptionPublicKey: encryption, signingPublicKey: signing, kemPublicKey: $0.publicKey, signature: $0.signature) } ?? false
+        let keyVersion = (json["keyVersion"] as? NSNumber)?.uint64Value
+        let identityVersion = (json["identityVersion"] as? NSNumber)?.intValue ?? 1
+        let mlDsa = json["mlDsaPublicKey"] as? String
+        let kem = json["kemPublicKey"] as? String
+        let keysSignature = json["keysSignature"] as? String
+        let served = ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: encryption, signingPublicKey: signing,
+                                       mlDsaPublicKey: mlDsa, kemPublicKey: kem)
+        let upgraded = keysHold(userId: userId, served, identityVersion: identityVersion, keysSignature: keysSignature)
+        var fingerprint: String?
+        if upgraded, let mlDsa, let kem {
+            fingerprint = try identityFingerprintOfKeys(
+                encryptionPublicKey: try base64urlDecode(value: encryption), signingPublicKey: try base64urlDecode(value: signing),
+                mlDsaPublicKey: try base64urlDecode(value: mlDsa), kemPublicKey: try base64urlDecode(value: kem)
+            )
+        }
         return Contact(
-            userId: userId, name: json["name"] as? String ?? "", email: json["email"] as? String ?? email,
-            keyVersion: (json["keyVersion"] as? NSNumber)?.uint64Value,
-            encryptionPublicKey: encryption, signingPublicKey: signing, kem: kem,
-            fingerprint: try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: encryption), signingPublicKey: try base64urlDecode(value: signing)),
-            kemSigned: signed
+            userId: userId, name: json["name"] as? String ?? "", email: json["email"] as? String ?? email, keyVersion: keyVersion,
+            identityVersion: identityVersion, encryptionPublicKey: encryption, signingPublicKey: signing, mlDsaPublicKey: mlDsa,
+            kemPublicKey: kem, keysSignature: keysSignature, upgraded: upgraded, fingerprint: fingerprint
         )
     }
 
@@ -170,27 +200,30 @@ extension Vault {
         try await loadSettings().contacts.values.sorted { $0.pinnedAt > $1.pinnedAt }
     }
 
-    /* This account's own fingerprint, for the other person to check. */
+    /*
+     * This account's own fingerprint, for the other person to check: version 3, over the four
+     * public keys the core re-derived from the private halves it opened, never the served ones.
+     */
     public func ownFingerprint() async throws -> String {
         let keys = try await identityKeys()
-        return try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey))
+        guard let mlDsa = keys.mlDsaPublicKey, let kem = keys.kemPublicKey else { throw AuthError.message("Your keys couldn’t be upgraded. Try again.") }
+        return try identityFingerprintOfKeys(
+            encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey),
+            mlDsaPublicKey: try base64urlDecode(value: mlDsa), kemPublicKey: try base64urlDecode(value: kem)
+        )
     }
 
     /*
-     * A person by email, with what the pin says about them. A pin whose served keys moved on is
-     * not followed here: that asks the server for their chain, which only "Check again" does.
+     * A person by email, with what the pin says about them (`ContactPin.compare`). A pin whose
+     * served keys moved on is not followed here: that asks the server for their chain, which
+     * only "Check again" does.
      */
     public func lookup(email: String) async throws -> Lookup {
         let contact = try await Auth.lookupContact(email: email)
         let pinned = try await loadSettings().contacts[contact.userId]
-        var changed = false
-        if let pinned {
-            // Any of the three keys differing from the pin is a changed account: the words no longer vouch for it.
-            if pinned.encryptionPublicKey != contact.encryptionPublicKey || pinned.signingPublicKey != contact.signingPublicKey { changed = true }
-            if let hash = pinned.kemPublicKeyHash, contact.kem.map({ keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) }) != hash { changed = true }
-        }
-        return Lookup(contact: contact, pinned: pinned, changed: changed, recheck: pinned.map { !$0.verified } ?? false,
-                      canFollow: changed && (pinned?.mayFollow(contact.served) ?? false))
+        let comparison = pinned?.compare(contact.served)
+        return Lookup(contact: contact, pinned: pinned, changed: comparison == .changed || comparison == .succession,
+                      recheck: comparison == .recheck, canFollow: comparison == .succession)
     }
 
     /* "Check again" from a lookup: follows the pinned keys along the chain to the served ones, then looks them up afresh. */
@@ -202,14 +235,15 @@ extension Vault {
         return next
     }
 
-    /* Trusts the keys shown now: what the person does after checking the fingerprint. Re-pinning writes a current fingerprint. */
+    /*
+     * Trusts the keys shown now: what the person does after comparing the words. Writes a
+     * version 3 pin from the served keys (X25519, Ed25519, the digests of ML-DSA and ML-KEM, and
+     * the fingerprint over all four), and only for an upgraded identity whose keys statement held.
+     */
     public func pin(_ contact: Contact) async throws {
-        let hash = contact.kemSigned ? contact.kem.map { keyDigest(publicKey: (try? base64urlDecode(value: $0.publicKey)) ?? Data()) } : nil
-        var pin = ContactPin(
-            userId: contact.userId, email: contact.email, name: contact.name, encryptionPublicKey: contact.encryptionPublicKey,
-            signingPublicKey: contact.signingPublicKey, fingerprint: contact.fingerprint, pinnedAt: ISO8601DateFormatter().string(from: Date()), kemPublicKeyHash: hash
-        )
-        pin.keyVersion = contact.keyVersion
+        guard contact.upgraded else { throw ContactError.notUpgraded(contact.name.isEmpty ? contact.email : contact.name) }
+        var pin = try ContactPin.of(contact.served, userId: contact.userId, email: contact.email, name: contact.name,
+                                    pinnedAt: ISO8601DateFormatter().string(from: Date()))
         try await updateSettings { settings in
             // The same keys checked again keep what a succession chain vouched for; brand-new keys start afresh.
             if let stored = settings.contacts[contact.userId], stored.signingPublicKey == pin.signingPublicKey,
@@ -220,6 +254,8 @@ extension Vault {
             settings.setPin(pin)
         }
         ReplacedKeysSeen.acknowledge(pin)
+        // Shares to them still in an older suite can be sealed in suite 4 now that a version 3 pin vouches for their keys.
+        Task { _ = try? await self.upgradeShares() }
     }
 
     public func unpin(_ pin: ContactPin) async throws {
@@ -230,27 +266,17 @@ extension Vault {
         try await api.shares(of: item.id, workspaceId: item.node.workspaceId)
     }
 
-    /* Remembers the first post-quantum key a person's pinned signing key vouched for, so a different one later is refused. */
-    func rememberKem(_ digest: String, for userId: String) async throws {
-        try await updateSettings { settings in
-            guard var stored = settings.contacts[userId], stored.kemPublicKeyHash == nil else { return }
-            stored.kemPublicKeyHash = digest
-            settings.setPin(stored)
-        }
-    }
-
     /*
-     * Shares an item with a pinned, checked contact: the served keys must match the pin and
-     * carry a post-quantum key the pin vouches for (see `ContactPin.sealKeys`), then the node
-     * key is sealed to them with this identity's private key, and the share joins the ledger.
+     * Shares an item with a pinned, checked contact: the served keys must be the ones the
+     * version 3 pin vouches for (see `ContactPin.sealKeys`), then the node key is sealed to them
+     * in suite 4, signed with both of this identity's signing keys, and the share joins the ledger.
      */
     public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> ShareView {
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         guard pin.verified else { throw ContactError.recheck(pin.displayName) }
         let contact = try await Auth.lookupContact(email: pin.email)
         guard contact.userId == pin.userId else { throw ContactError.changed }
-        let sealing = try pin.sealKeys(encryptionPublicKey: contact.encryptionPublicKey, kemPublicKey: contact.kem?.publicKey, kemSignature: contact.kem?.signature)
-        if let digest = sealing.newDigest { try await rememberKem(digest, for: pin.userId) }
+        let sealing = try pin.sealKeys(contact.served)
         let keys = try await identityKeys()
         let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: pin.userId, granterUserId: session.userId)
         let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)

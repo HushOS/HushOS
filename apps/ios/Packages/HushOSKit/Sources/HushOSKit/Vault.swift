@@ -93,6 +93,8 @@ public actor Vault {
     var earlierIdentities: [IdentityKeys]?
     /* When the identity in use was last compared with the one the server serves (see signingSeed). */
     var identityCheckedAt: Date?
+    /* The identity being opened (and upgraded), so callers that arrive meanwhile wait for it instead of upgrading twice. */
+    var openingIdentity: Task<IdentityKeys, Error>?
     /* The settings key, opened under the account key (see Settings). */
     var settingsKey: Data?
     /* The pins as the last settings read had them (see `knownPins`). */
@@ -249,21 +251,59 @@ public actor Vault {
     /*
      * The identity's private keys, opened once under the account key. An identity served as
      * current with a lower key version than this device has opened is refused: those are keys
-     * the account replaced, and a server handing them back wants them used again.
+     * the account replaced, and a server handing them back wants them used again. So is a
+     * version 1 identity once this device has opened version 2 (see `IdentityMarks`).
+     *
+     * A version 1 identity is upgraded here, before anything is signed with it
+     * (docs/identity-pq-design.md 2): the core adds an ML-DSA key (re-opening the wrapped seed
+     * and refusing one that does not open) and signs the keys statement; the server stores it
+     * in place, and a device that lost the race to another (409) opens the one stored.
      */
     func identityKeys() async throws -> IdentityKeys {
         if let identity { return identity }
-        let envelope = try await Auth.identity()
+        if let openingIdentity { return try await openingIdentity.value }
+        let task = Task { try await self.openIdentity() }
+        openingIdentity = task
+        defer { openingIdentity = nil }
+        return try await task.value
+    }
+
+    private func openIdentity() async throws -> IdentityKeys {
         let marks = IdentityMarks.shared
-        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion)
-        let keys = try identityOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
-        marks.record(userId: session.userId, keyVersion: keys.keyVersion)
+        let accountKey = try unlockAccount()
+        var envelope = try await Auth.identity()
+        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
+        var keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
+        if keys.identityVersion == 1 {
+            let upgraded = try identityUpgrade(userId: session.userId, accountKey: accountKey, envelope: envelope)
+            do {
+                envelope = try await Auth.upgradeIdentity(upgraded)
+            } catch AuthError.conflict {
+                // Another device upgraded first: open the identity it stored, never a second ML-DSA key.
+                envelope = try await Auth.identity()
+            }
+            keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
+        }
+        guard keys.identityVersion >= 2, keys.mlDsaPublicKey != nil, keys.kemPublicKey != nil else {
+            throw AuthError.message("Your keys couldn’t be upgraded. Try again.")
+        }
+        // The stored identity must still be the one this device has used: same keys, version not lowered.
+        try marks.check(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
+        marks.record(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
         // A settings mark an earlier version kept under this identity's key becomes the account's.
         SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: [keys.encryptionPublicKey])
         identity = keys
         identityCheckedAt = Date()
         return keys
     }
+
+    /* Opens (and on the first unlock after the post-quantum release, upgrades) the identity, before anything is written. */
+    public func prepareIdentity() async throws {
+        _ = try await identityKeys()
+    }
+
+    /* Tests: the account key, without this device's keychain. */
+    func adopt(accountKey key: Data) { accountKey = key }
 
     /* Tests: an identity already opened, without the account key from this device's keychain. */
     func adopt(identity keys: IdentityKeys, earlier: [IdentityKeys] = []) {

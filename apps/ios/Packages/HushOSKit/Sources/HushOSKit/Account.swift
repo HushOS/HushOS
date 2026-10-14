@@ -155,10 +155,19 @@ extension Auth {
 
     // MARK: Key rotation
 
+    /*
+     * An identity envelope as the server stores it: version 1 (X25519 and Ed25519, an ML-KEM key
+     * with its Ed25519 binding on most) or version 2 (all four halves and the keys statement's
+     * hybrid signature, no binding).
+     */
     static func identityEnvelope(from json: [String: Any]) -> IdentityEnvelope {
         let kem = (json["kem"] as? [String: Any]).map {
             IdentityKem(publicKey: $0["publicKey"] as? String ?? "", seedNonce: $0["seedNonce"] as? String ?? "",
-                        encryptedSeed: $0["encryptedSeed"] as? String ?? "", signature: $0["signature"] as? String ?? "")
+                        encryptedSeed: $0["encryptedSeed"] as? String ?? "", signature: $0["signature"] as? String)
+        }
+        let mlDsa = (json["mlDsa"] as? [String: Any]).map {
+            IdentityMlDsa(publicKey: $0["publicKey"] as? String ?? "", seedNonce: $0["seedNonce"] as? String ?? "",
+                          encryptedSeed: $0["encryptedSeed"] as? String ?? "")
         }
         return IdentityEnvelope(
             version: UInt32((json["version"] as? NSNumber)?.intValue ?? 0),
@@ -170,10 +179,13 @@ extension Auth {
             signingPublicKey: json["signingPublicKey"] as? String ?? "",
             signingSeedNonce: json["signingSeedNonce"] as? String ?? "",
             encryptedSigningSeed: json["encryptedSigningSeed"] as? String ?? "",
-            kem: kem
+            kem: kem,
+            mlDsa: mlDsa,
+            keysSignature: json["keysSignature"] as? String
         )
     }
 
+    /* The envelope as the API takes it: a version 2 one carries no KEM binding, a version 1 one no ML-DSA half. */
     static func json(_ identity: IdentityEnvelope) -> [String: Any] {
         var out: [String: Any] = [
             "version": identity.version, "keyVersion": identity.keyVersion, "wrappingSalt": identity.wrappingSalt,
@@ -182,7 +194,15 @@ extension Auth {
             "signingSeedNonce": identity.signingSeedNonce, "encryptedSigningSeed": identity.encryptedSigningSeed, "kem": NSNull(),
         ]
         if let kem = identity.kem {
-            out["kem"] = ["publicKey": kem.publicKey, "seedNonce": kem.seedNonce, "encryptedSeed": kem.encryptedSeed, "signature": kem.signature]
+            var half: [String: Any] = ["publicKey": kem.publicKey, "seedNonce": kem.seedNonce, "encryptedSeed": kem.encryptedSeed]
+            if identity.version == 1, let signature = kem.signature { half["signature"] = signature }
+            out["kem"] = half
+        }
+        if identity.version >= 2 {
+            if let mlDsa = identity.mlDsa {
+                out["mlDsa"] = ["publicKey": mlDsa.publicKey, "seedNonce": mlDsa.seedNonce, "encryptedSeed": mlDsa.encryptedSeed]
+            }
+            if let signature = identity.keysSignature { out["keysSignature"] = signature }
         }
         return out
     }
