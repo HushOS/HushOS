@@ -2,6 +2,12 @@
 
 Follow the root README to install dependencies, create `.env`, start Postgres, migrate, and start the app. Bun 1.4.2 runs everything, the browser suite included. Open the **repository root** in your editor so workspace configuration and aliases resolve consistently.
 
+## Commits and sign-off
+
+Every commit carries a sign-off: a `Signed-off-by: Your Name <you@example.com>` line certifying the [Developer Certificate of Origin](https://developercertificate.org/), that you wrote the change or otherwise have the right to submit it under the project's license (AGPL-3.0-only). Add it with `git commit -s`; the name and email must match the commit's author. The DCO check on every pull request fails on any commit without one. To fix a branch already pushed, run `git rebase --signoff origin/main` and force-push the branch.
+
+A sign-off is a statement, not a cryptographic signature: signing commits with an SSH or GPG key is welcome but separate. Commit messages follow Conventional Commits (`type(scope): summary`, imperative and lowercase; see AGENTS.md).
+
 ## Editors
 
 ### VS Code
