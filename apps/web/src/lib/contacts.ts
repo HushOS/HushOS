@@ -1,7 +1,6 @@
 import type { ContactIdentity, Settings, SettingsKeyEnvelope } from '@hushos/auth/api';
 import {
-    fingerprint,
-    keyDigest,
+    fingerprintOfKeys,
     pinVerified,
     publicKeyBytes,
     settingsRolledBack,
@@ -12,6 +11,7 @@ import {
     granterKeysOf,
     replacementUnseen,
     pinAfterSuccession,
+    pinOfServed,
     signersFromPins,
     type Pin,
     type ServedKeys,
@@ -23,6 +23,7 @@ import {
     IDENTITY_ROLLED_BACK,
     identityRolledBack,
     identitySeen,
+    identityVersionSeen,
     rememberIdentitySeen,
     rememberSettingsSeen,
     settingsSeen,
@@ -54,9 +55,16 @@ export type LoadedSettings = {
     };
     version: number;
 };
-export const EMPTY: LoadedSettings['settings'] = { version: 1, contacts: {} };
+export const EMPTY: LoadedSettings['settings'] = { version: 2, contacts: {} };
 
-type OwnIdentity = { keyVersion: number; encryptionPublicKey: string; signingPublicKey: string };
+type OwnIdentity = {
+    keyVersion: number;
+    identityVersion: 2;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKey: string;
+    kemPublicKey: string;
+};
 let opened: { userId: string; promise: Promise<OwnIdentity> } | undefined;
 let settingsKeyOpened: { userId: string; promise: Promise<void> } | undefined;
 authClient.store.subscribe((state, previous) => {
@@ -70,9 +78,10 @@ authClient.store.subscribe((state, previous) => {
  * Opens the identity in the worker once per unlock, with every earlier one the
  * account has had (shares sealed to them open only with them, and what was
  * signed with them still checks); returns its key version and public keys,
- * proven against the private keys. An identity from before hybrid sharing has
- * no KEM key yet: it is minted and signed in the worker, stored once on the
- * server, and the envelope reopened with it.
+ * proven against the private keys. A version 1 identity is upgraded here
+ * before anything is signed (docs/identity-pq-design.md 2): the worker adds an
+ * ML-DSA key and the keys statement, the server stores it once, and a device
+ * that lost that race opens the one another device stored.
  */
 export function openIdentity(userId: string, refresh = false) {
     if (opened?.userId !== userId || refresh)
@@ -91,14 +100,30 @@ export function openIdentity(userId: string, refresh = false) {
                     history,
                     refresh,
                 });
-                if (!result.kemPublicKey) {
-                    const { kem } = await authClient.rpc('identityMintKem', { userId, identity });
+                // An older identity served as current is refused, as older settings are: it
+                // would bring back keys this account replaced, and records they signed. Once
+                // this device has seen its version 2 identity, the version 1 form is a
+                // rollback too, and upgrading it again would mint a second ML-DSA key.
+                if (
+                    identityRolledBack(
+                        { keyVersion: result.keyVersion, identityVersion: result.identityVersion },
+                        {
+                            keyVersion: identitySeen(userId),
+                            identityVersion: identityVersionSeen(userId),
+                        },
+                    )
+                )
+                    throw new Error(IDENTITY_ROLLED_BACK);
+                if (result.identityVersion === 1) {
+                    const { identity: upgraded } = await authClient.rpc('identityUpgrade', {
+                        userId,
+                        identity,
+                    });
                     try {
-                        await authClient.addIdentityKem(kem);
-                        identity = { ...identity, kem };
+                        identity = (await authClient.upgradeIdentity(upgraded)).identity;
                     } catch (error) {
-                        // Another device got there first: take the key it stored.
-                        if (!/already has/.test(String((error as Error).message))) throw error;
+                        // Another device got there first: open the identity it stored.
+                        if ((error as { status?: number }).status !== 409) throw error;
                         identity = (await authClient.identity()).identity;
                     }
                     result = await authClient.rpc('identityOpen', {
@@ -108,15 +133,16 @@ export function openIdentity(userId: string, refresh = false) {
                         refresh: true,
                     });
                 }
-                // An older identity served as current is refused, as older settings are: it
-                // would bring back keys this account replaced, and records they signed.
-                if (identityRolledBack(result.keyVersion, identitySeen(userId)))
-                    throw new Error(IDENTITY_ROLLED_BACK);
-                rememberIdentitySeen(userId, result.keyVersion);
+                if (result.identityVersion !== 2 || !result.mlDsaPublicKey || !result.kemPublicKey)
+                    throw new Error('Your keys could not be upgraded. Try again.');
+                rememberIdentitySeen(userId, result.keyVersion, 2);
                 return {
                     keyVersion: result.keyVersion,
+                    identityVersion: 2 as const,
                     encryptionPublicKey: result.encryptionPublicKey,
                     signingPublicKey: result.signingPublicKey,
+                    mlDsaPublicKey: result.mlDsaPublicKey,
+                    kemPublicKey: result.kemPublicKey,
                 };
             })().catch((error: unknown) => {
                 opened = undefined;
@@ -248,10 +274,13 @@ export const ownFingerprintQueryOptions = (userId: string) =>
     queryOptions({
         queryKey: contactKeys.own(userId),
         queryFn: async () => {
+            // Over the keys the worker re-derived from all four private halves, never the served ones.
             const own = await openIdentity(userId);
-            return fingerprint(
+            return fingerprintOfKeys(
                 publicKeyBytes(own.encryptionPublicKey),
                 publicKeyBytes(own.signingPublicKey),
+                publicKeyBytes(own.mlDsaPublicKey),
+                publicKeyBytes(own.kemPublicKey),
             );
         },
         staleTime: Infinity,
@@ -297,7 +326,7 @@ export async function saveSettings(
 }
 
 /* A contact's identity as the server serves it: what every pin check is made against. */
-type Served = ServedKeys & { kem?: { publicKey: string; signature: string } | null };
+type Served = ServedKeys;
 
 /*
  * Brings a pin up to the keys the server serves, when it can without a words
@@ -329,26 +358,32 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
             } catch {
                 return { pin, outcome: 'changed' as const };
             }
-            const last = links.at(-1);
-            const kemPublicKey = served.kem?.publicKey ?? last?.newKemPublicKey;
-            if (!last || !kemPublicKey) return { pin, outcome: 'changed' as const };
+            const { mlDsaPublicKey, kemPublicKey } = served;
+            if (!links.length || !mlDsaPublicKey || !kemPublicKey || !pin.mlDsaPublicKeyHash)
+                return { pin, outcome: 'changed' as const };
             const { valid } = await authClient.rpc('identityVerifyChain', {
                 userId: pin.userId,
                 pinned: {
                     keyVersion: pin.keyVersion ?? null,
                     encryptionPublicKey: pin.encryptionPublicKey,
                     signingPublicKey: pin.signingPublicKey,
+                    mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash,
                 },
                 served: {
                     keyVersion: served.keyVersion,
                     encryptionPublicKey: served.encryptionPublicKey,
                     signingPublicKey: served.signingPublicKey,
+                    mlDsaPublicKey,
                     kemPublicKey,
                 },
                 links,
             });
             if (!valid) return { pin, outcome: 'changed' as const };
-            const next = await pinAfterSuccession(pin, served, kemPublicKey, new Date());
+            const next = await pinAfterSuccession(
+                pin,
+                { ...served, mlDsaPublicKey, kemPublicKey },
+                new Date(),
+            );
             await saveSettings(boundQueryClient, userId, (settings) => {
                 const current = settings.contacts[pin.userId];
                 // Only from the keys the chain was checked from: another device may have moved first.
@@ -376,7 +411,7 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
 export async function followServedKeys(
     userId: string,
     signer: { id: string },
-): Promise<'same' | 'followed' | 'changed' | 'not-pinned'> {
+): Promise<'same' | 'followed' | 'recheck' | 'changed' | 'not-pinned'> {
     const { settings } = await loadSettings(userId);
     const held = settings.contacts[signer.id];
     if (!held) return 'not-pinned';
@@ -394,6 +429,8 @@ export async function followServedKeys(
 async function servedMatchesPin(pin: Pin, served: Served) {
     const comparison = await comparePin(pin, served);
     if (comparison === 'same') return null;
+    if (comparison === 'recheck')
+        return `${pin.name}’s keys were upgraded. Compare words with them again in People you share with`;
     return comparison === 'succession'
         ? `${pin.name}’s sharing keys changed since you checked them. Check them again in People you share with`
         : `${pin.name}’s keys have changed since you checked them. Check it’s them in People you share with`;
@@ -401,7 +438,8 @@ async function servedMatchesPin(pin: Pin, served: Served) {
 
 export type Lookup = {
     contact: ContactIdentity;
-    fingerprint: string;
+    /* The version 3 fingerprint over their four keys; null until their identity is upgraded. */
+    fingerprint: string | null;
     /* The pin already held for this person, when there is one. */
     pinned: Pin | null;
     /* The looked-up key differs from the pinned one and no signed chain explains it: a warning, never a silent update. */
@@ -410,22 +448,35 @@ export type Lookup = {
     stale: boolean;
     /* The pin followed their signed succession to the keys looked up just now. */
     followed: boolean;
-    /* Their post-quantum key, when they have one: its digest, and whether their signing key vouches for it. */
-    kem: { hash: string; valid: boolean } | null;
+    /*
+     * Whether their identity is version 2 with a keys statement that holds: the
+     * only kind words can be compared over. False for someone who has not
+     * signed in since the post-quantum release.
+     */
+    upgraded: boolean;
 };
 
-async function servedKem(contactUserId: string, served: ContactIdentity) {
-    if (!served.kem) return null;
-    const [{ valid }, hash] = await Promise.all([
-        authClient.rpc('identityVerifyKem', {
-            userId: contactUserId,
+/* Whether a served identity is version 2 and its keys statement holds; not by itself a reason to trust it. */
+async function keysHold(contactUserId: string, served: ContactIdentity) {
+    if (
+        served.identityVersion !== 2 ||
+        !served.mlDsaPublicKey ||
+        !served.kemPublicKey ||
+        !served.keysSignature
+    )
+        return false;
+    const { valid } = await authClient.rpc('identityVerifyKeys', {
+        userId: contactUserId,
+        identity: {
+            keyVersion: served.keyVersion,
             encryptionPublicKey: served.encryptionPublicKey,
             signingPublicKey: served.signingPublicKey,
-            kem: served.kem,
-        }),
-        keyDigest(publicKeyBytes(served.kem.publicKey)),
-    ]);
-    return { hash, valid };
+            mlDsaPublicKey: served.mlDsaPublicKey,
+            kemPublicKey: served.kemPublicKey,
+            keysSignature: served.keysSignature,
+        },
+    });
+    return valid;
 }
 
 /* Looks a person up by email and compares the keys the server gave with the pin held. */
@@ -438,15 +489,20 @@ export async function lookupContact(
         authClient.lookupContact(email),
         queryClient.fetchQuery(settingsQueryOptions(userId)),
     ]);
-    const print = await fingerprint(
-        publicKeyBytes(contact.encryptionPublicKey),
-        publicKeyBytes(contact.signingPublicKey),
-    );
+    const upgraded = await keysHold(contact.userId, contact);
+    const print = upgraded
+        ? await fingerprintOfKeys(
+              publicKeyBytes(contact.encryptionPublicKey),
+              publicKeyBytes(contact.signingPublicKey),
+              publicKeyBytes(contact.mlDsaPublicKey!),
+              publicKeyBytes(contact.kemPublicKey!),
+          )
+        : null;
     const held = loaded.settings.contacts[contact.userId] ?? null;
-    const kem = await servedKem(contact.userId, contact);
     const checked = held ? await bringUpToDate(userId, held, contact) : null;
     const pinned = checked?.pin ?? null;
     const changed = checked?.outcome === 'changed';
+    // A pin from before the release (or never checked) over keys that did not change.
     const stale = pinned !== null && !changed && !(await pinVerified(pinned));
     return {
         contact,
@@ -455,11 +511,27 @@ export async function lookupContact(
         changed,
         stale,
         followed: checked?.outcome === 'followed',
-        kem,
+        upgraded,
     };
 }
 
-export function pinContact(queryClient: QueryClient, userId: string, lookup: Lookup) {
+/*
+ * Writes the version 3 pin of a contact whose words were just compared: their
+ * X25519 and Ed25519 keys, the digests of their ML-DSA and ML-KEM keys, and
+ * the fingerprint over all four. Only for an upgraded identity whose keys
+ * statement held (`lookup.upgraded`).
+ */
+export async function pinContact(queryClient: QueryClient, userId: string, lookup: Lookup) {
+    const { contact } = lookup;
+    if (!lookup.upgraded || !contact.mlDsaPublicKey || !contact.kemPublicKey)
+        throw new Error(
+            `${contact.name} needs to sign in to HushOS once more before you can compare words.`,
+        );
+    const fresh = await pinOfServed({
+        ...contact,
+        mlDsaPublicKey: contact.mlDsaPublicKey,
+        kemPublicKey: contact.kemPublicKey,
+    });
     return saveSettings(queryClient, userId, (settings) => {
         const before = settings.contacts[lookup.contact.userId];
         const moved =
@@ -479,12 +551,8 @@ export function pinContact(queryClient: QueryClient, userId: string, lookup: Loo
             userId: lookup.contact.userId,
             email: lookup.contact.email,
             name: lookup.contact.name,
-            encryptionPublicKey: lookup.contact.encryptionPublicKey,
-            signingPublicKey: lookup.contact.signingPublicKey,
-            fingerprint: lookup.fingerprint,
+            ...fresh,
             pinnedAt: new Date().toISOString(),
-            kemPublicKeyHash: lookup.kem?.valid ? lookup.kem.hash : null,
-            keyVersion: lookup.contact.keyVersion,
             // Words compared after a replacement: People need not say so any more.
             ...(!moved && before?.keysReplacedAt ? { replacementSeen: before.keysReplacedAt } : {}),
             // Accepting new keys: what was shared with them is sealed again, to these.
@@ -515,7 +583,7 @@ export function acknowledgeSuccession(queryClient: QueryClient, userId: string, 
 export async function trustGrantee(
     userId: string,
     granteeUserId: string,
-    served: Served & { kem: { publicKey: string; signature: string } | null },
+    served: Served,
 ): Promise<TrustedGrantee> {
     const loaded = await loadSettings(userId);
     const held = loaded.settings.contacts[granteeUserId];
@@ -527,35 +595,12 @@ export async function trustGrantee(
     const pinned = held;
     const moved = await servedMatchesPin(held, served);
     if (moved) throw new Error(`${moved} before sharing. Nothing was shared.`);
-    // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target, and
-    // withholding the KEM key is all it would take a server to get one.
-    if (!served.kem)
+    // comparePin said `same`: the served ML-KEM key is the one the version 3 pin's digest names.
+    if (!served.kemPublicKey)
         throw new Error(
             `${pinned.name} hasn’t got post-quantum keys yet, so nothing was shared. They get them the next time they sign in.`,
         );
-    if (pinned.kemPublicKeyHash)
-        return {
-            encryptionPublicKey: pinned.encryptionPublicKey,
-            kemPublicKey: served.kem.publicKey,
-        };
-    // Only the pinned signing key may vouch: the fingerprint compared covers it, the served one could be anyone's.
-    const { valid } = await authClient.rpc('identityVerifyKem', {
-        userId: granteeUserId,
-        encryptionPublicKey: pinned.encryptionPublicKey,
-        signingPublicKey: pinned.signingPublicKey,
-        kem: served.kem,
-    });
-    if (!valid)
-        throw new Error(
-            `${pinned.name}’s post-quantum key is not signed by their identity. Nothing was shared.`,
-        );
-    const hash = await keyDigest(publicKeyBytes(served.kem.publicKey));
-    await saveSettings(boundQueryClient, userId, (settings) => {
-        const pin = settings.contacts[granteeUserId];
-        if (pin) pin.kemPublicKeyHash = hash;
-        return settings;
-    });
-    return { encryptionPublicKey: pinned.encryptionPublicKey, kemPublicKey: served.kem.publicKey };
+    return { encryptionPublicKey: pinned.encryptionPublicKey, kemPublicKey: served.kemPublicKey };
 }
 
 /* Behind the share dialog: the pinned contact's served identity, checked against the pin. */
@@ -592,14 +637,9 @@ export class UnverifiedGranterError extends Error {
  * use would let a server fake a share "from" anyone and plant its own key as
  * theirs.
  */
-export async function trustGranter(granter: {
-    id: string;
-    name: string;
-    email: string;
-    keyVersion: number;
-    encryptionPublicKey: string;
-    signingPublicKey: string;
-}): Promise<TrustedGranter> {
+export async function trustGranter(
+    granter: { id: string; name: string; email: string } & Served,
+): Promise<TrustedGranter> {
     const userId = authClient.store.getState().unlockedUserId;
     if (!userId) throw new Error('Unlock your account first.');
     const loaded = await loadSettings(userId);
@@ -608,11 +648,17 @@ export async function trustGranter(granter: {
         throw new UnverifiedGranterError(
             `Add ${granter.name} in People you share with and check their words to open what they shared.`,
         );
-    // The share listing serves no KEM key, and opening needs none.
-    const moved = await servedMatchesPin(held, { ...granter, kem: undefined });
+    const moved = await servedMatchesPin(held, granter);
     if (moved) throw new Error(`${moved} to open what they shared.`);
+    // Both halves of the share's signature: the pinned Ed25519 key, and the served ML-DSA key
+    // whose digest the pin holds.
+    const keys = await granterKeysOf(held, granter);
+    if (!keys)
+        throw new Error(
+            `${held.name}’s keys have changed since you checked them. Check it’s them in People you share with to open what they shared.`,
+        );
     return {
-        ...granterKeysOf(held),
+        ...keys,
         // Keys the pin followed a succession from open nothing: a share sealed under one waits.
         ...(held.previousSigningKeys?.length ? { replaced: { name: held.name } } : {}),
     };

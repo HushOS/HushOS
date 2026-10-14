@@ -54,11 +54,28 @@ export function rememberSettingsSeen(userId: string, version: number) {
 export function identitySeen(userId: string) {
     return readMark(`${IDENTITY_SEEN_PREFIX}:${userId}`);
 }
-export function rememberIdentitySeen(userId: string, keyVersion: number) {
-    raiseMark(`${IDENTITY_SEEN_PREFIX}:${userId}`, keyVersion);
+/* The highest identity version (1, or 2 once upgraded) this device has opened for the account. */
+export function identityVersionSeen(userId: string) {
+    return readMark(`${IDENTITY_SEEN_PREFIX}:${userId}:version`);
 }
-export function identityRolledBack(served: number, seen: number) {
-    return served < seen;
+export function rememberIdentitySeen(userId: string, keyVersion: number, identityVersion: number) {
+    raiseMark(`${IDENTITY_SEEN_PREFIX}:${userId}`, keyVersion);
+    raiseMark(`${IDENTITY_SEEN_PREFIX}:${userId}:version`, identityVersion);
+}
+/*
+ * Whether the identity served as current is older than one this device has
+ * opened: a lower key version, or the version 1 form once it has seen version
+ * 2 (the upgrade keeps the key version, so the key version alone does not see
+ * it; docs/identity-pq-design.md 2).
+ */
+export function identityRolledBack(
+    served: { keyVersion: number; identityVersion: number },
+    seen: { keyVersion: number; identityVersion: number },
+) {
+    if (served.keyVersion < seen.keyVersion) return true;
+    // Once version 2 has been seen, the version 1 form is a rollback at any key version: every
+    // identity made since the release is version 2, so none can follow it.
+    return served.identityVersion < seen.identityVersion;
 }
 export const IDENTITY_ROLLED_BACK =
     'The server sent older sharing keys for your account than this device has opened, so nothing was opened. Try again later, and tell your operator if it keeps happening.';

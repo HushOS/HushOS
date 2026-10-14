@@ -58,7 +58,7 @@ test('the owner pins the guest and shares a folder as editor', async () => {
         timeout: 60_000,
     });
     // The guest's post-quantum key is served with a binding their identity signed.
-    await expect(dialog(owner).locator('[data-kem]')).toHaveAttribute('data-kem', 'signed');
+    await expect(dialog(owner).locator('[data-keys]')).toHaveAttribute('data-keys', 'signed');
     await dialog(owner).getByRole('button', { name: 'They match' }).click();
     await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
 
@@ -79,10 +79,10 @@ test('the owner pins the guest and shares a folder as editor', async () => {
     await shareWith(owner, /E2E Tester/, 'Can edit');
     await expect(owner.getByText(/shared with E2E Tester/)).toBeVisible();
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toContainText('Can edit');
-    // Suite 3: an ephemeral X25519 key and ML-KEM-768 together, signed by the owner.
+    // Suite 4: an ephemeral X25519 key and ML-KEM-768 together, with the owner's hybrid signature.
     await expect(dialog(owner).locator(`[data-share="${guestEmail}"]`)).toHaveAttribute(
         'data-suite',
-        '3',
+        '4',
     );
     // A link too, with a password: it has to survive the rotation that follows the revocation.
     linkUrl = await newLink(owner, 'open sesame');
