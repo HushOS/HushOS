@@ -1,0 +1,87 @@
+bun.lock
+  s_c56e31c87cddde::t_b17da100030502 168
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_e7590704e4c4e6 9,51-61,64-66,80,83,85,123-128
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_543fbcaa4d95f1 5,11,375
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_6a4ca2dac61a54 7-10,18,304,480,485-488,491-514,546-550,552-578,583-585,594-596,601-602,611-612,665-666,668-685,704,1227-1230,1232-1249,1252-1265,1267-1268,1273-1280,1286,1290-1318,1401-1403
+packages/db/drizzle/20261014213244_pq_identity/migration.sql
+  s_c56e31c87cddde::t_ca674e9051e321 1-17
+packages/db/drizzle/20261014213244_pq_identity/snapshot.json
+  s_c56e31c87cddde::t_85158a0c5cc132 1-8708
+packages/db/package.json
+  s_c56e31c87cddde::t_88b32b27575eb9 27
+packages/db/src/auth.settings.test.ts
+  s_c56e31c87cddde::t_c2a94f33b1071b 190,192,194
+packages/db/src/auth.test.ts
+  s_c56e31c87cddde::t_749159353c12ae 4-10,372-432,434-469,471-477,479,481-522,524-528,532-599,603,606,609,611,613,616,621-622,629,632,638-639,641-642,654,657,660,669-671,674,679,681,696-697,701,709-720,722-728,730-735,738-739,746-747,753-757,762,764-775,780-782,804-805,814,822,825,828,838,851-854,856,858,883,899-920,922-923,925-927
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_61506f90b5ee2e 12,786,790-793,795-804,808-810,891,895,898-899,906-907,931-932,1007-1008,1061,1064,1066,1077-1115,1119-1126,1132-1133,1148,1153,1163,1166,1169-1178,1188,1193,1199-1247,1274,1277
+packages/db/src/drive.changes.test.ts
+  s_c56e31c87cddde::t_dc5ee2a06d520f 63
+packages/db/src/drive.reports.test.ts
+  s_c56e31c87cddde::t_d41e66e4db14d5 228-229,233-239,457,730
+packages/db/src/drive.rotations.test.ts
+  s_c56e31c87cddde::t_0828c4a7d1e8bd 163,249,268,403
+packages/db/src/drive.shares.test.ts
+  s_c56e31c87cddde::t_979012f71708cf 106,254,344-345,347-348,357,363,375-377,380,398-399,402-403,412,417-418,426,438,448,455,457,464-466
+packages/db/src/drive.signatures.test.ts
+  s_c56e31c87cddde::t_eea2395eb2af61 199-231
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_70af07cec65e51 340,348-351,354-356,2775-2778,2780,2783-2799,2911-2912,2917,2977-2978
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_f2e68f0e864219 14
+packages/db/src/reports.ts
+  s_c56e31c87cddde::t_2879f3644ac70a 61,64,66
+packages/db/src/rotations.ts
+  s_c56e31c87cddde::t_381acafd5afe1e 119,121,123,188,190,192,237,239,241
+packages/db/src/schema/auth.ts
+  s_c56e31c87cddde::t_a14fd7050508e7 276,278-287,293,297-301,337-340,348-350,357,361-365,369
+packages/db/src/schema/drive.ts
+  s_c56e31c87cddde::t_281e4ab8173eae 311-314,354
+packages/db/src/signatures.test.ts
+  s_c56e31c87cddde::t_e4833c3c2eee3d 1,4,6,10,155,158,166,169,173,176-238
+packages/db/src/signatures.ts
+  s_c56e31c87cddde::t_bf84cf975c24da 2,15-23,91-95,102,105,111,117,120,125-173
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_d42590af6e7e69 1,67-92,113-114,117,125-131
+packages/drive/src/api.ts
+  s_c56e31c87cddde::t_1f206a7a8db72e 275-276,278,282-287,289,291,294-296,310-311,480
+packages/drive/src/client.test.ts
+  s_c56e31c87cddde::t_abe01bc9671544 44,47-49,63,224,281-282,300,322,351,512,527-530
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_07d59a4a2399ee 155-158,162,170,1006,1034,1070,1311,1578-1579,1587
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_48edc9f4c9868a 42-47,49-51
+packages/drive/src/server.shares.test.ts
+  s_c56e31c87cddde::t_00b8993ed9d03d 14-18,55,57,62-63,66,75,78,90,100,103-106
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_81144be8f26b41 219-244,830-832,884,924,949,1960-1961,2345,2347-2353
+packages/drive/src/trust.test.ts
+  s_c56e31c87cddde::t_638d4c767ebb3c 20-21,25-33,35,37-38,45-52,58-73,78-79,91-92,94-101,106,109-123,125,137,144,146-147,150,153-156,161,163-170,175-176,184-189,194-202,210-216,221-227,231-234
+packages/drive/src/trust.ts
+  s_c56e31c87cddde::t_8ac678958f0024 3,94-104,106,109-110,115,117-123,127-130,134-142,144-146,148-150,154-156,159-160,163-178,186-190,192-195
+packages/drive/test/fixtures.ts
+  s_c56e31c87cddde::t_b0f5190d8dbcbd 158
+packages/logging/src/privacy.test.ts
+  s_c56e31c87cddde::t_40c0049594c7fb 145-146,148-149
+packages/logging/src/privacy.ts
+  s_c56e31c87cddde::t_57470c07e98285 107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "629ddeb4c74964d6368b2598159dddfc88534a24",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
