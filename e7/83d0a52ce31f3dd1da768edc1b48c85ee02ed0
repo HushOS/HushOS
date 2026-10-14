@@ -1,0 +1,28 @@
+docs/groups-design.md
+  s_c56e31c87cddde::t_2b1d21b8be2367 64,112,152,220,365
+  s_c56e31c87cddde::t_9cafcf5797a821 52,219
+docs/envelope-migrations.md
+  s_c56e31c87cddde::t_030aad52197ff3 128-129
+  s_c56e31c87cddde::t_7baa78af53fc26 1-7,9-16,18-24,37-57,59-65,68-70,73,75,77-93,95-103,105-127,130-144,146,152-171,177-187,191-194,196-199,202-203,205-206
+  s_c56e31c87cddde::t_b0a873524a4216 17,58,66-67,71-72,188-190
+  s_c56e31c87cddde::t_9cafcf5797a821 8,74,76,94,104,145,147-151,195,200-201,204,207-210
+  s_c56e31c87cddde::t_4d07a67ec3c316 25-36,172-176
+docs/groups-threat-model.md
+  s_c56e31c87cddde::t_9cafcf5797a821 133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e783d0a52ce31f3dd1da768edc1b48c85ee02ed0",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
