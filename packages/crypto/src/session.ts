@@ -7,7 +7,6 @@ import {
     type SecurityUpdate,
 } from './security';
 import {
-    addIdentityKem,
     createIdentity,
     createSuccessor,
     verifySuccessionChain,
@@ -17,9 +16,10 @@ import {
     openIdentityEncryptionKey,
     openIdentityKemKey,
     openIdentitySigningKey,
-    verifyKemBinding,
+    verifyIdentityKeys,
+    upgradeIdentity,
+    openIdentityMlDsaKey,
     type IdentityEnvelope,
-    type IdentityKem,
 } from './identity';
 import {
     createSettingsKey,
@@ -40,6 +40,7 @@ import {
     signStatement,
     versionStatementAs,
     versionStatements,
+    type HybridPublicKey,
     type Integrity,
     type MetadataStatement,
     type NodeKind,
@@ -49,7 +50,7 @@ import {
     type VersionStatement,
 } from './signatures';
 import { openReportKey, sealReportKey } from './reports';
-import { KEM_PUBLIC_KEY_BYTES } from './pq';
+import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import {
     generateLinkSalt,
     generateLinkSecret,
@@ -175,14 +176,24 @@ export type CryptoRequests = {
         served: ServedKeys;
         links: SuccessionLink[];
     };
-    /* An identity made before hybrid sharing gets its KEM key: minted, wrapped and signed; installed by the next open. */
-    identityMintKem: { userId: string; identity: IdentityEnvelope };
-    /* Whether a contact's served KEM key is vouched for by their signing key; pure, needs no unlock. */
-    identityVerifyKem: {
+    /*
+     * A version 1 identity upgraded to version 2 (docs/identity-pq-design.md 2):
+     * the same keys and key version plus an ML-DSA key and the keys statement.
+     * Nothing is installed: send it with POST /api/auth/identity/upgrade, then
+     * open whatever the server answers with (refresh).
+     */
+    identityUpgrade: { userId: string; identity: IdentityEnvelope };
+    /* Whether a served version 2 identity's keys statement holds; pure, needs no unlock. Not a reason to trust. */
+    identityVerifyKeys: {
         userId: string;
-        encryptionPublicKey: string;
-        signingPublicKey: string;
-        kem: { publicKey: string; signature: string };
+        identity: {
+            keyVersion: number;
+            encryptionPublicKey: string;
+            signingPublicKey: string;
+            mlDsaPublicKey: string;
+            kemPublicKey: string;
+            keysSignature: string;
+        };
     };
     /*
      * Settings. The settings key is created once per account (store it with
@@ -197,7 +208,7 @@ export type CryptoRequests = {
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
     /*
      * Shares. Seal wraps an open node key to a contact's identity keys in share
-     * suite 3 (a fresh X25519 key and ML-KEM), signed by the granter's identity;
+     * suite 4 (a fresh X25519 key and ML-KEM), with the granter's hybrid signature;
      * open unwraps a share received, with the granter's keys the caller has
      * checked against its pin, and keeps the node key so the subtree opens like
      * any other.
@@ -218,11 +229,13 @@ export type CryptoRequests = {
         keyEpoch: number;
         granterUserId: string;
         /*
-         * The granter's current signing key, as the grantee's pin vouches for it
-         * (followed through a signed succession when it moved on). A share opens
-         * only if this key signed it: never one the granter has since replaced.
+         * The granter's current Ed25519 and ML-DSA keys, as the grantee's
+         * version 3 pin vouches for them (followed through a signed succession
+         * when they moved on). A share opens only if both signed it: never one
+         * the granter has since replaced.
          */
         granterSigningPublicKey: string;
+        granterMlDsaPublicKey: string;
         granteeUserId: string;
         /*
          * Which of this account's identities the share was sealed to, when the
@@ -269,12 +282,22 @@ export type CryptoRequests = {
         nodeId: string;
         keyEpoch: number;
         reportId: string;
-        /* Each operator's identity as the server served it; a KEM key is used only if its binding verifies. */
+        /*
+         * Each operator's identity as the server served it. A version 2 identity's
+         * KEM key is used once its keys statement holds. A version 1 identity (an
+         * operator who has not signed in since the upgrade) has no statement, and
+         * its served KEM key is used as served: operator keys come from the
+         * server and are pinned by nobody, so its old Ed25519 binding never
+         * protected against the server either (the reports dialog says so).
+         */
         operators: {
             userId: string;
+            keyVersion: number;
             encryptionPublicKey: string;
             signingPublicKey: string;
-            kem: { publicKey: string; signature: string } | null;
+            mlDsaPublicKey: string | null;
+            kemPublicKey: string | null;
+            keysSignature: string | null;
         }[];
     };
     driveOpenReport: {
@@ -658,16 +681,18 @@ export type CryptoResults = {
     unlock: { userId: string };
     identityOpen: {
         keyVersion: number;
+        identityVersion: 1 | 2;
         encryptionPublicKey: string;
         signingPublicKey: string;
+        mlDsaPublicKey: string | null;
         kemPublicKey: string | null;
         /* The earlier identities opened beside it, oldest first. */
         history: { keyVersion: number; encryptionPublicKey: string; signingPublicKey: string }[];
     };
     identitySucceed: { identity: IdentityEnvelope; signature: string };
     identityVerifyChain: { valid: boolean };
-    identityMintKem: { kem: IdentityKem };
-    identityVerifyKem: { valid: boolean };
+    identityUpgrade: { identity: IdentityEnvelope };
+    identityVerifyKeys: { valid: boolean };
     settingsKeyCreate: { settingsKey: SettingsKeyEnvelope };
     settingsKeyOpen: { opened: true };
     /* Null for a version 1 document, which no longer opens: treat it as no settings. */
@@ -820,6 +845,9 @@ export function createCryptoSession() {
               signingPublicKey: string;
               signingKey: Uint8Array<ArrayBuffer>;
               kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
+              identityVersion: 1 | 2;
+              /* Version 2 only: the other half of every hybrid signature. */
+              mlDsa: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
           }
         | undefined;
     /* Earlier identities of the account, oldest first: what shares sealed before a succession open with. */
@@ -834,6 +862,7 @@ export function createCryptoSession() {
         identityKey?.key.fill(0);
         identityKey?.signingKey.fill(0);
         identityKey?.kem?.secretKey.fill(0);
+        identityKey?.mlDsa?.secretKey.fill(0);
         identityKey = undefined;
         for (const earlier of identityHistory) {
             earlier.key.fill(0);
@@ -851,8 +880,10 @@ export function createCryptoSession() {
         if (!identityKey) throw new CryptoError('Open your identity first.');
         return {
             keyVersion: identityKey.keyVersion,
+            identityVersion: identityKey.identityVersion,
             encryptionPublicKey: identityKey.publicKey,
             signingPublicKey: identityKey.signingPublicKey,
+            mlDsaPublicKey: identityKey.mlDsa?.publicKey ?? null,
             kemPublicKey: identityKey.kem?.publicKey ?? null,
             history: identityHistory.map((earlier) => ({
                 keyVersion: earlier.keyVersion,
@@ -860,6 +891,13 @@ export function createCryptoSession() {
                 signingPublicKey: earlier.signingPublicKey,
             })),
         };
+    }
+    /* The open identity's hybrid signing keys: what signs shares and successions. */
+    function hybridKeys() {
+        if (!identityKey) throw new CryptoError('Open your identity first.');
+        if (!identityKey.mlDsa)
+            throw new CryptoError('Your keys need upgrading first. Unlock again and retry.');
+        return { signingKey: identityKey.signingKey, mlDsaSecretKey: identityKey.mlDsa.secretKey };
     }
     /* A statement signed by the open identity, base64url. */
     async function sign(statement: Uint8Array) {
@@ -963,14 +1001,14 @@ export function createCryptoSession() {
      */
     async function openShareWithAny(
         envelope: Uint8Array,
-        granterSigningPublicKey: Uint8Array,
+        granter: HybridPublicKey,
         candidates: GranteeSecrets[],
         ctx: ShareContext,
     ) {
         let failure: unknown;
         for (const grantee of candidates)
             try {
-                return await openShareKey(envelope, granterSigningPublicKey, grantee, ctx);
+                return await openShareKey(envelope, granter, grantee, ctx);
             } catch (error) {
                 // A bad signature fails for every candidate alike: say so at once.
                 if (error instanceof CryptoError && /not signed/.test(error.message)) throw error;
@@ -1287,7 +1325,7 @@ export function createCryptoSession() {
                                     ? decode(share.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
                                     : null,
                             },
-                            identityKey.signingKey,
+                            hybridKeys(),
                             {
                                 workspaceId,
                                 nodeId,
@@ -1613,6 +1651,21 @@ export function createCryptoSession() {
                     opened.push(signingKey);
                     const kem = await openIdentityKemKey(root, userId, identity);
                     if (kem) opened.push(kem.secretKey);
+                    const mlDsa = await openIdentityMlDsaKey(root, userId, identity);
+                    if (mlDsa) opened.push(mlDsa.secretKey);
+                    // A version 2 identity is used only once its keys statement holds.
+                    if (
+                        identity.version === 2 &&
+                        !(await verifyIdentityKeys(userId, {
+                            keyVersion: identity.keyVersion,
+                            encryptionPublicKey: identity.encryptionPublicKey,
+                            signingPublicKey: identity.signingPublicKey,
+                            mlDsaPublicKey: identity.mlDsa!.publicKey,
+                            kemPublicKey: identity.kem!.publicKey,
+                            keysSignature: identity.keysSignature!,
+                        }))
+                    )
+                        throw new CryptoError('Your identity keys do not match.');
                     const earlier = [];
                     for (const previous of history) {
                         const previousKey = await openIdentityEncryptionKey(root, userId, previous);
@@ -1638,6 +1691,8 @@ export function createCryptoSession() {
                         signingPublicKey: identity.signingPublicKey,
                         signingKey,
                         kem,
+                        identityVersion: identity.version,
+                        mlDsa,
                     };
                     identityHistory = earlier;
                     opened.length = 0;
@@ -1660,7 +1715,7 @@ export function createCryptoSession() {
                     throw new CryptoError('Open your identity first.');
                 const root = accountKey.slice();
                 try {
-                    return await createSuccessor(root, userId, identity, identityKey.signingKey);
+                    return await createSuccessor(root, userId, identity, hybridKeys());
                 } finally {
                     root.fill(0);
                 }
@@ -1669,27 +1724,20 @@ export function createCryptoSession() {
                 const { userId, pinned, served, links } = message.input;
                 return { valid: await verifySuccessionChain(userId, pinned, served, links) };
             }
-            case 'identityMintKem': {
+            case 'identityUpgrade': {
                 const { userId, identity } = message.input;
                 if (!accountKey || unlockedUserId !== userId)
                     throw new CryptoError('Unlock your account first.');
                 const root = accountKey.slice();
                 try {
-                    return { kem: await addIdentityKem(root, userId, identity) };
+                    return { identity: await upgradeIdentity(root, userId, identity) };
                 } finally {
                     root.fill(0);
                 }
             }
-            case 'identityVerifyKem': {
-                const { userId, encryptionPublicKey, signingPublicKey, kem } = message.input;
-                return {
-                    valid: await verifyKemBinding(
-                        userId,
-                        encryptionPublicKey,
-                        signingPublicKey,
-                        kem,
-                    ),
-                };
+            case 'identityVerifyKeys': {
+                const { userId, identity } = message.input;
+                return { valid: await verifyIdentityKeys(userId, identity) };
             }
             case 'settingsKeyCreate':
             case 'settingsKeyOpen': {
@@ -1749,7 +1797,7 @@ export function createCryptoSession() {
                             ? decode(message.input.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
                             : null,
                     },
-                    identityKey.signingKey,
+                    hybridKeys(),
                     { workspaceId, nodeId, keyEpoch, granteeUserId, granterUserId },
                 );
                 return { shareEnvelope: encode(envelope) };
@@ -1762,9 +1810,15 @@ export function createCryptoSession() {
                     throw new CryptoError('Open your identity first.');
                 const cached = nodeKey(workspaceId, nodeId);
                 if (cached && cached.epoch === keyEpoch) return { opened: true as const };
-                if (!message.input.granterSigningPublicKey)
+                if (!message.input.granterSigningPublicKey || !message.input.granterMlDsaPublicKey)
                     throw new CryptoError('This share needs the key of the person who shared it.');
-                const granter = decode(message.input.granterSigningPublicKey, 32);
+                const granter = {
+                    signingPublicKey: decode(message.input.granterSigningPublicKey, 32),
+                    mlDsaPublicKey: decode(
+                        message.input.granterMlDsaPublicKey,
+                        ML_DSA_PUBLIC_KEY_BYTES,
+                    ),
+                };
                 const candidates = granteeIdentities(message.input.granteeKeyVersion);
                 const key = await openShareWithAny(
                     decode(message.input.shareEnvelope),
@@ -1834,15 +1888,19 @@ export function createCryptoSession() {
                     );
                 const envelopes = [];
                 for (const operator of message.input.operators) {
-                    // A KEM key the signing key did not vouch for is a swap by the server: refuse it.
+                    // A version 2 identity's KEM key is used only once its keys statement holds.
+                    const hybrid =
+                        operator.mlDsaPublicKey && operator.kemPublicKey && operator.keysSignature;
                     if (
-                        operator.kem &&
-                        !(await verifyKemBinding(
-                            operator.userId,
-                            operator.encryptionPublicKey,
-                            operator.signingPublicKey,
-                            operator.kem,
-                        ))
+                        hybrid &&
+                        !(await verifyIdentityKeys(operator.userId, {
+                            keyVersion: operator.keyVersion,
+                            encryptionPublicKey: operator.encryptionPublicKey,
+                            signingPublicKey: operator.signingPublicKey,
+                            mlDsaPublicKey: operator.mlDsaPublicKey!,
+                            kemPublicKey: operator.kemPublicKey!,
+                            keysSignature: operator.keysSignature!,
+                        }))
                     )
                         throw new CryptoError("An operator's key does not match their identity.");
                     envelopes.push({
@@ -1852,8 +1910,8 @@ export function createCryptoSession() {
                                 node.key,
                                 {
                                     encryptionPublicKey: decode(operator.encryptionPublicKey, 32),
-                                    kemPublicKey: operator.kem
-                                        ? decode(operator.kem.publicKey, KEM_PUBLIC_KEY_BYTES)
+                                    kemPublicKey: operator.kemPublicKey
+                                        ? decode(operator.kemPublicKey, KEM_PUBLIC_KEY_BYTES)
                                         : null,
                                 },
                                 {

@@ -3,6 +3,7 @@ import sodium from 'libsodium-wrappers';
 import { describe, expect, test } from 'vitest';
 import { CryptoError } from './errors';
 import { encode } from './keys';
+import { mlDsaKeypair, mlDsaSign } from './pq';
 import {
     copyForm,
     integrityOf,
@@ -11,9 +12,12 @@ import {
     metadataStatement,
     metadataStatementAs,
     metadataStatements,
+    keysStatement,
     resealForm,
+    signHybrid,
     signStatement,
     successionStatement,
+    verifyHybrid,
     verifyStatement,
     versionResealedStatement,
     versionSavedStatement,
@@ -103,14 +107,99 @@ describe('statements', () => {
             newKeyVersion: 2,
             oldEncryptionPublicKey: key,
             oldSigningPublicKey: key,
+            oldMlDsaPublicKey: encode(new Uint8Array(1952)),
             newEncryptionPublicKey: key,
             newSigningPublicKey: key,
+            newMlDsaPublicKey: encode(new Uint8Array(1952)),
             newKemPublicKey: encode(new Uint8Array(1184)),
         };
         await expect(successionStatement(link)).rejects.toThrow('Invalid key version');
         await expect(
             successionStatement({ ...link, newKeyVersion: 3, newKemPublicKey: key }),
         ).rejects.toThrow();
+        // An ML-DSA key of the wrong length is no key: the statement is not built.
+        await expect(
+            successionStatement({ ...link, newKeyVersion: 3, oldMlDsaPublicKey: key }),
+        ).rejects.toThrow();
+        // Version 2, and the ML-DSA keys in it: what makes a classical signature over it fail.
+        const built = JSON.parse(
+            new TextDecoder().decode(await successionStatement({ ...link, newKeyVersion: 3 })),
+        );
+        expect(built.slice(0, 2)).toEqual(['hushos/identity/succession', 2]);
+        expect(built).toHaveLength(12);
+    });
+});
+
+describe('hybrid signatures', () => {
+    async function hybridPair() {
+        const ed = await keyPair();
+        const lattice = mlDsaKeypair(crypto.getRandomValues(new Uint8Array(32)));
+        return {
+            signing: { signingKey: ed.privateKey, mlDsaSecretKey: lattice.secretKey },
+            public: { signingPublicKey: ed.publicKey, mlDsaPublicKey: lattice.publicKey },
+        };
+    }
+    const keys = async () => {
+        const pair = await hybridPair();
+        return keysStatement({
+            userId: NODE,
+            keyVersion: 1,
+            encryptionPublicKey: encode(new Uint8Array(32)),
+            signingPublicKey: encode(pair.public.signingPublicKey),
+            mlDsaPublicKey: encode(pair.public.mlDsaPublicKey),
+            kemPublicKey: encode(new Uint8Array(1184)),
+        });
+    };
+
+    test('hold only when both halves verify, under the identity context', async () => {
+        const signer = await hybridPair();
+        const other = await hybridPair();
+        const message = await keys();
+        const signature = await signHybrid(message, signer.signing);
+        expect(signature).toHaveLength(3373);
+        expect(await verifyHybrid(message, signature, signer.public)).toBe(true);
+        // Either key swapped for another's, the other kept.
+        expect(
+            await verifyHybrid(message, signature, {
+                ...signer.public,
+                mlDsaPublicKey: other.public.mlDsaPublicKey,
+            }),
+        ).toBe(false);
+        expect(
+            await verifyHybrid(message, signature, {
+                ...signer.public,
+                signingPublicKey: other.public.signingPublicKey,
+            }),
+        ).toBe(false);
+        // A flip in either half, the other half left valid.
+        for (const at of [7, 64 + 7, 3372]) {
+            const broken = signature.slice();
+            broken[at]! ^= 1;
+            expect(await verifyHybrid(message, broken, signer.public)).toBe(false);
+        }
+        // The Ed25519 half alone, or a signature of any other length, is no fallback.
+        expect(await verifyHybrid(message, signature.subarray(0, 64), signer.public)).toBe(false);
+        expect(await verifyHybrid(message, signature.subarray(64), signer.public)).toBe(false);
+        expect(await verifyHybrid(message, new Uint8Array(3374), signer.public)).toBe(false);
+        // Another message.
+        const near = message.slice();
+        near[near.length - 3]! ^= 1;
+        expect(await verifyHybrid(near, signature, signer.public)).toBe(false);
+    });
+
+    test('an ML-DSA half made under the group context does not pass as an identity signature', async () => {
+        const signer = await hybridPair();
+        const message = await keys();
+        const genuine = await signHybrid(message, signer.signing);
+        // The same Ed25519 half with an ML-DSA half the group key would make (hushos/group/v1).
+        const groupHalf = mlDsaSign(message, signer.signing.mlDsaSecretKey, 'hushos/group/v1');
+        const mixed = new Uint8Array(3373);
+        mixed.set(genuine.subarray(0, 64));
+        mixed.set(groupHalf, 64);
+        expect(await verifyHybrid(message, mixed, signer.public)).toBe(false);
+        // And no context at all, as a plain ML-DSA signature would carry.
+        mixed.set(mlDsaSign(message, signer.signing.mlDsaSecretKey, ''), 64);
+        expect(await verifyHybrid(message, mixed, signer.public)).toBe(false);
     });
 });
 

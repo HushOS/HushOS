@@ -19,13 +19,21 @@ import { openReportKey } from './reports';
 import {
     openIdentityEncryptionKey,
     openIdentityKemKey,
+    openIdentityMlDsaKey,
     openIdentitySigningKey,
-    verifyKemBinding,
+    publicIdentity,
+    verifyIdentityKeys,
+    verifyOwnIdentity,
     verifySuccessionChain,
     verifySuccessionLink,
+    type IdentityEnvelope,
 } from './identity';
+import { fingerprint, fingerprintOfKeys, keyDigest } from './fingerprint';
+import { pinVerified } from './pins';
 import {
     integrityOf,
+    keysStatement,
+    successionStatement,
     metadataResealedStatement,
     metadataSavedStatement,
     metadataStatement,
@@ -273,6 +281,20 @@ describe('records sealed by the Rust core', () => {
                 reportId: crypto.randomUUID(),
             }),
         ).rejects.toThrow();
+        // A version 1 operator, sealed to the KEM key the server served: opens with that identity's keys.
+        const legacy = web.upgrade.legacy as never;
+        const legacyOperator = {
+            publicKey: decode(web.upgrade.legacy.encryptionPublicKey, 32),
+            privateKey: await openIdentityEncryptionKey(root, web.account.userId, legacy),
+            kemSecretKey: (await openIdentityKemKey(root, web.account.userId, legacy))!.secretKey,
+        };
+        expect(decode(report.legacyHybrid)).toHaveLength(1224);
+        expect(
+            await openReportKey(decode(report.legacyHybrid), legacyOperator, report.ctx),
+        ).toEqual(decode(report.nodeKey, 32));
+        await expect(
+            openReportKey(decode(report.legacyHybrid), operator, report.ctx),
+        ).rejects.toThrow();
     });
 
     it('opens the grant and the identity the core rewrapped under a new root', async () => {
@@ -290,38 +312,157 @@ describe('records sealed by the Rust core', () => {
         expect(
             await openIdentityEncryptionKey(newRoot, rotation.userId, rotation.identity as never),
         ).toEqual(before);
-        const kem = await openIdentityKemKey(newRoot, rotation.userId, rotation.identity as never);
+        const rotated = rotation.identity as IdentityEnvelope;
+        const kem = await openIdentityKemKey(newRoot, rotation.userId, rotated);
         expect(kem?.publicKey).toBe(web.share.identity.kem.publicKey);
+        // The ML-DSA seed moved with the rest, and the keys statement still holds.
+        const mlDsa = await openIdentityMlDsaKey(newRoot, rotation.userId, rotated);
+        expect(mlDsa?.publicKey).toBe(web.share.identity.mlDsa.publicKey);
+        await expect(verifyOwnIdentity(newRoot, rotation.userId, rotated)).resolves.toBeUndefined();
+        expect(rotated.keysSignature).toBe(web.share.identity.keysSignature);
+        await expect(openIdentityMlDsaKey(oldRoot, rotation.userId, rotated)).rejects.toThrow();
         await expect(
             openIdentityEncryptionKey(oldRoot, rotation.userId, rotation.identity as never),
         ).rejects.toThrow();
         // A rotation keeps the identity's own key version.
         expect(rotation.identity.keyVersion).toBe(web.share.identity.keyVersion);
+        // A version 1 identity in the history moves too, still version 1.
+        const legacy = rotation.legacyIdentity as IdentityEnvelope;
+        expect(legacy.version).toBe(1);
+        expect(await openIdentitySigningKey(newRoot, rotation.userId, legacy)).toEqual(
+            await openIdentitySigningKey(oldRoot, rotation.userId, web.upgrade.legacy as never),
+        );
     });
 
-    it('opens a suite 3 share the core sealed and signed, and only from its signer', async () => {
+    it('opens a suite 4 share the core sealed and signed, and only from its signer', async () => {
         const { share } = core;
         const root = decode(web.account.accountKey, 32);
         const identity = web.share.identity as never;
         const privateKey = await openIdentityEncryptionKey(root, web.account.userId, identity);
         const kem = await openIdentityKemKey(root, web.account.userId, identity);
         const grantee = { privateKey, kemSecretKey: kem!.secretKey };
-        const granter = decode(share.granterSigningPublicKey, 32);
-        expect(decode(share.signed)).toHaveLength(1256);
-        expect(await openShareKey(decode(share.signed), granter, grantee, share.ctx)).toEqual(
+        const granter = {
+            signingPublicKey: decode(share.granterSigningPublicKey, 32),
+            mlDsaPublicKey: decode(share.granterMlDsaPublicKey, 1952),
+        };
+        const signed = decode(share.signed);
+        expect(signed).toHaveLength(4565);
+        expect(await openShareKey(signed, granter, grantee, share.ctx)).toEqual(
             decode(share.nodeKey, 32),
         );
         await expect(
-            openShareKey(decode(share.signed), granter, grantee, { ...share.ctx, keyEpoch: 10 }),
+            openShareKey(signed, granter, grantee, { ...share.ctx, keyEpoch: 10 }),
         ).rejects.toThrow('not signed');
+        // Only from its signer: the grantee's own keys, or either of the granter's swapped.
+        const own = {
+            signingPublicKey: decode(web.share.identity.signingPublicKey, 32),
+            mlDsaPublicKey: decode(web.share.identity.mlDsa.publicKey, 1952),
+        };
+        for (const other of [
+            own,
+            { ...granter, signingPublicKey: own.signingPublicKey },
+            { ...granter, mlDsaPublicKey: own.mlDsaPublicKey },
+        ])
+            await expect(openShareKey(signed, other, grantee, share.ctx)).rejects.toThrow(
+                'not signed',
+            );
+        // Cut to suite 3's length, it opens as nothing.
         await expect(
-            openShareKey(
-                decode(share.signed),
-                decode(web.share.identity.signingPublicKey, 32),
-                grantee,
-                share.ctx,
+            openShareKey(signed.subarray(0, 1256), granter, grantee, share.ctx),
+        ).rejects.toThrow('Invalid share envelope');
+    });
+
+    it('opens a version 2 identity the core made, all four keys, and its keys statement holds', async () => {
+        const { identity } = core;
+        const root = decode(identity.accountKey, 32);
+        const envelope = identity.envelope as IdentityEnvelope;
+        expect(envelope.version).toBe(2);
+        await expect(verifyOwnIdentity(root, identity.userId, envelope)).resolves.toBeUndefined();
+        expect((await openIdentityMlDsaKey(root, identity.userId, envelope))!.publicKey).toBe(
+            envelope.mlDsa!.publicKey,
+        );
+        expect((await openIdentityKemKey(root, identity.userId, envelope))!.publicKey).toBe(
+            envelope.kem!.publicKey,
+        );
+        expect(await verifyIdentityKeys(identity.userId, publicIdentity(envelope))).toBe(true);
+        // It is the share's granter: the keys it signed the share with.
+        expect(envelope.signingPublicKey).toBe(core.share.granterSigningPublicKey);
+        expect(envelope.mlDsa!.publicKey).toBe(core.share.granterMlDsaPublicKey);
+        await expect(
+            verifyOwnIdentity(
+                crypto.getRandomValues(new Uint8Array(32)),
+                identity.userId,
+                envelope,
             ),
-        ).rejects.toThrow('not signed');
+        ).rejects.toThrow();
+    });
+
+    it('builds the core’s keys statement byte for byte and verifies its hybrid signature', async () => {
+        const { keys } = core;
+        const statement = await keysStatement({ userId: keys.userId, ...keys.identity });
+        expect(statement).toEqual(decode(keys.statement));
+        expect(await verifyIdentityKeys(keys.userId, keys.identity)).toBe(true);
+        expect(await verifyIdentityKeys(web.account.userId, keys.identity)).toBe(false);
+        const signature = decode(keys.identity.keysSignature);
+        for (const at of [9, 64 + 9]) {
+            const broken = signature.slice();
+            broken[at]! ^= 1;
+            expect(
+                await verifyIdentityKeys(keys.userId, {
+                    ...keys.identity,
+                    keysSignature: Buffer.from(broken).toString('base64url'),
+                }),
+            ).toBe(false);
+        }
+    });
+
+    it('opens the core’s upgrades of the web’s version 1 identities: the same keys, and an ML-DSA key', async () => {
+        const { upgrade } = core;
+        const root = decode(web.upgrade.accountKey, 32);
+        for (const [from, to] of [
+            ['legacy', 'upgraded'],
+            ['legacyNoKem', 'upgradedNoKem'],
+        ] as const) {
+            const legacy = upgrade[from] as IdentityEnvelope;
+            const upgraded = upgrade[to] as IdentityEnvelope;
+            expect([legacy.version, upgraded.version]).toEqual([1, 2]);
+            // The web's version 1 identity, as the core read it.
+            expect(legacy.signingPublicKey).toBe(web.upgrade[from].signingPublicKey);
+            expect(legacy.kem ?? null).toEqual(web.upgrade[from].kem ?? null);
+            expect(upgraded.keyVersion).toBe(legacy.keyVersion);
+            expect(upgraded.encryptionPublicKey).toBe(legacy.encryptionPublicKey);
+            expect(upgraded.signingPublicKey).toBe(legacy.signingPublicKey);
+            if (legacy.kem) expect(upgraded.kem!.publicKey).toBe(legacy.kem.publicKey);
+            expect(upgraded.kem).not.toHaveProperty('signature');
+            await expect(
+                verifyOwnIdentity(root, upgrade.userId, upgraded),
+            ).resolves.toBeUndefined();
+            expect(await verifyIdentityKeys(upgrade.userId, publicIdentity(upgraded))).toBe(true);
+            expect(await openIdentityEncryptionKey(root, upgrade.userId, upgraded)).toEqual(
+                await openIdentityEncryptionKey(root, upgrade.userId, legacy),
+            );
+        }
+    });
+
+    it('agrees with the core on fingerprint version 3', async () => {
+        const { fingerprints, identity } = core;
+        const fill = (byte: number) => new Uint8Array(32).fill(byte);
+        expect(fingerprints.vector).toBe('8b16 2a14 2a5b cb5b 1070 8017 ae93 b2e6 b496 7640');
+        expect(await fingerprint(fill(1), fill(2), fill(3), fill(4))).toBe(fingerprints.vector);
+        const envelope = identity.envelope as IdentityEnvelope;
+        expect(
+            await fingerprintOfKeys(
+                decode(envelope.encryptionPublicKey, 32),
+                decode(envelope.signingPublicKey, 32),
+                decode(envelope.mlDsa!.publicKey, 1952),
+                decode(envelope.kem!.publicKey, 1184),
+            ),
+        ).toBe(fingerprints.identity);
+        // The version 3 pin the core wrote into its settings verifies here.
+        const pin = Object.values(
+            JSON.parse(core.settings.readJson).contacts as Record<string, never>,
+        )[0]!;
+        expect(await pinVerified(pin)).toBe(true);
     });
 
     it('verifies the core’s writer signatures, and nothing near them', async () => {
@@ -454,44 +595,60 @@ describe('records sealed by the Rust core', () => {
             expect(await deriveId(entry.kind as IdKind, entry.scopeId, entry.seed)).toBe(entry.id);
     });
 
-    it('accepts the core’s succession of this identity, and opens the successor under the root', async () => {
+    it('accepts the core’s hybrid succession of this identity, and opens the successor under the root', async () => {
         const { succession } = core;
         const root = decode(web.account.accountKey, 32);
-        expect(await verifySuccessionLink(succession.userId, succession.link)).toBe(true);
-        expect(succession.identity.keyVersion).toBe(web.share.identity.keyVersion + 1);
-        expect(succession.link.oldSigningPublicKey).toBe(web.share.identity.signingPublicKey);
-        await expect(
-            openIdentityEncryptionKey(root, succession.userId, succession.identity as never),
-        ).resolves.toHaveLength(32);
-        // The core's identity is the web's in every part: its signing key and KEM binding check.
-        await expect(
-            openIdentitySigningKey(root, succession.userId, succession.identity as never),
-        ).resolves.toHaveLength(64);
+        const link = succession.link;
+        const signer = {
+            signingPublicKey: link.oldSigningPublicKey,
+            mlDsaPublicKey: link.oldMlDsaPublicKey,
+        };
+        expect(await successionStatement({ ...link, userId: succession.userId })).toEqual(
+            decode(succession.statement),
+        );
+        expect(decode(link.signature)).toHaveLength(3373);
+        expect(await verifySuccessionLink(succession.userId, link, signer)).toBe(true);
+        // Never under the keys the link brings in, and never with the Ed25519 half alone.
         expect(
-            await verifyKemBinding(
-                succession.userId,
-                succession.identity.encryptionPublicKey,
-                succession.identity.signingPublicKey,
-                succession.identity.kem,
-            ),
+            await verifySuccessionLink(succession.userId, link, {
+                signingPublicKey: link.newSigningPublicKey,
+                mlDsaPublicKey: link.newMlDsaPublicKey,
+            }),
+        ).toBe(false);
+        const stripped = Buffer.from(decode(link.signature).subarray(0, 64)).toString('base64url');
+        expect(
+            await verifySuccessionLink(succession.userId, { ...link, signature: stripped }, signer),
+        ).toBe(false);
+        expect(succession.identity.keyVersion).toBe(web.share.identity.keyVersion + 1);
+        expect(link.oldSigningPublicKey).toBe(web.share.identity.signingPublicKey);
+        expect(link.oldMlDsaPublicKey).toBe(web.share.identity.mlDsa.publicKey);
+        // The core's successor is the web's in every part: all four keys open and its keys statement holds.
+        await expect(
+            verifyOwnIdentity(root, succession.userId, succession.identity as never),
+        ).resolves.toBeUndefined();
+        const { chain } = succession;
+        expect(chain.pinned.mlDsaPublicKeyHash).toBe(
+            await keyDigest(decode(web.share.identity.mlDsa.publicKey)),
+        );
+        expect(
+            await verifySuccessionChain(succession.userId, chain.pinned, chain.served, chain.links),
         ).toBe(true);
         expect(
             await verifySuccessionChain(
                 succession.userId,
-                {
-                    keyVersion: succession.link.oldKeyVersion,
-                    encryptionPublicKey: succession.link.oldEncryptionPublicKey,
-                    signingPublicKey: succession.link.oldSigningPublicKey,
-                },
-                {
-                    keyVersion: succession.identity.keyVersion,
-                    encryptionPublicKey: succession.identity.encryptionPublicKey,
-                    signingPublicKey: succession.identity.signingPublicKey,
-                    kemPublicKey: succession.identity.kem.publicKey,
-                },
-                [succession.link],
+                chain.pinned,
+                chain.served,
+                chain.links.slice(1),
             ),
-        ).toBe(true);
+        ).toBe(false);
+        expect(
+            await verifySuccessionChain(
+                succession.userId,
+                chain.pinned,
+                { ...chain.served, mlDsaPublicKey: link.newMlDsaPublicKey },
+                chain.links,
+            ),
+        ).toBe(false);
     });
 
     it('opens version 2 settings the core sealed, and a settings key it made and rewrapped', async () => {
@@ -499,9 +656,13 @@ describe('records sealed by the Rust core', () => {
         const root = decode(web.account.accountKey, 32);
         const webKey = await openSettingsKey(root, web.settings.userId, web.settings.settingsKey);
         expect(settings.envelope.version).toBe(2);
-        expect(await openSettings(webKey, settings.userId, settings.envelope as never)).toEqual(
-            JSON.parse(settings.json),
-        );
+        // The core read the document as version 1 and sealed it as version 2, as both must.
+        const read = JSON.parse(settings.readJson);
+        expect(read.version).toBe(1);
+        expect(await openSettings(webKey, settings.userId, settings.envelope as never)).toEqual({
+            ...read,
+            version: 2,
+        });
         expect(await openSettingsKey(root, settings.userId, settings.settingsKey)).toEqual(
             decode(settings.settingsKeyRaw, 32),
         );

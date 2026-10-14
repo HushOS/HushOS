@@ -40,10 +40,15 @@ export type ContactPin = {
     fingerprint: string;
     pinnedAt: string;
     /*
-     * SHA-256 of the contact's ML-KEM public key, recorded when it was first
-     * seen vouched for by their signing key; a different key served later is a
-     * swap, and none at all is a downgrade. Absent until they have one.
+     * SHA-256 (hex) of the contact's ML-DSA and ML-KEM public keys, the two
+     * lattice keys a version 3 pin keeps by digest rather than in full (3 KB a
+     * contact would not fit the settings). A pin is version 3 exactly when it
+     * carries `mlDsaPublicKeyHash`; its fingerprint is then the version 3 one
+     * over all four keys (docs/identity-pq-design.md 2). A served key whose
+     * digest differs is a swap, and none at all is a downgrade. Pins without
+     * `mlDsaPublicKeyHash` were made before and trust nothing.
      */
+    mlDsaPublicKeyHash?: string | null;
     kemPublicKeyHash?: string | null;
     /*
      * The identity key version the pin was made at, so a later change of keys
@@ -54,7 +59,12 @@ export type ContactPin = {
 };
 
 export type Settings = {
-    version: 1;
+    /*
+     * 2 is the only one written: it may hold version 3 pins and group pins, and
+     * clients from before refuse it whole rather than rebuild a pin without
+     * the fields they do not know (docs/envelope-migrations.md 2). 1 is read.
+     */
+    version: 1 | 2;
     contacts: Record<string, ContactPin>;
     /*
      * The owner's own record of what they shared: per node, the people it was
@@ -65,7 +75,7 @@ export type Settings = {
     sharing?: { shares: Record<string, string[]>; links: Record<string, string> };
 };
 
-export const EMPTY_SETTINGS: Settings = { version: 1, contacts: {} };
+export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };
 
 /*
  * The settings key, apart from the identity: 32 random bytes wrapped under a
@@ -169,7 +179,8 @@ export async function sealSettings(
     if (!Number.isSafeInteger(settingsVersion) || settingsVersion < 1)
         throw new CryptoError('Invalid settings version.');
     if (settingsKey.length !== 32) throw new CryptoError('Invalid settings key.');
-    const json = new TextEncoder().encode(JSON.stringify(settings));
+    // Always written as version 2, whatever was read (docs/envelope-migrations.md 2).
+    const json = new TextEncoder().encode(JSON.stringify({ ...settings, version: 2 }));
     if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError('Settings are too large.');
     // Padded to 1 KiB steps with spaces JSON ignores, as the native core pads them, so the
     // length says little about how many people are pinned; the server refuses unpadded ones.
@@ -230,7 +241,7 @@ export async function openSettings(
     if (
         !parsed ||
         typeof parsed !== 'object' ||
-        (parsed as Settings).version !== 1 ||
+        ((parsed as Settings).version !== 1 && (parsed as Settings).version !== 2) ||
         typeof (parsed as Settings).contacts !== 'object'
     )
         throw new CryptoError('Unsupported settings document.');
