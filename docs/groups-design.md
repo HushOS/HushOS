@@ -193,11 +193,13 @@ The organizer's client derives the group id, makes the group key, signs roster v
 ### 3.5 Storage and the payer
 
 - A group plan's quota pools across the group's areas and, for families, the personal spaces of members who draw from it. `freeBytes` for any workspace in the pool reads the pool.
-- **One storage source per person**, as iCloud+ and Dropbox Family do it: a member on the free tier draws from the family pool automatically once admitted; a member who pays for their own plan chooses at admission, and later in Account, to keep it (their personal space stays outside the pool) or to switch (their subscription is cancelled with a prorated refund through Polar). Never both.
+- **One storage source per person**, as iCloud+ and Dropbox Family do it: a member on the free tier draws from the family pool automatically once admitted; a member who pays for their own plan chooses at admission, and later in Account, to keep it (their personal space stays outside the pool) or to switch: their own plan stops renewing and their personal space moves into the pool when the period they paid for ends, with no refund (they may also switch at once, giving up the rest of that period, which the dialog says plainly). Never both.
 - **No stacking of free allowances:** the pool is the plan's size; a member's own free allowance is not added to it.
 - **What the organizer sees:** the pool's total and which members are at their cap, never each member's usage.
 - **Optional per-member limits:** the organizer may cap how much of the pool a member's personal space uses; off by default. A member at their cap or with a full pool can still read, download and delete; only uploads are refused.
-- The payer is a billing customer keyed by owner kind and id. Polar products carry `hushos_plan`, `quota_bytes`, and new `hushos_group_kind` and `included_members` metadata; members beyond those included are billed per member with no upper limit, and companies have a minimum seat count.
+- The payer is a billing customer keyed by owner kind and id: in Polar, a team customer per group (`external_id: "group:<groupId>"`) whose owner is the paying member (`docs/polar-group-billing-spike.md` 5). Polar products carry `hushos_plan`, `quota_bytes`, `hushos_group_kind` and `included_members` metadata, and Business products `quota_bytes_per_member`: a company's pool grows with each paid member. Members beyond those included are a quantity on the group's one subscription (a unit-based price beside the fixed base, free up to the included members), with no upper limit; companies have a minimum. Polar never learns who the members are.
+- **Billing handover** completes only once the new payer has added a card in Polar's portal; until then the old payer stays the payer and is told so, since the card does not move with the subscription.
+- **A payer's account cannot be deleted** while they pay for a group: they hand billing over or cancel the group plan first, and the deletion screen says how.
 - Seats are counted at admission, never at invitation; a seat cut blocks new admissions and never removes anyone.
 
 ### 3.6 Child accounts
@@ -368,5 +370,5 @@ Each fails on a defect a person would notice (see AGENTS.md):
 
 ## 8. Open questions
 
-- **Polar mechanics** for per-member billing beyond the included members: a quantity on one subscription or a second per-member product. A short billing spike settles it before 3.5 is built; it also confirms the prorated refund when a member switches from their own plan to the pool.
+- **Polar mechanics** are settled by `docs/polar-group-billing-spike.md` (decisions agreed 2026-10-15); its sandbox experiments E1 to E8 still confirm the behaviour before 3.5 is built.
 - **Post-quantum identity signatures** are designed in `docs/identity-pq-design.md`; the migrations this design and that one need are in `docs/envelope-migrations.md`.
