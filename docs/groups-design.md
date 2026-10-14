@@ -49,7 +49,7 @@ The group key is a pair: an Ed25519 key and an ML-DSA-65 key (FIPS 204; `ml_dsa6
 
 A group signature is valid only if both verify. A quantum adversary must break ML-DSA, a classical one Ed25519; neither alone forges a roster or a succession.
 
-What stays classical: people's own identity signatures (Ed25519), which sign writer statements, seals (2.3, 2.6, 2.9) and identity successions. Their confidentiality is already hybrid (X25519 + ML-KEM-768), so nothing recorded today opens later; but a quantum adversary could one day forge a person's signature live. Making identity signatures hybrid is the next change (section 8).
+People's own identity signatures, which sign writer statements, seals (2.3, 2.6, 2.9), rosters' signer signatures and identity successions, are hybrid too: `docs/identity-pq-design.md` adds an ML-DSA-65 identity key (context `hushos/identity/v1`) and ships before group milestone 1, so no roster, seal or succession is ever signed by Ed25519 alone. File and folder signatures inside areas stay Ed25519, as everywhere, until their planned upgrade (`docs/identity-pq-design.md` 7). A signer identity signature below is that hybrid signature (3373 bytes).
 
 ### 2.3 The group key and its seals
 
@@ -61,7 +61,7 @@ SHA-256("hushos/group/fingerprint/v1" || groupId (36 ASCII bytes) || ed25519Publ
 
 **The words are always the version 1 key's.** After successions, a newcomer checks the version 1 words and verifies the succession chain from version 1 to the current key (2.5); pins keep the version 1 keys.
 
-The 64-byte seed is sealed only to members whose roster entry has the `members` role, with the share suite 3 construction (ephemeral X25519 + ML-KEM-768 to the holder's identity, signed by the sealer's identity key), under HKDF `info` `hushos/group/key-seal/v1` and AEAD associated data equal to the statement without its final digest:
+The 64-byte seed is sealed only to members whose roster entry has the `members` role, with the share suite 4 construction (ephemeral X25519 + ML-KEM-768 to the holder's identity, signed with the sealer's hybrid identity signature; `docs/identity-pq-design.md` 3), under HKDF `info` `hushos/group/key-seal/v1` and AEAD associated data equal to the statement without its final digest:
 
 ```
 ["hushos/group/key-seal",1,groupId,groupKeyVersion,holderUserId,holderKeyVersion,sealerUserId,sha256(sealed)]
@@ -109,7 +109,7 @@ A succession replaces the group key and is tied to a place in the roster chain:
 
 ### 2.6 Area grants
 
-An area's workspace key is granted with the suite 3 construction, under HKDF `info` `hushos/group/area-grant/v1` and AEAD associated data equal to the statement without its digest:
+An area's workspace key is granted with the suite 4 construction, under HKDF `info` `hushos/group/area-grant/v1` and AEAD associated data equal to the statement without its digest:
 
 ```
 ["hushos/group/area-grant",1,groupId,workspaceId,workspaceKeyVersion,granteeUserId,granteeKeyVersion,granterUserId,sha256(sealed)]
@@ -149,7 +149,7 @@ A former member still holds their keys, and a signature carries no trustworthy d
 
 ### 2.9 Guardian seals (child accounts)
 
-A child account's root is sealed to each guardian with the suite 3 construction, under HKDF `info` `hushos/account/guardian-seal/v1` and associated data equal to the statement without its digest:
+A child account's root is sealed to each guardian with the suite 4 construction, under HKDF `info` `hushos/account/guardian-seal/v1` and associated data equal to the statement without its digest:
 
 ```
 ["hushos/account/guardian-seal",1,childUserId,childRootVersion,guardianUserId,guardianKeyVersion,sealerUserId,sha256(sealed)]
@@ -215,6 +215,8 @@ Built after the family core. A child account is a separate account type; a famil
     3. makes a new settings key and re-seals the settings;
     4. bumps the personal workspace key version and runs a full `drive_rotations` of the personal tree;
     5. re-seals its outgoing shares (the sharing ledger) to their grantees.
+
+    The run also registers a new password and a new recovery phrase and signs out every other device in the switch, in that order (switch first, rotation after); see `docs/envelope-migrations.md` 7, which also sets the device-approval rule that stops a guardian's device from taking over the account at conversion.
 
     The server deletes every guardian seal in the transaction that switches the account to the new root; family holders then fold the new identity into the next roster (its succession chain verifies) and re-grant the family areas to it.
 
@@ -360,4 +362,4 @@ Each fails on a defect a person would notice (see AGENTS.md):
 ## 8. Open questions
 
 - **Polar mechanics** for per-member billing beyond the included members: a quantity on one subscription or a second per-member product. A short billing spike settles it before 3.5 is built; it also confirms the prorated refund when a member switches from their own plan to the pool.
-- **Post-quantum identity signatures.** People's identity keys sign with Ed25519 only, so writer signatures, seals and identity successions could one day be forged live by a quantum adversary. The fix is a hybrid ML-DSA-65 identity signing key, added through an identity succession, with every statement carrying both signatures. It touches every client and the integrity design, so it is its own design.
+- **Post-quantum identity signatures** are designed in `docs/identity-pq-design.md`; the migrations this design and that one need are in `docs/envelope-migrations.md`.

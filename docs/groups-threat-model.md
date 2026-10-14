@@ -130,7 +130,7 @@ Who is in which group and with what capabilities, who invited and admitted whom 
 - Members check words honestly and over a channel the server cannot alter; the flows make the check unavoidable but cannot make it careful.
 - Devices are not compromised while in use; a compromised device is its owner, with everything that implies.
 - TLS and the web origin deliver the real HushOS code. Like any end-to-end encrypted web app, a server that serves altered code can read what is typed into it; the native apps and self-hosting are the answers for anyone who cannot accept that.
-- X25519, ML-KEM-768, Ed25519, ML-DSA-65, XChaCha20-Poly1305, SHA-256 and Argon2id hold; group signatures need both Ed25519 and ML-DSA-65 to fall, people's identity signatures only Ed25519 (until the spec's section 8 is done).
+- X25519, ML-KEM-768, Ed25519, ML-DSA-65, XChaCha20-Poly1305, SHA-256 and Argon2id hold; group signatures need both Ed25519 and ML-DSA-65 to fall, people's keys statements, successions and shares likewise from `docs/identity-pq-design.md` (before group milestone 1); file and folder signatures stay Ed25519 until their planned upgrade.
 
 ## 6. Out of scope
 
