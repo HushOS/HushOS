@@ -343,6 +343,18 @@ export async function selectNodes(tx: Tx, ids: string[]) {
  * at all.
  */
 export type { SignedStatement };
+/*
+ * A signed write from an account whose identity is still version 1: clients
+ * upgrade on unlock before any write (docs/identity-pq-design.md 5), so this is
+ * an outdated build. Thrown, not reported as a bad signature, so the API can
+ * tell it to update (409) instead of calling its signature forged.
+ */
+export class OutdatedIdentityError extends Error {
+    override name = 'OutdatedIdentityError';
+    constructor() {
+        super('Update HushOS to save changes.');
+    }
+}
 export async function signedBy(tx: Tx, userId: string, statements: SignedStatement[]) {
     const [identity] = await tx
         .select({
@@ -351,9 +363,10 @@ export async function signedBy(tx: Tx, userId: string, statements: SignedStateme
         })
         .from(accountIdentities)
         .where(eq(accountIdentities.userId, userId));
+    if (!identity) return false;
     // A version 1 identity signs nothing: clients upgrade it on unlock before any write
     // (docs/identity-pq-design.md 5), so only an outdated client gets here.
-    if (!identity || identity.version !== 2) return false;
+    if (identity.version !== 2) throw new OutdatedIdentityError();
     return statements.every((statement) => verifySigned(identity.signingPublicKey, statement));
 }
 /* The metadata statement for a node's envelope as it is about to be stored. */

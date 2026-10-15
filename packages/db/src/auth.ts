@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { keyedHash } from './hash-key';
@@ -1081,8 +1081,15 @@ export type SuccessionResult =
               | 'not-upgraded'
               | 'stale'
               | 'unchanged'
-              | 'bad-signature';
+              | 'bad-signature'
+              | 'history-full';
       };
+
+/*
+ * The most earlier identities an account keeps. A master-key rotation carries
+ * every one of them re-wrapped in a single request, which is capped to match.
+ */
+export const IDENTITY_HISTORY_LIMIT = 1000;
 
 /* A version 2 identity as it is stored: every column, the lattice halves present. */
 export type IdentityV2 = Omit<typeof accountIdentities.$inferInsert, 'userId'> & {
@@ -1147,6 +1154,11 @@ export async function succeedIdentity(input: {
         if (!current) return { status: 'no-identity' };
         if (current.version !== 2 || !current.mlDsaPublicKey) return { status: 'not-upgraded' };
         if (input.identity.keyVersion !== current.keyVersion + 1) return { status: 'stale' };
+        const [earlier] = await tx
+            .select({ count: count() })
+            .from(accountIdentityHistory)
+            .where(eq(accountIdentityHistory.userId, user.id));
+        if ((earlier?.count ?? 0) >= IDENTITY_HISTORY_LIMIT) return { status: 'history-full' };
         if (
             input.identity.encryptionPublicKey.equals(current.encryptionPublicKey) ||
             input.identity.signingPublicKey.equals(current.signingPublicKey) ||
@@ -1229,12 +1241,28 @@ export async function upgradeIdentity(input: {
             .where(eq(accountIdentities.userId, user.id));
         if (!current) return { status: 'no-identity' };
         if (current.version === 2) return { status: 'stale', current };
+        // Everything the upgrade keeps must be byte for byte what is stored: the public keys
+        // and the wrapped private keys with their salt and nonces. A client that sent new
+        // wraps of the same public keys could leave the account unable to open its keys.
+        // Only an identity that had no ML-KEM key may gain one here.
+        const same = (a: Buffer | null | undefined, b: Buffer | null | undefined) =>
+            Boolean(a && b && a.equals(b));
         if (
             input.identity.keyVersion !== current.keyVersion ||
-            !input.identity.encryptionPublicKey.equals(current.encryptionPublicKey) ||
-            !input.identity.signingPublicKey.equals(current.signingPublicKey) ||
+            !same(input.identity.encryptionPublicKey, current.encryptionPublicKey) ||
+            !same(input.identity.signingPublicKey, current.signingPublicKey) ||
+            !same(input.identity.wrappingSalt, current.wrappingSalt) ||
+            !same(input.identity.encryptionPrivateKeyNonce, current.encryptionPrivateKeyNonce) ||
+            !same(
+                input.identity.encryptedEncryptionPrivateKey,
+                current.encryptedEncryptionPrivateKey,
+            ) ||
+            !same(input.identity.signingSeedNonce, current.signingSeedNonce) ||
+            !same(input.identity.encryptedSigningSeed, current.encryptedSigningSeed) ||
             (current.kemPublicKey !== null &&
-                !input.identity.kemPublicKey.equals(current.kemPublicKey))
+                (!same(input.identity.kemPublicKey, current.kemPublicKey) ||
+                    !same(input.identity.kemSeedNonce, current.kemSeedNonce) ||
+                    !same(input.identity.encryptedKemSeed, current.encryptedKemSeed)))
         )
             return { status: 'mismatch' };
         await tx
@@ -1243,6 +1271,15 @@ export async function upgradeIdentity(input: {
             .where(eq(accountIdentities.userId, user.id));
         return { status: 'ok' };
     });
+}
+
+/* How many earlier identities the account keeps: what a master-key rotation carries. */
+export async function countIdentityHistory(userId: string) {
+    const [row] = await db
+        .select({ count: count() })
+        .from(accountIdentityHistory)
+        .where(eq(accountIdentityHistory.userId, userId));
+    return row?.count ?? 0;
 }
 
 /* The account's own earlier identities, oldest first: what opens shares sealed to old keys. */

@@ -13,6 +13,7 @@ import { db } from './client';
 import {
     accountEnrollments,
     accountIdentities,
+    accountIdentityHistory,
     accountIntents,
     billingCustomers,
     opaqueCredentials,
@@ -541,6 +542,15 @@ describe('the upgrade to a version 2 identity', () => {
                 ...identity,
                 ...v2Fields(user.id, hybridSignerFromSeed(seedOf('stranger')), identity),
             },
+            // The same public keys with new wraps of their private halves: a client bug that
+            // would leave the account unable to open its keys.
+            { ...identity, wrappingSalt: bytes(32) },
+            { ...identity, encryptedSigningSeed: bytes(48) },
+            { ...identity, encryptedEncryptionPrivateKey: bytes(48) },
+            { ...identity, encryptedKemSeed: bytes(80) },
+            { ...identity, encryptionPrivateKeyNonce: bytes(24) },
+            { ...identity, signingSeedNonce: bytes(24) },
+            { ...identity, kemSeedNonce: bytes(24) },
         ])
             expect(
                 await auth.upgradeIdentity({
@@ -589,13 +599,27 @@ describe('the upgrade to a version 2 identity', () => {
                 keysSignature: Buffer.concat([classical, Buffer.alloc(3309)]),
             }),
         ).toBe(false);
-        // A version 2 row with half its lattice fields is refused by the table itself.
-        await expect(
-            db
-                .update(accountIdentities)
-                .set({ version: 2, mlDsaPublicKey: signer.mlDsaPublicKey })
-                .where(eq(accountIdentities.userId, user.id)),
-        ).rejects.toThrow();
+        // A version 2 row missing any one lattice field is refused by the table itself, with
+        // everything else present (a check over an empty column would otherwise pass as unknown).
+        const complete = freshV2(user.id, signer, 1);
+        for (const missing of [
+            'mlDsaPublicKey',
+            'mlDsaSeedNonce',
+            'encryptedMlDsaSeed',
+            'keysSignature',
+        ] as const)
+            await expect(
+                db
+                    .update(accountIdentities)
+                    .set({ ...complete, [missing]: null })
+                    .where(eq(accountIdentities.userId, user.id)),
+            ).rejects.toThrow();
+        // The same row, complete, is stored.
+        await db
+            .update(accountIdentities)
+            .set(complete)
+            .where(eq(accountIdentities.userId, user.id));
+        expect((await auth.getIdentity(user.id))!.version).toBe(2);
     });
 });
 
@@ -775,6 +799,47 @@ describe('identity succession', () => {
                 signature: made.signature,
             }),
         ).toEqual({ status: 'session' });
+    });
+
+    test('refuses a succession past the earlier identities a master-key rotation can carry', async () => {
+        const { user, signer, sessionTokenHash } = await account('history-full@hushos.test');
+        const succeed = async (from: HybridSigner, keyVersion: number, label: string) => {
+            const made = await successor(user.id, from, keyVersion, label);
+            const result = await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity: made.identity,
+                signature: made.signature,
+            });
+            return { result, next: made.next };
+        };
+        const first = await succeed(signer, 2, 'full-1');
+        expect(first.result).toEqual({ status: 'ok', keyVersion: 2 });
+        // Copies of that history row stand in for the successions up to one short of the limit.
+        const [row] = await db
+            .select()
+            .from(accountIdentityHistory)
+            .where(eq(accountIdentityHistory.userId, user.id));
+        const filler = Array.from({ length: auth.IDENTITY_HISTORY_LIMIT - 2 }, (_, index) => ({
+            ...row!,
+            keyVersion: index + 2,
+            replacedByKeyVersion: index + 3,
+        }));
+        await db.insert(accountIdentityHistory).values(filler);
+        const last = auth.IDENTITY_HISTORY_LIMIT;
+        await db
+            .update(accountIdentities)
+            .set({ keyVersion: last })
+            .where(eq(accountIdentities.userId, user.id));
+        const atLimit = await succeed(first.next, last + 1, 'full-2');
+        expect(atLimit.result).toEqual({ status: 'ok', keyVersion: last + 1 });
+        expect(await auth.listIdentityHistory(user.id)).toHaveLength(auth.IDENTITY_HISTORY_LIMIT);
+        // What sizes the body a master-key rotation may send for this account.
+        expect(await auth.countIdentityHistory(user.id)).toBe(auth.IDENTITY_HISTORY_LIMIT);
+        const past = await succeed(atLimit.next, last + 2, 'full-3');
+        expect(past.result).toEqual({ status: 'history-full' });
+        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(last + 1);
     });
 
     test('the chain lists each succession in order from the version asked for, ML-DSA keys included', async () => {

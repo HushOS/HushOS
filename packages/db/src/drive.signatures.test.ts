@@ -213,19 +213,21 @@ describe('creating', () => {
         });
         const id = randomUUID();
         const envelope = metadataEnvelope();
-        const created = await drive.createRoot({
-            workspaceId: owner.workspaceId,
-            userId: owner.userId,
-            id,
-            envelopes: {
-                keyEpoch: await epoch(),
-                parentKeyEpoch: 1,
-                keyEnvelope: keyEnvelope(),
-                metadataEnvelope: envelope,
-                metadataSignature: signMetadata(ownerKey, id, 'folder', envelope),
-            },
-        });
-        expect(created.status).toBe('bad-signature');
+        // Refused as outdated (the API answers 409 "Update HushOS"), not as a forged signature.
+        await expect(
+            drive.createRoot({
+                workspaceId: owner.workspaceId,
+                userId: owner.userId,
+                id,
+                envelopes: {
+                    keyEpoch: await epoch(),
+                    parentKeyEpoch: 1,
+                    keyEnvelope: keyEnvelope(),
+                    metadataEnvelope: envelope,
+                    metadataSignature: signMetadata(ownerKey, id, 'folder', envelope),
+                },
+            }),
+        ).rejects.toBeInstanceOf(drive.OutdatedIdentityError);
         expect(await nodeRow(id)).toBeNull();
     });
 

@@ -298,7 +298,7 @@ export const accountIdentities = pgTable(
         ),
         check(
             'account_identities_ml_dsa_valid',
-            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null) or (${table.version} = 2 and ${table.kemPublicKey} is not null and ${table.kemSignature} is null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373)`,
+            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null) or (${table.version} = 2 and ${table.kemPublicKey} is not null and ${table.kemSignature} is null and ${table.mlDsaPublicKey} is not null and ${table.mlDsaSeedNonce} is not null and ${table.encryptedMlDsaSeed} is not null and ${table.keysSignature} is not null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373)`,
         ),
         check(
             'account_identities_lengths_valid',
@@ -362,7 +362,7 @@ export const accountIdentityHistory = pgTable(
         ),
         check(
             'account_identity_history_ml_dsa_valid',
-            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null and ${table.newMlDsaPublicKey} is null and octet_length(${table.successionSignature}) = 64) or (${table.version} = 2 and ${table.kemPublicKey} is not null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373 and octet_length(${table.newMlDsaPublicKey}) = 1952 and octet_length(${table.successionSignature}) = 3373)`,
+            sql`(${table.version} = 1 and ${table.mlDsaPublicKey} is null and ${table.mlDsaSeedNonce} is null and ${table.encryptedMlDsaSeed} is null and ${table.keysSignature} is null and ${table.newMlDsaPublicKey} is null and octet_length(${table.successionSignature}) = 64) or (${table.version} = 2 and ${table.kemPublicKey} is not null and ${table.mlDsaPublicKey} is not null and ${table.mlDsaSeedNonce} is not null and ${table.encryptedMlDsaSeed} is not null and ${table.keysSignature} is not null and ${table.newMlDsaPublicKey} is not null and octet_length(${table.mlDsaPublicKey}) = 1952 and octet_length(${table.mlDsaSeedNonce}) = 24 and octet_length(${table.encryptedMlDsaSeed}) = 48 and octet_length(${table.keysSignature}) = 3373 and octet_length(${table.newMlDsaPublicKey}) = 1952 and octet_length(${table.successionSignature}) = 3373)`,
         ),
         check(
             'account_identity_history_lengths_valid',
