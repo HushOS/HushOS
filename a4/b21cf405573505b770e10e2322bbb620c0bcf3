@@ -1,0 +1,21 @@
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_4b0ea83e5c5459 1974-1981
+apps/web/src/lib/auth-log-routes.test.ts
+  s_c56e31c87cddde::t_d839905610f80b 8-10,12,16-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a4b21cf405573505b770e10e2322bbb620c0bcf3",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
