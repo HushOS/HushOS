@@ -1,4 +1,4 @@
-import { CryptoError } from './errors';
+import { CryptoError, RefusedError } from './errors';
 import { checkPassword, normalizePassword } from './password';
 import {
     createSecurityChange,
@@ -848,6 +848,8 @@ export function createCryptoSession() {
               identityVersion: 1 | 2;
               /* Version 2 only: the other half of every hybrid signature. */
               mlDsa: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
+              /* Version 2 only: the keys statement the identity was opened with. */
+              keysSignature: string | null;
           }
         | undefined;
     /* Earlier identities of the account, oldest first: what shares sealed before a succession open with. */
@@ -1628,11 +1630,33 @@ export function createCryptoSession() {
                 const history = message.input.history ?? [];
                 if (!accountKey || unlockedUserId !== userId)
                     throw new CryptoError('Unlock your account first.');
+                // Never older than the identity already open, whatever the caller checked: opening
+                // one makes it the identity everything is signed with, and a replaced identity is
+                // still sealed under this root, so it would open. A fresh unlock starts with none.
+                if (
+                    identityKey &&
+                    identityKey.userId === userId &&
+                    (identity.keyVersion < identityKey.keyVersion ||
+                        identity.version < identityKey.identityVersion)
+                )
+                    throw new RefusedError(
+                        'The server sent older sharing keys than the ones open on this device.',
+                    );
+                // The identity already open, only if it is the one served: after an upgrade or a
+                // succession the served envelope differs, and the cached one must not stand in for it.
                 if (
                     identityKey &&
                     identityKey.userId === userId &&
                     !message.input.refresh &&
-                    history.length <= identityHistory.length
+                    history.length <= identityHistory.length &&
+                    identityKey.identityVersion === identity.version &&
+                    identityKey.keyVersion === identity.keyVersion &&
+                    identityKey.publicKey === identity.encryptionPublicKey &&
+                    identityKey.signingPublicKey === identity.signingPublicKey &&
+                    (identityKey.mlDsa?.publicKey ?? null) ===
+                        (identity.mlDsa?.publicKey ?? null) &&
+                    (identityKey.kem?.publicKey ?? null) === (identity.kem?.publicKey ?? null) &&
+                    identityKey.keysSignature === (identity.keysSignature ?? null)
                 )
                     return openedIdentity();
                 // Oldest first, each older than the one after and than the current one.
@@ -1693,6 +1717,7 @@ export function createCryptoSession() {
                         kem,
                         identityVersion: identity.version,
                         mlDsa,
+                        keysSignature: identity.keysSignature ?? null,
                     };
                     identityHistory = earlier;
                     opened.length = 0;
@@ -1706,13 +1731,19 @@ export function createCryptoSession() {
                 const { userId, identity } = message.input;
                 if (!accountKey || unlockedUserId !== userId)
                     throw new CryptoError('Unlock your account first.');
-                if (
-                    !identityKey ||
-                    identityKey.userId !== userId ||
-                    identityKey.keyVersion !== identity.keyVersion ||
-                    identityKey.signingPublicKey !== identity.signingPublicKey
-                )
+                // Every public key the succession statement names as the old one must be the open
+                // identity's, proven when it was opened: never sign for keys served beside it.
+                if (!identityKey || identityKey.userId !== userId)
                     throw new CryptoError('Open your identity first.');
+                if (
+                    identityKey.keyVersion !== identity.keyVersion ||
+                    identity.version !== 2 ||
+                    identityKey.signingPublicKey !== identity.signingPublicKey ||
+                    identityKey.publicKey !== identity.encryptionPublicKey ||
+                    identityKey.mlDsa?.publicKey !== identity.mlDsa.publicKey ||
+                    identityKey.kem?.publicKey !== identity.kem.publicKey
+                )
+                    throw new RefusedError('Your keys changed on another device. Try again.');
                 const root = accountKey.slice();
                 try {
                     return await createSuccessor(root, userId, identity, hybridKeys());

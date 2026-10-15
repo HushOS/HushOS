@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { RefusedError } from './errors';
 import { createDeviceKey, rememberAccountKey } from './device';
 import {
     createIdentity,
@@ -451,7 +452,7 @@ describe('succession in the worker', () => {
         ).toBe(1);
         // A stale envelope (not the open identity) cannot be succeeded.
         await expect(me('identitySucceed', { userId: USER, identity: second })).rejects.toThrow(
-            'Open your identity first',
+            'Your keys changed on another device',
         );
 
         // The server took it: the device opens the new identity with the old one as history.
@@ -465,8 +466,28 @@ describe('succession in the worker', () => {
         expect(reopened.history.map((earlier) => earlier.keyVersion)).toEqual([1]);
         // History must be older than the current identity, oldest first.
         await expect(
-            me('identityOpen', { userId: USER, identity: first, history: [second], refresh: true }),
+            me('identityOpen', {
+                userId: USER,
+                identity: second,
+                history: [second],
+                refresh: true,
+            }),
         ).rejects.toThrow('out of order');
+        // And never older than the identity open: the replaced one still opens under this root.
+        await expect(
+            me('identityOpen', { userId: USER, identity: first, refresh: true }),
+        ).rejects.toBeInstanceOf(RefusedError);
+        expect(
+            (
+                (await me('identityOpen', {
+                    userId: USER,
+                    identity: second,
+                    history: [first],
+                })) as {
+                    keyVersion: number;
+                }
+            ).keyVersion,
+        ).toBe(2);
 
         const open = {
             workspaceId: WS,
@@ -551,5 +572,85 @@ describe('succession in the worker', () => {
             links: [linkOf(first, second, signature)],
         })) as { valid: boolean };
         expect(chain.valid).toBe(true);
+    });
+});
+
+describe('the worker’s open identity', () => {
+    test('a served identity other than the one open is opened, never answered from the cache', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        // The version 1 form of the same keys, as the account held before its upgrade.
+        const before: IdentityEnvelope = {
+            version: 1,
+            keyVersion: current.keyVersion,
+            wrappingSalt: current.wrappingSalt,
+            encryptionPublicKey: current.encryptionPublicKey,
+            encryptionPrivateKeyNonce: current.encryptionPrivateKeyNonce,
+            encryptedEncryptionPrivateKey: current.encryptedEncryptionPrivateKey,
+            signingPublicKey: current.signingPublicKey,
+            signingSeedNonce: current.signingSeedNonce,
+            encryptedSigningSeed: current.encryptedSigningSeed,
+            kem: { ...current.kem },
+        };
+        const me = await device(USER, root);
+        const first = (await me('identityOpen', { userId: USER, identity: before })) as {
+            identityVersion: number;
+        };
+        expect(first.identityVersion).toBe(1);
+        // The upgrade was stored but its answer was lost: the next open, without refresh, is
+        // handed the version 2 identity and must open it, not report the cached version 1.
+        const next = (await me('identityOpen', { userId: USER, identity: current })) as {
+            identityVersion: number;
+            mlDsaPublicKey: string | null;
+        };
+        expect(next.identityVersion).toBe(2);
+        expect(next.mlDsaPublicKey).toBe(current.mlDsa.publicKey);
+    });
+
+    test('the open identity answers only for the served envelope whole, its KEM key and keys statement too', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        const stranger = await createIdentity(root, FRIEND);
+        const me = await device(USER, root);
+        await me('identityOpen', { userId: USER, identity: current });
+        // Each would be answered from the cache if it were compared on the other keys alone,
+        // and is refused once opened: the KEM seed is sealed to its own public key, and the
+        // keys statement is over this identity's keys.
+        await expect(
+            me('identityOpen', {
+                userId: USER,
+                identity: {
+                    ...current,
+                    kem: { ...current.kem, publicKey: stranger.kem.publicKey },
+                },
+            }),
+        ).rejects.toThrow('This encrypted key could not be opened');
+        await expect(
+            me('identityOpen', {
+                userId: USER,
+                identity: { ...current, keysSignature: stranger.keysSignature },
+            }),
+        ).rejects.toThrow(/do not match/);
+    });
+
+    test('a succession signs only for the public keys of the identity it opened', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        const stranger = await createIdentity(root, FRIEND);
+        const me = await device(USER, root);
+        await me('identityOpen', { userId: USER, identity: current });
+        // The same key version and Ed25519 key, but another X25519, ML-DSA or ML-KEM key served
+        // beside them: the statement would vouch for keys this device never proved it holds.
+        for (const served of [
+            { ...current, encryptionPublicKey: stranger.encryptionPublicKey },
+            { ...current, mlDsa: { ...current.mlDsa, publicKey: stranger.mlDsa.publicKey } },
+            { ...current, kem: { ...current.kem, publicKey: stranger.kem.publicKey } },
+        ])
+            await expect(
+                me('identitySucceed', { userId: USER, identity: served }),
+            ).rejects.toBeInstanceOf(RefusedError);
+        await expect(
+            me('identitySucceed', { userId: USER, identity: current }),
+        ).resolves.toBeDefined();
     });
 });
