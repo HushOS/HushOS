@@ -1,0 +1,33 @@
+packages/db/drizzle/20261014231034_pq_identity_not_null/migration.sql
+  s_c56e31c87cddde::t_6ee3bb9f6f71f9 1-2
+packages/db/drizzle/20261014231034_pq_identity_not_null/snapshot.json
+  s_c56e31c87cddde::t_6b07cbcf1f4f1b 1-8708
+packages/db/src/auth.test.ts
+  s_c56e31c87cddde::t_615ad684973ab5 16,545-553,602-622,804-844
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_7e6a03424366ba 1,1084-1085,1088-1093,1157-1161,1244-1249,1252-1261,1263-1265,1276-1284
+packages/db/src/drive.signatures.test.ts
+  s_c56e31c87cddde::t_99f9336cbef82b 216-230
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_70f9a00d5aed34 346-357,366,369
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_ab6012ac9d474b 14
+packages/db/src/schema/auth.ts
+  s_c56e31c87cddde::t_0bf162d80d18a0 301,365
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b2096cd555a567560e9ec389e504a70e741b4ead",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
