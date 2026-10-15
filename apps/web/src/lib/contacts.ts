@@ -10,6 +10,7 @@ import {
     comparePin,
     granterKeysOf,
     replacementUnseen,
+    keysPassedThrough,
     pinAfterSuccession,
     pinOfServed,
     signersFromPins,
@@ -19,9 +20,8 @@ import {
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
 import { onStaleIdentity } from '@/lib/drive-api';
+import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
-    IDENTITY_ROLLED_BACK,
-    identityRolledBack,
     identitySeen,
     identityVersionSeen,
     rememberIdentitySeen,
@@ -57,14 +57,6 @@ export type LoadedSettings = {
 };
 export const EMPTY: LoadedSettings['settings'] = { version: 2, contacts: {} };
 
-type OwnIdentity = {
-    keyVersion: number;
-    identityVersion: 2;
-    encryptionPublicKey: string;
-    signingPublicKey: string;
-    mlDsaPublicKey: string;
-    kemPublicKey: string;
-};
 let opened: { userId: string; promise: Promise<OwnIdentity> } | undefined;
 let settingsKeyOpened: { userId: string; promise: Promise<void> } | undefined;
 authClient.store.subscribe((state, previous) => {
@@ -84,71 +76,41 @@ authClient.store.subscribe((state, previous) => {
  * that lost that race opens the one another device stored.
  */
 export function openIdentity(userId: string, refresh = false) {
-    if (opened?.userId !== userId || refresh)
-        opened = {
-            userId,
-            promise: (async () => {
-                requireUnlocked(userId);
-                let [{ identity }, { identities: history }] = await Promise.all([
-                    authClient.identity(),
-                    authClient.identityHistory(),
-                ]);
-                requireUnlocked(userId);
-                let result = await authClient.rpc('identityOpen', {
-                    userId,
-                    identity,
-                    history,
-                    refresh,
-                });
-                // An older identity served as current is refused, as older settings are: it
-                // would bring back keys this account replaced, and records they signed. Once
-                // this device has seen its version 2 identity, the version 1 form is a
-                // rollback too, and upgrading it again would mint a second ML-DSA key.
-                if (
-                    identityRolledBack(
-                        { keyVersion: result.keyVersion, identityVersion: result.identityVersion },
-                        {
-                            keyVersion: identitySeen(userId),
-                            identityVersion: identityVersionSeen(userId),
-                        },
-                    )
-                )
-                    throw new Error(IDENTITY_ROLLED_BACK);
-                if (result.identityVersion === 1) {
-                    const { identity: upgraded } = await authClient.rpc('identityUpgrade', {
-                        userId,
-                        identity,
-                    });
-                    try {
-                        identity = (await authClient.upgradeIdentity(upgraded)).identity;
-                    } catch (error) {
-                        // Another device got there first: open the identity it stored.
-                        if ((error as { status?: number }).status !== 409) throw error;
-                        identity = (await authClient.identity()).identity;
-                    }
-                    result = await authClient.rpc('identityOpen', {
-                        userId,
-                        identity,
-                        history,
-                        refresh: true,
-                    });
-                }
-                if (result.identityVersion !== 2 || !result.mlDsaPublicKey || !result.kemPublicKey)
-                    throw new Error('Your keys could not be upgraded. Try again.');
-                rememberIdentitySeen(userId, result.keyVersion, 2);
-                return {
-                    keyVersion: result.keyVersion,
-                    identityVersion: 2 as const,
-                    encryptionPublicKey: result.encryptionPublicKey,
-                    signingPublicKey: result.signingPublicKey,
-                    mlDsaPublicKey: result.mlDsaPublicKey,
-                    kemPublicKey: result.kemPublicKey,
-                };
-            })().catch((error: unknown) => {
-                opened = undefined;
-                throw error;
-            }),
-        };
+    if (opened?.userId !== userId || refresh) {
+        const promise: Promise<OwnIdentity> = (async () => {
+            requireUnlocked(userId);
+            return openOwnIdentity(
+                {
+                    fetch: async () => {
+                        const [{ identity }, { identities: history }] = await Promise.all([
+                            authClient.identity(),
+                            authClient.identityHistory(),
+                        ]);
+                        requireUnlocked(userId);
+                        return { identity, history };
+                    },
+                    open: (identity, history, refresh) =>
+                        authClient.rpc('identityOpen', { userId, identity, history, refresh }),
+                    upgrade: async (identity) =>
+                        (await authClient.rpc('identityUpgrade', { userId, identity })).identity,
+                    store: async (identity) =>
+                        (await authClient.upgradeIdentity(identity)).identity,
+                    seen: () => ({
+                        keyVersion: identitySeen(userId),
+                        identityVersion: identityVersionSeen(userId),
+                    }),
+                    remember: (keyVersion, identityVersion) =>
+                        rememberIdentitySeen(userId, keyVersion, identityVersion),
+                },
+                refresh,
+            );
+        })().catch((error: unknown) => {
+            // Only this attempt's own entry: a later refresh may have replaced it meanwhile.
+            if (opened?.promise === promise) opened = undefined;
+            throw error;
+        });
+        opened = { userId, promise };
+    }
     return opened.promise;
 }
 
@@ -172,8 +134,9 @@ export async function succeedIdentity(queryClient: QueryClient, userId: string) 
         settings.resealOwnShares = true;
         return settings;
     });
-    await openIdentity(userId);
-    const { identity } = await authClient.identity();
+    // Opened afresh, and signed over the envelope opened: the worker signs only for the identity
+    // it holds. Another device replacing it meanwhile is refused by the server as stale.
+    const { envelope: identity } = await openIdentity(userId, true);
     const { identity: next, signature } = await authClient.rpc('identitySucceed', {
         userId,
         identity,
@@ -383,6 +346,7 @@ async function bringUpToDate(userId: string, pin: Pin, served: Served) {
                 pin,
                 { ...served, mlDsaPublicKey, kemPublicKey },
                 new Date(),
+                await keysPassedThrough(pin, links),
             );
             await saveSettings(boundQueryClient, userId, (settings) => {
                 const current = settings.contacts[pin.userId];

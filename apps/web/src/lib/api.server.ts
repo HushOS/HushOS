@@ -15,7 +15,7 @@ import {
 } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
-import { driveRepository, growthRepository } from '@hushos/db';
+import { authRepository, driveRepository, growthRepository } from '@hushos/db';
 import {
     CLIENT_HEADER,
     LINK_TOKEN_HEADER,
@@ -81,6 +81,12 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
             });
         }
         if (/^\/api\/(drive|admin)\//.test(new URL(request.url).pathname)) {
+            // A signed write from an identity still on version 1: an outdated build (see signedBy).
+            if (error instanceof driveRepository.OutdatedIdentityError)
+                return status(409, {
+                    message: 'Update HushOS to save changes.',
+                    code: 'unsupported' as const,
+                });
             if (error instanceof drive.DriveError)
                 return status(error.status, {
                     message: error.message,
@@ -567,7 +573,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
                 // Every earlier identity, re-wrapped under the new root by a master-key rotation.
-                identityHistory: t.Optional(t.Array(identitySchema, { maxItems: 100 })),
+                identityHistory: t.Optional(
+                    t.Array(identitySchema, { maxItems: authRepository.IDENTITY_HISTORY_LIMIT }),
+                ),
                 settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
@@ -1936,7 +1944,9 @@ export async function handleApiRequest(request: Request): Promise<Response> {
         path === '/api/auth/settings'
             ? SETTINGS_BODY_LIMIT
             : path === '/api/auth/security/finish'
-              ? 1024 * 1024
+              ? // Up to every earlier identity beside the current one; narrowed per account below.
+                (authRepository.IDENTITY_HISTORY_LIMIT + 1) * auth.SECURITY_CHANGE_IDENTITY_BYTES +
+                auth.SECURITY_CHANGE_REST_BYTES
               : path === '/api/auth/identity/succession' ||
                   path === '/api/auth/identity/upgrade' ||
                   path === '/api/auth/register/finish' ||
@@ -1954,6 +1964,24 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     try {
         if (request.method !== 'GET' && request.method !== 'OPTIONS') {
             guardAuthMutation(request);
+            let limit = bodyLimit(pathname);
+            // The one route whose cap runs to megabytes is rate limited before its body is read,
+            // read only for a current session, and only as far as that account's identities need,
+            // so neither a stranger nor a fresh account can make the server buffer megabytes.
+            const large = limit > SETTINGS_BODY_LIMIT;
+            if (large) {
+                await auth.limitAuthMutation(requestAddress(request));
+                const allowed = await auth.securityChangeBodyLimit(readSessionToken(request));
+                if (allowed === null) {
+                    await request.body?.cancel();
+                    log.set({ auth: { outcome: 'rejected' } });
+                    return Response.json(
+                        { message: 'Sign in before changing account security.' },
+                        { status: 401, headers },
+                    );
+                }
+                limit = Math.min(limit, allowed);
+            }
             const reader = request.body?.getReader();
             const chunks: Uint8Array[] = [];
             let length = 0;
@@ -1962,7 +1990,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                     const { done, value } = await reader.read();
                     if (done) break;
                     length += value.byteLength;
-                    if (length > bodyLimit(pathname)) {
+                    if (length > limit) {
                         await reader.cancel();
                         log.set({ auth: { outcome: 'rejected' } });
                         return Response.json(
@@ -1985,7 +2013,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                 body,
             });
             // Consume the budget only for requests that passed the cheap checks above.
-            await auth.limitAuthMutation(requestAddress(request));
+            if (!large) await auth.limitAuthMutation(requestAddress(request));
         }
         const result = await apiApp.fetch(request);
         log.set({
