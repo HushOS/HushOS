@@ -54,5 +54,10 @@ export default defineConfig({
         timeout: 180_000,
         stdout: 'ignore',
         stderr: 'pipe',
+        // Turbo starts each task in its own process group, so the SIGKILL Playwright
+        // sends this command's group by default kills turbo and orphans the jobs worker.
+        // SIGTERM lets turbo kill its tasks' groups itself, at once (SIGINT waits ten
+        // seconds); past the timeout Playwright falls back to that SIGKILL.
+        gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
     },
 });
