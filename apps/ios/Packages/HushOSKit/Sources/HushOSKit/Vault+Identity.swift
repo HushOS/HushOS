@@ -74,41 +74,45 @@ public enum Signing: Sendable, Equatable {
  * this account writes, the keys a reader trusts, and replacing the identity.
  */
 extension Vault {
-    /* Every identity this account holds: the current one first, then the earlier ones, newest first. */
+    /*
+     * Every identity this account holds: the current one first, then the earlier ones, newest
+     * first. The history read beside an identity forgotten meanwhile (a succession here, or
+     * noticed from another device) may be the one before it: read both again rather than keep it.
+     */
     func allIdentities() async throws -> [IdentityKeys] {
-        let current = try await identityKeys()
-        if let earlierIdentities { return [current] + earlierIdentities }
-        let accountKey = try unlockAccount()
-        var earlier: [IdentityKeys] = []
-        for envelope in try await Auth.identityHistory() {
-            // Opening proves each is this account's own (sealed under its root, its keys matching), not one the server added.
-            earlier.append(try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope))
+        while true {
+            let generation = identityGeneration
+            let current = try await identityKeys()
+            if let earlierIdentities { return [current] + earlierIdentities }
+            let accountKey = try unlockAccount()
+            var earlier: [IdentityKeys] = []
+            for envelope in try await Auth.identityHistory() {
+                // Opening proves each is this account's own (sealed under its root, its keys matching), not one the server added.
+                earlier.append(try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope))
+            }
+            guard generation == identityGeneration else { continue }
+            earlier.sort { $0.keyVersion > $1.keyVersion }
+            earlierIdentities = earlier
+            // A settings mark an earlier version kept under any of these keys becomes the account's, so a
+            // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
+            SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey))
+            return [current] + earlier
         }
-        earlier.sort { $0.keyVersion > $1.keyVersion }
-        earlierIdentities = earlier
-        // A settings mark an earlier version kept under any of these keys becomes the account's, so a
-        // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
-        SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey))
-        return [current] + earlier
     }
 
     /*
      * The signing seed of the identity in use: every write that sets a metadata or content-key
      * envelope is signed with it. The server checks against the account's current key, so an
      * identity another device replaced meanwhile is noticed (asked at most every few minutes)
-     * and opened afresh, rather than every write failing until the app restarts. One served
+     * and opened afresh, rather than every write failing until the app restarts. Any public
+     * key, either version or the keys statement differing is another identity. One served
      * with a lower key version than the one in use is not taken: `identityKeys` refuses it.
      */
     private func signingSeed() async throws -> Data {
         if identity != nil, identityCheckedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true,
            let served = try? await Auth.identity() {
             identityCheckedAt = Date()
-            if served.signingPublicKey != identity?.signingPublicKey || served.keyVersion != identity?.keyVersion
-                || served.version != identity?.identityVersion {
-                identity = nil
-                earlierIdentities = nil
-                trustedSigners = nil
-            }
+            if identityEnvelope.map({ !served.servesSameIdentity(as: $0) }) ?? true { forgetIdentity() }
         }
         do {
             return try await identityKeys().signingSeed
@@ -159,14 +163,22 @@ extension Vault {
      * rotation or copy stops rather than re-sign blind.
      */
     public func signers() async throws -> TrustedSigners {
-        if let trustedSigners { return trustedSigners }
-        let trusted = try TrustedSigners(userId: session.userId, identities: try await allIdentities(), pins: try await loadSettings().contacts.values)
-        trustedSigners = trusted
-        return trusted
+        while true {
+            if let trustedSigners { return trustedSigners }
+            let generation = signersGeneration
+            let trusted = try TrustedSigners(userId: session.userId, identities: try await allIdentities(), pins: try await loadSettings().contacts.values)
+            // Forgotten while it loaded (a succession, a pin saved): built from what that replaced, so built again.
+            guard generation == signersGeneration else { continue }
+            trustedSigners = trusted
+            return trusted
+        }
     }
 
-    /* Forgets the trusted keys, so the next read builds them again (a pin added elsewhere, say). */
-    public func forgetSigners() { trustedSigners = nil }
+    /* Forgets the trusted keys, so the next read builds them again (a pin added elsewhere, say), and a build under way isn't kept. */
+    public func forgetSigners() {
+        signersGeneration &+= 1
+        trustedSigners = nil
+    }
 
     /* Tests: whom to trust, without the network. */
     func adopt(signers: TrustedSigners) { trustedSigners = signers }
@@ -186,19 +198,18 @@ extension Vault {
         // Opened (and upgraded to version 2, which a succession needs) before the served one is read back.
         let opened = try await identityKeys()
         let current = try await Auth.identity()
-        guard opened.signingPublicKey == current.signingPublicKey, opened.keyVersion == current.keyVersion,
-              opened.identityVersion == current.version else {
-            identity = nil
-            earlierIdentities = nil
+        // Signed over exactly the identity opened: all four keys, the key version and the identity version.
+        guard opened.encryptionPublicKey == current.encryptionPublicKey, opened.signingPublicKey == current.signingPublicKey,
+              opened.mlDsaPublicKey == current.mlDsa?.publicKey, opened.kemPublicKey == current.kem?.publicKey,
+              opened.keyVersion == current.keyVersion, opened.identityVersion == current.version else {
+            forgetIdentity()
             throw AuthError.message("Your keys changed on another device. Try again.")
         }
         let succession = try identitySucceed(userId: session.userId, accountKey: try unlockAccount(), current: current)
         try await Auth.succeedIdentity(succession)
         // From here the keys are replaced: what is left is re-sealing, which the next Drive open finishes if this one can't.
         ResealPending.set(for: succession.identity.signingPublicKey)
-        identity = nil
-        earlierIdentities = nil
-        trustedSigners = nil
+        forgetIdentity()
         _ = try await allIdentities()
         return try await upgradeShares()
     }
@@ -287,6 +298,20 @@ enum ResealPending {
     static func set(for signingPublicKey: String) { Unbacked.write(signingPublicKey, file) }
     static func isSet(for signingPublicKey: String) -> Bool { Unbacked.read(String.self, file) == signingPublicKey }
     static func clear() { Unbacked.write(String?.none, file) }
+}
+
+extension IdentityEnvelope {
+    /*
+     * Whether this is `other` as served: the four public keys, the key version, the identity
+     * version and the keys statement (the KEM key's own binding too, on version 1). The sealed
+     * halves are left out: a master-key rotation wraps them again without changing the identity.
+     */
+    func servesSameIdentity(as other: IdentityEnvelope) -> Bool {
+        version == other.version && keyVersion == other.keyVersion
+            && encryptionPublicKey == other.encryptionPublicKey && signingPublicKey == other.signingPublicKey
+            && mlDsa?.publicKey == other.mlDsa?.publicKey && kem?.publicKey == other.kem?.publicKey
+            && kem?.signature == other.kem?.signature && keysSignature == other.keysSignature
+    }
 }
 
 extension RotationOutcome {

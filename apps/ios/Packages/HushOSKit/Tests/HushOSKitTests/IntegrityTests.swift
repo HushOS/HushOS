@@ -294,8 +294,52 @@ struct SuccessionFollowTests {
         #expect(next.kemPublicKeyHash == keyDigest(publicKey: try base64urlDecode(value: third.identity.kem!.publicKey)))
         #expect(next.previousSigningKeys == [first.envelope.signingPublicKey, second.identity.signingPublicKey])
         #expect(next.keysReplacedAt != nil && next.pinnedAt == pin.pinnedAt)
+        // Shares to them still hold the old keys: every client is told to seal them again.
+        #expect(next.resealShares == true)
         // Keys that didn't change are no succession.
         #expect(pin.follow(servedOf(first.envelope), links: []) == .same)
+    }
+
+    @Test func aDecoyLinkInFrontOfTheChainAddsNoKeyToThePreviousSigningKeys() throws {
+        let first = try makeIdentity(maya)
+        let second = try identitySucceed(userId: maya, accountKey: first.root, current: first.envelope)
+        let pin = try pinned(maya, first.keys)
+        let real = link(from: first.envelope, to: second)
+        // The server's own identity, and a link from it that the core never checks.
+        let server = try makeIdentity(maya)
+        let serverNext = try identitySucceed(userId: maya, accountKey: server.root, current: server.envelope)
+        // At the pinned X25519 and Ed25519 keys, but another ML-DSA key: not where the core starts the chain.
+        var decoy = real
+        decoy.oldMlDsaPublicKey = server.envelope.mlDsa!.publicKey
+        let evil = link(from: server.envelope, to: serverNext)
+
+        guard case .followed(let next) = pin.follow(servedOf(second.identity), links: [decoy, evil, real]) else {
+            Issue.record("The real chain behind the decoy was not followed")
+            return
+        }
+        // Only the key the verified chain passed through: never the server's, whose records would read retired-key.
+        #expect(next.previousSigningKeys == [first.envelope.signingPublicKey])
+        #expect(!(next.previousSigningKeys ?? []).contains(server.envelope.signingPublicKey))
+        // The same decoy with nothing behind it is no chain at all.
+        #expect(pin.follow(servedOf(second.identity), links: [decoy, evil]) == .changed)
+    }
+
+    /*
+     * The pin's own signing key is kept as replaced whatever the start rule found: were it ever
+     * to miss where the core started a chain the core verified, the records the pinned key
+     * signed would otherwise turn "someone you haven't checked".
+     */
+    @Test func aFollowedPinAlwaysKeepsItsOwnSigningKey() throws {
+        let first = try makeIdentity(maya)
+        let second = try identitySucceed(userId: maya, accountKey: first.root, current: first.envelope)
+        let pin = try pinned(maya, first.keys)
+        let real = link(from: first.envelope, to: second)
+        // No start found: no link's key is kept, the pinned one still is.
+        #expect(pin.previousKeys(after: [real], from: nil, served: second.identity.signingPublicKey) == [first.envelope.signingPublicKey])
+        // Kept once, oldest first, beside what the pin kept before; never the served key.
+        var older = pin
+        older.previousSigningKeys = ["earlier-key", second.identity.signingPublicKey]
+        #expect(older.previousKeys(after: [real], from: 0, served: second.identity.signingPublicKey) == ["earlier-key", first.envelope.signingPublicKey])
     }
 
     @Test func aChainThatDoesNotHoldIsAChangedKey() throws {

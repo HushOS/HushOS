@@ -92,16 +92,85 @@ extension OnFakeDrive {
 
         @Test func ownWordsAreOverTheFourKeysAndMatchWhatAContactPins() async throws {
             defer { done() }
-            let vault = await vault(IdentityServer(stored: versionOne(v2)))
-            let own = try await vault.ownFingerprint()
-            let stored = try #require(IdentityServer.current?.stored)
-            let pin = try ContactPin.of(servedOf(stored), userId: me, email: "me@example.com", name: "Me", pinnedAt: "2026-10-15T00:00:00Z")
+            let server = IdentityServer(stored: versionOne(v2))
+            let device = await vault(server)
+            _ = try await device.identityKeys()
+            let opened = server.stored
+            let pin = try ContactPin.of(servedOf(opened), userId: me, email: "me@example.com", name: "Me", pinnedAt: "2026-10-15T00:00:00Z")
+            // The server now serves other public keys than the ones the core re-derived when it opened: words from it would be its keys'.
+            let other = try identityCreate(userId: me, accountKey: root, keyVersion: v2.keyVersion)
+            server.stored = other
+            let own = try await device.ownFingerprint()
             #expect(own == pin.fingerprint)
+            let served = try ContactPin.of(servedOf(other), userId: me, email: "me@example.com", name: "Me", pinnedAt: "2026-10-15T00:00:00Z")
+            #expect(own != served.fingerprint)
+            // Served with a public key its sealed seed does not make, from the start: nothing opens, so no words at all.
+            var swapped = opened
+            swapped.mlDsa?.publicKey = other.mlDsa!.publicKey
+            let refused = await vault(IdentityServer(stored: swapped))
+            await #expect(throws: (any Error).self) { _ = try await refused.ownFingerprint() }
+        }
+
+        @Test func afterAdoptingTheWinnerOfARaceAnOlderIdentityIsRefused() async throws {
+            defer { done() }
+            // This device had opened the version 1 identity at key version 3 before the release.
+            IdentityMarks.shared.record(userId: me, keyVersion: v2.keyVersion, identityVersion: 1)
+            let old = versionOne(v2)
+            // The 409 re-read hands back a version 2 identity of the account at an older key version.
+            let older = try identityCreate(userId: me, accountKey: root, keyVersion: v2.keyVersion - 1)
+            let server = IdentityServer(stored: old)
+            server.winner = older
+            await #expect(throws: AuthError.message(IdentityMarks.downgraded)) { _ = try await vault(server).identityKeys() }
+
+            // An honest race: the winner is adopted, and from then on the version 1 form is refused and never upgraded.
+            let winner = try identityUpgrade(userId: me, accountKey: root, envelope: old)
+            let raced = IdentityServer(stored: old)
+            raced.winner = winner
+            #expect(try await vault(raced).identityKeys().mlDsaPublicKey == winner.mlDsa?.publicKey)
+            let rolledBack = IdentityServer(stored: old)
+            await #expect(throws: AuthError.message(IdentityMarks.downgraded)) { _ = try await vault(rolledBack).identityKeys() }
+            #expect(rolledBack.upgrades.isEmpty)
+        }
+
+        /*
+         * A read of whose signatures count that is waiting on the history, or on the settings, when
+         * the identity is replaced (this device's succession, or one noticed from another): what it
+         * had read is the identity before. Keeping it would leave the replaced key trusted as the
+         * current one and the new one's own history out, until something else forgot it.
+         */
+        @Test(arguments: ["/api/auth/identity/history", "/api/auth/settings"])
+        func signersReadAcrossAReplacedIdentityAreNotKept(_ path: String) async throws {
+            defer { done() }
+            let earliest = try identityCreate(userId: me, accountKey: root, keyVersion: v2.keyVersion - 1)
+            let server = IdentityServer(stored: v2)
+            server.history = [earliest]
+            let device = await vault(server)
+            _ = try await device.identityKeys()
+            server.hold(path)
+            let reading = Task { try await device.signers() }
+            try await server.waitUntilHeld()
+            // Replaced while the reply is on its way: the successor is served, and the old identity joins the history.
+            let next = try identitySucceed(userId: me, accountKey: root, current: v2).identity
+            server.stored = next
+            server.history = [earliest, v2]
+            await device.forgetIdentity()
+            server.release()
+
+            let signers = try await reading.value
+            let own = try #require(signers.keys[me])
+            #expect(own.current == (try base64urlDecode(value: next.signingPublicKey)))
+            #expect(own.retired == [try base64urlDecode(value: v2.signingPublicKey), try base64urlDecode(value: earliest.signingPublicKey)])
+            // What the vault keeps is the new read, not the one from before.
+            #expect(await device.trustedSigners == signers)
+            #expect(await device.earlierIdentities?.map(\.signingPublicKey) == [v2.signingPublicKey, earliest.signingPublicKey])
         }
     }
 }
 
-/* `GET /api/auth/identity` and `POST /api/auth/identity/upgrade` as the server has them. */
+/*
+ * `GET /api/auth/identity`, `POST /api/auth/identity/upgrade`, `GET /api/auth/identity/history`
+ * and an empty `GET /api/auth/settings`, as the server has them.
+ */
 final class IdentityServer: @unchecked Sendable {
     nonisolated(unsafe) static var current: IdentityServer?
     var stored: IdentityEnvelope
@@ -109,15 +178,48 @@ final class IdentityServer: @unchecked Sendable {
     var winner: IdentityEnvelope?
     var upgrades: [IdentityEnvelope] = []
     var bodies: [[String: Any]] = []
+    /* The account's earlier identities, oldest first. */
+    var history: [IdentityEnvelope] = []
     private let lock = NSLock()
+    /* The path whose next reply is held (read as the server has it then) until `release()`; whether it arrived. */
+    private var holding: String?
+    private var held = false
+    private let gate = DispatchSemaphore(value: 0)
 
     init(stored: IdentityEnvelope) { self.stored = stored }
+
+    func hold(_ path: String) { lock.withLock { holding = path; held = false } }
+
+    func release() { gate.signal() }
+
+    struct NeverArrived: Error {}
+
+    func waitUntilHeld() async throws {
+        for _ in 0..<500 {
+            if lock.withLock({ held }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw NeverArrived()
+    }
+
+    /* Called by the transport after `answer`: blocks this request until `release()` when it is the one held. */
+    func wait(for request: URLRequest) {
+        let hit = lock.withLock {
+            guard let holding, request.url?.path == holding else { return false }
+            self.holding = nil
+            held = true
+            return true
+        }
+        if hit { _ = gate.wait(timeout: .now() + 10) }
+    }
 
     func answer(_ request: URLRequest, body: Data?) -> (Int, [String: Any]) {
         lock.lock()
         defer { lock.unlock() }
         let path = request.url?.path ?? ""
         if path == "/api/auth/identity", request.httpMethod == "GET" { return (200, ["identity": Auth.json(stored)]) }
+        if path == "/api/auth/identity/history", request.httpMethod == "GET" { return (200, ["identities": history.map { Auth.json($0) }]) }
+        if path == "/api/auth/settings", request.httpMethod == "GET" { return (200, ["settingsVersion": 0]) }
         if path == "/api/auth/identity/upgrade", request.httpMethod == "POST" {
             let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             bodies.append(json)
@@ -154,6 +256,7 @@ final class IdentityServerProtocol: URLProtocol {
             body = data
         }
         let (status, json) = IdentityServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
+        IdentityServer.current?.wait(for: request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())

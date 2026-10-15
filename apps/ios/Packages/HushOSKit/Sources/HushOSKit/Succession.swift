@@ -1,5 +1,8 @@
 import Foundation
+import os
 import HushOSCore
+
+private let successionLog = Logger(subsystem: "com.hushos.app", category: "succession")
 
 /*
  * Following a contact's identity succession (docs/integrity-design.md, "What contacts
@@ -107,8 +110,7 @@ extension ContactPin {
         case .recheck, .changed: return .changed
         case .succession: break
         }
-        guard let version = served.keyVersion, let mlDsa = served.mlDsaPublicKey, let kem = served.kemPublicKey, let mlDsaHash = mlDsaPublicKeyHash,
-              let start = links.firstIndex(where: { $0.oldEncryptionPublicKey == encryptionPublicKey && $0.oldSigningPublicKey == signingPublicKey })
+        guard let version = served.keyVersion, let mlDsa = served.mlDsaPublicKey, let kem = served.kemPublicKey, let mlDsaHash = mlDsaPublicKeyHash
         else { return .changed }
         let valid = successionChainVerify(
             userId: userId,
@@ -118,11 +120,46 @@ extension ContactPin {
             links: links
         )
         guard valid, var next = try? ContactPin.of(served, userId: userId, email: email, name: name, pinnedAt: pinnedAt) else { return .changed }
-        var earlier = previousSigningKeys ?? []
-        for link in links[start...] where !earlier.contains(link.oldSigningPublicKey) { earlier.append(link.oldSigningPublicKey) }
-        next.previousSigningKeys = earlier
+        let start = chainStart(links)
+        if start == nil {
+            // The core verified a chain this client finds no start for: the two start rules disagree. Followed all the same, keeping the pinned key.
+            successionLog.fault("a verified succession chain has no start by the client's rule (\(links.count, privacy: .public) links)")
+        }
+        next.previousSigningKeys = previousKeys(after: links, from: start, served: next.signingPublicKey)
         next.keysReplacedAt = ISO8601DateFormatter().string(from: now)
+        // What this person shared with them still holds the old keys: every client re-seals it (synced, as the web's pin has it).
+        next.resealShares = true
         return .followed(next)
+    }
+
+    /*
+     * The signing keys a followed pin keeps as replaced, oldest first: the ones it kept already,
+     * its own signing key (always: what it signed is still this person's, even if `start` were
+     * ever not found where the core started), then the old key of every link from `start`, the
+     * links the core verified, through the end. The served key is the current one, never a
+     * previous one (as the web and Android keep it).
+     */
+    func previousKeys(after links: [SuccessionLink], from start: Int?, served signingKey: String) -> [String] {
+        var earlier = previousSigningKeys ?? []
+        var passed = [signingPublicKey]
+        if let start { passed += links[start...].map(\.oldSigningPublicKey) }
+        for key in passed where !earlier.contains(key) { earlier.append(key) }
+        return earlier.filter { $0 != signingKey }
+    }
+
+    /*
+     * Where the core starts the chain (`succession_chain_verify`): the first link whose old
+     * X25519, Ed25519 and ML-DSA keys are this pin's, the ML-DSA key by its digest. A link in
+     * front of it is never checked, so nothing it names may be kept: a decoy at the pinned
+     * classical keys with another ML-DSA key, followed by a link naming the server's own key as
+     * an old one, would otherwise put that key among the previous signing keys.
+     */
+    func chainStart(_ links: [SuccessionLink]) -> Int? {
+        guard let mlDsaPublicKeyHash else { return nil }
+        return links.firstIndex {
+            $0.oldEncryptionPublicKey == encryptionPublicKey && $0.oldSigningPublicKey == signingPublicKey
+                && digestOf($0.oldMlDsaPublicKey) == mlDsaPublicKeyHash
+        }
     }
 }
 

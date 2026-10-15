@@ -44,6 +44,12 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
     public var previousSigningKeys: [String]? = nil
     /* When the pin last followed a succession rather than a words check: People says so until the words are compared again. */
     public var keysReplacedAt: String? = nil
+    /*
+     * Set when the pin followed a succession: what this person shared with them still holds the
+     * old keys and waits to be sealed to the new ones (the web clears it once it has). Synced, and
+     * written only when set, so a save from here never clears another client's.
+     */
+    public var resealShares: Bool? = nil
     public var id: String { userId }
 }
 

@@ -122,6 +122,7 @@ struct Settings {
         raw["keyVersion"] = pin.keyVersion.map { NSNumber(value: $0) } ?? NSNull()
         raw["previousSigningKeys"] = pin.previousSigningKeys
         raw["keysReplacedAt"] = pin.keysReplacedAt
+        if pin.resealShares == true { raw["resealShares"] = true }
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }
@@ -272,7 +273,7 @@ extension Vault {
                 SettingsMarks.shared.record(userId: session.userId, version: stored)
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
-                trustedSigners = nil
+                forgetSigners()
                 return settings
             } catch AuthError.conflict where attempt < 2 {
                 attempt += 1

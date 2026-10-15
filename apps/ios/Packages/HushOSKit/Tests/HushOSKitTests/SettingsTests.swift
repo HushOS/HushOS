@@ -151,6 +151,76 @@ struct SettingsMarksTests {
 }
 
 /*
+ * The app and its extensions raise the same marks file at once. Each raise reads, changes and
+ * writes the whole file, so without the lock a raise written over another's loses it, and a
+ * lost mark is a rollback this device no longer refuses.
+ */
+struct HighWaterMarksTests {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString)/marks.json")
+
+    @Test func raisesFromSeparateWritersAtOnceAreAllKept() throws {
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let writers = 8
+        let raises = 40
+        // Each writer its own instance (as each process has), each raise its own key, and one key every writer raises.
+        DispatchQueue.concurrentPerform(iterations: writers) { writer in
+            for step in 1...raises {
+                let marks = HighWaterMarks(file: file)
+                marks.raise("writer-\(writer)-\(step)", to: UInt64(step))
+                marks.raise("shared", to: UInt64(writer * raises + step))
+            }
+        }
+        let kept = HighWaterMarks(file: file).load()
+        for writer in 0..<writers {
+            for step in 1...raises { #expect(kept["writer-\(writer)-\(step)"] == UInt64(step), "lost writer \(writer) raise \(step)") }
+        }
+        #expect(kept["shared"] == UInt64(writers * raises))
+        #expect(kept.count == writers * raises + 1)
+    }
+
+    /* Another process holding the lock, from a descriptor of its own, until the returned closure lets go. */
+    func holdLock() throws -> () -> Void {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let other = open(file.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard other >= 0, flock(other, LOCK_EX) == 0 else { throw CocoaError(.fileLocking) }
+        return { flock(other, LOCK_UN); close(other) }
+    }
+
+    /*
+     * In the background the system may grant no time, and the file may be locked: the upgrade to
+     * version 2 is then not written. It must still count in this process (or the version 1 form
+     * served next is opened and upgraded again, minting a second ML-DSA key), and must land with
+     * the next write.
+     */
+    @Test func aRaiseThatCouldNotBeWrittenStillCountsHereAndLandsWithTheNextWrite() throws {
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let me = "user-\(UUID().uuidString)"
+        let release = try holdLock()
+        IdentityMarks(file: file, activity: .expired).record(userId: me, keyVersion: 3, identityVersion: 2)
+        #expect(HighWaterMarks(file: file).load()[IdentityMarks.versionKey(userId: me)] == nil, "nothing was written")
+        // Another reader in this process refuses the rollback all the same.
+        let marks = IdentityMarks(file: file)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: me, keyVersion: 3, identityVersion: 1) }
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: me, keyVersion: 2, identityVersion: 2) }
+
+        // The next write, of anything, carries it.
+        release()
+        SettingsMarks(file: file).record(userId: me, version: 1)
+        let kept = HighWaterMarks(file: file).load()
+        #expect(kept[IdentityMarks.versionKey(userId: me)] == 2)
+        #expect(kept[IdentityMarks.key(userId: me)] == 3)
+    }
+
+    /* Without time from the system the lock is still tried once, without waiting: free, the raise is written at once. */
+    @Test func withoutTimeAFreeLockIsStillWritten() throws {
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let me = "user-\(UUID().uuidString)"
+        SettingsMarks(file: file, activity: .expired).record(userId: me, version: 7)
+        #expect(HighWaterMarks(file: file).load()[SettingsMarks.key(userId: me)] == 7)
+    }
+}
+
+/*
  * The highest own identity key version and identity version this device opened: an identity
  * served as current with a lower key version (keys the account replaced), or the version 1
  * form once version 2 was opened (which would be upgraded again into a second ML-DSA key), is
