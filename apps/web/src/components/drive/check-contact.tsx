@@ -180,7 +180,8 @@ export function CheckContact({
             ) : found.followed || (recheck && found.pinned && replacementUnseen(found.pinned)) ? (
                 <p className="text-sm leading-snug">
                     {first} replaced their sharing keys; the change is signed by their previous
-                    keys. Ask {first} to read you their twelve words to be sure it was them.
+                    keys. To be sure it was them, ask {first} to open People you share with in
+                    HushOS, choose Your twelve words, and read them to you.
                 </p>
             ) : notUpgraded ? (
                 <p className="text-sm leading-snug text-muted-foreground">
@@ -189,9 +190,10 @@ export function CheckContact({
                 </p>
             ) : found.stale ? (
                 <p className="text-sm leading-snug text-muted-foreground">
-                    You added {first} before the twelve words covered all of their keys. Read them
-                    together again, on a call or in person; until you do, nothing is shared with{' '}
-                    {first} and what they share with you stays shut.
+                    You added {first} before the twelve words covered all of their keys. Ask {first}{' '}
+                    to open People you share with in HushOS, choose Your twelve words, and read them
+                    to you, on a call or in person. Until you do, nothing is shared with {first} and
+                    what they share with you stays shut.
                 </p>
             ) : (
                 <p className="text-sm leading-snug text-muted-foreground">
