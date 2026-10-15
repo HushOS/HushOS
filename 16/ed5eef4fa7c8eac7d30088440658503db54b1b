@@ -1,0 +1,59 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_c56e31c87cddde::t_04ff5c986626d7 304-307,327-342
+  s_c56e31c87cddde::t_33037a7daf919c 303
+  s_c56e31c87cddde::t_c9b34263064540 308-310,324-326
+  s_c56e31c87cddde::t_286391f647a65e 343-344
+  s_c1fb0a8429598f::t_a3165ba75c1d8c 297-298,311-323
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_c56e31c87cddde::t_74b33da02555fd 180-220
+  s_c56e31c87cddde::t_143257e1fa3855 154-179,221-222
+  s_c56e31c87cddde::t_97fc530abc6b80 153
+apps/ios/AGENTS.md
+  s_c56e31c87cddde::t_5bc3e80a384ec0 75,85,104-105
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_c56e31c87cddde::t_8080a68b64d5e5 8-13,17-18,20-23,29-30,33-52,55,57-118,122-188,199,231-240,259,287,289-294
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c56e31c87cddde::t_c72751e29c6029 125,276
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_c56e31c87cddde::t_9c9fbc25b5ccad 2,5-6,113,123-128,130-131,134-163
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_c56e31c87cddde::t_8cba16fb34e74b 77-81,83-99,107-108,115,166-174,177-181,201-205,212,303-316
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_c56e31c87cddde::t_a7a091d033ecf3 94-95,100-101,108-109,269-298,301,325-326,328,346
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IdentityUpgradeTests.swift
+  s_c56e31c87cddde::t_d421ee1380d113 95-103,105-165,170-173,181-182,184-187,191-215,221-222,259
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_0a921aa66e1761::t_857651dd18ef0d 47-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16ed5eef4fa7c8eac7d30088440658503db54b1b",
+  "prompts": {},
+  "sessions": {
+    "s_0a921aa66e1761": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a80ad98577457f36e",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c1fb0a8429598f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aadce077f733e5260",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
