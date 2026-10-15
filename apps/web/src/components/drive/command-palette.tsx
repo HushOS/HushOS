@@ -29,6 +29,7 @@ import {
     TagIcon,
     Trash2Icon,
     UploadIcon,
+    TextQuoteIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useStore } from 'zustand';
@@ -39,6 +40,7 @@ import { Kbd } from '@/components/drive/hotkey-hints';
 import { keyLabel, shortcuts } from '@/components/drive/shortcuts';
 import { useTheme } from '@/components/theme-provider';
 import { searchHash } from '@/lib/search';
+import { OwnWordsDialog } from '@/components/own-words-dialog';
 import { account } from '@/components/user-menu';
 import {
     AlertDialog,
@@ -137,6 +139,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     const { theme, setTheme } = useTheme();
     const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
     const [confirm, setConfirm] = useState<'empty-trash' | null>(null);
+    const [showingWords, setShowingWords] = useState(false);
     const [busy, setBusy] = useState(false);
     useHotkey('Mod+K', () => setPaletteOpen(!open));
     useHotkey('/', () => setPaletteOpen(true), { ignoreInputs: true, preventDefault: true });
@@ -468,6 +471,15 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                             <CommandGroup heading="This device">
                                 {unlocked && (
                                     <CommandItem
+                                        value="your twelve words fingerprint check"
+                                        onSelect={run(() => setShowingWords(true))}
+                                    >
+                                        <TextQuoteIcon />
+                                        Your twelve words
+                                    </CommandItem>
+                                )}
+                                {unlocked && (
+                                    <CommandItem
                                         value="lock device browser"
                                         onSelect={run(openDeviceDialog)}
                                     >
@@ -525,6 +537,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
                     )}
                 </CommandList>
             </CommandDialog>
+            <OwnWordsDialog userId={user.id} open={showingWords} onOpenChange={setShowingWords} />
             <AlertDialog
                 open={confirm !== null}
                 onOpenChange={(value) => !value && !busy && setConfirm(null)}

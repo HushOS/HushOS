@@ -4,6 +4,7 @@ import {
     ContactIcon,
     EllipsisIcon,
     RotateCcwIcon,
+    SearchIcon,
     ShieldCheckIcon,
     TriangleAlertIcon,
     UserPlusIcon,
@@ -11,10 +12,9 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { CheckContact } from '@/components/drive/check-contact';
-import { FingerprintWords } from '@/components/fingerprint-words';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
-import { Spinner } from '@/components/motion';
+import { OwnWordsDialog } from '@/components/own-words-dialog';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
 import {
@@ -43,10 +43,10 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import {
     acknowledgeSuccession,
-    ownFingerprintQueryOptions,
     pinVerified,
     removeContact,
     replacementUnseen,
@@ -70,6 +70,8 @@ export const Route = createFileRoute('/_authenticated/app/_drive/people')({
  * never stops for it, from the share dialog too.
  */
 const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? name;
+/* A list this long gets a filter; a shorter one fits on a screen and is found by eye. */
+const FILTER_FROM = 8;
 
 function People() {
     const { userId } = useDrive();
@@ -80,9 +82,21 @@ function People() {
     const [removing, setRemoving] = useState<ContactPin | null>(null);
     const [busy, setBusy] = useState(false);
     const [rechecking, setRechecking] = useState<ContactPin | null>(null);
+    const [showingWords, setShowingWords] = useState(false);
+    const [query, setQuery] = useState('');
     const contacts = Object.values(settings.data?.settings.contacts ?? {}).sort((a, b) =>
         a.name.localeCompare(b.name),
     );
+    // Kept while something is typed, so a list that shrank below the threshold never hides a filter.
+    const filtering = contacts.length >= FILTER_FROM || query !== '';
+    const needle = filtering ? query.trim().toLocaleLowerCase() : '';
+    const shown = needle
+        ? contacts.filter(
+              (contact) =>
+                  contact.name.toLocaleLowerCase().includes(needle) ||
+                  contact.email.toLocaleLowerCase().includes(needle),
+          )
+        : contacts;
     // Pins made before the words covered every key: nothing is shared through them until checked again.
     const stale = useQuery({
         queryKey: ['contacts', 'stale', userId, settings.dataUpdatedAt],
@@ -139,6 +153,9 @@ function People() {
                 title="People you share with"
                 description="Add people by the email they use for HushOS. Checking it’s really them takes a minute on a call or in person, and is worth doing before you share anything private."
             >
+                <Button variant="outline" onClick={() => setShowingWords(true)}>
+                    Your twelve words
+                </Button>
                 <Button onClick={() => setAdding(true)}>
                     <UserPlusIcon />
                     Add someone
@@ -195,9 +212,41 @@ function People() {
                     </span>
                 </div>
             )}
-            {contacts.length > 0 && (
+            {filtering && (
+                <div
+                    className={`relative mx-5 mb-3 max-w-md sm:mx-8 ${succeeded.length > 0 ? 'mt-4' : ''}`}
+                >
+                    <SearchIcon
+                        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                    />
+                    <Input
+                        type="search"
+                        aria-label="Find someone by name or email"
+                        placeholder="Find someone"
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        className="h-9 pl-9 pointer-coarse:h-11"
+                    />
+                </div>
+            )}
+            {/* Said as the list narrows, so a screen reader hears what typing found. */}
+            <output
+                className={
+                    needle && shown.length === 0
+                        ? 'border-t border-rule px-5 py-4 text-sm text-muted-foreground sm:px-8'
+                        : 'sr-only'
+                }
+            >
+                {!needle
+                    ? ''
+                    : shown.length === 0
+                      ? `Nobody here matches “${query.trim()}”.`
+                      : `${shown.length} of ${contacts.length} shown`}
+            </output>
+            {shown.length > 0 && (
                 <ul className="flex flex-col border-t border-rule">
-                    {contacts.map((contact) => (
+                    {shown.map((contact) => (
                         <li
                             key={contact.userId}
                             data-contact={contact.email}
@@ -261,7 +310,7 @@ function People() {
                 </ul>
             )}
 
-            <OwnFingerprint userId={userId} />
+            <OwnWordsDialog userId={userId} open={showingWords} onOpenChange={setShowingWords} />
 
             <Dialog open={adding} onOpenChange={setAdding}>
                 <DialogContent className="sm:max-w-[480px]">
@@ -374,30 +423,5 @@ function People() {
                 </AlertDialogContent>
             </AlertDialog>
         </div>
-    );
-}
-
-/* What others check when they add this person: their twelve words, read aloud from here. */
-function OwnFingerprint({ userId }: { userId: string }) {
-    const own = useQuery(ownFingerprintQueryOptions(userId));
-    return (
-        <section className="mx-5 mt-8 mb-8 flex max-w-2xl flex-col gap-2 rounded-2xl border border-rule p-5 sm:mx-8">
-            <h2 className="text-[15px] font-bold">Your twelve words</h2>
-            <p className="text-sm text-muted-foreground">
-                When someone adds you, they’ll ask you to read these. They’re the same on all your
-                devices.
-            </p>
-            <div className="mt-1">
-                {own.isPending ? (
-                    <Spinner className="size-4 text-muted-foreground" />
-                ) : own.isError ? (
-                    <span className="text-sm text-destructive">
-                        {own.error instanceof Error ? own.error.message : 'Couldn’t open it.'}
-                    </span>
-                ) : (
-                    <FingerprintWords fingerprint={own.data} />
-                )}
-            </div>
-        </section>
     );
 }

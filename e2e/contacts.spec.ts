@@ -35,7 +35,9 @@ test('everyone sees their own twelve words, and the code they come from', async 
     await bob.goto('/app/contacts');
     await expect(bob).toHaveURL(/\/app\/people$/);
     await expect(bob.getByRole('heading', { name: 'People you share with' })).toBeVisible();
-    const own = bob.locator('section', { hasText: 'Your twelve words' });
+    // One click from the page's header, however many people are listed under it.
+    await bob.getByRole('button', { name: 'Your twelve words' }).click();
+    const own = bob.getByRole('dialog', { name: 'Your twelve words' });
     const words = own.locator('[data-fingerprint-words]');
     await expect(words.getByRole('listitem')).toHaveCount(12, { timeout: 60_000 });
     bobWords = (await words.getAttribute('data-fingerprint-words'))!;
@@ -44,6 +46,18 @@ test('everyone sees their own twelve words, and the code they come from', async 
     await own.getByRole('button', { name: 'Show as code' }).click();
     await expect(own.locator('[data-fingerprint]')).toHaveText(/^([0-9a-f]{4} ){9}[0-9a-f]{4}$/);
     bobFingerprint = (await own.locator('[data-fingerprint]').textContent())!.trim();
+    await bob.keyboard.press('Escape');
+    // The same words from the account menu, on any page: here one outside the drive.
+    await bob.goto('/app/account', { waitUntil: 'networkidle' });
+    await expect(bob.getByRole('heading', { name: 'Account', exact: true })).toBeVisible({
+        timeout: 60_000,
+    });
+    await bob.getByRole('button', { name: 'Account menu' }).click();
+    await bob.getByRole('menuitem', { name: 'Your twelve words' }).click();
+    await expect(
+        bob.getByRole('dialog', { name: 'Your twelve words' }).locator('[data-fingerprint-words]'),
+    ).toHaveAttribute('data-fingerprint-words', bobWords, { timeout: 60_000 });
+    await bob.keyboard.press('Escape');
 });
 
 test('a lookup shows the other person’s fingerprint, and a pin survives a reload', async () => {
