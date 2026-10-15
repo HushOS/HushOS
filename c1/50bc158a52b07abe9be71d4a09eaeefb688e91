@@ -1,0 +1,59 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharedLoadTest.kt
+  s_c56e31c87cddde::t_07ba642d86961e 1-122
+  s_c56e31c87cddde::t_6235d57e458afa 123-159
+apps/android/app/src/test/kotlin/com/hushos/app/data/OpenedIdentitiesTest.kt
+  s_c56e31c87cddde::t_002a3ac2b7cd2d 1-85
+  s_c56e31c87cddde::t_a9c34616ed8f6f 86-89
+apps/android/app/src/test/kotlin/com/hushos/app/data/TrustLoadsTest.kt
+  s_c56e31c87cddde::t_5ca7c6e76e3d90 1-71
+apps/android/app/src/main/kotlin/com/hushos/app/data/Integrity.kt
+  s_c56e31c87cddde::t_9abc5d421d856a 251-303,313,316
+  s_c56e31c87cddde::t_96c7751c896c64 232-250,304,311
+  s_c56e31c87cddde::t_91451f71bc6999 305-310,312,314-315
+apps/android/app/src/test/kotlin/com/hushos/app/data/SuccessionPinTest.kt
+  s_c56e31c87cddde::t_9369b1c0938174 56,70,72-84
+  s_c56e31c87cddde::t_8d926a915abd5b 57-59,67-69
+  s_c56e31c87cddde::t_7bdaf5261ebe60 71
+  s_c1fb0a8429598f::t_c3db000a453272 13,51-52,60-66,162
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_e9de1a492596d1 892-893,897,899
+  s_c56e31c87cddde::t_c0d0e6de6bde32 900-904,907-908
+apps/android/AGENTS.md
+  s_c56e31c87cddde::t_01c86f16f4b8a7 56
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_c56e31c87cddde::t_531fd669a2dabd 105-110,130,143,229-230,244-247,249,251,255-278,431-433
+apps/android/app/src/main/kotlin/com/hushos/app/data/OwnIdentity.kt
+  s_c56e31c87cddde::t_4233750acb4ea0 5,9,12-14,65-127
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c56e31c87cddde::t_1205cd357dd5ac 141-152,164,242,244-246,527-534,538
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_c56e31c87cddde::t_478b2d1c7a9a93 26,41-43,58-75,77,92,107,112-113,120-125,127
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  s_c56e31c87cddde::t_db1bf57f4e2aa7 5,7-8,11,16,118-123,125-178
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharingTrustTest.kt
+  s_c56e31c87cddde::t_a36ced5276714c 123-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c150bc158a52b07abe9be71d4a09eaeefb688e91",
+  "prompts": {},
+  "sessions": {
+    "s_c1fb0a8429598f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aadce077f733e5260",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
