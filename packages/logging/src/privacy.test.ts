@@ -188,3 +188,15 @@ describe('the auth block', () => {
         expect(sanitizeFailure(loop)).toEqual({ kind: 'LoopError' });
     });
 });
+
+describe('a failure on a private page', () => {
+    test('keeps its class and code, and nothing it said', () => {
+        const event = redact({
+            path: '/app/drive',
+            status: 500,
+            failure: { name: 'TypeError', code: 'ERR_X', message: 'maya@example.com' },
+        });
+        expect(event.failure).toEqual({ kind: 'TypeError', code: 'ERR_X' });
+        expect(JSON.stringify(event)).not.toContain('maya@example.com');
+    });
+});
