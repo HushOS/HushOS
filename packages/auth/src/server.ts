@@ -20,6 +20,7 @@ import { adminRepository, authRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import { sendShareEmail, sendVerificationEmail } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
+import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 
 import {
     ENVELOPE_VERSION,
@@ -37,6 +38,7 @@ import {
 } from './tokens';
 
 export { AuthError } from './tokens';
+export { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 
 /*
  * The auth domain. Nothing here reads a request: callers hand in the session or
@@ -616,7 +618,20 @@ export async function succeedIdentity(
             throw new AuthError('The new keys must differ from the current ones.', 400);
         case 'bad-signature':
             throw new AuthError('The new keys are not signed by your current keys.', 400);
+        case 'history-full':
+            throw new AuthError('This account has replaced its keys as many times as it can.', 409);
     }
+}
+
+/*
+ * The most bytes a security change may send for this session's account (see
+ * limits.ts). Null without a current session.
+ */
+export async function securityChangeBodyLimit(sessionToken: string | null) {
+    const user = await getSessionUser(sessionToken);
+    if (!user) return null;
+    const earlier = await authRepository.countIdentityHistory(user.id);
+    return (earlier + 1) * SECURITY_CHANGE_IDENTITY_BYTES + SECURITY_CHANGE_REST_BYTES;
 }
 
 /* The person's own earlier identities, oldest first, to open shares sealed to earlier keys. */

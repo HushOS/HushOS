@@ -1,6 +1,7 @@
 import {
     createCryptoSession,
     CryptoError,
+    RefusedError,
     type CryptoRequests,
     type CryptoResults,
 } from '@hushos/crypto';
@@ -21,14 +22,16 @@ self.onmessage = async (event: MessageEvent<Message>) => {
         // session in no state to trust, so it starts over. A Drive operation that
         // fails, such as a chunk read on a preview closed a moment earlier, is an
         // ordinary error for its caller and must not wipe the keys under everything
-        // else that is running.
-        if (!String(event.data.operation).startsWith('drive')) session.reset();
+        // else that is running. A refusal changed nothing, so it keeps the session too.
+        const kept = error instanceof RefusedError;
+        if (!kept && !String(event.data.operation).startsWith('drive')) session.reset();
         self.postMessage({
             id,
             error:
                 error instanceof CryptoError
                     ? error.message
                     : 'Something went wrong on this device. Please try again.',
+            ...(kept ? { kept } : {}),
         });
     }
 };

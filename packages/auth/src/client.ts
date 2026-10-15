@@ -111,8 +111,15 @@ export function createAuthClient(
             // through onLock, which is the only Drive failure that should lock. While a
             // sign-in or security change runs, it owns the worker and locks on its own
             // failures: a background read refused by the locked worker (settings, an
-            // identity) must not throw away the change's state mid-way.
-            if (!String(operation).startsWith('drive') && !busy && transport === activeTransport)
+            // identity) must not throw away the change's state mid-way. A refusal the worker
+            // kept its keys through is an ordinary error too.
+            const kept = (error as { kept?: unknown } | null)?.kept === true;
+            if (
+                !kept &&
+                !String(operation).startsWith('drive') &&
+                !busy &&
+                transport === activeTransport
+            )
                 lock();
             throw error;
         }
