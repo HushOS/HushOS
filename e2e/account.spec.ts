@@ -109,3 +109,34 @@ test('an upload that does not fit offers the ways out, and emptying the trash fi
     await expect(page.getByText('Trash is empty')).toBeVisible({ timeout: 60_000 });
     await page.context().close();
 });
+
+test('a security change is read only for a signed-in account, and only as far as its keys need', async ({
+    browser,
+}) => {
+    // A master-key rotation carries every earlier identity, so this route may take megabytes;
+    // a stranger or a new account must not get the server to buffer that much.
+    const junk = (bytes: number) => JSON.stringify({ padding: 'a'.repeat(bytes) });
+    const page = await newPage(browser);
+    await page.goto('/login', { waitUntil: 'networkidle' });
+    const origin = new URL(page.url()).origin;
+    const post = (bytes: number) =>
+        page.request.post('/api/auth/security/finish', {
+            data: junk(bytes),
+            headers: { origin, 'content-type': 'application/json' },
+        });
+    const signedOut = await post(1_000_000);
+    expect(signedOut.status()).toBe(401);
+    expect(await signedOut.json()).toEqual({
+        message: 'Sign in before changing account security.',
+    });
+
+    await registerAccount(page);
+    // One identity and no earlier ones: about 268 KiB. Under it the body is read and
+    // checked as any other; over it, it is refused before it is read whole.
+    const read = await post(200_000);
+    expect(read.status()).toBe(400);
+    const tooLarge = await post(1_000_000);
+    expect(tooLarge.status()).toBe(413);
+    expect(await tooLarge.json()).toEqual({ message: 'Request is too large.' });
+    await page.context().close();
+});
