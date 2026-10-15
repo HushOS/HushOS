@@ -1,6 +1,7 @@
 import sansLatin from '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url';
 import geistMonoLatin from '@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2?url';
-import { evlogErrorHandler } from '@hushos/logging/nitro';
+import type { RequestLogger } from '@hushos/logging';
+import { safeErrorHandler } from '@hushos/logging/nitro';
 import type { QueryClient } from '@tanstack/react-query';
 import {
     createRootRouteWithContext,
@@ -47,7 +48,16 @@ import styles from '@/styles.css?url';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
-        middleware: [createMiddleware().server(evlogErrorHandler)],
+        middleware: [
+            createMiddleware().server(
+                safeErrorHandler(
+                    async () =>
+                        (await import('nitro/context')).useRequest().context?.log as
+                            | RequestLogger
+                            | undefined,
+                ),
+            ),
+        ],
     },
     // Public pages only need to know whether a session cookie exists; no lookup here.
     // The protected layout validates for real when the user goes in.

@@ -4,7 +4,7 @@ import { db } from '@hushos/db';
 import { EvlogError, parseError, authLogAction, sanitizeFailure } from '@hushos/logging';
 import { useRequest } from 'nitro/context';
 import { API_SERVICE } from '@hushos/shared';
-import { Elysia, t, ValidationError, ParseError } from 'elysia';
+import { Elysia, t, NotFound, ValidationError, ParseError } from 'elysia';
 import * as auth from '@hushos/auth/server';
 import {
     authCookie,
@@ -47,6 +47,16 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
         enrollmentToken: readEnrollmentToken(request),
     }))
     .error(({ error, status, request }) => {
+        // A route the API does not define is not an outage: nothing is logged as an error. Drive
+        // and admin answer 501, never 404: their clients read a 404 as "this item is gone" and drop
+        // what they hold, and an unknown route there means a client newer than this server.
+        if (error instanceof NotFound)
+            return /^\/api\/(drive|admin)\//.test(new URL(request.url).pathname)
+                ? status(501, {
+                      message: 'This server does not offer that yet. It may need an update.',
+                      code: 'unsupported' as const,
+                  })
+                : status(404, { message: 'Not found.' });
         if (new URL(request.url).pathname.startsWith('/api/auth/')) {
             if (error instanceof auth.AuthError) {
                 // A 5xx is an operator problem (mail, database): say what kind, never what it said.

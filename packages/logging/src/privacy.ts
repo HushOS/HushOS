@@ -80,6 +80,7 @@ const safeAuthFields = new Set([
     'duration',
     'durationMs',
     'auth',
+    'failure',
 ]);
 const authActions = new Set([
     'register/email',
@@ -218,6 +219,8 @@ export function redactAuthenticationEvent(event: WideEvent) {
     event.path = path;
     if (!privateRoute) return;
     for (const key of Object.keys(event)) if (!safeAuthFields.has(key)) delete event[key];
+    // A failure on a private page keeps its class and code, so the operator still sees what broke.
+    if (event.failure) event.failure = sanitizeFailure(event.failure);
     if (path.startsWith('/api/auth/')) event.path = `/api/auth/${authLogAction(path)}`;
     else event.path = privatePage(path);
     const auth = event.auth;
