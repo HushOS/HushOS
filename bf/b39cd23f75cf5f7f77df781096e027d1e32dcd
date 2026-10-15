@@ -1,0 +1,22 @@
+crates/hushos-core/src/identity.rs
+  s_c56e31c87cddde::t_c4a85351b5f382 890-898,1234
+  s_c56e31c87cddde::t_a8b619a3d614c2 1221-1233
+  s_c56e31c87cddde::t_bccae5c85e9178 312-315,317
+  s_c56e31c87cddde::t_d261df8dbd81bd 1220,1235-1241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfb39cd23f75cf5f7f77df781096e027d1e32dcd",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
