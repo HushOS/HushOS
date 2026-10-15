@@ -309,8 +309,12 @@ fn mint_ml_dsa(
 ) -> CoreResult<(IdentityMlDsa, Zeroizing<Vec<u8>>)> {
     let seed = Zeroizing::new(random(ML_DSA_SEED_BYTES));
     let public_key = encode(&ml_dsa_public_key(&seed)?);
+    #[cfg(test)]
+    let key_version_wrapped = tests::MISWRAP_ML_DSA.with(|miswrap| key_version + u64::from(miswrap.get()));
+    #[cfg(not(test))]
+    let key_version_wrapped = key_version;
     let (seed_nonce, encrypted_seed) =
-        wrap_half(root, salt, user_id, key_version, ML_DSA_PURPOSE, &seed, &public_key)?;
+        wrap_half(root, salt, user_id, key_version_wrapped, ML_DSA_PURPOSE, &seed, &public_key)?;
     let wrapped = IdentityMlDsa { public_key, seed_nonce, encrypted_seed };
     reopens_ml_dsa(root, salt, user_id, key_version, &wrapped)?;
     Ok((wrapped, seed))
@@ -883,6 +887,15 @@ pub(crate) mod tests {
     const USER: &str = "11111111-1111-4111-8111-111111111111";
     const FRIEND: &str = "33333333-3333-4333-8333-333333333333";
 
+    thread_local! {
+        /*
+         * Makes `mint_ml_dsa` wrap the seed at the wrong key version (the wrong
+         * associated data, the bug its re-open guards against), on this test
+         * thread only.
+         */
+        pub(crate) static MISWRAP_ML_DSA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
     /* A version 1 identity as accounts held them before the release, from a version 2 one's keys. */
     pub(crate) fn version_one(envelope: &IdentityEnvelope, with_kem: bool) -> IdentityEnvelope {
         IdentityEnvelope {
@@ -1202,6 +1215,28 @@ pub(crate) mod tests {
         }
         assert!(identity_upgrade(USER.into(), random(32), legacy.clone()).is_err());
         assert!(identity_upgrade(FRIEND.into(), root, legacy).is_err());
+    }
+
+    #[test]
+    fn an_identity_whose_ml_dsa_seed_was_wrapped_so_it_does_not_open_is_never_made_or_upgraded() {
+        let root = random(32);
+        let legacy = version_one(&identity_create(USER.into(), root.clone(), 2).unwrap(), true);
+        MISWRAP_ML_DSA.with(|miswrap| miswrap.set(true));
+        let created = identity_create(USER.into(), root.clone(), 2);
+        let upgraded = identity_upgrade(USER.into(), root.clone(), legacy.clone());
+        MISWRAP_ML_DSA.with(|miswrap| miswrap.set(false));
+        // Signing with the seed still in memory would succeed; uploading the result would strand the account.
+        assert!(
+            matches!(created, Err(CoreError::Sealed(_))),
+            "identity_create made an unopenable ML-DSA seed"
+        );
+        assert!(
+            matches!(upgraded, Err(CoreError::Sealed(_))),
+            "identity_upgrade made an unopenable ML-DSA seed"
+        );
+        // The same calls with an honest wrap go through.
+        assert!(identity_create(USER.into(), root.clone(), 2).is_ok());
+        assert!(identity_upgrade(USER.into(), root, legacy).is_ok());
     }
 
     #[test]
