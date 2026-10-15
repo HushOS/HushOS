@@ -1971,6 +1971,14 @@ export async function handleApiRequest(request: Request): Promise<Response> {
         Vary: 'Cookie',
         'Referrer-Policy': 'no-referrer',
     };
+    // A path the API does not define answers before its body is read or the shared budget is
+    // spent: a client looping on a removed route must not lock out sign-ins behind its address.
+    // The logging allowlist decides it; auth-log-routes.test.ts keeps the two in step.
+    if (authLogAction(pathname.replace(/\/+$/, '')) === 'unknown') {
+        await request.body?.cancel();
+        log.set({ auth: { outcome: 'rejected' } });
+        return Response.json({ message: 'Not found.' }, { status: 404, headers });
+    }
     try {
         if (request.method !== 'GET' && request.method !== 'OPTIONS') {
             guardAuthMutation(request);
