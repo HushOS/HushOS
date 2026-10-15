@@ -39,7 +39,9 @@ export function OwnWordsDialog({
     const own = useQuery({
         ...ownFingerprintQueryOptions(userId),
         enabled: open && unlocked,
-        refetchOnMount: 'always',
+        // Stale at once, so every opening reads them again: the dialog stays mounted between
+        // openings, and a mount-time refetch alone would answer from the first reading.
+        staleTime: 0,
     });
     return (
         <Dialog open={open && unlocked} onOpenChange={onOpenChange}>

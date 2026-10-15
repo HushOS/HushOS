@@ -481,3 +481,41 @@ fun settingsEnvelope(json: JSONObject) = SettingsEnvelope(
 
 /* One row of "shared by me": a share or a link, and the item it points at once its name is opened. */
 data class SharedByMe(val id: String, val item: Opened?, val node: NodeView, val share: OwnedShare?, val link: LinkView?)
+
+/*
+ * "Find someone" on People, by the web's rule: offered from eight people (a shorter list
+ * fits on a screen and is found by eye), kept while anything is typed so a list that shrank
+ * below eight never hides the field holding the text, and matching a name or an email,
+ * trimmed and case-insensitive. Both sides are NFC first, so a name stored decomposed matches
+ * what a keyboard types; accents still count ("e" doesn't find "é"), as on the web.
+ */
+object PeopleFilter {
+    const val FROM = 8
+
+    fun offered(count: Int, query: String): Boolean = count >= FROM || query.isNotEmpty()
+
+    /* The query as typed, trimmed: what People quotes back. */
+    fun typed(query: String): String = query.trim { it.isWhitespace() }
+
+    /* The query as matched: blank means everyone. */
+    fun needle(query: String): String = folded(typed(query))
+
+    fun matches(name: String, email: String, query: String): Boolean {
+        val needle = needle(query)
+        return needle.isEmpty() || folded(name).contains(needle) || folded(email).contains(needle)
+    }
+
+    fun shown(pins: List<ContactPin>, query: String): List<ContactPin> = pins.filter { matches(it.name, it.email, query) }
+
+    /*
+     * What the filter found, in the web's words: shown under the field and said by TalkBack. Null while nothing (or
+     * only spaces) is typed.
+     */
+    fun result(shown: Int, total: Int, query: String): String? {
+        val typed = typed(query)
+        if (typed.isEmpty()) return null
+        return if (shown == 0) "Nobody here matches “$typed”." else "$shown of $total shown"
+    }
+
+    private fun folded(text: String): String = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFC).lowercase()
+}

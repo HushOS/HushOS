@@ -100,6 +100,17 @@ internal class OpenedIdentities(private val open: () -> IdentityKeys, private va
     /* The identity in use (see openOwnIdentity). */
     fun current(): IdentityKeys = identity ?: synchronized(lock) { identity ?: open().also { identity = it } }
 
+    /*
+     * The identity in use, checked against the one the server serves now: when that is another (the keys were replaced
+     * on another device), the one in use is forgotten and the served one opened, never the replaced keys kept.
+     */
+    fun current(served: IdentityEnvelope): IdentityKeys {
+        val opened = current()
+        if (isOpened(opened, served)) return opened
+        forget()
+        return current()
+    }
+
     /* After a succession, or a signature the server refused: the next caller opens what the server serves now. */
     fun forget() = synchronized(lock) {
         identity = null

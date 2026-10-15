@@ -5,6 +5,7 @@ import com.hushos.core.identityCreate
 import com.hushos.core.identityOpen
 import com.hushos.core.randomBytes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -85,5 +86,30 @@ class OpenedIdentitiesTest {
         opener.join(10_000)
         forgetter.join(10_000)
         assertEquals(next.signingPublicKey, identities.current().signingPublicKey)
+    }
+
+    /*
+     * Your twelve words after the keys were replaced on another device: this process still holds the old identity (it is
+     * kept until something forgets it), so the words must come from checking what the server serves now.
+     */
+    @Test
+    fun theIdentityServedNowReplacesTheOneKeptWhenItDiffers() {
+        val beforeEnvelope = identityCreate(userId, root, 4uL)
+        val afterEnvelope = identityCreate(userId, root, 5uL)
+        val before = identityOpen(userId, root, beforeEnvelope)
+        val after = identityOpen(userId, root, afterEnvelope)
+        var opens = 0
+        val server = Server(before, emptyList())
+        val identities = OpenedIdentities({ opens++; server.open() }, server::history)
+        assertEquals(ownFingerprint(before), ownFingerprint(identities.current(beforeEnvelope)))
+        // Served unchanged: the one in use is kept, not opened again.
+        assertEquals(ownFingerprint(before), ownFingerprint(identities.current(beforeEnvelope)))
+        assertEquals(1, opens)
+        server.current = after
+        // Unchecked, the old words would still be shown.
+        assertEquals(ownFingerprint(before), ownFingerprint(identities.current()))
+        assertNotEquals(ownFingerprint(before), ownFingerprint(after))
+        assertEquals(ownFingerprint(after), ownFingerprint(identities.current(afterEnvelope)))
+        assertEquals(2, opens)
     }
 }

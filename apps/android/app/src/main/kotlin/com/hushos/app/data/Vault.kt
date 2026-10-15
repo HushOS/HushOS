@@ -425,6 +425,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun ownFingerprint(): String = ownFingerprint(identityKeys())
 
     /*
+     * The words for Your twelve words, as of now: the served identity is read first, and when it is not the one this
+     * process opened (the keys were replaced on another device), that one is forgotten and the served one opened, so
+     * the words are those of the identity the server serves at this moment, re-derived from its private halves. It
+     * needs the server: offline it fails rather than show words it can't confirm are current, and a 401 ends the session.
+     */
+    fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context)))
+
+    /*
      * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
      * (docs/integrity-design.md, "Who sees whom"), because the person asked. Nothing else follows them on its own.
      */

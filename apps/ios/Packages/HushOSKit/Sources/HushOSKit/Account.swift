@@ -66,7 +66,7 @@ extension Auth {
         }
         let parsed = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            if (response as? HTTPURLResponse)?.statusCode == 401 { throw AuthError.message("Your session ended. Sign in again.") }
+            if (response as? HTTPURLResponse)?.statusCode == 401 { throw AuthError.sessionEnded }
             if (response as? HTTPURLResponse)?.statusCode == 409 { throw AuthError.conflict(parsed["message"] as? String ?? "This changed on another device. Try again.") }
             throw AuthError.message(parsed["message"] as? String ?? "Something went wrong on HushOS. Try again in a moment.")
         }

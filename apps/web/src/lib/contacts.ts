@@ -238,7 +238,18 @@ export const ownFingerprintQueryOptions = (userId: string) =>
         queryKey: contactKeys.own(userId),
         queryFn: async () => {
             // Over the keys the worker re-derived from all four private halves, never the served ones.
-            const own = await openIdentity(userId);
+            let own = await openIdentity(userId);
+            // The identity open since unlock may have been replaced from another device; read the
+            // words over what this account holds now, opened again (rollback checks included).
+            const { identity: served } = await authClient.identity();
+            if (
+                served.keyVersion !== own.keyVersion ||
+                served.encryptionPublicKey !== own.encryptionPublicKey ||
+                served.signingPublicKey !== own.signingPublicKey ||
+                (served.version === 2 ? served.mlDsa.publicKey : null) !== own.mlDsaPublicKey ||
+                (served.kem?.publicKey ?? null) !== own.kemPublicKey
+            )
+                own = await openIdentity(userId, true);
             return fingerprintOfKeys(
                 publicKeyBytes(own.encryptionPublicKey),
                 publicKeyBytes(own.signingPublicKey),

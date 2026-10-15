@@ -32,6 +32,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.PrivacyTip
 import androidx.compose.material.icons.outlined.Gavel
+import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Visibility
@@ -112,6 +114,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
     var editingName by rememberSaveable { mutableStateOf(false) }
     var signingOut by rememberSaveable { mutableStateOf(false) }
+    var showingPeople by rememberSaveable { mutableStateOf(false) }
     // /app/trash: straight to Trash.
     LaunchedEffect(state.request) { if (state.request == "trash") { page = Page.TRASH; model.clearRequest() } }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
@@ -149,6 +152,9 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             Subheader("Sign-in and recovery")
             AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
             AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }
+            // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
+            AccountRow("People you share with", "Check it’s them before you share anything sensitive", Icons.Outlined.Group) { showingPeople = true }
+            AccountRow("Your twelve words", "Read these to someone checking it’s you", Icons.Outlined.Badge) { model.openOwnWords() }
             Subheader("Your files")
             // Trash lives here, as it did before the redesign (the user's choice).
             AccountRow("Trash", state.storage?.let { s -> trashSummary(s.trashItems, s.trashBytes) }, Icons.Outlined.Delete) { page = Page.TRASH }
@@ -167,6 +173,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
                 modifier = Modifier.fillMaxWidth().padding(vertical = AlpineSpace.S6), textAlign = TextAlign.Center)
         }
     }
+    if (showingPeople) PeopleSheet(model, state) { showingPeople = false }
     if (editingName) {
         var name by rememberSaveable { mutableStateOf(state.user?.name.orEmpty()) }
         AlertDialog(

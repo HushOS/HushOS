@@ -63,6 +63,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,7 +99,8 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     val opened = openedId?.let { id -> state.shares?.firstNotNullOfOrNull { it.root?.takeIf { root -> root.id == id } } ?: model.item(id) }
     // A pasted link carries its key: memory only, never the saved-state bundle the system writes to disk.
     var linkText by remember { mutableStateOf("") }
-    var people by remember { mutableStateOf(false) }
+    // Saveable, as on Account: a rotation keeps People (and Your twelve words above it) open.
+    var people by rememberSaveable { mutableStateOf(false) }
     var byMe by rememberSaveable { mutableStateOf(false) }
     var mine by remember { mutableStateOf<List<SharedByMe>?>(null) }
     var mineFailed by remember { mutableStateOf(false) }
@@ -142,7 +145,9 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = {
         DestinationBar("Shared") {
             TextButton(onClick = { people = true }) {
-                Icon(Icons.Outlined.Group, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.size(AlpineSpace.S2)); Text("People")
+                Icon(Icons.Outlined.Group, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.size(AlpineSpace.S2))
+                // Short on screen; its full name for TalkBack, the place's name everywhere else.
+                Text("People", modifier = Modifier.semantics { contentDescription = "People you share with" })
             }
         }
     }) { padding ->

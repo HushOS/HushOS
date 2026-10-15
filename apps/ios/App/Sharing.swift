@@ -653,25 +653,44 @@ struct PersonAvatar: View {
     }
 }
 
-/* Twelve words in two columns, numbered, for reading aloud. */
+/*
+ * Twelve words in two columns, numbered, for reading aloud. Show as code gives the
+ * same fingerprint as hex, as the web does, for checking against an app that still
+ * shows it that way; the words are drawn from that code, so either matching means the same.
+ */
 struct FingerprintWordsView: View {
     let fingerprint: String
+    @State private var code = false
+    // At accessibility text sizes a long word doesn't fit half the width: one column, never a truncated word.
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let words = FingerprintWords.words(fingerprint) ?? []
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: Alpine.Space.s2) {
-            ForEach(words.indices, id: \.self) { index in
-                HStack(spacing: 6) {
-                    Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(Alpine.inkMuted).frame(width: 18, alignment: .trailing)
-                    Text(words[index]).font(.body.monospaced()).foregroundStyle(Alpine.ink)
+        VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+            if code {
+                Text(fingerprint).font(.body.monospaced()).foregroundStyle(Alpine.ink).textSelection(.enabled).speechSpellsOutCharacters()
+                    .padding(.horizontal, Alpine.Space.s3).padding(.vertical, Alpine.Space.s2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Alpine.ground, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: Alpine.Space.s2) {
+                    ForEach(words.indices, id: \.self) { index in
+                        HStack(spacing: 6) {
+                            Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(Alpine.inkMuted).frame(width: 18, alignment: .trailing)
+                            Text(words[index]).font(.body.weight(.medium)).foregroundStyle(Alpine.ink)
+                        }
+                        .padding(.horizontal, Alpine.Space.s2).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Alpine.ground, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
+                    }
                 }
-                .padding(.horizontal, Alpine.Space.s2).padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Alpine.ground, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(words.joined(separator: ", "))
             }
+            // Borderless, so only the words of the button toggle inside a list row.
+            Button(code ? "Show as words" : "Show as code") { code.toggle() }
+                .font(Theme.Text.footnote.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(words.joined(separator: ", "))
     }
 }
 
@@ -715,13 +734,13 @@ struct CheckContactView: View {
                 }
                 Section {
                     if found.followed || (found.pinned.map(ReplacedKeysSeen.notice) == true && !found.changed && !found.recheck) {
-                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure, ask \(first) to read you their twelve words. If they match these, it’s really them.")
+                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if notUpgraded {
                         Text("\(first) hasn’t signed in since HushOS upgraded its keys. You can compare words once they have.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.recheck && !found.changed {
-                        Text("\(first)’s keys were upgraded. Ask \(first) to open People you share with in HushOS and read you their twelve words. If they match these, it’s really them. Shares between you open again once you’ve both done it.")
+                        Text("You added \(first) before the twelve words covered all of their keys. Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with \(first) and what they share with you stays shut.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.changed {
                         Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
@@ -735,7 +754,7 @@ struct CheckContactView: View {
                                 .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
                         }
                     } else {
-                        Text("Ask \(first) to open People you share with in HushOS and read you their twelve words, on a call or in person. If they match these, it’s really them.")
+                        Text("Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     }
                     if let fingerprint = found.contact.fingerprint {
@@ -749,7 +768,7 @@ struct CheckContactView: View {
                 if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
                 Section {
                     if found.pinned != nil && !found.changed && !found.recheck && found.pinned.map(ReplacedKeysSeen.notice) != true {
-                        Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in people you share with").frame(maxWidth: .infinity) }
+                        Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in People you share with").frame(maxWidth: .infinity) }
                             .buttonStyle(PrimaryCapsuleStyle())
                     } else {
                         VStack(spacing: Alpine.Space.s2) {
@@ -834,22 +853,43 @@ struct CheckContactView: View {
     }
 }
 
-/* People you share with: your contacts, checking it's them, removing someone, and your own twelve words. */
+/*
+ * People you share with: Add someone and Your twelve words first, so neither is buried
+ * under a long list, then your contacts (Find someone from eight of them), checking
+ * it's them and removing someone.
+ */
 struct PeopleView: View {
+    @Environment(AppModel.self) private var model
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var pins: [ContactPin] = []
-    @State private var own: String?
     @State private var loaded = false
     @State private var error: String?
     @State private var checking: ContactPin?
     @State private var rechecking: ContactPin?
     @State private var removing: ContactPin?
     @State private var adding = false
+    @State private var showingWords = false
+    @State private var query = ""
+
+    /* What the list shows under the filter, and what VoiceOver hears once typing pauses. */
+    private var shown: [ContactPin] { PeopleFilter.shown(pins, query: query) }
+    private var result: String? { PeopleFilter.result(shown: shown.count, of: pins.count, query: query) }
+    /*
+     * The session ended (a request found it gone, or the app left the signed-in state): People
+     * closes, so MainView's "You've been signed out" isn't hidden behind it.
+     */
+    private var sessionOver: Bool { model.state != .signedIn || store.error == DriveStore.sessionEnded }
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button { adding = true } label: { Label("Add someone", systemImage: "person.badge.plus").foregroundStyle(Alpine.primary) }.alpineRow()
+                    Button { showingWords = true } label: { Label("Your twelve words", systemImage: "person.text.rectangle").foregroundStyle(Alpine.primary) }.alpineRow()
+                } header: {
+                    Text("People you can share with. Check it’s them before you share anything sensitive.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                }
                 Section {
                     if loaded && pins.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
@@ -870,7 +910,10 @@ struct PeopleView: View {
                         .padding(.vertical, Alpine.Space.s2)
                         .alpineRow()
                     }
-                    ForEach(pins) { pin in
+                    if let result, shown.isEmpty {
+                        Text(result).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).padding(.vertical, Alpine.Space.s2).alpineRow()
+                    }
+                    ForEach(shown) { pin in
                         Menu {
                             // A pin that vouches for nothing has no words worth reading back: look them up and compare afresh.
                             if ReplacedKeysSeen.notice(pin) {
@@ -902,26 +945,22 @@ struct PeopleView: View {
                         .accessibilityLabel("More for \(pin.name)")
                         .itemRow()
                     }
-                } header: {
-                    Text("People you can share with. Check it’s them before you share anything sensitive.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-                }
-                Section {
-                    Button { adding = true } label: { Label("Add someone", systemImage: "person.badge.plus").foregroundStyle(Alpine.primary) }.alpineRow()
-                }
-                Section {
-                    if let own { FingerprintWordsView(fingerprint: own).padding(.vertical, Alpine.Space.s2).alpineRow() } else { ProgressView().alpineRow() }
-                } header: {
-                    Text("Your twelve words").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
-                } footer: {
-                    Text("When someone adds you, they’ll ask you to read these. They’re the same on all your devices.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                 }
             }
             .listStyle(.insetGrouped)
             .alpineGrouped()
             .environment(\.defaultMinListRowHeight, 1)
+            .findSomeone(offered: PeopleFilter.offered(count: pins.count, query: query), query: $query)
+            // Said once typing pauses, not at every letter VoiceOver already echoes.
+            .task(id: result) {
+                guard let result else { return }
+                try? await Task.sleep(for: .milliseconds(600))
+                if !Task.isCancelled { AccessibilityNotification.Announcement(result).post() }
+            }
             .navigationTitle("People you share with")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
             .navigationDestination(isPresented: $adding) {
                 CheckContactView(email: "") { pin in
                     adding = false
@@ -960,6 +999,7 @@ struct PeopleView: View {
             }
             .task { await load() }
         }
+        .onChange(of: sessionOver, initial: true) { _, over in if over { dismiss() } }
     }
 
     private func firstName(_ pin: ContactPin) -> String {
@@ -969,12 +1009,86 @@ struct PeopleView: View {
     private func load() async {
         do {
             pins = try await store.vault.contacts().sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            own = try await store.vault.ownFingerprint()
             error = nil
         } catch {
+            // A session that ended is the store's to say (it closes People); anything else is said here.
+            if endsSession(error) { store.report(error); return }
             self.error = "This list couldn’t be opened. " + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
         loaded = true
+    }
+}
+
+private extension View {
+    /* People's search field, only while it is offered (PeopleFilter.offered): `.searchable` has no hidden state. */
+    @ViewBuilder func findSomeone(offered: Bool, query: Binding<String>) -> some View {
+        if offered {
+            searchable(text: query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find someone")
+        } else {
+            self
+        }
+    }
+}
+
+/*
+ * Your twelve words: what others check when they add this person, read aloud from
+ * here. A sheet from a row at the top of People and from Account, so it is a tap away
+ * while someone waits on a call.
+ *
+ * What is guaranteed: each opening asks the server which identity it serves and, if
+ * that is not the one this phone opened (keys replaced on another device), opens the
+ * served one first (`Vault.currentOwnFingerprint`). The words are always computed from
+ * the public keys the core re-derived from the private halves, never from served keys.
+ * Without the server it says it couldn't reach HushOS rather than show words it can't
+ * confirm. The sheet closes when the app leaves the signed-in state, another account
+ * takes the phone, or a request (its own read included) finds the session ended; it is
+ * not reopened by anything.
+ */
+struct OwnWordsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(DriveStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var words: String?
+    @State private var error: String?
+    /* The account the words were opened for. */
+    @State private var account: String?
+
+    /* Signed in as whom; nil once signed out, checking or deleted, or once a request found the session ended. */
+    private var signedIn: String? { model.state == .signedIn && store.error != DriveStore.sessionEnded ? model.user?.id : nil }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if let words {
+                        FingerprintWordsView(fingerprint: words).padding(.vertical, Alpine.Space.s2).alpineRow()
+                    } else if let error {
+                        Text(error).foregroundStyle(Alpine.danger).alpineRow()
+                    } else {
+                        ProgressView().accessibilityLabel("Opening your words").alpineRow()
+                    }
+                } header: {
+                    Text("When someone adds you, they’ll ask you to read these. They’re the same on all your devices.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .alpineGrouped()
+            .navigationTitle("Your twelve words")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            account = signedIn
+            guard account != nil else { dismiss(); return }
+            do { words = try await store.vault.currentOwnFingerprint() } catch {
+                // A session that ended is the store's to say (and closes this sheet); anything else is said here.
+                if endsSession(error) { store.report(error); return }
+                self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t open them. Try again."
+            }
+        }
+        .onChange(of: signedIn) { _, now in if now == nil || now != account { dismiss() } }
     }
 }
 
@@ -991,7 +1105,7 @@ private struct CheckItsThemSheet: View {
                 Section {
                     FingerprintWordsView(fingerprint: pin.fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
                 } header: {
-                    Text("Ask \(first) to open People you share with in HushOS and read you their twelve words, on a call or in person. If they match these, it’s really them.")
+                    Text("Ask \(first) to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 } footer: {
                     Text("If they don’t match, don’t share anything new with them. Remove them, and add them again once they’ve signed in.")
