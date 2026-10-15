@@ -45,7 +45,6 @@ import com.hushos.core.MetadataStatement
 import com.hushos.core.NodeKind
 import com.hushos.core.VersionStatement
 import com.hushos.core.contentSuite
-import com.hushos.core.identitySucceed
 import com.hushos.core.Integrity
 import com.hushos.core.settingsKeyCreate
 import com.hushos.core.settingsKeyOpen
@@ -139,9 +138,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
     /* Node keys and rows by (workspace, node): a share's keys never answer for this account's own nodes (NodeCache). */
     internal val nodes = NodeCache { workspace?.workspaceId }
-    private var identity: IdentityKeys? = null
-    /* The account's earlier identities, opened, newest first; null until asked (shares sealed to earlier keys need them). */
-    private var history: List<IdentityKeys>? = null
+    /* The identity in use and the earlier ones, opened once and kept until forgotten (see OpenedIdentities). */
+    private val ownIdentities = OpenedIdentities(
+        open = {
+            openOwnIdentity(api.session.userId, unlockAccount(), SettingsMark.of(context),
+                served = { Auth.identity(context) },
+                store = { Auth.upgradeIdentity(context, it) },
+                upgraded = { ShareSeals.of(context).lastPass = 0L },
+            )
+        },
+        // Each opened under the account key, which proves it is this account's own, not one the server added.
+        history = { Auth.identityHistory(context).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() },
+    )
     /* The settings key, opened under the account key once the server served it (or this device made it). */
     private var settingsKey: ByteArray? = null
     private val indexFile = File(context.filesDir, "files-parents.json")
@@ -153,7 +161,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     init {
-        api.onBadSignature = { identity = null; history = null }
+        api.onBadSignature = { forgetIdentity() }
     }
 
     companion object {
@@ -231,26 +239,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * version 1 form once this device has seen version 2, is refused. After this device's own upgrade the re-seal pass
      * runs at the next Drive open, to seal the ledger's shares in suite 4 where pins allow.
      */
-    internal fun identityKeys(): IdentityKeys = identity ?: synchronized(identityLock) {
-        identity ?: openOwnIdentity(api.session.userId, unlockAccount(), SettingsMark.of(context),
-            served = { Auth.identity(context) },
-            store = { Auth.upgradeIdentity(context, it) },
-            upgraded = { ShareSeals.of(context).lastPass = 0L },
-        ).also { identity = it }
-    }
-    private val identityLock = Any()
+    internal fun identityKeys(): IdentityKeys = ownIdentities.current()
 
-    /*
-     * Every identity this account has held, the current one first, then the earlier ones newest first, each opened (and
-     * so proven) under the account key. Without the network the earlier ones are left out this time, not forgotten;
-     * `strict` fails instead, for a caller that would misread their absence.
-     */
-    internal fun identities(strict: Boolean = false): List<IdentityKeys> {
-        val current = identityKeys()
-        val load = { Auth.identityHistory(context).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() }
-        val earlier = history ?: (if (strict) load() else runCatching(load).getOrNull())?.also { history = it }
-        return listOf(current) + earlier.orEmpty().filter { it.signingPublicKey != current.signingPublicKey }
-    }
+    private fun forgetIdentity() = ownIdentities.forget()
+
+    internal fun identities(strict: Boolean = false): List<IdentityKeys> = ownIdentities.all(strict)
 
     /*
      * The signing keys this device trusts and for whom: its own (the current one, and the earlier ones as retired) and
@@ -531,14 +524,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun replaceSharingKeys(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
         val userId = api.session.userId
         // A succession is signed with both halves: a version 1 identity is upgraded first.
-        identityKeys()
-        val current = Auth.identity(context)
-        val succession = identitySucceed(userId, unlockAccount(), current)
+        val opened = identityKeys()
+        // Signed over the identity opened, never over whatever the server serves now.
+        val succession = try {
+            succeedOwnIdentity(userId, unlockAccount(), opened, Auth.identity(context))
+        } catch (error: IdentityMoved) {
+            forgetIdentity()
+            throw error
+        }
         Auth.succeedIdentity(context, succession)
         // From here the shares wait to be sealed again: a pass cut short is finished on the next Drive open, never by minting again.
         ShareSeals.of(context).pending = succession.identity.keyVersion
-        identity = null
-        history = null
+        forgetIdentity()
         val keys = identityKeys()
         if (keys.signingPublicKey != succession.identity.signingPublicKey) throw ApiError(502, "HushOS answered with other keys than the new ones. Try again.")
         // The keys are replaced from here on, whatever happens next: a failure below is said, not undone or retried by minting again.

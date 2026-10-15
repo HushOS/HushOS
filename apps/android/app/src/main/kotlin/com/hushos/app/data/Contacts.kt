@@ -102,6 +102,12 @@ data class ContactPin(
     val previousSigningKeys: List<String> = emptyList(),
     /* When the pin followed a signed succession to new keys, until the words are compared again: People says so. */
     val keysReplacedAt: String? = null,
+    /*
+     * Set when the pin followed a succession: what this person shared with them still holds the old keys and waits to be
+     * sealed to the new ones (the web clears it once it has). Synced, and written only when set, so a save from here
+     * never clears another client's.
+     */
+    val resealShares: Boolean = false,
 ) {
     /*
      * Whether the words were compared over all four keys: a version 3 pin whose stored fingerprint is the version 3 one
@@ -121,6 +127,7 @@ data class ContactPin(
         if (mlDsaPublicKeyHash == null) json.remove("mlDsaPublicKeyHash") else json.put("mlDsaPublicKeyHash", mlDsaPublicKeyHash)
         if (previousSigningKeys.isEmpty()) json.remove("previousSigningKeys") else json.put("previousSigningKeys", JSONArray(previousSigningKeys))
         if (keysReplacedAt == null) json.remove("keysReplacedAt") else json.put("keysReplacedAt", keysReplacedAt)
+        if (resealShares) json.put("resealShares", true)
         return json
     }
 
@@ -133,6 +140,7 @@ data class ContactPin(
             if (!json.has("keyVersion") || json.isNull("keyVersion")) null else json.optLong("keyVersion").takeIf { it >= 1 }?.toULong(),
             json.optJSONArray("previousSigningKeys")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).ifEmpty { null } } }.orEmpty(),
             if (json.isNull("keysReplacedAt")) null else json.optString("keysReplacedAt").ifEmpty { null },
+            json.optBoolean("resealShares", false),
         )
 
         /*
@@ -218,7 +226,8 @@ const val CHAIN_FROM: ULong = 1uL
  * keys it replaces, versions rising, the served four keys at the end). A pin that follows becomes the version 3 pin of
  * the served keys, keeps every signing key the chain passed through (what they signed before still verifies), and is
  * marked so People can suggest comparing words again: a succession made with stolen keys is still a change the person
- * did not make.
+ * did not make. It is also marked `resealShares`, as the web's pinAfterSuccession does: shares to them still hold the
+ * old keys.
  */
 fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<SuccessionLink>, now: String): ContactPin? {
     if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
@@ -232,12 +241,39 @@ fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<Succes
     }.getOrDefault(false)
     if (!holds) return null
     val next = ContactPin.ofServed(pin.userId, pin.email, pin.name, served, pin.pinnedAt) ?: return null
-    val start = links.indexOfFirst { it.oldEncryptionPublicKey == pin.encryptionPublicKey && it.oldSigningPublicKey == pin.signingPublicKey }
-    val passed = links.drop(start).map { it.oldSigningPublicKey }
+    val start = chainStart(pin, links)
+    // The core verified a chain this client finds no start for: the two start rules disagree. Followed all the same,
+    // keeping the pinned key. No keys or addresses in the line; JVM tests have no Log, hence runCatching.
+    if (start == null) runCatching { android.util.Log.e("HushOSTrust", "a verified succession chain has no start by the client's rule (${links.size} links)") }
     return next.copy(
-        previousSigningKeys = (pin.previousSigningKeys + passed).distinct().filter { it != served.signingPublicKey },
+        previousSigningKeys = previousKeysAfter(pin, links, start, served.signingPublicKey),
         keysReplacedAt = now,
+        resealShares = true,
     )
+}
+
+/*
+ * The signing keys a followed pin keeps as replaced, oldest first: the ones it kept already, its own signing key (always:
+ * what it signed is still this person's, even if `start` were ever not found where the core started), then the old key
+ * of every link from `start`, the links the core verified, through the end. The served key is the current one, never a
+ * previous one.
+ */
+internal fun previousKeysAfter(pin: ContactPin, links: List<SuccessionLink>, start: Int?, servedSigningKey: String): List<String> {
+    val passed = listOf(pin.signingPublicKey) + (start?.let { links.drop(it).map { link -> link.oldSigningPublicKey } } ?: emptyList())
+    return (pin.previousSigningKeys + passed).distinct().filter { it != servedSigningKey }
+}
+
+/*
+ * Where the core starts the chain (succession_chain_verify): the first link whose old X25519, Ed25519 and ML-DSA keys
+ * are the pin's, the ML-DSA key by its digest. A link in front of it is never checked, so nothing it names may be kept:
+ * a decoy at the pinned classical keys with another ML-DSA key, followed by a link naming the server's own key as an
+ * old one, would otherwise put that key among the previous signing keys.
+ */
+internal fun chainStart(pin: ContactPin, links: List<SuccessionLink>): Int? {
+    val mlDsaHash = pin.mlDsaPublicKeyHash ?: return null
+    return links.indexOfFirst {
+        it.oldEncryptionPublicKey == pin.encryptionPublicKey && it.oldSigningPublicKey == pin.signingPublicKey && digestOf(it.oldMlDsaPublicKey) == mlDsaHash
+    }.takeIf { it >= 0 }
 }
 
 /*
@@ -392,8 +428,9 @@ fun granterKey(granterId: String, granterName: String, served: ServedIdentity, p
         PinComparison.SAME -> Unit
         PinComparison.RECHECK -> throw GranterTrust.Recheck(granterName)
         PinComparison.SUCCESSION -> throw GranterTrust.Replaced(granterName)
-        // A pin that vouches for nothing, served other keys: still a words check first.
-        PinComparison.CHANGED -> throw if (!pin.verified) GranterTrust.Recheck(granterName) else GranterTrust.Changed(granterName)
+        // Other keys than the pinned ones, whatever the pin's version: the changed-key warning. Only the same keys under
+        // a pin that vouches for nothing is an upgrade (RECHECK).
+        PinComparison.CHANGED -> throw GranterTrust.Changed(granterName)
     }
     val keys = granterKeysOf(pin, served) ?: throw GranterTrust.Changed(granterName)
     return GranterKey(keys, pin.previousSigningKeys.isNotEmpty())

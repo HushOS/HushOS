@@ -120,6 +120,17 @@ class SharingTrustTest {
         assertThrows(GranterTrust.Replaced::class.java) { granterKey(userId, "Ada", served.copy(keyVersion = 3uL, signingPublicKey = base64urlEncode(ByteArray(32) { 4 })), atTwo) }
     }
 
+    @Test
+    fun aPinFromBeforeTheReleaseServedOtherKeysIsTheChangedKeyWarningNotAnUpgrade() {
+        // Only the same X25519 and Ed25519 keys under a pin that vouches for nothing is "keys were upgraded".
+        for (pin in listOf(preRelease, staleFingerprint)) {
+            val pins = mapOf(userId to pin)
+            for (other in listOf(served.copy(encryptionPublicKey = flipped(enc)), served.copy(signingPublicKey = flipped(sig)),
+                served.copy(keyVersion = 3uL, signingPublicKey = flipped(sig))))
+                assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", other, pins) }
+        }
+    }
+
     private fun row(id: String, grantee: String, identity: ServedIdentity = served) =
         JSONObject().put("id", id).put("granteeUserId", grantee).put("grantee", identity.toJson())
 

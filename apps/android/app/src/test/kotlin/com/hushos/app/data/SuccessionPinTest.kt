@@ -10,6 +10,7 @@ import com.hushos.core.identitySucceed
 import com.hushos.core.keyDigest
 import com.hushos.core.randomBytes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,7 +48,38 @@ class SuccessionPinTest {
         // What the old key signed still verifies, and People is told so it can suggest comparing words again.
         assertEquals(listOf(link.oldSigningPublicKey), next.previousSigningKeys)
         assertEquals(now, next.keysReplacedAt)
+        // Shares to them still hold the old keys: every client is told to seal them again.
+        assertTrue(next.resealShares)
         assertEquals(PinComparison.SAME, comparePin(next, served))
+    }
+
+    @Test
+    fun aDecoyLinkInFrontOfTheChainAddsNoKeyToThePreviousSigningKeys() {
+        // The server's own identity, and a link from it that the core never checks.
+        val root = randomBytes(32u)
+        val server = identityCreate(userId, root, 2uL)
+        val evil = linkOf(server, identitySucceed(userId, root, server))
+        // At the pinned X25519 and Ed25519 keys, but another ML-DSA key: not where the core starts the chain.
+        val decoy = link.copy(oldMlDsaPublicKey = server.mlDsa!!.publicKey)
+        val next = followSuccession(pinned, served, listOf(decoy, evil, link), now)!!
+        // Only the key the verified chain passed through: never the server's, whose records would read retired-key.
+        assertEquals(listOf(link.oldSigningPublicKey), next.previousSigningKeys)
+        assertFalse(server.signingPublicKey in next.previousSigningKeys)
+        // The same decoy with nothing behind it is no chain at all.
+        assertNull(followSuccession(pinned, served, listOf(decoy, evil), now))
+    }
+
+    /*
+     * The pin's own signing key is kept as replaced whatever the start rule found: were it ever to miss where the core
+     * started a chain the core verified, the records the pinned key signed would otherwise turn unknown-signer.
+     */
+    @Test
+    fun aFollowedPinAlwaysKeepsItsOwnSigningKey() {
+        // No start found: no link's key is kept, the pinned one still is.
+        assertEquals(listOf(pinned.signingPublicKey), previousKeysAfter(pinned, listOf(link), null, served.signingPublicKey))
+        // Kept once, oldest first, beside what the pin kept before; never the served key.
+        val older = pinned.copy(previousSigningKeys = listOf("earlier-key", served.signingPublicKey))
+        assertEquals(listOf("earlier-key", pinned.signingPublicKey), previousKeysAfter(older, listOf(link), 0, served.signingPublicKey))
     }
 
     @Test
@@ -127,6 +159,7 @@ class SuccessionPinTest {
         val read = Settings.parse(settings.text(), 1uL).contacts.getValue(userId)
         assertEquals(next, read)
         assertTrue(read.verified)
+        assertTrue(read.resealShares)
         // Compared again over the same keys: the notice goes, the vouched-for earlier key stays.
         settings.pin(read.copy(keysReplacedAt = null, pinnedAt = now))
         val again = Settings.parse(settings.text(), 2uL).contacts.getValue(userId)
