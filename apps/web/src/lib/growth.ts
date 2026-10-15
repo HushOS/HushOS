@@ -33,7 +33,7 @@ function word<K extends string>(key: K) {
                 ? (input as Record<string, unknown>)[key]
                 : undefined;
         if (typeof value !== 'string' || value.length < 1 || value.length > 64) {
-            throw new Error(`Expected a ${key}.`);
+            throw Object.assign(new Error(`Expected a ${key}.`), { status: 400 });
         }
         return { [key]: value } as Record<K, string>;
     };

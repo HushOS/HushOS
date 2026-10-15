@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createError } from 'evlog';
-import { safeErrorHandler } from './nitro';
+import { safeErrorHandler, withoutDetail } from './nitro';
 
 /*
  * An error that escapes a server route reaches the framework, which prints it
@@ -111,5 +111,40 @@ describe('an error escaping a server route', () => {
             throw new Error('outside a request');
         })(failing(new Error('token=abc123'))).catch((e: unknown) => e);
         expect((thrown as Error).message).toBe('Request failed.');
+    });
+});
+
+describe('the original error', () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.restoreAllMocks();
+    });
+
+    test('is printed outside production, for whoever runs the server, and never in production', async () => {
+        const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const original = new Error('No account for maya@example.com');
+        vi.stubEnv('NODE_ENV', 'development');
+        await withoutDetail(original, () => undefined);
+        expect(printed).toHaveBeenCalledWith(original);
+        printed.mockClear();
+        vi.stubEnv('NODE_ENV', 'production');
+        const bare = await withoutDetail(original, () => undefined);
+        expect(printed).not.toHaveBeenCalled();
+        expect(bare).toMatchObject({ message: 'Request failed.', status: 500 });
+    });
+});
+
+describe('a server function failing inside a server route', () => {
+    test('is logged once, under its own class, not again as the bare error', async () => {
+        const { lines, log } = logger();
+        const inner = await withoutDetail(
+            new RangeError('pool exhausted for maya@example.com'),
+            () => log,
+        );
+        const outer = await withoutDetail(inner, () => log);
+        expect(outer).toBe(inner);
+        expect(lines.filter((line) => line instanceof Error)).toHaveLength(1);
+        expect(lines).toContainEqual({ failure: { kind: 'RangeError' } });
+        expect(lines).not.toContainEqual({ failure: { kind: 'Error' } });
     });
 });

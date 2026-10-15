@@ -25,6 +25,8 @@ export function authError(error: unknown, { signIn = false }: { signIn?: boolean
         return signIn
             ? 'That email and password don’t match. Check them and try again.'
             : 'That password isn’t right. Check it and try again.';
+    // What a server function's failure becomes on its way out (see withoutDetail).
+    if (message === 'Request failed.') return 'Something went wrong on our side. Please try again.';
     if (message === 'The recovery phrase does not match this account.')
         return 'These words didn’t open your account. Check you used your newest kit.';
     return message;

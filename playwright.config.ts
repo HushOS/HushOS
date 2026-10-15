@@ -38,21 +38,30 @@ export default defineConfig({
         },
         { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /mobile\.spec\.ts/ },
     ],
-    webServer: {
-        // From the root, so Bun loads the root .env the way `bun run dev` does. In CI
-        // the server's output goes to a file the workflow uploads on failure, and only
-        // there: three lines a request, it was most of the job log and buried the tests.
-        command: process.env.CI
-            ? 'mkdir -p scratchpad && bun run dev > scratchpad/e2e-server.log 2>&1'
-            : 'bun run dev',
-        // Each test context sends its own x-forwarded-for (see helpers.ts), so the
-        // per-address cap on verification emails never trips. A dev server you
-        // started yourself needs TRUSTED_PROXY_HEADER=x-forwarded-for in .env.
-        env: { TRUSTED_PROXY_HEADER: 'x-forwarded-for' },
-        url: 'http://localhost:5173',
-        reuseExistingServer: true,
-        timeout: 180_000,
-        stdout: 'ignore',
-        stderr: 'pipe',
-    },
+    // Pointed at a server of its own (E2E_BASE_URL), a run starts none: otherwise it would start
+    // the dev server on 5173 whenever nothing listens there, or test whatever another session serves.
+    webServer: process.env.E2E_BASE_URL
+        ? undefined
+        : {
+              // From the root, so Bun loads the root .env the way `bun run dev` does. In CI
+              // the server's output goes to a file the workflow uploads on failure, and only
+              // there: three lines a request, it was most of the job log and buried the tests.
+              command: process.env.CI
+                  ? 'mkdir -p scratchpad && bun run dev > scratchpad/e2e-server.log 2>&1'
+                  : 'bun run dev',
+              // Each test context sends its own x-forwarded-for (see helpers.ts), so the
+              // per-address cap on verification emails never trips. A dev server you
+              // started yourself needs TRUSTED_PROXY_HEADER=x-forwarded-for in .env.
+              env: { TRUSTED_PROXY_HEADER: 'x-forwarded-for' },
+              url: 'http://localhost:5173',
+              reuseExistingServer: true,
+              timeout: 180_000,
+              stdout: 'ignore',
+              stderr: 'pipe',
+              // Turbo starts each task in its own process group, so the SIGKILL Playwright
+              // sends this command's group by default kills turbo and orphans the jobs worker.
+              // SIGTERM lets turbo kill its tasks' groups itself, at once (SIGINT waits ten
+              // seconds); past the timeout Playwright falls back to that SIGKILL.
+              gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+          },
 });
