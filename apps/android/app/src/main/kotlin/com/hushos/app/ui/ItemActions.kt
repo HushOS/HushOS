@@ -162,11 +162,11 @@ fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle:
     }
 }
 
-/* One row of a sheet: an icon and a label, red for the destructive one. */
+/* One row of a sheet: an icon and a label, red for the destructive one, blue (`action`) for one that opens something among content that doesn't. */
 @Composable
-fun SheetRow(label: String, icon: ImageVector, danger: Boolean = false, enabled: Boolean = true, leading: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+fun SheetRow(label: String, icon: ImageVector, danger: Boolean = false, enabled: Boolean = true, action: Boolean = false, leading: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val alpine = Alpine.colors
-    val color = when { !enabled -> alpine.inkMuted; danger -> alpine.danger; else -> alpine.ink }
+    val color = when { !enabled -> alpine.inkMuted; danger -> alpine.danger; action -> alpine.primary; else -> alpine.ink }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = AlpineSpace.S6),
         verticalAlignment = Alignment.CenterVertically,

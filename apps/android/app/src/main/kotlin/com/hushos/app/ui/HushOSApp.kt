@@ -247,6 +247,11 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     }
     if (transfersOpen) TransferSheet(model, state.queued + state.transfers, state.unreachable, makeRoom = { transfersOpen = false; makingRoom = true }) { transfersOpen = false }
     if (makingRoom) StorageFullSheet(model, state, (state.queued + state.transfers).filter { it.noRoom }) { makingRoom = false }
+    // Its window must lie above People's when asked from there: after a re-creation (a rotation) it is made a frame
+    // late, so it comes after the People sheet's again instead of beneath it.
+    var settled by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { settled = true }
+    if (settled && model.showingOwnWords) OwnWordsSheet(model, state, model::closeOwnWords)
     BackgroundSheet(active = state.queued.any { !it.done })
     }
 }

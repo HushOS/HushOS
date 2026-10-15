@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,11 +30,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
@@ -48,6 +52,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -67,6 +72,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -83,9 +90,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,11 +116,13 @@ import com.hushos.app.data.Lookup
 import com.hushos.app.data.OldLink
 import com.hushos.app.data.Opened
 import com.hushos.app.data.OwnedShare
+import com.hushos.app.data.PeopleFilter
 import com.hushos.app.data.Reports
 import com.hushos.tokens.AlpineRadius
 import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -632,7 +649,6 @@ private fun qrBitmap(text: String, size: Int): Bitmap {
 @Composable
 fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, dismiss: () -> Unit, added: (ContactPin) -> Unit) {
     val alpine = Alpine.colors
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var found by remember { mutableStateOf<Lookup?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -662,14 +678,14 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
             Text(
                 when {
                     lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
-                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys, and the change is signed by their previous keys. Ask them to read you their twelve words to be sure it was them."
+                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you."
                     notUpgraded -> "$first hasn’t signed in since HushOS upgraded its keys. You can compare words once they have."
-                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Read them together again, on a call or in person; until you do, nothing is shared with $first and what they share with you stays shut."
-                    else -> "Ask $first to read you the twelve words HushOS shows for their account, on a call or in person. If they match these, it’s really them."
+                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with $first and what they share with you stays shut."
+                    else -> "Ask $first to open People you share with in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
             )
-            contact.fingerprint?.let { WordGrid(Fingerprint.words(it, Fingerprint.wordlist(context))) }
+            contact.fingerprint?.let { FingerprintWords(it) }
             if (mismatch) Text("Don’t share with this account. Check the email address with $first, then try again.", style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center)
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center) }
             Button(
@@ -695,17 +711,21 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
     }
 }
 
-/* Twelve words, numbered, in three columns. */
+/*
+ * Twelve words, numbered, in two columns, one at the largest font sizes: an eight-letter word never shares a third of
+ * the width with two others, and a word is never cut short (no line limit; a word wider than its cell wraps).
+ */
 @Composable
 fun WordGrid(words: List<String>) {
     val alpine = Alpine.colors
+    val columns = if (LocalDensity.current.fontScale >= 1.8f) 1 else 2
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-        words.chunked(3).forEachIndexed { row, three ->
-            Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                three.forEachIndexed { column, word ->
-                    Row(Modifier.weight(1f).background(alpine.fill, RoundedCornerShape(10.dp)).padding(horizontal = AlpineSpace.S2, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${row * 3 + column + 1}", style = MaterialTheme.typography.labelSmall, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
-                        Text(word, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1)
+        words.chunked(columns).forEachIndexed { row, cells ->
+            Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                cells.forEachIndexed { column, word ->
+                    Row(Modifier.weight(1f).fillMaxHeight().background(alpine.fill, RoundedCornerShape(10.dp)).padding(horizontal = AlpineSpace.S2, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${row * columns + column + 1}", style = MaterialTheme.typography.labelSmall, color = alpine.inkMuted, modifier = Modifier.padding(end = AlpineSpace.S1))
+                        Text(word, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                     }
                 }
             }
@@ -714,22 +734,82 @@ fun WordGrid(words: List<String>) {
 }
 
 /*
- * People you share with: everyone this account added, a way to check each is
- * really them or remove them (asked first), someone new by email, and the twelve
- * words others read off this account.
+ * A fingerprint as twelve words, or Show as code: the same fingerprint as hex, as the
+ * web offers, for checking against an app that still shows it that way; the words are
+ * drawn from that code, so either matching means the same.
+ */
+@Composable
+fun FingerprintWords(fingerprint: String) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    var code by rememberSaveable { mutableStateOf(false) }
+    val words = remember(fingerprint) { Fingerprint.words(fingerprint, Fingerprint.wordlist(context)) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+        if (code) Text(fingerprint, style = MaterialTheme.typography.bodyLarge, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.fillMaxWidth().background(alpine.fill, RoundedCornerShape(10.dp)).padding(horizontal = AlpineSpace.S3, vertical = AlpineSpace.S3))
+        else WordGrid(words)
+        TextButton(onClick = { code = !code }) { Text(if (code) "Show as words" else "Show as code") }
+    }
+}
+
+/*
+ * Your twelve words: what others check when they add this person, read aloud from here. One sheet for the app (Main
+ * draws it while `DriveViewModel.showingOwnWords`), from a row at the top of People and from Account, so it is a tap
+ * away while someone waits on a call.
+ *
+ * What is guaranteed: each opening (and each re-creation, after a rotation) asks the server which identity it serves
+ * and, if that is not the one this process opened (keys replaced on another device), opens the served one first
+ * (`Vault.currentOwnFingerprint`). The words are always computed from the public keys the core re-derived from the
+ * private halves, never from served keys. Without the server it says why rather than show words it can't confirm. The
+ * sheet closes when the session ends (a 401 anywhere signs out) or another account signs in, and sign-in, sign-out and
+ * a lost session clear the flag, so nothing reopens it.
+ */
+@Composable
+fun OwnWordsSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
+    val alpine = Alpine.colors
+    val signedIn = if (state.gate == Gate.SIGNED_IN) state.user?.id else null
+    val account = remember { signedIn }
+    LaunchedEffect(signedIn) { if (signedIn == null || signedIn != account) dismiss() }
+    var words by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { words = model.ownFingerprint { error = it } ?: run { if (error == null) error = "Couldn’t open them. Try again."; null } }
+    Sheet(onDismissRequest = dismiss) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6),
+            verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            Text("Your twelve words", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+            Text("When someone adds you, they’ll ask you to read these. They’re the same on all your devices.",
+                style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            val shown = words
+            when {
+                shown != null -> FingerprintWords(shown)
+                error != null -> Text(error!!, style = MaterialTheme.typography.bodyMedium, color = alpine.danger)
+                else -> Box(Modifier.fillMaxWidth().heightIn(min = 144.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.semantics { contentDescription = "Opening your words" })
+                }
+            }
+        }
+    }
+}
+
+/*
+ * People you share with: someone new by email and Your twelve words first, then everyone
+ * this account added, by name (Find someone from eight of them), with a way to check
+ * each is really them or remove them (asked first).
  */
 @Composable
 fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     val alpine = Alpine.colors
-    val context = LocalContext.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
-    var own by remember { mutableStateOf<String?>(null) }
     var pins by remember { mutableStateOf<List<ContactPin>?>(null) }
     var email by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var checking by remember { mutableStateOf<Pair<String, ContactPin?>?>(null) }
     var open by remember { mutableStateOf<ContactPin?>(null) }
     var removing by remember { mutableStateOf<ContactPin?>(null) }
-    suspend fun load() { own = model.ownFingerprint(); pins = model.contacts() ?: emptyList() }
+    // By name, as iOS and the web list them (accents count, case doesn't), not newest first.
+    val byName = remember { java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY } }
+    suspend fun load() { pins = (model.contacts() ?: emptyList()).sortedWith(compareBy(byName) { it.name }) }
     LaunchedEffect(Unit) { load() }
     checking?.let { (address, pinned) ->
         CheckThemSheet(model, address, pinned, dismiss = { checking = null }) { pin ->
@@ -750,6 +830,8 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.weight(1f))
                 androidx.compose.material3.FilledTonalButton(enabled = email.contains("@"), onClick = { checking = email.trim() to null }, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Add") }
             }
+            // Right under adding someone, above the list, so it is never buried however many people there are.
+            SheetRow("Your twelve words", Icons.Outlined.Badge, action = true) { model.openOwnWords() }
             val list = pins
             // Someone whose keys changed by a succession their old keys signed: followed, said quietly, with the way to be sure.
             for (pin in list.orEmpty().filter { it.verified && it.keysReplacedAt != null }) {
@@ -760,22 +842,47 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
                     TextButton(onClick = { checking = pin.email to pin }) { Text("Compare words again") }
                 }
             }
+            val shown = list?.let { PeopleFilter.shown(it, query) }
+            if (list != null && PeopleFilter.offered(list.size, query)) {
+                TextField(
+                    value = query, onValueChange = { query = it }, singleLine = true,
+                    placeholder = { Text("Find someone") },
+                    keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                    leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.ink) },
+                    trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, "Clear search") } },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    shape = CircleShape,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = alpine.fill, unfocusedContainerColor = alpine.fill,
+                        focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent,
+                        unfocusedPlaceholderColor = alpine.inkMuted, focusedPlaceholderColor = alpine.inkMuted,
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)
+                        .then(if (alpine.high) Modifier.border(1.dp, alpine.field, CircleShape) else Modifier)
+                        // Its name for TalkBack, which the placeholder isn't once something is typed.
+                        .semantics { contentDescription = "Find someone by name or email" },
+                )
+            }
+            val result = if (list == null || shown == null) null else PeopleFilter.result(shown.size, list.size, query)
+            // What typing found ("2 of 8 shown", "Nobody here matches “…”."), on screen and said by TalkBack as a live
+            // region: settled once typing pauses, so it isn't read out at every letter TalkBack already echoes.
+            var said by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(result) { if (result == null) said = null else { delay(400); said = result } }
+            said?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+                    modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2).semantics { liveRegion = LiveRegionMode.Polite })
+            }
             if (list == null) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S6), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             // The web's and iOS's words for an empty list.
             else if (list.isEmpty()) Column(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S4)) {
                 Text("Nobody here yet", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 Text("Add someone by their email, or add them while you share.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             }
-            for (pin in list.orEmpty()) {
+            for (pin in shown.orEmpty()) {
                 val checked = runCatching { whenText(Instant.parse(pin.pinnedAt).toEpochMilli()) }.getOrNull()
                 // A pin that vouches for nothing (from before both keys were checked) says so: sharing and their shares wait for a new check.
                 val detail = if (pin.verified) listOfNotNull(pin.email, checked?.let { "Checked $it" }).joinToString(" · ") else "${pin.email} · Check their words again"
                 PersonRow(pin.name.ifEmpty { pin.email }, detail, pin.userId) { if (pin.verified) open = pin else checking = pin.email to pin }
-            }
-            own?.let { fingerprint ->
-                Subheader("Your twelve words")
-                Text("Read these to someone checking it’s you.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
-                Box(Modifier.padding(AlpineSpace.S4)) { WordGrid(Fingerprint.words(fingerprint, Fingerprint.wordlist(context))) }
             }
         }
     }

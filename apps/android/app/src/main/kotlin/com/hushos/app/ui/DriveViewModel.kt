@@ -209,6 +209,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private fun filesAppChanged() = context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
 
     private fun signedIn(user: SessionUser) {
+        showingOwnWords = false
         // A session saved before the email was kept learns it now, so the Files app can name the account.
         if (user.email.isNotEmpty()) Shared.session(context)?.takeIf { it.email != user.email && it.userId == user.id }?.let {
             Shared.writeSession(context, it.copy(email = user.email))
@@ -357,6 +358,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun signOut() {
+        showingOwnWords = false
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
@@ -371,6 +373,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun sessionLost() {
+        showingOwnWords = false
         Shared.clearSession(context)
         vault = null
         link = null
@@ -752,6 +755,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     internal var recovery by mutableStateOf<RecoveryFlow?>(null)
         private set
 
+    /*
+     * Your twelve words is open (one sheet for the whole app, from People or Account): kept here so a rotation or a theme
+     * or font-size change keeps it open, never across process death (a new view model), and closed by every sign-in,
+     * sign-out and lost session so it never comes back by itself.
+     */
+    internal var showingOwnWords by mutableStateOf(false)
+        private set
+
+    fun openOwnWords() { showingOwnWords = true }
+    fun closeOwnWords() { showingOwnWords = false }
+
     fun startRecovery() { recovery = RecoveryFlow(RecoveryStep.EMAIL) }
     fun leaveRecovery() { recovery = null }
     fun clearRecoveryError() { recovery = recovery?.takeIf { it.error != null }?.copy(error = null) ?: recovery }
@@ -979,7 +993,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun report(item: Opened, category: String, reason: String, email: String?): Boolean? = io { it.report(item, category, reason, email) }
     suspend fun recoveryPhrase(): String? = io { it.recoveryPhrase() }
     suspend fun contacts(): List<ContactPin>? = io { it.contacts() }
-    suspend fun ownFingerprint(): String? = io { it.ownFingerprint() }
+    /* `failure` hears why the words couldn’t be opened, for the sheet to say in place. */
+    suspend fun ownFingerprint(failure: ((String) -> Unit)? = null): String? = io(failure) { it.currentOwnFingerprint() }
     suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
         .also { result -> if (result.getOrNull()?.followed == true) refreshTrust() }
     /* Pins the contact whose words were just compared; `failure` hears why not (they haven't upgraded, say). */

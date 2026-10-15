@@ -21,7 +21,7 @@ Toolchain on this Mac: SDK at `~/Library/Android/sdk` (platform 37, build-tools 
 
 ## What the app does
 
-The same four tabs as iOS: Home (search, type chips, tags row and manager with presets plus any hex colour), Files (search, tag filters, floating add menu, long-press selection with a contextual bar for copy, cut, move and trash, a paste bar while the clipboard holds items, the replace, keep both or skip prompt for same-name uploads), Shared, Account (name, plan and storage, change password, delete account, trash, sign out). Nested screens pass `contentWindowInsets = WindowInsets(0)` because the outer Scaffold already pays the navigation bar inset.
+The same four tabs as iOS: Home (search, type chips, tags row and manager with presets plus any hex colour), Files (search, tag filters, floating add menu, long-press selection with a contextual bar for copy, cut, move and trash, a paste bar while the clipboard holds items, the replace, keep both or skip prompt for same-name uploads), Shared, Account (name, plan and storage, change password, delete account, People you share with and Your twelve words, trash, sign out). People (`PeopleSheet` in `ui/LinksUi.kt`, from Account and the Shared header) has the add-by-email field, then a Your twelve words row, then the list sorted by name with Find someone from eight contacts; Your twelve words is one `OwnWordsSheet` drawn by `Main` while `DriveViewModel.showingOwnWords`, which checks the served identity first (`Vault.currentOwnFingerprint`). Nested screens pass `contentWindowInsets = WindowInsets(0)` because the outer Scaffold already pays the navigation bar inset.
 
 ## Things learned the hard way
 
