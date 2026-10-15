@@ -14,7 +14,8 @@ export const getThemeServerFn = createServerFn().handler(() => {
 
 export const setThemeServerFn = createServerFn({ method: 'POST' })
     .validator((value: unknown) => {
-        if (!isTheme(value)) throw new Error('Invalid theme preference.');
+        if (!isTheme(value))
+            throw Object.assign(new Error('Invalid theme preference.'), { status: 400 });
         return value;
     })
     .handler(({ data }) => {
@@ -36,7 +37,8 @@ export const getContrastServerFn = createServerFn().handler(() => {
 
 export const setContrastServerFn = createServerFn({ method: 'POST' })
     .validator((value: unknown) => {
-        if (typeof value !== 'boolean') throw new Error('Invalid contrast preference.');
+        if (typeof value !== 'boolean')
+            throw Object.assign(new Error('Invalid contrast preference.'), { status: 400 });
         return value;
     })
     .handler(({ data }) => {
