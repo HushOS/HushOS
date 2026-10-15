@@ -6,6 +6,7 @@ import {
     copySignatureForms,
     granterKeysOf,
     integrityIssues,
+    keysPassedThrough,
     signatureFormFor,
     pinAfterSuccession,
     replacementUnseen,
@@ -167,7 +168,9 @@ describe('a pin after a succession', () => {
             mlDsaPublicKey: OTHER_ML_DSA,
             kemPublicKey: OTHER_KEM,
         };
-        const after = await pinAfterSuccession(before, next, new Date('2026-10-12T10:00:00.000Z'));
+        const after = await pinAfterSuccession(before, next, new Date('2026-10-12T10:00:00.000Z'), [
+            before.signingPublicKey,
+        ]);
         expect(after).toMatchObject({
             encryptionPublicKey: key(3),
             signingPublicKey: key(4),
@@ -215,6 +218,7 @@ describe('a second succession', () => {
                 kemPublicKey: KEM,
             },
             new Date('2026-10-12T10:00:00.000Z'),
+            [key(2)],
         );
         const twice = await pinAfterSuccession(
             once,
@@ -226,6 +230,7 @@ describe('a second succession', () => {
                 kemPublicKey: OTHER_KEM,
             },
             new Date('2026-10-13T10:00:00.000Z'),
+            [key(4)],
         );
         expect(twice.previousSigningKeys).toEqual([key(2), key(4)]);
         expect(await granterKeysOf(twice, { mlDsaPublicKey: ML_DSA })).toEqual({
@@ -369,5 +374,76 @@ describe('what a copy, a rename or a recreated folder is signed with', () => {
             metadata: 'resealed',
             version: 'resealed',
         });
+    });
+});
+
+describe('keys a followed chain retires', () => {
+    test('every signing key the verified chain passed through, and nothing a decoy link names', async () => {
+        const pinned = await pin();
+        const link = (old: { x: string; ed: string; ml: string }, ed: string) => ({
+            oldEncryptionPublicKey: old.x,
+            oldSigningPublicKey: old.ed,
+            oldMlDsaPublicKey: old.ml,
+            newSigningPublicKey: ed,
+        });
+        const chain = [
+            link({ x: key(1), ed: key(2), ml: ML_DSA }, key(4)),
+            link({ x: key(3), ed: key(4), ml: OTHER_ML_DSA }, key(6)),
+        ];
+        expect(await keysPassedThrough(pinned, chain)).toEqual([key(2), key(4)]);
+        // A decoy in front with the pinned classical keys and another ML-DSA key, naming an
+        // attacker's key as the next one's old key: the chain starts where the pin's ML-DSA
+        // digest matches, so neither the decoy's nor the attacker's key is retired.
+        const decoy = link({ x: key(1), ed: key(2), ml: OTHER_ML_DSA }, key(9));
+        const evil = link({ x: key(8), ed: key(9), ml: OTHER_ML_DSA }, key(4));
+        expect(await keysPassedThrough(pinned, [decoy, evil, ...chain])).toEqual([key(2), key(4)]);
+        // No link starts at the pin: nothing passed through.
+        expect(await keysPassedThrough(pinned, [decoy, evil])).toEqual([]);
+        // And the pin after the chain keeps them, oldest first, with no duplicates.
+        const after = await pinAfterSuccession(
+            await pin({ previousSigningKeys: [key(7)] }),
+            {
+                keyVersion: 3,
+                encryptionPublicKey: key(5),
+                signingPublicKey: key(6),
+                mlDsaPublicKey: ML_DSA,
+                kemPublicKey: KEM,
+            },
+            new Date('2026-10-15T00:00:00.000Z'),
+            [key(2), key(4), key(7)],
+        );
+        expect(after.previousSigningKeys).toEqual([key(7), key(2), key(4)]);
+        expect(await signersFromPins({ maya: after })).toEqual({
+            maya: { current: key(6), retired: [key(7), key(2), key(4)] },
+        });
+        // A chain that returns to a key it passed through leaves that key current, never
+        // retired as well: records it signs read as theirs, not as a replaced key's.
+        const back = await pinAfterSuccession(
+            await pin({ previousSigningKeys: [key(6)] }),
+            {
+                keyVersion: 3,
+                encryptionPublicKey: key(5),
+                signingPublicKey: key(6),
+                mlDsaPublicKey: ML_DSA,
+                kemPublicKey: KEM,
+            },
+            new Date('2026-10-15T00:00:00.000Z'),
+            [key(2), key(6)],
+        );
+        expect(back.previousSigningKeys).toEqual([key(2)]);
+        // Whatever the keys passed through, the pinned one is kept: records it signed stay theirs.
+        const unfound = await pinAfterSuccession(
+            await pin(),
+            {
+                keyVersion: 2,
+                encryptionPublicKey: key(3),
+                signingPublicKey: key(4),
+                mlDsaPublicKey: OTHER_ML_DSA,
+                kemPublicKey: KEM,
+            },
+            new Date('2026-10-15T00:00:00.000Z'),
+            [],
+        );
+        expect(unfound.previousSigningKeys).toEqual([key(2)]);
     });
 });

@@ -164,19 +164,55 @@ export async function pinOfServed(
 }
 
 /*
+ * The Ed25519 keys a verified succession chain passed through, oldest first:
+ * the old signing key of every link from where the chain starts. It starts as
+ * the core's verifySuccessionChain does, at the first link whose old X25519,
+ * Ed25519 and ML-DSA keys (by digest) are the pin's, so a decoy link served in
+ * front of the real chain adds nothing. Only call it with a chain that held.
+ */
+export async function keysPassedThrough(
+    pin: Pin,
+    links: {
+        oldEncryptionPublicKey: string;
+        oldSigningPublicKey: string;
+        oldMlDsaPublicKey: string;
+    }[],
+) {
+    for (let index = 0; index < links.length; index++) {
+        const link = links[index]!;
+        if (
+            link.oldEncryptionPublicKey === pin.encryptionPublicKey &&
+            link.oldSigningPublicKey === pin.signingPublicKey &&
+            (await digestOf(link.oldMlDsaPublicKey)) === pin.mlDsaPublicKeyHash
+        )
+            return links.slice(index).map((each) => each.oldSigningPublicKey);
+    }
+    return [];
+}
+
+/*
  * The pin after a succession chain from it to the served keys verified: the
- * served keys as a version 3 pin, and the keys it held before kept beside
- * them. Only call it with a chain that held.
+ * served keys as a version 3 pin, and every signing key it held or the chain
+ * passed through kept beside them (`passed`, from keysPassedThrough), but
+ * never the served one, which is current, not previous. The pinned key is
+ * kept whatever `passed` holds, so a start keysPassedThrough failed to find
+ * cannot drop it. Only call it with a chain that held.
  */
 export async function pinAfterSuccession(
     pin: Pin,
     served: ServedKeys & { mlDsaPublicKey: string; kemPublicKey: string },
     now: Date,
+    passed: string[],
 ): Promise<Pin> {
+    const previous = (pin.previousSigningKeys ?? []).filter(
+        (key) => key !== served.signingPublicKey,
+    );
+    for (const key of [pin.signingPublicKey, ...passed])
+        if (key !== served.signingPublicKey && !previous.includes(key)) previous.push(key);
     return {
         ...pin,
         ...(await pinOfServed(served)),
-        previousSigningKeys: [...(pin.previousSigningKeys ?? []), pin.signingPublicKey],
+        previousSigningKeys: previous,
         keysReplacedAt: now.toISOString(),
         resealShares: true,
     };
