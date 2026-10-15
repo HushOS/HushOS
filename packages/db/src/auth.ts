@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { keyedHash } from './hash-key';
@@ -9,7 +9,7 @@ import {
     storageEntitlements,
     workspaces,
 } from './schema';
-import { successionStatement, verifySignature } from './signatures';
+import { keysStatement, successionStatement, verifyHybrid } from './signatures';
 import {
     accountEnrollments,
     accountIntents,
@@ -783,18 +783,31 @@ export type IdentityWrap = Pick<
     | 'signingPublicKey'
     | 'signingSeedNonce'
     | 'encryptedSigningSeed'
+    | 'version'
     | 'kemPublicKey'
     | 'kemSeedNonce'
     | 'encryptedKemSeed'
+    | 'mlDsaPublicKey'
+    | 'mlDsaSeedNonce'
+    | 'encryptedMlDsaSeed'
+    | 'keysSignature'
 >;
-function samePublicKeys(
-    a: { encryptionPublicKey: Buffer; signingPublicKey: Buffer; kemPublicKey?: Buffer | null },
-    b: { encryptionPublicKey: Buffer; signingPublicKey: Buffer; kemPublicKey?: Buffer | null },
-) {
+type PublicKeys = {
+    encryptionPublicKey: Buffer;
+    signingPublicKey: Buffer;
+    kemPublicKey?: Buffer | null;
+    mlDsaPublicKey?: Buffer | null;
+    keysSignature?: Buffer | null;
+};
+/* The same public identity: every key, and a version 2 identity's keys statement, unchanged. */
+function samePublicKeys(a: PublicKeys, b: PublicKeys) {
+    const same = (x?: Buffer | null, y?: Buffer | null) => (x ? Boolean(y?.equals(x)) : !y);
     return (
         a.encryptionPublicKey.equals(b.encryptionPublicKey) &&
         a.signingPublicKey.equals(b.signingPublicKey) &&
-        (a.kemPublicKey ? Boolean(b.kemPublicKey?.equals(a.kemPublicKey)) : !b.kemPublicKey)
+        same(a.kemPublicKey, b.kemPublicKey) &&
+        same(a.mlDsaPublicKey, b.mlDsaPublicKey) &&
+        same(a.keysSignature, b.keysSignature)
     );
 }
 
@@ -875,18 +888,23 @@ export async function changeAccountSecurity(input: {
             // version stays, or (as clients before succession labelled it) follows the
             // root's when that is higher; it never goes back, which would reuse a version
             // the history or a contact's pin already names.
+            // A version 2 identity keeps its key version exactly: the keys statement binds it.
             const identityVersion = input.identity?.keyVersion;
             if (
                 !input.identity ||
+                (input.identity.version ?? 1) !== current.identity.version ||
                 !(
                     identityVersion === current.identity.keyVersion ||
-                    (identityVersion === input.envelope.keyVersion &&
+                    (current.identity.version === 1 &&
+                        identityVersion === input.envelope.keyVersion &&
                         identityVersion > current.identity.keyVersion)
                 ) ||
                 !samePublicKeys(current.identity, {
                     encryptionPublicKey: input.identity.encryptionPublicKey,
                     signingPublicKey: input.identity.signingPublicKey,
                     kemPublicKey: input.identity.kemPublicKey ?? null,
+                    mlDsaPublicKey: input.identity.mlDsaPublicKey ?? null,
+                    keysSignature: input.identity.keysSignature ?? null,
                 })
             )
                 return false;
@@ -910,6 +928,8 @@ export async function changeAccountSecurity(input: {
                             encryptionPublicKey: next.encryptionPublicKey,
                             signingPublicKey: next.signingPublicKey,
                             kemPublicKey: next.kemPublicKey ?? null,
+                            mlDsaPublicKey: next.mlDsaPublicKey ?? null,
+                            keysSignature: next.keysSignature ?? null,
                         })
                     );
                 })
@@ -984,6 +1004,8 @@ export async function changeAccountSecurity(input: {
                     encryptedSigningSeed: wrap.encryptedSigningSeed,
                     kemSeedNonce: wrap.kemSeedNonce ?? null,
                     encryptedKemSeed: wrap.encryptedKemSeed ?? null,
+                    mlDsaSeedNonce: wrap.mlDsaSeedNonce ?? null,
+                    encryptedMlDsaSeed: wrap.encryptedMlDsaSeed ?? null,
                 })
                 .where(
                     and(
@@ -1036,10 +1058,12 @@ export async function lookupIdentity(normalizedEmail: string) {
             userId: users.id,
             name: users.name,
             email: users.email,
+            identityVersion: accountIdentities.version,
             encryptionPublicKey: accountIdentities.encryptionPublicKey,
             signingPublicKey: accountIdentities.signingPublicKey,
+            mlDsaPublicKey: accountIdentities.mlDsaPublicKey,
             kemPublicKey: accountIdentities.kemPublicKey,
-            kemSignature: accountIdentities.kemSignature,
+            keysSignature: accountIdentities.keysSignature,
             keyVersion: accountIdentities.keyVersion,
         })
         .from(users)
@@ -1050,26 +1074,70 @@ export async function lookupIdentity(normalizedEmail: string) {
 
 export type SuccessionResult =
     | { status: 'ok'; keyVersion: number }
-    | { status: 'session' | 'no-identity' | 'stale' | 'unchanged' | 'bad-signature' };
+    | {
+          status:
+              | 'session'
+              | 'no-identity'
+              | 'not-upgraded'
+              | 'stale'
+              | 'unchanged'
+              | 'bad-signature'
+              | 'history-full';
+      };
+
+/*
+ * The most earlier identities an account keeps. A master-key rotation carries
+ * every one of them re-wrapped in a single request, which is capped to match.
+ */
+export const IDENTITY_HISTORY_LIMIT = 1000;
+
+/* A version 2 identity as it is stored: every column, the lattice halves present. */
+export type IdentityV2 = Omit<typeof accountIdentities.$inferInsert, 'userId'> & {
+    version: 2;
+    keyVersion: number;
+    kemPublicKey: Buffer;
+    mlDsaPublicKey: Buffer;
+    keysSignature: Buffer;
+};
+
+/*
+ * Whether a version 2 identity's keys statement holds for `userId`: both
+ * halves of its hybrid signature, under the keys it names, over its four
+ * public keys and its key version. The server checks it before storing any
+ * identity, so a stored one always verifies; clients check again.
+ */
+export function identityKeysHold(userId: string, identity: IdentityV2) {
+    return verifyHybrid(
+        { signingPublicKey: identity.signingPublicKey, mlDsaPublicKey: identity.mlDsaPublicKey },
+        keysStatement({
+            userId,
+            keyVersion: identity.keyVersion,
+            encryptionPublicKey: identity.encryptionPublicKey,
+            signingPublicKey: identity.signingPublicKey,
+            mlDsaPublicKey: identity.mlDsaPublicKey,
+            kemPublicKey: identity.kemPublicKey,
+        }),
+        identity.keysSignature,
+    );
+}
 
 /*
  * Replaces an account's identity with one minted at the next key version and
- * vouched for by the current signing key (docs/integrity-design.md). Under the
- * account's row lock, so it cannot interleave with a master-key rotation or a
- * second succession: the session must still be current, the key version must
- * be the next one, the statement must verify against the current signing key,
- * and the keys must actually change. The replaced identity moves to the
- * history whole, still sealed, with the succession that replaced it.
+ * vouched for by the current identity's hybrid signature
+ * (docs/identity-pq-design.md 2). Under the account's row lock, so it cannot
+ * interleave with a master-key rotation, an upgrade or a second succession:
+ * the session must still be current, the current identity must be version 2,
+ * the key version must be the next one, the version 2 statement must verify
+ * under both current signing keys, and every key must actually change. The
+ * replaced identity moves to the history whole, still sealed, with the
+ * succession that replaced it.
  */
 export async function succeedIdentity(input: {
     userId: string;
     credentialVersion: number;
     sessionTokenHash: Buffer;
-    /* The new identity, its KEM binding already checked against its own signing key. */
-    identity: Omit<typeof accountIdentities.$inferInsert, 'userId'> & {
-        keyVersion: number;
-        kemPublicKey: Buffer;
-    };
+    /* The new identity, its keys statement already checked. */
+    identity: IdentityV2;
     signature: Buffer;
 }): Promise<SuccessionResult> {
     return db.transaction(async (tx) => {
@@ -1084,10 +1152,17 @@ export async function succeedIdentity(input: {
             .from(accountIdentities)
             .where(eq(accountIdentities.userId, user.id));
         if (!current) return { status: 'no-identity' };
+        if (current.version !== 2 || !current.mlDsaPublicKey) return { status: 'not-upgraded' };
         if (input.identity.keyVersion !== current.keyVersion + 1) return { status: 'stale' };
+        const [earlier] = await tx
+            .select({ count: count() })
+            .from(accountIdentityHistory)
+            .where(eq(accountIdentityHistory.userId, user.id));
+        if ((earlier?.count ?? 0) >= IDENTITY_HISTORY_LIMIT) return { status: 'history-full' };
         if (
             input.identity.encryptionPublicKey.equals(current.encryptionPublicKey) ||
             input.identity.signingPublicKey.equals(current.signingPublicKey) ||
+            input.identity.mlDsaPublicKey.equals(current.mlDsaPublicKey) ||
             (current.kemPublicKey && input.identity.kemPublicKey.equals(current.kemPublicKey))
         )
             return { status: 'unchanged' };
@@ -1097,11 +1172,22 @@ export async function succeedIdentity(input: {
             newKeyVersion: input.identity.keyVersion,
             oldEncryptionPublicKey: current.encryptionPublicKey,
             oldSigningPublicKey: current.signingPublicKey,
+            oldMlDsaPublicKey: current.mlDsaPublicKey,
             newEncryptionPublicKey: input.identity.encryptionPublicKey,
             newSigningPublicKey: input.identity.signingPublicKey,
+            newMlDsaPublicKey: input.identity.mlDsaPublicKey,
             newKemPublicKey: input.identity.kemPublicKey,
         });
-        if (!verifySignature(current.signingPublicKey, statement, input.signature))
+        if (
+            !verifyHybrid(
+                {
+                    signingPublicKey: current.signingPublicKey,
+                    mlDsaPublicKey: current.mlDsaPublicKey,
+                },
+                statement,
+                input.signature,
+            )
+        )
             return { status: 'bad-signature' };
         const { userId: _userId, ...old } = current;
         await tx.insert(accountIdentityHistory).values({
@@ -1111,14 +1197,89 @@ export async function succeedIdentity(input: {
             newEncryptionPublicKey: input.identity.encryptionPublicKey,
             newSigningPublicKey: input.identity.signingPublicKey,
             newKemPublicKey: input.identity.kemPublicKey,
+            newMlDsaPublicKey: input.identity.mlDsaPublicKey,
             successionSignature: input.signature,
         });
         await tx
             .update(accountIdentities)
-            .set({ ...input.identity, createdAt: new Date() })
+            .set({ ...input.identity, kemSignature: null, createdAt: new Date() })
             .where(eq(accountIdentities.userId, user.id));
         return { status: 'ok', keyVersion: input.identity.keyVersion };
     });
+}
+
+export type UpgradeResult =
+    | { status: 'ok' }
+    | { status: 'session' | 'no-identity' | 'mismatch' }
+    /* Another device upgraded first: its identity, to adopt. */
+    | { status: 'stale'; current: typeof accountIdentities.$inferSelect };
+
+/*
+ * The upgrade of a version 1 identity to version 2, in place
+ * (docs/identity-pq-design.md 2): the same X25519, Ed25519 and ML-KEM keys
+ * (an identity without an ML-KEM key may gain one) and the same key version,
+ * plus the ML-DSA key and the keys statement, already checked. No history row
+ * and no succession. Under the account's row lock; a device that lost a race
+ * is handed the identity that won.
+ */
+export async function upgradeIdentity(input: {
+    userId: string;
+    credentialVersion: number;
+    sessionTokenHash: Buffer;
+    identity: IdentityV2;
+}): Promise<UpgradeResult> {
+    return db.transaction(async (tx) => {
+        const [user] = await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, input.userId))
+            .for('update');
+        if (!user || !(await sessionIsCurrent(tx, input))) return { status: 'session' };
+        const [current] = await tx
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, user.id));
+        if (!current) return { status: 'no-identity' };
+        if (current.version === 2) return { status: 'stale', current };
+        // Everything the upgrade keeps must be byte for byte what is stored: the public keys
+        // and the wrapped private keys with their salt and nonces. A client that sent new
+        // wraps of the same public keys could leave the account unable to open its keys.
+        // Only an identity that had no ML-KEM key may gain one here.
+        const same = (a: Buffer | null | undefined, b: Buffer | null | undefined) =>
+            Boolean(a && b && a.equals(b));
+        if (
+            input.identity.keyVersion !== current.keyVersion ||
+            !same(input.identity.encryptionPublicKey, current.encryptionPublicKey) ||
+            !same(input.identity.signingPublicKey, current.signingPublicKey) ||
+            !same(input.identity.wrappingSalt, current.wrappingSalt) ||
+            !same(input.identity.encryptionPrivateKeyNonce, current.encryptionPrivateKeyNonce) ||
+            !same(
+                input.identity.encryptedEncryptionPrivateKey,
+                current.encryptedEncryptionPrivateKey,
+            ) ||
+            !same(input.identity.signingSeedNonce, current.signingSeedNonce) ||
+            !same(input.identity.encryptedSigningSeed, current.encryptedSigningSeed) ||
+            (current.kemPublicKey !== null &&
+                (!same(input.identity.kemPublicKey, current.kemPublicKey) ||
+                    !same(input.identity.kemSeedNonce, current.kemSeedNonce) ||
+                    !same(input.identity.encryptedKemSeed, current.encryptedKemSeed)))
+        )
+            return { status: 'mismatch' };
+        await tx
+            .update(accountIdentities)
+            .set({ ...input.identity, kemSignature: null })
+            .where(eq(accountIdentities.userId, user.id));
+        return { status: 'ok' };
+    });
+}
+
+/* How many earlier identities the account keeps: what a master-key rotation carries. */
+export async function countIdentityHistory(userId: string) {
+    const [row] = await db
+        .select({ count: count() })
+        .from(accountIdentityHistory)
+        .where(eq(accountIdentityHistory.userId, userId));
+    return row?.count ?? 0;
 }
 
 /* The account's own earlier identities, oldest first: what opens shares sealed to old keys. */
@@ -1147,8 +1308,10 @@ export async function successionChain(userId: string, from: number) {
             newKeyVersion: accountIdentityHistory.replacedByKeyVersion,
             oldEncryptionPublicKey: accountIdentityHistory.encryptionPublicKey,
             oldSigningPublicKey: accountIdentityHistory.signingPublicKey,
+            oldMlDsaPublicKey: accountIdentityHistory.mlDsaPublicKey,
             newEncryptionPublicKey: accountIdentityHistory.newEncryptionPublicKey,
             newSigningPublicKey: accountIdentityHistory.newSigningPublicKey,
+            newMlDsaPublicKey: accountIdentityHistory.newMlDsaPublicKey,
             newKemPublicKey: accountIdentityHistory.newKemPublicKey,
             signature: accountIdentityHistory.successionSignature,
         })
@@ -1160,27 +1323,6 @@ export async function successionChain(userId: string, from: number) {
             ),
         )
         .orderBy(asc(accountIdentityHistory.keyVersion));
-}
-
-/*
- * Gives an identity made before hybrid sharing its KEM key, once: the first
- * device to unlock after the change mints it, and a second device that raced
- * is told so and re-reads. The X25519 and signing keys are never touched here.
- */
-export async function addIdentityKem(input: {
-    userId: string;
-    kemPublicKey: Buffer;
-    kemSeedNonce: Buffer;
-    encryptedKemSeed: Buffer;
-    kemSignature: Buffer;
-}) {
-    const { userId, ...kem } = input;
-    const [row] = await db
-        .update(accountIdentities)
-        .set(kem)
-        .where(and(eq(accountIdentities.userId, userId), isNull(accountIdentities.kemPublicKey)))
-        .returning({ userId: accountIdentities.userId });
-    return row !== undefined;
 }
 
 /*

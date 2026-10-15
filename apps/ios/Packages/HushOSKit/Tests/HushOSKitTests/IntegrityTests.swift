@@ -3,23 +3,33 @@ import HushOSCore
 import Testing
 @testable import HushOSKit
 
-/* An identity as the web mints one, opened: what signs, seals and opens below. */
-private func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) throws -> (envelope: IdentityEnvelope, keys: IdentityKeys, root: Data) {
+/* An identity as the web mints one (version 2), opened: what signs, seals and opens below. */
+func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) throws -> (envelope: IdentityEnvelope, keys: IdentityKeys, root: Data) {
     let root = try root ?? randomBytes(length: 32)
     let envelope = try identityCreate(userId: userId, accountKey: root, keyVersion: version)
     return (envelope, try identityOpen(userId: userId, accountKey: root, envelope: envelope), root)
 }
 
-/* A pin made after a words check over these keys. */
-private func pinned(_ userId: String, _ keys: IdentityKeys, name: String = "Maya", keyVersion: UInt64? = 1) throws -> ContactPin {
-    var pin = ContactPin(
-        userId: userId, email: "\(name.lowercased())@example.com", name: name, encryptionPublicKey: keys.encryptionPublicKey,
-        signingPublicKey: keys.signingPublicKey,
-        fingerprint: try identityFingerprint(encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey)),
-        pinnedAt: "2026-10-01T00:00:00Z", kemPublicKeyHash: nil
-    )
-    pin.keyVersion = keyVersion
-    return pin
+/* The keys the server serves for an identity: its four public keys and version. */
+func servedOf(_ envelope: IdentityEnvelope, mlDsa: Bool = true, kem: Bool = true) -> ServedContactKeys {
+    ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
+                      mlDsaPublicKey: mlDsa ? envelope.mlDsa?.publicKey : nil, kemPublicKey: kem ? envelope.kem?.publicKey : nil)
+}
+
+/* A version 3 pin made after a words check over these keys. */
+func pinned(_ userId: String, _ keys: IdentityKeys, name: String = "Maya", keyVersion: UInt64? = 1) throws -> ContactPin {
+    let served = ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+                                   mlDsaPublicKey: keys.mlDsaPublicKey, kemPublicKey: keys.kemPublicKey)
+    return try ContactPin.of(served, userId: userId, email: "\(name.lowercased())@example.com", name: name, pinnedAt: "2026-10-01T00:00:00Z")
+}
+
+/* The same person's pin as a client before the post-quantum release wrote it: version 2, no ML-DSA digest, the version 2 words. */
+func pinnedBeforeTheRelease(_ pin: ContactPin) -> ContactPin {
+    var old = ContactPin(userId: pin.userId, email: pin.email, name: pin.name, encryptionPublicKey: pin.encryptionPublicKey,
+                         signingPublicKey: pin.signingPublicKey, fingerprint: "0f1e 2d3c 4b5a 6978 8796 a5b4 c3d2 e1f0 0f1e 2d3c",
+                         pinnedAt: pin.pinnedAt, kemPublicKeyHash: pin.kemPublicKeyHash)
+    old.keyVersion = pin.keyVersion
+    return old
 }
 
 /*
@@ -78,9 +88,8 @@ struct IntegrityDecisionTests {
     @Test func aPinThatNeedsItsWordsCheckedAgainVouchesForNobodyAndNamesNobody() throws {
         let mayaKeys = try makeIdentity(maya).keys
         let pin = try pinned(maya, mayaKeys)
-        let stale = ContactPin(userId: pin.userId, email: pin.email, name: pin.name, encryptionPublicKey: pin.encryptionPublicKey,
-                               signingPublicKey: pin.signingPublicKey, fingerprint: "0000 0000 0000 0000 0000 0000 0000 0000 0000 0000",
-                               pinnedAt: pin.pinnedAt, kemPublicKeyHash: nil)
+        // A pin from before the post-quantum release: the same keys, but its words never covered ML-DSA.
+        let stale = pinnedBeforeTheRelease(pin)
         let trusted = try TrustedSigners(userId: me, identities: [], pins: [stale])
         #expect(trusted.provenance(of: try file(signedBy: mayaKeys, as: mayaSigner)) == .unknownSigner(signerId: maya))
         #expect(trusted.writer(mayaSigner) == .unchecked)
@@ -248,8 +257,9 @@ struct FailClosedTests {
 }
 
 /*
- * A pinned person who replaced their keys: the pin follows only a chain their pinned keys
- * signed, link by link, to exactly the keys served; anything else is a changed key.
+ * A pinned person who replaced their keys: the pin follows only a version 2 chain their pinned
+ * keys (Ed25519 and ML-DSA both) signed, link by link, to exactly the four keys served;
+ * anything else is a changed key.
  */
 struct SuccessionFollowTests {
     let maya = UUID().uuidString.lowercased()
@@ -257,15 +267,11 @@ struct SuccessionFollowTests {
     func link(from old: IdentityEnvelope, to succession: IdentitySuccession) -> SuccessionLink {
         SuccessionLink(
             oldKeyVersion: old.keyVersion, newKeyVersion: succession.identity.keyVersion,
-            oldEncryptionPublicKey: old.encryptionPublicKey, oldSigningPublicKey: old.signingPublicKey,
+            oldEncryptionPublicKey: old.encryptionPublicKey, oldSigningPublicKey: old.signingPublicKey, oldMlDsaPublicKey: old.mlDsa?.publicKey ?? "",
             newEncryptionPublicKey: succession.identity.encryptionPublicKey, newSigningPublicKey: succession.identity.signingPublicKey,
-            newKemPublicKey: succession.identity.kem?.publicKey ?? "", signature: succession.signature
+            newMlDsaPublicKey: succession.identity.mlDsa?.publicKey ?? "", newKemPublicKey: succession.identity.kem?.publicKey ?? "",
+            signature: succession.signature
         )
-    }
-
-    func served(_ envelope: IdentityEnvelope, kem: Bool = true) -> ServedContactKeys {
-        ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey,
-                          signingPublicKey: envelope.signingPublicKey, kemPublicKey: kem ? envelope.kem?.publicKey : nil)
     }
 
     @Test func aChainThePinnedKeysSignedMovesThePinToTheServedKeys() throws {
@@ -276,21 +282,64 @@ struct SuccessionFollowTests {
         let links = [link(from: first.envelope, to: second), link(from: second.identity, to: third)]
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-        guard case .followed(let next) = pin.follow(served(third.identity), links: links, at: now) else {
+        guard case .followed(let next) = pin.follow(servedOf(third.identity), links: links, at: now) else {
             Issue.record("A valid chain was not followed")
             return
         }
         #expect(next.encryptionPublicKey == third.identity.encryptionPublicKey)
         #expect(next.signingPublicKey == third.identity.signingPublicKey)
         #expect(next.keyVersion == 3)
-        #expect(next.verified, "the fingerprint is the v2 one over the new keys")
+        #expect(next.verified, "a version 3 pin over the new keys")
+        #expect(next.mlDsaPublicKeyHash == keyDigest(publicKey: try base64urlDecode(value: third.identity.mlDsa!.publicKey)))
         #expect(next.kemPublicKeyHash == keyDigest(publicKey: try base64urlDecode(value: third.identity.kem!.publicKey)))
         #expect(next.previousSigningKeys == [first.envelope.signingPublicKey, second.identity.signingPublicKey])
         #expect(next.keysReplacedAt != nil && next.pinnedAt == pin.pinnedAt)
-        // A share's granter carries no KEM key: the chain's last link names it, signed.
-        #expect(pin.follow(served(third.identity, kem: false), links: links, at: now) == .followed(next))
+        // Shares to them still hold the old keys: every client is told to seal them again.
+        #expect(next.resealShares == true)
         // Keys that didn't change are no succession.
-        #expect(pin.follow(served(first.envelope), links: []) == .same)
+        #expect(pin.follow(servedOf(first.envelope), links: []) == .same)
+    }
+
+    @Test func aDecoyLinkInFrontOfTheChainAddsNoKeyToThePreviousSigningKeys() throws {
+        let first = try makeIdentity(maya)
+        let second = try identitySucceed(userId: maya, accountKey: first.root, current: first.envelope)
+        let pin = try pinned(maya, first.keys)
+        let real = link(from: first.envelope, to: second)
+        // The server's own identity, and a link from it that the core never checks.
+        let server = try makeIdentity(maya)
+        let serverNext = try identitySucceed(userId: maya, accountKey: server.root, current: server.envelope)
+        // At the pinned X25519 and Ed25519 keys, but another ML-DSA key: not where the core starts the chain.
+        var decoy = real
+        decoy.oldMlDsaPublicKey = server.envelope.mlDsa!.publicKey
+        let evil = link(from: server.envelope, to: serverNext)
+
+        guard case .followed(let next) = pin.follow(servedOf(second.identity), links: [decoy, evil, real]) else {
+            Issue.record("The real chain behind the decoy was not followed")
+            return
+        }
+        // Only the key the verified chain passed through: never the server's, whose records would read retired-key.
+        #expect(next.previousSigningKeys == [first.envelope.signingPublicKey])
+        #expect(!(next.previousSigningKeys ?? []).contains(server.envelope.signingPublicKey))
+        // The same decoy with nothing behind it is no chain at all.
+        #expect(pin.follow(servedOf(second.identity), links: [decoy, evil]) == .changed)
+    }
+
+    /*
+     * The pin's own signing key is kept as replaced whatever the start rule found: were it ever
+     * to miss where the core started a chain the core verified, the records the pinned key
+     * signed would otherwise turn "someone you haven't checked".
+     */
+    @Test func aFollowedPinAlwaysKeepsItsOwnSigningKey() throws {
+        let first = try makeIdentity(maya)
+        let second = try identitySucceed(userId: maya, accountKey: first.root, current: first.envelope)
+        let pin = try pinned(maya, first.keys)
+        let real = link(from: first.envelope, to: second)
+        // No start found: no link's key is kept, the pinned one still is.
+        #expect(pin.previousKeys(after: [real], from: nil, served: second.identity.signingPublicKey) == [first.envelope.signingPublicKey])
+        // Kept once, oldest first, beside what the pin kept before; never the served key.
+        var older = pin
+        older.previousSigningKeys = ["earlier-key", second.identity.signingPublicKey]
+        #expect(older.previousKeys(after: [real], from: 0, served: second.identity.signingPublicKey) == ["earlier-key", first.envelope.signingPublicKey])
     }
 
     @Test func aChainThatDoesNotHoldIsAChangedKey() throws {
@@ -299,38 +348,45 @@ struct SuccessionFollowTests {
         let pin = try pinned(maya, first.keys)
         let good = link(from: first.envelope, to: second)
 
-        // Signed by anyone but the pinned key: a server minting keys of its own and vouching for them itself.
+        // Signed by anyone but the pinned keys: a server minting keys of its own and vouching for them itself.
         let stranger = try makeIdentity(maya)
         let forged = try identitySucceed(userId: maya, accountKey: stranger.root, current: stranger.envelope)
         var spliced = link(from: first.envelope, to: forged)
-        #expect(pin.follow(served(forged.identity), links: [spliced], at: Date()) == .changed)
+        #expect(pin.follow(servedOf(forged.identity), links: [spliced], at: Date()) == .changed)
         spliced = good
         spliced.signature = forged.signature
-        #expect(pin.follow(served(second.identity), links: [spliced]) == .changed)
+        #expect(pin.follow(servedOf(second.identity), links: [spliced]) == .changed)
+        // A link that starts at the pinned X25519 and Ed25519 keys but another ML-DSA key: not the identity whose words were compared.
+        spliced = good
+        spliced.oldMlDsaPublicKey = stranger.envelope.mlDsa!.publicKey
+        #expect(pin.follow(servedOf(second.identity), links: [spliced]) == .changed)
 
-        // A valid chain that ends somewhere other than the served keys.
-        #expect(pin.follow(served(stranger.envelope), links: [good]) == .changed)
+        // A valid chain that ends somewhere other than the served keys, or at them with another ML-KEM key.
+        #expect(pin.follow(servedOf(stranger.envelope), links: [good]) == .changed)
+        let otherKem = ServedContactKeys(keyVersion: 2, encryptionPublicKey: second.identity.encryptionPublicKey, signingPublicKey: second.identity.signingPublicKey,
+                                         mlDsaPublicKey: second.identity.mlDsa!.publicKey, kemPublicKey: stranger.envelope.kem!.publicKey)
+        #expect(pin.follow(otherKem, links: [good]) == .changed)
+        // New keys served without an ML-DSA key: never a succession, whatever the chain says.
+        #expect(pin.follow(servedOf(second.identity, mlDsa: false), links: [good]) == .changed)
         // No chain at all (a reset, not a succession).
-        #expect(pin.follow(served(second.identity), links: []) == .changed)
+        #expect(pin.follow(servedOf(second.identity), links: []) == .changed)
         // Served at a version no higher than the pin's: nothing to follow.
         var ahead = pin
         ahead.keyVersion = 5
-        #expect(ahead.follow(served(second.identity), links: [good]) == .changed)
-        // A pin whose words were never checked over both keys follows nothing.
-        let unverified = ContactPin(userId: pin.userId, email: pin.email, name: pin.name, encryptionPublicKey: pin.encryptionPublicKey,
-                                    signingPublicKey: pin.signingPublicKey, fingerprint: "", pinnedAt: pin.pinnedAt, kemPublicKeyHash: nil)
-        #expect(unverified.follow(served(second.identity), links: [good]) == .changed)
+        #expect(ahead.follow(servedOf(second.identity), links: [good]) == .changed)
+        // A pin from before the release passes nothing on, even along a chain its keys signed.
+        #expect(pinnedBeforeTheRelease(pin).follow(servedOf(second.identity), links: [good]) == .changed)
         // The chain is someone else's: the statement names the user.
-        let other = ContactPin(userId: UUID().uuidString.lowercased(), email: pin.email, name: pin.name, encryptionPublicKey: pin.encryptionPublicKey,
-                               signingPublicKey: pin.signingPublicKey, fingerprint: pin.fingerprint, pinnedAt: pin.pinnedAt, kemPublicKeyHash: nil)
-        #expect(other.follow(served(second.identity), links: [good]) == .changed)
+        var other = pin
+        other = try ContactPin.of(servedOf(first.envelope), userId: UUID().uuidString.lowercased(), email: pin.email, name: pin.name, pinnedAt: pin.pinnedAt)
+        #expect(other.follow(servedOf(second.identity), links: [good]) == .changed)
     }
 }
 
 /*
- * A suite 3 share opens only under a signature by the granter's current pinned signing key,
- * and with whichever of this account's identities it was sealed to. A key the granter has
- * since replaced opens nothing: the share waits for their re-seal.
+ * A suite 4 share opens only under both halves of a signature by the granter's current pinned
+ * keys, and with whichever of this account's identities it was sealed to. A key the granter
+ * has since replaced opens nothing: the share waits for their re-seal.
  */
 struct SignedShareTests {
     let granter = UUID().uuidString.lowercased()
@@ -345,8 +401,9 @@ struct SignedShareTests {
                       granteeKemPublicKey: try base64urlDecode(value: granteeKeys.kemPublicKey!))
     }
 
-    func pinnedGranter(_ keys: IdentityKeys, replaced: Bool = false) throws -> PinnedGranter {
-        PinnedGranter(signingPublicKey: try base64urlDecode(value: keys.signingPublicKey), replacedKeys: replaced, name: "Alice")
+    func pinnedGranter(_ keys: IdentityKeys, mlDsaOf other: IdentityKeys? = nil, replaced: Bool = false) throws -> PinnedGranter {
+        PinnedGranter(signingPublicKey: try base64urlDecode(value: keys.signingPublicKey),
+                      mlDsaPublicKey: try base64urlDecode(value: (other ?? keys).mlDsaPublicKey!), replacedKeys: replaced, name: "Alice")
     }
 
     @Test func aShareNotSignedByThePinnedGranterDoesNotOpen() throws {
@@ -356,11 +413,15 @@ struct SignedShareTests {
         let nodeKey = try randomBytes(length: 32)
         let ctx = context()
         let envelope = try seal(nodeKey, ctx: ctx, by: alice, to: bob)
-        #expect(envelope.count == 1256)
+        #expect(envelope.count == 4565)
         #expect(try ShareOpener.open(envelope, ctx: ctx, granter: try pinnedGranter(alice), identities: [bob]) == nodeKey)
-        // Sealed by someone holding a key in Alice's name, but not the one Bob checked: refused, nothing decapsulated.
+        // Sealed by someone holding keys in Alice's name, but not the ones Bob checked: refused, nothing decapsulated.
         let forged = try seal(try randomBytes(length: 32), ctx: ctx, by: mallory, to: bob)
         #expect(throws: (any Error).self) { try ShareOpener.open(forged, ctx: ctx, granter: try pinnedGranter(alice), identities: [bob]) }
+        // Alice's Ed25519 key with another ML-DSA key (a server swapping the served one): the ML-DSA half fails.
+        #expect(throws: (any Error).self) { try ShareOpener.open(envelope, ctx: ctx, granter: try pinnedGranter(alice, mlDsaOf: mallory), identities: [bob]) }
+        // Cut down to suite 3's length: opens as nothing.
+        #expect(throws: (any Error).self) { try ShareOpener.open(envelope.prefix(1256), ctx: ctx, granter: try pinnedGranter(alice), identities: [bob]) }
         // A signature lifted onto another node or epoch doesn't hold either.
         var moved = ctx
         moved.keyEpoch = 5
@@ -373,12 +434,12 @@ struct SignedShareTests {
         let nodeKey = try randomBytes(length: 32)
         let ctx = context()
         let envelope = try seal(nodeKey, ctx: ctx, by: alice.keys, to: bob.keys)
-        // Alice replaced her keys and Bob's pin followed: her earlier key no longer opens anything, and Bob is told to ask her.
+        // Alice replaced her keys and Bob's pin followed: her earlier keys no longer open anything, and Bob is told to ask her.
         let aliceNext = try identityOpen(userId: granter, accountKey: alice.root, envelope: try identitySucceed(userId: granter, accountKey: alice.root, current: alice.envelope).identity)
         #expect(throws: GranterTrust.reseal(name: "Alice")) {
             try ShareOpener.open(envelope, ctx: ctx, granter: try pinnedGranter(aliceNext, replaced: true), identities: [bob.keys])
         }
-        // Once she seals it again under her current key, it opens.
+        // Once she seals it again under her current keys, it opens.
         let resealed = try seal(nodeKey, ctx: ctx, by: aliceNext, to: bob.keys)
         #expect(try ShareOpener.open(resealed, ctx: ctx, granter: try pinnedGranter(aliceNext, replaced: true), identities: [bob.keys]) == nodeKey)
     }

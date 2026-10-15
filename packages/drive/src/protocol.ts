@@ -39,15 +39,16 @@ export const MAX_PART_URLS_PER_REQUEST = 64;
 export const MAX_FOLDER_BATCH = 64;
 
 /*
- * A share envelope is suite 3 (an ephemeral X25519 key, ML-KEM-768 and the
- * granter's signature), 1256 bytes, and nothing else is written or served.
- * Suites 1 (72 bytes) and 2 (1160) no longer open on any client; their
- * lengths are kept only so the server can tell an outdated client to update
- * rather than call its envelope malformed.
+ * A share envelope is suite 4 (an ephemeral X25519 key, ML-KEM-768 and the
+ * granter's hybrid signature, docs/identity-pq-design.md), 4565 bytes, and
+ * nothing else is written or served. Suites 1 (72 bytes), 2 (1160) and 3
+ * (1256) no longer open on any client; their lengths are kept only so the
+ * server can tell an outdated client to update rather than call its envelope
+ * malformed.
  */
-export const SHARE_SUITE = 3;
-export const SHARE_ENVELOPE_BYTES = 1256;
-export const RETIRED_SHARE_ENVELOPE_BYTES: readonly number[] = [72, 1160];
+export const SHARE_SUITE = 4;
+export const SHARE_ENVELOPE_BYTES = 4565;
+export const RETIRED_SHARE_ENVELOPE_BYTES: readonly number[] = [72, 1160, 1256];
 export const THUMBNAIL_BATCH = 100;
 
 /* The name a client shows for the root; never stored, the root's metadata names it. */

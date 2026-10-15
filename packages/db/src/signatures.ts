@@ -1,4 +1,5 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 
 /*
  * The statements writers sign, as docs/integrity-design.md fixes them: a UTF-8
@@ -11,6 +12,15 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
  */
 
 export const SIGNATURE_BYTES = 64;
+/*
+ * A person's hybrid signature (docs/identity-pq-design.md): Ed25519 then
+ * ML-DSA-65 over the same statement, under the identity context; valid only if
+ * both halves verify. It signs the keys statement and successions. File and
+ * folder signatures stay Ed25519.
+ */
+export const ML_DSA_PUBLIC_KEY_BYTES = 1952;
+export const HYBRID_SIGNATURE_BYTES = 64 + 3309;
+const IDENTITY_CONTEXT = new TextEncoder().encode('hushos/identity/v1');
 
 /*
  * Which statement a signature makes. `ordinary` vouches for who wrote the
@@ -78,30 +88,87 @@ export function versionStatement(input: VersionStatementInput, form: StatementFo
     ]);
 }
 
-/* Keys are Base64url here, as the statement names them; the KEM key only by its digest. */
+/*
+ * Version 2, the only one accepted: keys are Base64url here, as the statement
+ * names them; the KEM key only by its digest. Signed with the old identity's
+ * hybrid signature.
+ */
 export function successionStatement(input: {
     userId: string;
     oldKeyVersion: number;
     newKeyVersion: number;
     oldEncryptionPublicKey: Uint8Array;
     oldSigningPublicKey: Uint8Array;
+    oldMlDsaPublicKey: Uint8Array;
     newEncryptionPublicKey: Uint8Array;
     newSigningPublicKey: Uint8Array;
+    newMlDsaPublicKey: Uint8Array;
     newKemPublicKey: Uint8Array;
 }) {
     const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
     return statement([
         'hushos/identity/succession',
-        1,
+        2,
         input.userId.toLowerCase(),
         input.oldKeyVersion,
         input.newKeyVersion,
         b64(input.oldEncryptionPublicKey),
         b64(input.oldSigningPublicKey),
+        b64(input.oldMlDsaPublicKey),
         b64(input.newEncryptionPublicKey),
         b64(input.newSigningPublicKey),
+        b64(input.newMlDsaPublicKey),
         digest(input.newKemPublicKey),
     ]);
+}
+
+/* What binds a version 2 identity's four public keys to the account, signed with both signing keys. */
+export function keysStatement(input: {
+    userId: string;
+    keyVersion: number;
+    encryptionPublicKey: Uint8Array;
+    signingPublicKey: Uint8Array;
+    mlDsaPublicKey: Uint8Array;
+    kemPublicKey: Uint8Array;
+}) {
+    const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
+    return statement([
+        'hushos/identity/keys',
+        1,
+        input.userId.toLowerCase(),
+        input.keyVersion,
+        b64(input.encryptionPublicKey),
+        b64(input.signingPublicKey),
+        b64(input.mlDsaPublicKey),
+        digest(input.kemPublicKey),
+    ]);
+}
+
+/*
+ * Whether `signature` is both halves of a hybrid signature by `keys` over
+ * `message`: Ed25519 under the signing key, then ML-DSA-65 under the
+ * identity context. The caller knows from context that the statement is a
+ * hybrid one; any other length is false, never a classical fallback.
+ */
+export function verifyHybrid(
+    keys: { signingPublicKey: Uint8Array; mlDsaPublicKey: Uint8Array },
+    message: Uint8Array,
+    signature: Uint8Array,
+) {
+    if (
+        signature.length !== HYBRID_SIGNATURE_BYTES ||
+        keys.mlDsaPublicKey.length !== ML_DSA_PUBLIC_KEY_BYTES
+    )
+        return false;
+    if (!verifySignature(keys.signingPublicKey, message, signature.subarray(0, SIGNATURE_BYTES)))
+        return false;
+    try {
+        return ml_dsa65.verify(signature.subarray(SIGNATURE_BYTES), message, keys.mlDsaPublicKey, {
+            context: IDENTITY_CONTEXT,
+        });
+    } catch {
+        return false;
+    }
 }
 
 /* Ed25519 over `message` by the raw 32-byte `publicKey`; false for anything malformed. */

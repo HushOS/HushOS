@@ -5,7 +5,6 @@ import com.hushos.core.Content
 import com.hushos.core.LinkContext
 import com.hushos.core.MetadataContext
 import com.hushos.core.NodeKeyContext
-import com.hushos.core.OperatorKem
 import com.hushos.core.OperatorKeys
 import com.hushos.core.ReportContext
 import com.hushos.core.VersionContext
@@ -74,8 +73,15 @@ data class OpenedLink(
     val kdfVersion: Int? = null,
 )
 
-/* An operator as `GET /api/drive/reports/operators` lists them. */
-data class ReportOperator(val userId: String, val encryptionPublicKey: String, val signingPublicKey: String, val kem: OperatorKem?)
+/*
+ * An operator as `GET /api/drive/reports/operators` lists them: their served identity. The core seals to a version 2
+ * operator's ML-KEM key once its keys statement holds, to a version 1 operator's served one as served (nobody pins
+ * operator keys), and refuses an operator with no ML-KEM key.
+ */
+data class ReportOperator(val userId: String, val identity: ServedIdentity) {
+    fun keys() = OperatorKeys(userId, identity.keyVersion ?: 1uL, identity.encryptionPublicKey, identity.signingPublicKey,
+        identity.mlDsaPublicKey, identity.kemPublicKey, identity.keysSignature)
+}
 
 object Reports {
     /* What can be reported, in the words the web uses. */
@@ -102,7 +108,7 @@ object Reports {
         val keys = JSONArray()
         for (operator in operators) {
             val ctx = ReportContext(item.node.workspaceId, item.id, item.node.keyEpoch, reportId, operator.userId)
-            val sealed = reportSealKey(ctx, nodeKey, OperatorKeys(operator.userId, operator.encryptionPublicKey, operator.signingPublicKey, operator.kem))
+            val sealed = reportSealKey(ctx, nodeKey, operator.keys())
             keys.put(JSONObject().put("operatorUserId", operator.userId).put("keyEnvelope", base64urlEncode(sealed)))
         }
         val trimmed = email?.trim().orEmpty()
@@ -193,8 +199,7 @@ class PublicApi(val origin: String, private val transport: PublicTransport = Htt
     }
 
     fun operators(): List<ReportOperator> = get("/reports/operators").getJSONArray("operators").objects().map {
-        ReportOperator(it.getString("userId"), it.getString("encryptionPublicKey"), it.getString("signingPublicKey"),
-            it.optJSONObject("kem")?.let { kem -> OperatorKem(kem.getString("publicKey"), kem.getString("signature")) })
+        ReportOperator(it.getString("userId"), ServedIdentity.from(it))
     }
 
     fun range(url: String, range: ByteRange): ByteArray {

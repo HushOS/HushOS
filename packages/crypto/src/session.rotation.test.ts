@@ -257,7 +257,7 @@ describe('rotation', () => {
         expect(decode(rotatedB.versions[0]!.contentKeyEnvelope)).toHaveLength(72);
         expect(rotatedB.shares[0]!.shareEnvelope).not.toBe(shareEnvelope);
         // Re-sealed in suite 3, signed by the owner running the rotation.
-        expect(decode(rotatedB.shares[0]!.shareEnvelope)).toHaveLength(1256);
+        expect(decode(rotatedB.shares[0]!.shareEnvelope)).toHaveLength(4565);
         expect(rotatedB.links[0]!.unsealable).toBeUndefined();
 
         // C, wrapped under B's old key, still opens here: the worker kept B's previous key.
@@ -386,6 +386,7 @@ describe('rotation', () => {
             keyEpoch: 9,
             granterUserId: USER,
             granterSigningPublicKey: identity.signingPublicKey,
+            granterMlDsaPublicKey: identity.mlDsa!.publicKey,
             granteeUserId: GUEST,
             shareEnvelope: rotatedB.shares[0]!.shareEnvelope,
             prevShareEnvelope: shareEnvelope,

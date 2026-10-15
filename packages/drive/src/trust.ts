@@ -1,6 +1,6 @@
 import type { DriveSigners } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
-import { fingerprint, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
+import { fingerprintOfKeys, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
 import { pinVerified } from '@hushos/crypto/pins';
 import type { Integrity, SignatureForm } from '@hushos/crypto/signatures';
 import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
@@ -91,76 +91,144 @@ export async function signersFromPins(contacts: Record<string, Pin>): Promise<Dr
 }
 
 /*
- * What a pin says about the keys the server serves for that person now:
- * - same: the pinned keys, KEM key included once one is pinned;
- * - succession: other keys at a higher key version, so a signed chain from
- *   the pinned ones may explain it (only from a verified pin: an unchecked
- *   pin cannot pass its trust on);
- * - changed: anything else, which only a fresh words check can accept.
+ * What a pin says about the keys the server serves for that person now
+ * (docs/identity-pq-design.md 2):
+ * - same: a version 3 pin, and the served X25519 and Ed25519 keys are the
+ *   pinned ones and the served ML-DSA and ML-KEM keys match its digests;
+ * - recheck: a pin from before the release (no ML-DSA digest) over the same
+ *   X25519 and Ed25519 keys: the person upgraded, and only comparing words
+ *   again trusts them ("Check words again"); until then, nothing is trusted;
+ * - succession: other keys at a higher key version, so a signed chain from a
+ *   version 3 pin may explain it;
+ * - changed: anything else, including a served identity with no ML-DSA key, or
+ *   one whose ML-DSA or ML-KEM key differs, beside the pinned classical keys.
  */
-export type PinComparison = 'same' | 'succession' | 'changed';
-/*
- * Keys as the server serves them. `kem` is undefined where the server does not
- * serve it (a share's granter), and then only the chain can vouch for one.
- */
+export type PinComparison = 'same' | 'recheck' | 'succession' | 'changed';
 export type ServedKeys = Pick<
     ServedIdentity,
-    'keyVersion' | 'encryptionPublicKey' | 'signingPublicKey'
-> & { kem?: ServedIdentity['kem'] };
+    'keyVersion' | 'encryptionPublicKey' | 'signingPublicKey' | 'mlDsaPublicKey' | 'kemPublicKey'
+>;
 export async function comparePin(pin: Pin, served: ServedKeys): Promise<PinComparison> {
     const sameKeys =
         pin.encryptionPublicKey === served.encryptionPublicKey &&
         pin.signingPublicKey === served.signingPublicKey;
+    const verified = await pinVerified(pin);
     if (sameKeys) {
-        if (!pin.kemPublicKeyHash || served.kem === undefined) return 'same';
-        if (!served.kem) return 'changed';
-        return (await keyDigest(publicKeyBytes(served.kem.publicKey))) === pin.kemPublicKeyHash
+        if (!verified) return 'recheck';
+        if (!served.mlDsaPublicKey || !served.kemPublicKey) return 'changed';
+        const [mlDsa, kem] = await Promise.all([
+            digestOf(served.mlDsaPublicKey),
+            digestOf(served.kemPublicKey),
+        ]);
+        return mlDsa === pin.mlDsaPublicKeyHash && kem === pin.kemPublicKeyHash
             ? 'same'
             : 'changed';
     }
-    // A succession always mints a KEM key, so a served identity without one is no successor.
-    if (served.kem === null) return 'changed';
-    // A pin made before successions records no version: the chain is then looked for from 1.
-    if (served.keyVersion > (pin.keyVersion ?? 1) && (await pinVerified(pin))) return 'succession';
+    // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
+    if (!served.mlDsaPublicKey || !served.kemPublicKey) return 'changed';
+    // A pin with no version: the chain is then looked for from 1.
+    if (served.keyVersion > (pin.keyVersion ?? 1) && verified) return 'succession';
     return 'changed';
+}
+
+/* SHA-256 (hex) of a base64url public key, or null when it does not decode. */
+async function digestOf(publicKey: string) {
+    try {
+        return await keyDigest(publicKeyBytes(publicKey));
+    } catch {
+        return null;
+    }
+}
+
+/*
+ * A version 3 pin of the served keys, as comparing words writes it: the
+ * X25519 and Ed25519 keys, the digests of the ML-DSA and ML-KEM keys, and the
+ * version 3 fingerprint over all four (docs/identity-pq-design.md 2).
+ */
+export async function pinOfServed(
+    served: ServedKeys & { mlDsaPublicKey: string; kemPublicKey: string },
+) {
+    return {
+        encryptionPublicKey: served.encryptionPublicKey,
+        signingPublicKey: served.signingPublicKey,
+        mlDsaPublicKeyHash: await keyDigest(publicKeyBytes(served.mlDsaPublicKey)),
+        kemPublicKeyHash: await keyDigest(publicKeyBytes(served.kemPublicKey)),
+        fingerprint: await fingerprintOfKeys(
+            publicKeyBytes(served.encryptionPublicKey),
+            publicKeyBytes(served.signingPublicKey),
+            publicKeyBytes(served.mlDsaPublicKey),
+            publicKeyBytes(served.kemPublicKey),
+        ),
+        keyVersion: served.keyVersion,
+    };
+}
+
+/*
+ * The Ed25519 keys a verified succession chain passed through, oldest first:
+ * the old signing key of every link from where the chain starts. It starts as
+ * the core's verifySuccessionChain does, at the first link whose old X25519,
+ * Ed25519 and ML-DSA keys (by digest) are the pin's, so a decoy link served in
+ * front of the real chain adds nothing. Only call it with a chain that held.
+ */
+export async function keysPassedThrough(
+    pin: Pin,
+    links: {
+        oldEncryptionPublicKey: string;
+        oldSigningPublicKey: string;
+        oldMlDsaPublicKey: string;
+    }[],
+) {
+    for (let index = 0; index < links.length; index++) {
+        const link = links[index]!;
+        if (
+            link.oldEncryptionPublicKey === pin.encryptionPublicKey &&
+            link.oldSigningPublicKey === pin.signingPublicKey &&
+            (await digestOf(link.oldMlDsaPublicKey)) === pin.mlDsaPublicKeyHash
+        )
+            return links.slice(index).map((each) => each.oldSigningPublicKey);
+    }
+    return [];
 }
 
 /*
  * The pin after a succession chain from it to the served keys verified: the
- * served keys, their fingerprint and KEM digest, the key version, and the
- * keys it held before kept beside them. Only call it with a chain that held.
+ * served keys as a version 3 pin, and every signing key it held or the chain
+ * passed through kept beside them (`passed`, from keysPassedThrough), but
+ * never the served one, which is current, not previous. The pinned key is
+ * kept whatever `passed` holds, so a start keysPassedThrough failed to find
+ * cannot drop it. Only call it with a chain that held.
  */
 export async function pinAfterSuccession(
     pin: Pin,
-    served: Pick<ServedIdentity, 'keyVersion' | 'encryptionPublicKey' | 'signingPublicKey'>,
-    /* The new KEM key: as served, or as the chain's last link names it (its digest is signed). */
-    kemPublicKey: string,
+    served: ServedKeys & { mlDsaPublicKey: string; kemPublicKey: string },
     now: Date,
+    passed: string[],
 ): Promise<Pin> {
+    const previous = (pin.previousSigningKeys ?? []).filter(
+        (key) => key !== served.signingPublicKey,
+    );
+    for (const key of [pin.signingPublicKey, ...passed])
+        if (key !== served.signingPublicKey && !previous.includes(key)) previous.push(key);
     return {
         ...pin,
-        encryptionPublicKey: served.encryptionPublicKey,
-        signingPublicKey: served.signingPublicKey,
-        fingerprint: await fingerprint(
-            publicKeyBytes(served.encryptionPublicKey),
-            publicKeyBytes(served.signingPublicKey),
-        ),
-        kemPublicKeyHash: await keyDigest(publicKeyBytes(kemPublicKey)),
-        keyVersion: served.keyVersion,
-        previousSigningKeys: [...(pin.previousSigningKeys ?? []), pin.signingPublicKey],
+        ...(await pinOfServed(served)),
+        previousSigningKeys: previous,
         keysReplacedAt: now.toISOString(),
         resealShares: true,
     };
 }
 
 /*
- * The key a granter's share must be signed with: the pin's current signing
- * key and nothing else. Keys the pin followed a succession from were replaced
- * because they may be exposed, so a share signed with one waits for the
- * granter to seal it again ("Ask them to share it again").
+ * The keys a granter's share must be signed with: the pin's current Ed25519
+ * key, and the served ML-DSA key only if its digest is the pin's. Keys the pin
+ * followed a succession from were replaced because they may be exposed, so a
+ * share signed with one waits for the granter to seal it again ("Ask them to
+ * share it again"). Null when the served ML-DSA key is not the pinned one.
  */
-export function granterKeysOf(pin: Pin) {
-    return { signingPublicKey: pin.signingPublicKey };
+export async function granterKeysOf(pin: Pin, served: Pick<ServedIdentity, 'mlDsaPublicKey'>) {
+    if (!pin.mlDsaPublicKeyHash || !served.mlDsaPublicKey) return null;
+    if ((await digestOf(served.mlDsaPublicKey)) !== pin.mlDsaPublicKeyHash) return null;
+    return { signingPublicKey: pin.signingPublicKey, mlDsaPublicKey: served.mlDsaPublicKey };
 }
 
 /* An item's checks: its metadata, and its current version when it has one; null when not checked. */

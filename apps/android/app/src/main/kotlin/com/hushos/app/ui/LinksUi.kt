@@ -654,37 +654,31 @@ fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, di
             }
             val contact = lookup.contact
             val first = firstName(contact.name, contact.email)
-            val unsigned = contact.kemPublicKey != null && !contact.kemSigned
+            // Words can only be compared over an upgraded identity whose keys statement holds.
+            val notUpgraded = !lookup.upgraded
             PersonAvatar(contact.name.ifEmpty { contact.email }, contact.userId, 72.dp)
             Text("Check it’s $first", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
             Text(contact.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Text(
                 when {
                     lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
-                    lookup.recheck -> "You added $first before HushOS checked both of their keys. Ask them to read you the twelve words HushOS shows for their account. If they match these, it’s really them."
-                    lookup.followed || lookup.pinned?.keysReplacedAt != null -> "$first replaced their sharing keys, and the change is signed by their previous keys. Ask them to read you their twelve words to be sure it was them."
+                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys, and the change is signed by their previous keys. Ask them to read you their twelve words to be sure it was them."
+                    notUpgraded -> "$first hasn’t signed in since HushOS upgraded its keys. You can compare words once they have."
+                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Read them together again, on a call or in person; until you do, nothing is shared with $first and what they share with you stays shut."
                     else -> "Ask $first to read you the twelve words HushOS shows for their account, on a call or in person. If they match these, it’s really them."
                 },
                 style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
             )
-            WordGrid(Fingerprint.words(contact.fingerprint, Fingerprint.wordlist(context)))
-            Text(
-                when {
-                    unsigned -> "$first’s newest key isn’t signed by their account. Don’t add them; ask them to sign in again first."
-                    contact.kemPublicKey != null -> "Their newest key is signed by their account."
-                    else -> "They get their newest key the next time they sign in."
-                },
-                style = MaterialTheme.typography.bodySmall, color = if (unsigned) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
-            )
+            contact.fingerprint?.let { WordGrid(Fingerprint.words(it, Fingerprint.wordlist(context))) }
             if (mismatch) Text("Don’t share with this account. Check the email address with $first, then try again.", style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center)
             error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center) }
             Button(
-                enabled = !adding && !unsigned && !mismatch,
+                enabled = !adding && !notUpgraded && !mismatch,
                 onClick = {
                     adding = true; error = null
                     scope.launch {
-                        if (model.pin(contact)) model.contacts()?.firstOrNull { it.userId == contact.userId }?.let(added) ?: run { error = "They weren’t saved. Try again." }
-                        else error = "They weren’t saved. Try again."
+                        if (model.pin(contact) { error = it }) model.contacts()?.firstOrNull { it.userId == contact.userId }?.let(added) ?: run { error = "They weren’t saved. Try again." }
+                        else if (error == null) error = "They weren’t saved. Try again."
                         adding = false
                     }
                 },

@@ -64,17 +64,33 @@ class SettingsMarkTest {
 
     @Test
     fun anOwnIdentityServedAtALowerKeyVersionThanOpenedBeforeIsRefused() {
-        mark().checkIdentity("user-1", 1uL)
-        mark().recordIdentity("user-1", 3uL)
-        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 2uL) }
+        mark().checkIdentity("user-1", 1uL, 1u)
+        mark().recordIdentity("user-1", 3uL, 2u)
+        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 2uL, 2u) }
         // The same or a later identity opens; the mark only rises, and outlives a new instance (a sign-in again).
-        mark().checkIdentity("USER-1", 3uL)
-        mark().recordIdentity("user-1", 4uL)
-        mark().recordIdentity("user-1", 2uL)
-        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 3uL) }
+        mark().checkIdentity("USER-1", 3uL, 2u)
+        mark().recordIdentity("user-1", 4uL, 2u)
+        mark().recordIdentity("user-1", 2uL, 2u)
+        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 3uL, 2u) }
         // Another account's identity has its own mark, and the settings mark is a separate count.
-        mark().checkIdentity("user-2", 1uL)
+        mark().checkIdentity("user-2", 1uL, 1u)
         mark().checkSettings("user-1", 0uL, present = false)
+    }
+
+    @Test
+    fun theVersionOneFormOfAnIdentityThisDeviceSawUpgradedIsARollback() {
+        // The upgrade keeps the key version: a mark of the key version alone would let the old form through, and this
+        // device would mint a second ML-DSA key for it (docs/identity-pq-design.md 2).
+        mark().checkIdentity("user-1", 3uL, 1u)
+        mark().recordIdentity("user-1", 3uL, 2u)
+        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 3uL, 1u) }
+        mark().checkIdentity("user-1", 3uL, 2u)
+        // A later key version only exists as version 2 (a succession needs it), and is never refused for the version mark.
+        mark().checkIdentity("user-1", 4uL, 2u)
+        // Nor can a version 1 form follow at a higher key version: it is refused there too.
+        assertThrows(IdentityRolledBack::class.java) { mark().checkIdentity("user-1", 4uL, 1u) }
+        // Another account that has not upgraded yet still opens its version 1 identity.
+        mark().checkIdentity("user-2", 3uL, 1u)
     }
 
     @Test

@@ -11,10 +11,11 @@ import { folder, member, root, share, type Account } from '../test/fixtures';
 import * as server from './server';
 
 /*
- * Share envelopes at the domain: suite 3 (1256 bytes) is the only one taken
- * or served. An envelope of a retired suite is an outdated client, told to
- * update; any other length is no envelope at all. A suite 1 or 2 envelope a
- * rotation left behind as the previous one is never handed to the grantee.
+ * Share envelopes at the domain: suite 4 (4565 bytes) is the only one taken
+ * or served. An envelope of a retired suite (1, 2, or 3 with Ed25519 alone) is
+ * an outdated client, told to update; any other length is no envelope at all.
+ * An older envelope a rotation left behind as the previous one is never handed
+ * to the grantee.
  */
 
 const b64 = (bytes: Buffer) => bytes.toString('base64url');
@@ -51,18 +52,18 @@ describe('creating and re-sealing', () => {
         });
 
     test('a retired suite is told to update, any other length is invalid, and nothing is stored', async () => {
-        for (const length of [72, 1160])
+        for (const length of [72, 1160, 1256])
             expect(await refusal(shareWith(length))).toEqual({ status: 409, code: 'unsupported' });
-        for (const length of [100, 1255, 1257])
+        for (const length of [100, 4564, 4566])
             expect(await refusal(shareWith(length))).toEqual({ status: 400, code: 'invalid' });
         expect(await server.listNodeShares(owner.userId, owner.workspaceId, project.id)).toEqual({
             shares: [],
         });
-        const made = await shareWith(1256);
-        expect(made.share.suite).toBe(3);
+        const made = await shareWith(4565);
+        expect(made.share.suite).toBe(4);
     });
 
-    test('a re-seal takes suite 3 only and leaves the stored envelope alone otherwise', async () => {
+    test('a re-seal takes suite 4 only and leaves the stored envelope alone otherwise', async () => {
         const shareId = await share(owner, project, guest, 'viewer');
         const before = (await server.listSharedWithMe(guest.userId)).shares[0]!.shareEnvelope;
         const reseal = (length: number) =>
@@ -71,9 +72,10 @@ describe('creating and re-sealing', () => {
                 shareEnvelope: b64(randomBytes(length)),
             });
         expect(await refusal(reseal(1160))).toEqual({ status: 409, code: 'unsupported' });
+        expect(await refusal(reseal(1256))).toEqual({ status: 409, code: 'unsupported' });
         expect(await refusal(reseal(1000))).toEqual({ status: 400, code: 'invalid' });
         expect((await server.listSharedWithMe(guest.userId)).shares[0]!.shareEnvelope).toBe(before);
-        const fresh = randomBytes(1256);
+        const fresh = randomBytes(4565);
         await server.resealShare(owner.userId, owner.workspaceId, shareId, {
             keyEpoch: project.keyEpoch,
             shareEnvelope: b64(fresh),
@@ -85,7 +87,7 @@ describe('creating and re-sealing', () => {
 });
 
 describe('the previous envelope', () => {
-    test('is served while a rotation runs only when it is suite 3', async () => {
+    test('is served while a rotation runs only when it is suite 4', async () => {
         const shareId = await share(owner, project, guest, 'viewer');
         const previous = async (envelope: Buffer) => {
             await db.$client.query(
@@ -95,12 +97,13 @@ describe('the previous envelope', () => {
             const [row] = (await server.listSharedWithMe(guest.userId)).shares;
             return { envelope: row!.prevShareEnvelope, epoch: row!.prevKeyEpoch };
         };
-        // A suite 1 or 2 row re-sealed by a rotation keeps its old envelope as the previous one.
+        // An older row re-sealed by a rotation keeps its old envelope as the previous one.
         expect(await previous(randomBytes(72))).toEqual({ envelope: null, epoch: null });
         expect(await previous(randomBytes(1160))).toEqual({ envelope: null, epoch: null });
-        const suite3 = randomBytes(1256);
-        expect(await previous(suite3)).toEqual({
-            envelope: b64(suite3),
+        expect(await previous(randomBytes(1256))).toEqual({ envelope: null, epoch: null });
+        const suite4 = randomBytes(4565);
+        expect(await previous(suite4)).toEqual({
+            envelope: b64(suite4),
             epoch: project.keyEpoch - 1,
         });
     });

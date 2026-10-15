@@ -13,7 +13,7 @@ public struct ShareMount: Sendable, Identifiable {
 /* Why a received share stays shut until the person acts in People you share with, or the granter does. */
 public enum GranterTrust: Error, LocalizedError, Sendable, Equatable {
     case unverified(name: String), changed(name: String)
-    /* Pinned, but not with a current fingerprint over both keys: as good as not checked. */
+    /* Pinned before the post-quantum release (or edited): as good as not checked until words are compared again. */
     case recheck(name: String)
     /*
      * Signed with keys the granter has since replaced (the pin followed their succession): an
@@ -37,17 +37,19 @@ public enum GranterTrust: Error, LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .unverified(let name): return "Add \(name) in People you share with and check their words to open what they shared."
-        case .recheck(let name): return "Check \(name)’s words again in People you share with to open what they shared."
+        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in People you share with. Shares from them open once you’ve both compared words."
         case .changed(let name): return "\(name)’s key has changed since you added them. Check again in People you share with before opening what they shared."
         case .reseal(let name): return "Ask \(name) to share it again."
         }
     }
 }
 
-/* The granter's keys a received share is opened with: from the pin, never the server. */
+/* The granter's keys a received share is opened with: vouched for by the pin, never by the server alone. */
 public struct PinnedGranter: Sendable, Equatable {
     /* Ed25519, the pin's current key: a share must be signed by it. Keys the granter replaced open nothing. */
     public let signingPublicKey: Data
+    /* ML-DSA-65, as served, and only because its digest is the pin's: the other half of the share's signature. */
+    public let mlDsaPublicKey: Data
     /* The pin followed a succession: a share that fails under the current key likely awaits the granter's re-seal. */
     public let replacedKeys: Bool
     public let name: String
@@ -55,32 +57,44 @@ public struct PinnedGranter: Sendable, Equatable {
 
 extension ContactPin {
     /*
-     * The key to open a share from this granter with: the pinned one, and only when the server served
-     * that same key. Taking the served keys of someone not pinned would let a server fake a share "from"
-     * anyone with a key of its own, so that is refused, and nothing is pinned or followed here: pinning
-     * follows a words check, and following a succession follows the person asking.
+     * The keys to open a share from this granter with (`granterKeysOf` in trust.ts): the pinned
+     * Ed25519 key, and the served ML-DSA key only if its digest is the pin's, and only when the
+     * server serves the pinned keys. Taking the served keys of someone not pinned would let a
+     * server fake a share "from" anyone with a key of its own, so that is refused, and nothing is
+     * pinned or followed here: pinning follows a words check, and following a succession follows
+     * the person asking.
      */
     public static func granter(_ granter: SharedWithMeView.Granter, pins: [String: ContactPin]) throws -> PinnedGranter {
         let name = granter.name.isEmpty ? granter.email : granter.name
         guard let pin = pins[granter.id] else { throw GranterTrust.unverified(name: name) }
         guard pin.verified else { throw GranterTrust.recheck(name: pin.displayName) }
-        guard pin.matches(granter.served) else { throw GranterTrust.changed(name: pin.displayName) }
-        return PinnedGranter(signingPublicKey: try base64urlDecode(value: pin.signingPublicKey),
+        let served = granter.served
+        switch pin.compare(served) {
+        case .same: break
+        case .recheck: throw GranterTrust.recheck(name: pin.displayName)
+        case .succession, .changed: throw GranterTrust.changed(name: pin.displayName)
+        }
+        guard let mlDsa = served.mlDsaPublicKey, let hash = pin.mlDsaPublicKeyHash, digestOf(mlDsa) == hash else {
+            throw GranterTrust.changed(name: pin.displayName)
+        }
+        return PinnedGranter(signingPublicKey: try base64urlDecode(value: pin.signingPublicKey), mlDsaPublicKey: try base64urlDecode(value: mlDsa),
                              replacedKeys: !(pin.previousSigningKeys ?? []).isEmpty, name: pin.displayName)
     }
 }
 
 /*
- * Opens a share envelope (suite 3 only) with the granter's current signing key, checked before
- * anything else, and each identity this account holds, the current one first, since a share
- * sealed before this account's own succession opens only with the identity it was sealed to.
+ * Opens a share envelope (suite 4 only) once both halves of its signature verify under the
+ * granter's pinned keys, checked before anything else, with each identity this account holds,
+ * the current one first, since a share sealed before this account's own succession opens only
+ * with the identity it was sealed to.
  */
 public enum ShareOpener {
     public static func open(_ envelope: Data, ctx: ShareContext, granter: PinnedGranter, identities: [IdentityKeys]) throws -> Data {
         var first: Error?
+        let keys = HybridPublicKey(signingPublicKey: granter.signingPublicKey, mlDsaPublicKey: granter.mlDsaPublicKey)
         for identity in identities {
             do {
-                return try shareOpen(envelope: envelope, granterSigningPublicKey: granter.signingPublicKey, grantee: identity, ctx: ctx)
+                return try shareOpen(envelope: envelope, granter: keys, grantee: identity, ctx: ctx)
             } catch {
                 first = first ?? error
             }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { fingerprint, fingerprintWords, FINGERPRINT_WORDS } from './fingerprint';
+import { fingerprint, fingerprintOfKeys, fingerprintWords, FINGERPRINT_WORDS } from './fingerprint';
 
 /* A fingerprint as fingerprint() prints it, from a 160-bit value. */
 function print(value: bigint) {
@@ -41,19 +41,44 @@ describe('fingerprint words', () => {
         }
     });
 
-    test('the same keys give the same twelve words, and another key of either kind different ones', async () => {
-        const one = fingerprintWords(await fingerprint(key(1), key(2)));
+    test('the same keys give the same twelve words, and another key of any of the four kinds different ones', async () => {
+        const one = fingerprintWords(await fingerprint(key(1), key(2), key(3), key(4)));
         expect(one).toHaveLength(FINGERPRINT_WORDS);
-        expect(fingerprintWords(await fingerprint(key(1), key(2)))).toEqual(one);
-        expect(fingerprintWords(await fingerprint(key(4), key(2)))).not.toEqual(one);
-        // The signing key vouches for the ML-KEM key, so swapping it alone must show.
-        expect(fingerprintWords(await fingerprint(key(1), key(3)))).not.toEqual(one);
+        expect(fingerprintWords(await fingerprint(key(1), key(2), key(3), key(4)))).toEqual(one);
+        // X25519, Ed25519, and the digests of the ML-DSA and ML-KEM keys: a swap of any one shows.
+        for (const swapped of [
+            [key(9), key(2), key(3), key(4)],
+            [key(1), key(9), key(3), key(4)],
+            [key(1), key(2), key(9), key(4)],
+            [key(1), key(2), key(3), key(9)],
+        ] as const)
+            expect(fingerprintWords(await fingerprint(...swapped))).not.toEqual(one);
+    });
+
+    test('the lattice keys enter by their digests, and a changed ML-DSA or ML-KEM key changes the words', async () => {
+        const mlDsa = new Uint8Array(1952).fill(5);
+        const kem = new Uint8Array(1184).fill(6);
+        const one = await fingerprintOfKeys(key(1), key(2), mlDsa, kem);
+        const digestOf = async (bytes: Uint8Array<ArrayBuffer>) =>
+            new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+        expect(one).toBe(
+            await fingerprint(key(1), key(2), await digestOf(mlDsa), await digestOf(kem)),
+        );
+        const otherMlDsa = mlDsa.slice();
+        otherMlDsa[1951] = 7;
+        const otherKem = kem.slice();
+        otherKem[0] = 7;
+        expect(await fingerprintOfKeys(key(1), key(2), otherMlDsa, kem)).not.toBe(one);
+        expect(await fingerprintOfKeys(key(1), key(2), mlDsa, otherKem)).not.toBe(one);
+        // Keys of the wrong size are refused rather than digested.
+        await expect(fingerprintOfKeys(key(1), key(2), key(3), kem)).rejects.toThrow();
     });
 
     test('is the vector the native core prints for the same keys', async () => {
-        // crates/hushos-core contacts.rs checks the same value.
-        expect(await fingerprint(key(1), key(2))).toBe(
-            '8e5f 7614 6df7 df81 0a13 a5aa 35c7 ac7d b5db 2e38',
+        // crates/hushos-core contacts.rs checks the same value; recomputed independently with
+        // SHA-256("hushos/identity/fingerprint/v3" || 32×01 || 32×02 || 32×03 || 32×04).
+        expect(await fingerprint(key(1), key(2), key(3), key(4))).toBe(
+            '8b16 2a14 2a5b cb5b 1070 8017 ae93 b2e6 b496 7640',
         );
     });
 

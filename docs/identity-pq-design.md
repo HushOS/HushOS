@@ -57,10 +57,10 @@ The identity signs it with its own hybrid signature, which proves it holds both 
 ### Fingerprint version 3
 
 ```
-SHA-256("hushos/identity/fingerprint/v3" || x25519 (32) || ed25519 (32) || mlDsaPublicKey (1952) || mlKemPublicKey (1184))
+SHA-256("hushos/identity/fingerprint/v3" || x25519 (32) || ed25519 (32) || SHA-256(mlDsaPublicKey) (32) || SHA-256(mlKemPublicKey) (32))
 ```
 
-The twelve words are made as today (`fingerprintWords`: the first 132 bits of the digest). Version 3 covers the ML-KEM key directly, so comparing words pins all four keys. A second preimage against 132 bits costs about 2^66 for a quantum adversary using Grover's algorithm, a serial run no one expects to be practical.
+The twelve words are made as today (`fingerprintWords`: the first 132 bits of the digest). Version 3 covers the ML-KEM key directly, so comparing words pins all four keys. The two lattice keys enter by their SHA-256 digests, which is what a pin keeps of them, so a pin can check its own fingerprint without holding 3 KB of keys; SHA-256's collision resistance makes that as binding as the keys themselves. Vector: the fingerprint of 32×0x01, 32×0x02 and digests 32×0x03, 32×0x04 is `8b16 2a14 2a5b cb5b 1070 8017 ae93 b2e6 b496 7640`. A second preimage against 132 bits costs about 2^66 for a quantum adversary using Grover's algorithm, a serial run no one expects to be practical.
 
 **Why the words have to change.** A key that only Ed25519 vouches for (the way ML-KEM was added, `POST /api/auth/identity/kem`) falls together with Ed25519. Post-quantum authenticity has to rest on something a quantum adversary cannot forge, and that is the words.
 
@@ -91,7 +91,7 @@ A pin made before the release holds X25519 and Ed25519 and a version 2 fingerpri
 
 After the release, **a version 2 pin trusts nothing, whatever the server serves**: a version 2 identity, or the version 1 form with the same X25519 and Ed25519 keys and no ML-DSA key.
 
-- When the served X25519 and Ed25519 keys equal the pin's, the contact shows as **Check words again** ("Maya's keys were upgraded. Compare words to keep trusting them"). Until then the contact reads as someone not yet checked, for records, shares and verdicts alike.
+- When the served X25519 and Ed25519 keys equal the pin's, People shows the contact with a **Check again** badge and the menu item **Check their words again**; an Unverified mark's "Check again" says "Maya’s keys were upgraded. Compare words with them again in People you share with." Until then the contact reads as someone not yet checked, for records, shares and verdicts alike.
 - When the keys differ, it is the changed-key warning, as today.
 - `pinVerified` requires the version 3 fingerprint. The KEM binding (`identityVerifyKem`) is no longer a path to trust: a KEM key is trusted only through a version 3 pin or a verified keys statement under one.
 
@@ -100,8 +100,8 @@ After the release, **a version 2 pin trusts nothing, whatever the server serves*
 ```
 ContactPin v3 = { userId, email, name, keyVersion, pinnedAt,
                   encryptionPublicKey (X25519), signingPublicKey (Ed25519),
-                  mlDsaPublicKeyHash = base64url(SHA-256(mlDsaPublicKey)),
-                  kemPublicKeyHash   = base64url(SHA-256(mlKemPublicKey)),
+                  mlDsaPublicKeyHash = hex(SHA-256(mlDsaPublicKey)),
+                  kemPublicKeyHash   = hex(SHA-256(mlKemPublicKey)),   // hex, as kemPublicKeyHash always was
                   fingerprint        = the version 3 fingerprint }
 ```
 
@@ -156,7 +156,7 @@ envelope = eph.public (32) || kemCt (1088) || nonce (24) || body (48) || sig (33
 
 Everything else is as in suite 3: the grantee checks the signature against the granter's pinned keys before it decapsulates, and the server tells suites apart by length. Suite 3 is no longer written or opened. The group seals in `docs/groups-design.md` (key seal, area grant, guardian seal) use this construction under their own `info` and associated data.
 
-**Existing shares need both sides to compare words.** The upgrade pass re-seals each account's ledger in suite 4 (`upgradeShares({ all: true })`), but re-sealing goes through `trustGrantee`, which needs a version 3 pin of the grantee, and the grantee checks suite 4 against a version 3 pin of the granter. Every pin is version 2 at the release, so a share stays shut until the granter and the grantee have each compared words with the other and the granter's device has signed in since. That is acceptable while production holds mostly test accounts. People shows the hint "Shares from Maya open once you've both compared words."
+**Existing shares need both sides to compare words.** The upgrade pass re-seals each account's ledger in suite 4 (`upgradeShares({ all: true })`), but re-sealing goes through `trustGrantee`, which needs a version 3 pin of the grantee, and the grantee checks suite 4 against a version 3 pin of the granter. Every pin is version 2 at the release, so a share stays shut until the granter and the grantee have each compared words with the other and the granter's device has signed in since. That is acceptable while production holds mostly test accounts. The recheck dialog says so: "shares between you open again once you’ve both done it."
 
 ### Verdicts
 

@@ -1,5 +1,5 @@
 export * from './protocol';
-export { CryptoError } from './errors';
+export { CryptoError, RefusedError } from './errors';
 export {
     createCryptoSession,
     type CryptoRequests,

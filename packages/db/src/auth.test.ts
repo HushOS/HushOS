@@ -1,13 +1,19 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, resetDatabase, signingKeyFromSeed } from '../test/helpers';
-import { successionStatement } from './signatures';
+import {
+    closeDatabase,
+    hybridSignerFromSeed,
+    resetDatabase,
+    type HybridSigner,
+} from '../test/helpers';
+import { keysStatement, successionStatement } from './signatures';
 import * as auth from './auth';
 import { db } from './client';
 import {
     accountEnrollments,
     accountIdentities,
+    accountIdentityHistory,
     accountIntents,
     billingCustomers,
     opaqueCredentials,
@@ -364,162 +370,300 @@ describe('server secrets', () => {
     });
 });
 
-describe('the identity’s KEM key', () => {
-    const kem = () => ({
-        kemPublicKey: bytes(1184),
-        kemSeedNonce: bytes(24),
-        encryptedKemSeed: bytes(80),
-        kemSignature: bytes(64),
-    });
+/*
+ * Identities as the repository stores them (docs/identity-pq-design.md): a
+ * version 1 identity upgrades in place to version 2, and a version 2 identity
+ * is replaced only by a succession its current hybrid keys signed. Keys are
+ * real where a signature is checked; the rest are bytes of the right length.
+ */
+const seedOf = (label: string) => createHash('sha256').update(label).digest();
+const kemHalf = () => ({
+    kemPublicKey: bytes(1184),
+    kemSeedNonce: bytes(24),
+    encryptedKemSeed: bytes(80),
+});
+/* The lattice half of a version 2 identity for `signer`, with a keys statement it signed. */
+function v2Fields(
+    userId: string,
+    signer: HybridSigner,
+    base: {
+        keyVersion: number;
+        encryptionPublicKey: Buffer;
+        kemPublicKey: Buffer;
+    },
+) {
+    return {
+        version: 2 as const,
+        signingPublicKey: signer.signingPublicKey,
+        mlDsaPublicKey: signer.mlDsaPublicKey,
+        mlDsaSeedNonce: bytes(24),
+        encryptedMlDsaSeed: bytes(48),
+        kemSignature: null,
+        keysSignature: signer.sign(
+            keysStatement({
+                userId,
+                keyVersion: base.keyVersion,
+                encryptionPublicKey: base.encryptionPublicKey,
+                signingPublicKey: signer.signingPublicKey,
+                mlDsaPublicKey: signer.mlDsaPublicKey,
+                kemPublicKey: base.kemPublicKey,
+            }),
+        ),
+    };
+}
+/* A new version 2 identity row at `keyVersion` for `signer`. */
+function freshV2(userId: string, signer: HybridSigner, keyVersion: number) {
+    const encryptionPublicKey = bytes(32);
+    const kem = kemHalf();
+    return {
+        keyVersion,
+        wrappingSalt: bytes(32),
+        encryptionPublicKey,
+        encryptionPrivateKeyNonce: bytes(24),
+        encryptedEncryptionPrivateKey: bytes(48),
+        signingSeedNonce: bytes(24),
+        encryptedSigningSeed: bytes(48),
+        ...kem,
+        ...v2Fields(userId, signer, {
+            keyVersion,
+            encryptionPublicKey,
+            kemPublicKey: kem.kemPublicKey,
+        }),
+    };
+}
 
-    test('is absent at first, added exactly once, and served on lookup', async () => {
-        const user = await registered('kem@hushos.test');
-        expect((await auth.lookupIdentity('kem@hushos.test'))?.kemPublicKey).toBeNull();
-        const first = kem();
-        expect(await auth.addIdentityKem({ userId: user.id, ...first })).toBe(true);
-        // A second device that raced to mint one is refused; the first key stands.
-        expect(await auth.addIdentityKem({ userId: user.id, ...kem() })).toBe(false);
-        const served = await auth.lookupIdentity('kem@hushos.test');
-        expect(served?.kemPublicKey?.equals(first.kemPublicKey)).toBe(true);
-        expect(served?.kemSignature?.equals(first.kemSignature)).toBe(true);
-        // Half a key is refused by the table itself.
-        await expect(
-            db
-                .update(accountIdentities)
-                .set({ kemSignature: null })
-                .where(eq(accountIdentities.userId, user.id)),
-        ).rejects.toThrow();
-    });
+describe('the upgrade to a version 2 identity', () => {
+    /* A registered account with a version 1 identity whose Ed25519 key is real. */
+    async function v1Account(email: string, withKem = true) {
+        const user = await registered(email);
+        const signer = hybridSignerFromSeed(seedOf(`upgrade:${email}`));
+        await db
+            .update(accountIdentities)
+            .set({
+                signingPublicKey: signer.signingPublicKey,
+                ...(withKem ? { ...kemHalf(), kemSignature: bytes(64) } : {}),
+            })
+            .where(eq(accountIdentities.userId, user.id));
+        return { user, signer, sessionTokenHash: await signedIn(user.id) };
+    }
+    /* The upgrade of the stored identity: the same keys and version, plus the lattice half. */
+    async function upgradeOf(userId: string, signer: HybridSigner) {
+        const current = (await auth.getIdentity(userId))!;
+        const kemPublicKey = current.kemPublicKey ?? bytes(1184);
+        return {
+            keyVersion: current.keyVersion,
+            wrappingSalt: current.wrappingSalt,
+            encryptionPublicKey: current.encryptionPublicKey,
+            encryptionPrivateKeyNonce: current.encryptionPrivateKeyNonce,
+            encryptedEncryptionPrivateKey: current.encryptedEncryptionPrivateKey,
+            signingSeedNonce: current.signingSeedNonce,
+            encryptedSigningSeed: current.encryptedSigningSeed,
+            kemPublicKey,
+            kemSeedNonce: current.kemSeedNonce ?? bytes(24),
+            encryptedKemSeed: current.encryptedKemSeed ?? bytes(80),
+            ...v2Fields(userId, signer, {
+                keyVersion: current.keyVersion,
+                encryptionPublicKey: current.encryptionPublicKey,
+                kemPublicKey,
+            }),
+        };
+    }
 
-    test('survives a master-key rotation unchanged and cannot be swapped by one', async () => {
-        const email = 'rotate@hushos.test';
-        const workspaceId = randomUUID();
-        const created = await auth.registerAccount({
-            enrollmentTokenHash: await verifiedEnrollment(email),
-            ...registration(workspaceId),
-        });
-        if (created.status !== 'created') throw new Error(created.status);
-        const user = created.user;
-        const minted = kem();
-        await auth.addIdentityKem({ userId: user.id, ...minted });
-        const sessionTokenHash = await signedIn(user.id);
-        const stored = (await auth.getIdentity(user.id))!;
-        const change = (kemPublicKey: Buffer | null) =>
-            auth.changeAccountSecurity({
+    test('keeps the keys and the key version, stores the lattice half once, and serves it', async () => {
+        const { user, signer, sessionTokenHash } = await v1Account('upgrade@hushos.test');
+        const before = (await auth.getIdentity(user.id))!;
+        const identity = await upgradeOf(user.id, signer);
+        expect(auth.identityKeysHold(user.id, identity)).toBe(true);
+        expect(
+            await auth.upgradeIdentity({
                 userId: user.id,
-                action: 'master-key',
-                sessionTokenHash,
                 credentialVersion: 1,
-                registrationRecord: 'record-2',
-                envelope: {
-                    keyVersion: 2,
-                    wrappingSalt: bytes(32),
-                    wrappingNonce: bytes(24),
-                    encryptedKey: bytes(48),
-                },
-                recovery: {
-                    keyVersion: 2,
-                    recoveryVersion: 2,
-                    wrappingSalt: bytes(32),
-                    wrappingNonce: bytes(24),
-                    encryptedKey: bytes(48),
-                    backupNonce: bytes(24),
-                    encryptedRecoveryKey: bytes(48),
-                    publicKey: bytes(32),
-                },
-                identity: {
-                    keyVersion: 2,
-                    wrappingSalt: bytes(32),
-                    encryptionPublicKey: stored.encryptionPublicKey,
-                    encryptionPrivateKeyNonce: bytes(24),
-                    encryptedEncryptionPrivateKey: bytes(48),
-                    signingPublicKey: stored.signingPublicKey,
-                    signingSeedNonce: bytes(24),
-                    encryptedSigningSeed: bytes(48),
-                    kemPublicKey,
-                    kemSeedNonce: kemPublicKey ? bytes(24) : null,
-                    encryptedKemSeed: kemPublicKey ? bytes(80) : null,
-                    kemSignature: kemPublicKey ? stored.kemSignature : null,
-                },
-                workspaces: [
-                    {
-                        id: workspaceId,
-                        grant: {
-                            keyVersion: 2,
-                            workspaceKeyVersion: 1,
-                            wrappingSalt: bytes(32),
-                            wrappingNonce: bytes(24),
-                            encryptedKey: bytes(48),
-                        },
-                    },
-                ],
-            });
-        // A different KEM key in the rewrapped bundle is a swap, and dropping it is a downgrade.
-        expect(await change(bytes(1184))).toBe(false);
-        expect(await change(null)).toBe(false);
-        // The same key, rewrapped under the new root, goes through.
-        expect(await change(minted.kemPublicKey)).toBe(true);
-        expect((await auth.getIdentity(user.id))?.kemPublicKey?.equals(minted.kemPublicKey)).toBe(
+                sessionTokenHash,
+                identity,
+            }),
+        ).toEqual({ status: 'ok' });
+        const after = (await auth.getIdentity(user.id))!;
+        expect(after.version).toBe(2);
+        expect(after.keyVersion).toBe(before.keyVersion);
+        expect(after.signingPublicKey.equals(before.signingPublicKey)).toBe(true);
+        expect(after.kemPublicKey!.equals(before.kemPublicKey!)).toBe(true);
+        // The Ed25519 KEM binding is no longer a path to trust, and is dropped.
+        expect(after.kemSignature).toBeNull();
+        // No history and no succession: nothing about the account's past changes.
+        expect(await auth.listIdentityHistory(user.id)).toEqual([]);
+        const served = await auth.lookupIdentity('upgrade@hushos.test');
+        expect(served?.identityVersion).toBe(2);
+        expect(served?.mlDsaPublicKey?.equals(signer.mlDsaPublicKey)).toBe(true);
+        expect(served?.keysSignature?.equals(identity.keysSignature)).toBe(true);
+        // A second device that raced is handed the identity that won, not a second ML-DSA key.
+        const other = hybridSignerFromSeed(seedOf('second device'));
+        const second = await auth.upgradeIdentity({
+            userId: user.id,
+            credentialVersion: 1,
+            sessionTokenHash,
+            identity: { ...identity, ...v2Fields(user.id, other, identity) },
+        });
+        expect(second.status).toBe('stale');
+        if (second.status === 'stale')
+            expect(second.current.mlDsaPublicKey!.equals(signer.mlDsaPublicKey)).toBe(true);
+        expect(
+            (await auth.getIdentity(user.id))!.mlDsaPublicKey!.equals(signer.mlDsaPublicKey),
+        ).toBe(true);
+    });
+
+    test('gives an identity from before hybrid sharing its ML-KEM key in the same step', async () => {
+        const { user, signer, sessionTokenHash } = await v1Account(
+            'upgrade-nokem@hushos.test',
+            false,
+        );
+        expect((await auth.getIdentity(user.id))!.kemPublicKey).toBeNull();
+        const identity = await upgradeOf(user.id, signer);
+        expect(
+            await auth.upgradeIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity,
+            }),
+        ).toEqual({ status: 'ok' });
+        expect((await auth.getIdentity(user.id))!.kemPublicKey!.equals(identity.kemPublicKey)).toBe(
             true,
         );
+    });
+
+    test('refuses an upgrade that changes a key or the key version, and changes nothing', async () => {
+        const { user, signer, sessionTokenHash } = await v1Account('upgrade-swap@hushos.test');
+        const identity = await upgradeOf(user.id, signer);
+        for (const swapped of [
+            { ...identity, encryptionPublicKey: bytes(32) },
+            { ...identity, kemPublicKey: bytes(1184) },
+            { ...identity, keyVersion: 2 },
+            {
+                ...identity,
+                ...v2Fields(user.id, hybridSignerFromSeed(seedOf('stranger')), identity),
+            },
+            // The same public keys with new wraps of their private halves: a client bug that
+            // would leave the account unable to open its keys.
+            { ...identity, wrappingSalt: bytes(32) },
+            { ...identity, encryptedSigningSeed: bytes(48) },
+            { ...identity, encryptedEncryptionPrivateKey: bytes(48) },
+            { ...identity, encryptedKemSeed: bytes(80) },
+            { ...identity, encryptionPrivateKeyNonce: bytes(24) },
+            { ...identity, signingSeedNonce: bytes(24) },
+            { ...identity, kemSeedNonce: bytes(24) },
+        ])
+            expect(
+                await auth.upgradeIdentity({
+                    userId: user.id,
+                    credentialVersion: 1,
+                    sessionTokenHash,
+                    identity: swapped,
+                }),
+            ).toEqual({ status: 'mismatch' });
+        expect((await auth.getIdentity(user.id))!.version).toBe(1);
+        // A session a sign-out ended does nothing either.
+        expect(
+            await auth.upgradeIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash: hash('no such session'),
+                identity,
+            }),
+        ).toEqual({ status: 'session' });
+    });
+
+    test('the keys statement holds only for its own keys, account and version', async () => {
+        const user = await registered('keys@hushos.test');
+        const signer = hybridSignerFromSeed(seedOf('keys'));
+        const identity = freshV2(user.id, signer, 1);
+        expect(auth.identityKeysHold(user.id, identity)).toBe(true);
+        expect(auth.identityKeysHold(randomUUID(), identity)).toBe(false);
+        expect(auth.identityKeysHold(user.id, { ...identity, keyVersion: 2 })).toBe(false);
+        expect(auth.identityKeysHold(user.id, { ...identity, kemPublicKey: bytes(1184) })).toBe(
+            false,
+        );
+        expect(
+            auth.identityKeysHold(user.id, {
+                ...identity,
+                mlDsaPublicKey: hybridSignerFromSeed(seedOf('other')).mlDsaPublicKey,
+            }),
+        ).toBe(false);
+        // Its Ed25519 half alone, padded to length or not, is not the statement's signature.
+        const classical = signer.signClassical(keysStatement({ userId: user.id, ...identity }));
+        expect(auth.identityKeysHold(user.id, { ...identity, keysSignature: classical })).toBe(
+            false,
+        );
+        expect(
+            auth.identityKeysHold(user.id, {
+                ...identity,
+                keysSignature: Buffer.concat([classical, Buffer.alloc(3309)]),
+            }),
+        ).toBe(false);
+        // A version 2 row missing any one lattice field is refused by the table itself, with
+        // everything else present (a check over an empty column would otherwise pass as unknown).
+        const complete = freshV2(user.id, signer, 1);
+        for (const missing of [
+            'mlDsaPublicKey',
+            'mlDsaSeedNonce',
+            'encryptedMlDsaSeed',
+            'keysSignature',
+        ] as const)
+            await expect(
+                db
+                    .update(accountIdentities)
+                    .set({ ...complete, [missing]: null })
+                    .where(eq(accountIdentities.userId, user.id)),
+            ).rejects.toThrow();
+        // The same row, complete, is stored.
+        await db
+            .update(accountIdentities)
+            .set(complete)
+            .where(eq(accountIdentities.userId, user.id));
+        expect((await auth.getIdentity(user.id))!.version).toBe(2);
     });
 });
 
 describe('identity succession', () => {
-    const seed = (label: string) => createHash('sha256').update(label).digest();
-    const kemKey = () => ({
-        kemPublicKey: bytes(1184),
-        kemSeedNonce: bytes(24),
-        encryptedKemSeed: bytes(80),
-        kemSignature: bytes(64),
-    });
-    /* A registered account whose identity signs for real, at key version 1 with a KEM key. */
+    /* A registered account whose version 2 identity signs for real, at key version 1. */
     async function account(email: string) {
         const user = await registered(email);
-        const key = signingKeyFromSeed(seed(`old:${email}`));
+        const signer = hybridSignerFromSeed(seedOf(`old:${email}`));
         await db
             .update(accountIdentities)
-            .set({ signingPublicKey: key.publicKey, ...kemKey() })
+            .set(freshV2(user.id, signer, 1))
             .where(eq(accountIdentities.userId, user.id));
-        return { user, key, sessionTokenHash: await signedIn(user.id) };
+        return { user, signer, sessionTokenHash: await signedIn(user.id) };
     }
-    /* A new identity at `keyVersion`, and the old key's signature over its succession statement. */
+    /* A new identity at `keyVersion`, and the current keys' hybrid signature over its succession. */
     async function successor(
         userId: string,
-        signer: ReturnType<typeof signingKeyFromSeed>,
+        signer: HybridSigner,
         keyVersion: number,
         label: string,
     ) {
         const current = (await auth.getIdentity(userId))!;
-        const next = signingKeyFromSeed(seed(`new:${label}`));
-        const identity = {
-            keyVersion,
-            wrappingSalt: bytes(32),
-            encryptionPublicKey: bytes(32),
-            encryptionPrivateKeyNonce: bytes(24),
-            encryptedEncryptionPrivateKey: bytes(48),
-            signingPublicKey: next.publicKey,
-            signingSeedNonce: bytes(24),
-            encryptedSigningSeed: bytes(48),
-            ...kemKey(),
-        };
+        const next = hybridSignerFromSeed(seedOf(`new:${label}`));
+        const identity = freshV2(userId, next, keyVersion);
         const statement = successionStatement({
             userId,
             oldKeyVersion: current.keyVersion,
             newKeyVersion: keyVersion,
             oldEncryptionPublicKey: current.encryptionPublicKey,
             oldSigningPublicKey: current.signingPublicKey,
+            oldMlDsaPublicKey: current.mlDsaPublicKey!,
             newEncryptionPublicKey: identity.encryptionPublicKey,
             newSigningPublicKey: identity.signingPublicKey,
+            newMlDsaPublicKey: identity.mlDsaPublicKey,
             newKemPublicKey: identity.kemPublicKey,
         });
         return { identity, next, statement, signature: signer.sign(statement) };
     }
 
-    test('replaces the identity and keeps the old one, still sealed, with its succession', async () => {
-        const { user, key, sessionTokenHash } = await account('succeed@hushos.test');
+    test('replaces the identity and keeps the old one, still sealed, with its hybrid succession', async () => {
+        const { user, signer, sessionTokenHash } = await account('succeed@hushos.test');
         const before = (await auth.getIdentity(user.id))!;
-        const { identity, signature } = await successor(user.id, key, 2, 'a');
+        const { identity, signature } = await successor(user.id, signer, 2, 'a');
+        expect(signature).toHaveLength(3373);
         expect(
             await auth.succeedIdentity({
                 userId: user.id,
@@ -531,18 +675,13 @@ describe('identity succession', () => {
         ).toEqual({ status: 'ok', keyVersion: 2 });
         const now = (await auth.getIdentity(user.id))!;
         expect(now.keyVersion).toBe(2);
-        expect(now.signingPublicKey.equals(identity.signingPublicKey)).toBe(true);
-        // Contacts look the account up under its new keys and version.
+        expect(now.mlDsaPublicKey!.equals(identity.mlDsaPublicKey)).toBe(true);
         const served = await auth.lookupIdentity('succeed@hushos.test');
         expect(served?.keyVersion).toBe(2);
-        expect(served?.encryptionPublicKey.equals(identity.encryptionPublicKey)).toBe(true);
+        expect(served?.signingPublicKey.equals(identity.signingPublicKey)).toBe(true);
         // The old envelope, byte for byte, so the account's devices still open shares sealed to it.
         const [old] = await auth.listIdentityHistory(user.id);
-        expect(old).toMatchObject({
-            keyVersion: 1,
-            replacedByKeyVersion: 2,
-            createdAt: before.createdAt,
-        });
+        expect(old).toMatchObject({ keyVersion: 1, replacedByKeyVersion: 2, version: 2 });
         for (const field of [
             'wrappingSalt',
             'encryptionPublicKey',
@@ -551,16 +690,19 @@ describe('identity succession', () => {
             'encryptedSigningSeed',
             'kemPublicKey',
             'encryptedKemSeed',
-            'kemSignature',
+            'mlDsaPublicKey',
+            'encryptedMlDsaSeed',
+            'keysSignature',
         ] as const)
             expect(old![field]?.equals(before[field]!)).toBe(true);
+        expect(old!.newMlDsaPublicKey!.equals(identity.mlDsaPublicKey)).toBe(true);
         expect(old!.successionSignature.equals(signature)).toBe(true);
     });
 
     test('refuses a key version other than the next one, and changes nothing', async () => {
-        const { user, key, sessionTokenHash } = await account('version@hushos.test');
+        const { user, signer, sessionTokenHash } = await account('version@hushos.test');
         for (const keyVersion of [1, 3]) {
-            const { identity, signature } = await successor(user.id, key, keyVersion, 'v');
+            const { identity, signature } = await successor(user.id, signer, keyVersion, 'v');
             expect(
                 await auth.succeedIdentity({
                     userId: user.id,
@@ -575,14 +717,12 @@ describe('identity succession', () => {
         expect(await auth.listIdentityHistory(user.id)).toEqual([]);
     });
 
-    test('refuses a statement not signed by the current key, or not the one stored', async () => {
-        const { user, key, sessionTokenHash } = await account('forged@hushos.test');
-        // Signed by the new key: anyone holding only the new identity could make that.
-        const selfSigned = await successor(user.id, key, 2, 'b');
+    test('refuses a succession not signed by both current keys, or not the one stored', async () => {
+        const { user, signer, sessionTokenHash } = await account('forged@hushos.test');
         const attempt = (
             identity: Parameters<typeof auth.succeedIdentity>[0]['identity'],
             signature: Buffer,
-        ): ReturnType<typeof auth.succeedIdentity> =>
+        ) =>
             auth.succeedIdentity({
                 userId: user.id,
                 credentialVersion: 1,
@@ -590,44 +730,121 @@ describe('identity succession', () => {
                 identity,
                 signature,
             });
-        expect(
-            await attempt(selfSigned.identity, selfSigned.next.sign(selfSigned.statement)),
-        ).toEqual({ status: 'bad-signature' });
-        // A genuine signature, but the server is handed a different KEM key than the one signed.
+        const made = await successor(user.id, signer, 2, 'b');
+        // Signed by the new keys: anyone holding only the new identity could make that.
+        expect(await attempt(made.identity, made.next.sign(made.statement))).toEqual({
+            status: 'bad-signature',
+        });
+        // Ed25519 alone, as version 1 signed: the statement is a hybrid one.
+        expect(await attempt(made.identity, signer.signClassical(made.statement))).toEqual({
+            status: 'bad-signature',
+        });
+        // The current Ed25519 half beside an ML-DSA half by another key, as a quantum forger
+        // of Ed25519 could make.
+        const forger = hybridSignerFromSeed(seedOf('forger'));
         expect(
             await attempt(
-                { ...selfSigned.identity, kemPublicKey: bytes(1184) },
-                selfSigned.signature,
+                made.identity,
+                Buffer.concat([
+                    signer.signClassical(made.statement),
+                    forger.signLattice(made.statement),
+                ]),
+            ),
+        ).toEqual({ status: 'bad-signature' });
+        // A genuine signature, but the server is handed other keys than the ones signed.
+        expect(
+            await attempt({ ...made.identity, kemPublicKey: bytes(1184) }, made.signature),
+        ).toEqual({
+            status: 'bad-signature',
+        });
+        expect(
+            await attempt(
+                { ...made.identity, mlDsaPublicKey: forger.mlDsaPublicKey },
+                made.signature,
             ),
         ).toEqual({ status: 'bad-signature' });
         // The same keys again are not a succession.
         const current = (await auth.getIdentity(user.id))!;
         expect(
             await attempt(
-                { ...selfSigned.identity, signingPublicKey: current.signingPublicKey },
-                selfSigned.signature,
+                { ...made.identity, mlDsaPublicKey: current.mlDsaPublicKey! },
+                made.signature,
             ),
         ).toEqual({ status: 'unchanged' });
         expect((await auth.getIdentity(user.id))?.keyVersion).toBe(1);
     });
 
-    test('refuses a session that a rotation or sign-out has ended', async () => {
-        const { user, key } = await account('ended@hushos.test');
-        const { identity, signature } = await successor(user.id, key, 2, 'c');
+    test('refuses a succession from a version 1 identity, and from an ended session', async () => {
+        const user = await registered('v1-succeed@hushos.test');
+        const sessionTokenHash = await signedIn(user.id);
+        const next = hybridSignerFromSeed(seedOf('v1-next'));
+        const identity = freshV2(user.id, next, 2);
         expect(
             await auth.succeedIdentity({
                 userId: user.id,
                 credentialVersion: 1,
-                sessionTokenHash: hash('no such session'),
+                sessionTokenHash,
                 identity,
-                signature,
+                signature: Buffer.alloc(3373),
+            }),
+        ).toEqual({ status: 'not-upgraded' });
+        const { user: other, signer } = await account('ended@hushos.test');
+        const made = await successor(other.id, signer, 2, 'c');
+        expect(
+            await auth.succeedIdentity({
+                userId: other.id,
+                credentialVersion: 1,
+                sessionTokenHash: hash('no such session'),
+                identity: made.identity,
+                signature: made.signature,
             }),
         ).toEqual({ status: 'session' });
     });
 
-    test('the chain lists each succession in order from the version asked for', async () => {
-        const { user, key, sessionTokenHash } = await account('chain@hushos.test');
-        const first = await successor(user.id, key, 2, 'chain-1');
+    test('refuses a succession past the earlier identities a master-key rotation can carry', async () => {
+        const { user, signer, sessionTokenHash } = await account('history-full@hushos.test');
+        const succeed = async (from: HybridSigner, keyVersion: number, label: string) => {
+            const made = await successor(user.id, from, keyVersion, label);
+            const result = await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity: made.identity,
+                signature: made.signature,
+            });
+            return { result, next: made.next };
+        };
+        const first = await succeed(signer, 2, 'full-1');
+        expect(first.result).toEqual({ status: 'ok', keyVersion: 2 });
+        // Copies of that history row stand in for the successions up to one short of the limit.
+        const [row] = await db
+            .select()
+            .from(accountIdentityHistory)
+            .where(eq(accountIdentityHistory.userId, user.id));
+        const filler = Array.from({ length: auth.IDENTITY_HISTORY_LIMIT - 2 }, (_, index) => ({
+            ...row!,
+            keyVersion: index + 2,
+            replacedByKeyVersion: index + 3,
+        }));
+        await db.insert(accountIdentityHistory).values(filler);
+        const last = auth.IDENTITY_HISTORY_LIMIT;
+        await db
+            .update(accountIdentities)
+            .set({ keyVersion: last })
+            .where(eq(accountIdentities.userId, user.id));
+        const atLimit = await succeed(first.next, last + 1, 'full-2');
+        expect(atLimit.result).toEqual({ status: 'ok', keyVersion: last + 1 });
+        expect(await auth.listIdentityHistory(user.id)).toHaveLength(auth.IDENTITY_HISTORY_LIMIT);
+        // What sizes the body a master-key rotation may send for this account.
+        expect(await auth.countIdentityHistory(user.id)).toBe(auth.IDENTITY_HISTORY_LIMIT);
+        const past = await succeed(atLimit.next, last + 2, 'full-3');
+        expect(past.result).toEqual({ status: 'history-full' });
+        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(last + 1);
+    });
+
+    test('the chain lists each succession in order from the version asked for, ML-DSA keys included', async () => {
+        const { user, signer, sessionTokenHash } = await account('chain@hushos.test');
+        const first = await successor(user.id, signer, 2, 'chain-1');
         await auth.succeedIdentity({
             userId: user.id,
             credentialVersion: 1,
@@ -649,7 +866,8 @@ describe('identity succession', () => {
             [2, 3],
         ]);
         // Each link names the keys it hands over to, and the next starts from them.
-        expect(chain![0]!.newSigningPublicKey.equals(first.identity.signingPublicKey)).toBe(true);
+        expect(chain![0]!.newMlDsaPublicKey!.equals(first.identity.mlDsaPublicKey)).toBe(true);
+        expect(chain![1]!.oldMlDsaPublicKey!.equals(first.identity.mlDsaPublicKey)).toBe(true);
         expect(chain![1]!.oldSigningPublicKey.equals(first.identity.signingPublicKey)).toBe(true);
         expect(chain![1]!.newKemPublicKey.equals(second.identity.kemPublicKey)).toBe(true);
         expect(chain![1]!.signature.equals(second.signature)).toBe(true);
@@ -658,7 +876,7 @@ describe('identity succession', () => {
         expect(await auth.successionChain(randomUUID(), 1)).toBeNull();
     });
 
-    test('a master-key rotation re-wraps every earlier identity and never lowers the key version', async () => {
+    test('a master-key rotation re-wraps every earlier identity, keeps the lattice keys, and never moves a version 2 key version', async () => {
         const workspaceId = randomUUID();
         const created = await auth.registerAccount({
             enrollmentTokenHash: await verifiedEnrollment('rewrap@hushos.test'),
@@ -666,13 +884,13 @@ describe('identity succession', () => {
         });
         if (created.status !== 'created') throw new Error(created.status);
         const user = created.user;
-        const key = signingKeyFromSeed(seed('old:rewrap'));
+        const signer = hybridSignerFromSeed(seedOf('old:rewrap'));
         await db
             .update(accountIdentities)
-            .set({ signingPublicKey: key.publicKey, ...kemKey() })
+            .set(freshV2(user.id, signer, 1))
             .where(eq(accountIdentities.userId, user.id));
         const sessionTokenHash = await signedIn(user.id);
-        const succession = await successor(user.id, key, 2, 'rewrap');
+        const succession = await successor(user.id, signer, 2, 'rewrap');
         await auth.succeedIdentity({
             userId: user.id,
             credentialVersion: 1,
@@ -682,6 +900,7 @@ describe('identity succession', () => {
         const current = (await auth.getIdentity(user.id))!;
         const [old] = await auth.listIdentityHistory(user.id);
         const rewrap = <T extends typeof current | typeof old>(row: T, keyVersion: number) => ({
+            version: row!.version,
             keyVersion,
             wrappingSalt: bytes(32),
             encryptionPublicKey: row!.encryptionPublicKey,
@@ -694,10 +913,14 @@ describe('identity succession', () => {
             kemSeedNonce: bytes(24),
             encryptedKemSeed: bytes(80),
             kemSignature: row!.kemSignature,
+            mlDsaPublicKey: row!.mlDsaPublicKey,
+            mlDsaSeedNonce: bytes(24),
+            encryptedMlDsaSeed: bytes(48),
+            keysSignature: row!.keysSignature,
         });
-        // The account root is at version 1 and goes to 2; the identity is already at 2.
+        // The account root is at version 1 and goes to 2; the identity is at 2.
         const change = (
-            identityVersion: number,
+            identity: ReturnType<typeof rewrap>,
             identityHistory: ReturnType<typeof rewrap>[] | undefined,
         ) =>
             auth.changeAccountSecurity({
@@ -722,7 +945,7 @@ describe('identity succession', () => {
                     encryptedRecoveryKey: bytes(48),
                     publicKey: bytes(32),
                 },
-                identity: rewrap(current, identityVersion),
+                identity,
                 identityHistory,
                 workspaces: [
                     {
@@ -737,19 +960,36 @@ describe('identity succession', () => {
                     },
                 ],
             });
-        // Left behind under the old root, the earlier identity would be lost with it.
-        expect(await change(2, undefined)).toBe(false);
-        // A history entry that changes the old public keys is not a re-wrap.
-        expect(await change(2, [{ ...rewrap(old, 1), signingPublicKey: bytes(32) }])).toBe(false);
-        // Back to version 1 would reuse the version the history and contacts' pins name.
-        expect(await change(1, [rewrap(old, 1)])).toBe(false);
         const history = rewrap(old, 1);
-        expect(await change(2, [history])).toBe(true);
+        // Left behind under the old root, the earlier identity would be lost with it.
+        expect(await change(rewrap(current, 2), undefined)).toBe(false);
+        // A history entry or a current identity that changes a public key is not a re-wrap.
+        expect(
+            await change(rewrap(current, 2), [{ ...history, signingPublicKey: bytes(32) }]),
+        ).toBe(false);
+        expect(
+            await change(
+                {
+                    ...rewrap(current, 2),
+                    mlDsaPublicKey: hybridSignerFromSeed(seedOf('swap')).mlDsaPublicKey,
+                },
+                [history],
+            ),
+        ).toBe(false);
+        expect(await change({ ...rewrap(current, 2), keysSignature: bytes(3373) }, [history])).toBe(
+            false,
+        );
+        // The keys statement binds the key version: a version 2 identity's never moves, up or down.
+        expect(await change(rewrap(current, 1), [history])).toBe(false);
+        expect(await change(rewrap(current, 3), [history])).toBe(false);
+        expect(await change(rewrap(current, 2), [history])).toBe(true);
         const [after] = await auth.listIdentityHistory(user.id);
-        expect(after!.encryptedSigningSeed.equals(history.encryptedSigningSeed)).toBe(true);
-        expect(after!.signingPublicKey.equals(old!.signingPublicKey)).toBe(true);
+        expect(after!.encryptedMlDsaSeed!.equals(history.encryptedMlDsaSeed)).toBe(true);
+        expect(after!.mlDsaPublicKey!.equals(old!.mlDsaPublicKey!)).toBe(true);
         expect(after!.successionSignature.equals(old!.successionSignature)).toBe(true);
-        expect((await auth.getIdentity(user.id))?.keyVersion).toBe(2);
+        const now = (await auth.getIdentity(user.id))!;
+        expect(now.keyVersion).toBe(2);
+        expect(now.mlDsaPublicKey!.equals(current.mlDsaPublicKey!)).toBe(true);
     });
 });
 

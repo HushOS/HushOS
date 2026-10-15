@@ -23,6 +23,7 @@ import com.hushos.app.data.Vault
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
+import com.hushos.app.data.SharedLoad
 import com.hushos.app.data.TrustState
 import com.hushos.app.data.providerSummary
 import java.io.File
@@ -37,7 +38,9 @@ import java.io.FileNotFoundException
  * as a sign-in affordance that opens the app.
  */
 class HushOSDocumentsProvider : DocumentsProvider() {
-    private var vault: Vault? = null
+    /* Read on any thread; replaced only under vaultLock, one Vault per session. */
+    @Volatile private var vault: Vault? = null
+    private val vaultLock = Any()
 
     override fun onCreate(): Boolean = true
 
@@ -52,14 +55,26 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val ctx = context ?: throw FileNotFoundException("no context")
         val session = Shared.session(ctx)
         vault?.let { if (session != null && it.api.session == session) return it }
+        return synchronized(vaultLock) {
+            // Another request may have replaced it while this one waited: then it is that one.
+            vault?.let { if (session != null && it.api.session == session) return it }
+            vault = null
+            // A load begun for the vault dropped here neither lands nor is joined by the next one's requests.
+            trustLoad.reset(null) { trust = TrustState.Loading }
+            session ?: throw authenticationRequired()
+            val created = Vault(ctx, com.hushos.app.data.DriveApi(session))
+            // The tree on the phone first: listings answer from it, and without a network they still answer.
+            runCatching { created.buildCatalogue() }
+            trustLoad.reset(created)
+            vault = created
+            created
+        }
+    }
+
+    /* The session is gone: the vault goes, and nothing loaded for it lands. */
+    private fun dropVault() = synchronized(vaultLock) {
         vault = null
-        trust = TrustState.Loading
-        session ?: throw authenticationRequired()
-        val created = Vault(ctx, com.hushos.app.data.DriveApi(session))
-        vault = created
-        // The tree on the phone first: listings answer from it, and without a network they still answer.
-        runCatching { created.buildCatalogue() }
-        return created
+        trustLoad.reset(null) { trust = TrustState.Loading }
     }
 
     private fun authenticationRequired(): Exception {
@@ -74,7 +89,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     private fun <T> guarded(block: () -> T): T = try {
         block()
     } catch (e: NotAuthenticated) {
-        vault = null
+        dropVault()
         throw authenticationRequired()
     } catch (e: AuthenticationRequiredException) {
         throw e
@@ -89,19 +104,27 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     /* Whom this account trusts, for the rows' Unverified label, and when it was last asked. */
     @Volatile private var trust: TrustState = TrustState.Loading
     @Volatile private var trustAt = 0L
+    private val trustLoad = SharedLoad<Vault, Result<com.hushos.app.data.Trust>>()
 
     /*
      * The trust set, loaded at most every few minutes (a failed load is asked again sooner), as the app's own lists
      * use it. A load that fails marks every row, never none (docs/integrity-design.md, "Checking fails closed").
+     * Requests arrive on many threads: they share one load (SharedLoad), which is kept only while its vault is still
+     * this provider's (`reset` in requireVault); one for a vault dropped since answers its own request and keeps nothing.
      */
     private fun trustFor(vault: Vault): TrustState {
         val now = android.os.SystemClock.elapsedRealtime()
         val current = trust
         val fresh = if (current is TrustState.Ready) TRUST_TTL_MS else TRUST_RETRY_MS
         if (current !is TrustState.Loading && now - trustAt < fresh) return current
-        val result = runCatching { vault.trust() }
+        val result = trustLoad.load(vault, { runCatching { vault.trust() } }) { read ->
+            if (read.exceptionOrNull() !is NotAuthenticated) {
+                trust = trust.after(read)
+                trustAt = now
+            }
+        }
         if (result.exceptionOrNull() is NotAuthenticated) throw result.exceptionOrNull()!!
-        return current.after(result).also { trust = it; trustAt = now }
+        return current.after(result)
     }
 
     private fun summaryOf(item: Opened, trust: TrustState): String? = providerSummary(item.node, trust)

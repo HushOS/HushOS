@@ -229,6 +229,91 @@ sealed interface TrustState {
     fun after(result: Result<Trust>): TrustState = result.fold({ Ready(it) }) { error -> if (error is Unreachable && this is Ready) this else Failed }
 }
 
+/*
+ * Trust loads of which only the latest begun may land. Loads overlap (a refresh, then a succession or a pin change and
+ * the refresh after it), and the older one can finish last: kept, it would put back the replaced key or the old pins
+ * until the next load. `land` checks and applies under one lock, so a load begun meanwhile always lands after it.
+ */
+class TrustLoads {
+    private val begun = java.util.concurrent.atomic.AtomicLong()
+    private val lock = Any()
+
+    /* A ticket for a load about to start; any load begun before it no longer lands. */
+    fun begin(): Long = begun.incrementAndGet()
+
+    /* No load begun so far lands (the account or the session changed). */
+    fun dropAll() { begun.incrementAndGet() }
+
+    /* Runs `apply` (which keeps the load's result) only when no load began after `ticket`; null otherwise. */
+    fun <T> land(ticket: Long, apply: () -> T): T? = synchronized(lock) { if (ticket == begun.get()) apply() else null }
+}
+
+/*
+ * One load at a time, shared by everyone who asks while it runs (the Files app asks from many threads at once): a load
+ * per request would multiply the loads, and with only the latest kept, none would land while browsing goes on. Loads
+ * are for the current `key` (the vault, set by `reset`): one is joined only for that key and only if nothing
+ * invalidated since it began, and only such a load is kept. A request still holding another key (a vault dropped since
+ * it took it) loads for itself: never joined, never kept, never in the way of the current key's load.
+ */
+class SharedLoad<K : Any, T> {
+    private class Flight<K, T>(val key: K, val generation: Long) {
+        val done = java.util.concurrent.CompletableFuture<T>()
+    }
+
+    private val lock = Any()
+    private var generation = 0L
+    private var current: K? = null
+    private var flight: Flight<K, T>? = null
+
+    /* `key` is the one loads are for from now (null: none); nothing begun before is kept or joined. `then` runs under the same lock. */
+    fun reset(key: K?, then: () -> Unit = {}) = synchronized(lock) {
+        generation++
+        current = key
+        flight = null
+        then()
+    }
+
+    /* The identity or the pins changed: the next caller loads afresh, and the load under way keeps nothing. */
+    fun invalidate() = synchronized(lock) { reset(current) }
+
+    /*
+     * The result of the load for `key` under way, or of one started now with `read`. The one that ran `read` hands the
+     * result to `keep` under the lock, only when `key` is still the current one and nothing invalidated since it
+     * began. Those who joined get the same result, kept or not (they asked before it changed), and always get it:
+     * a `keep` that throws fails only the caller that ran it.
+     */
+    fun load(key: K, read: () -> T, keep: (T) -> Unit): T {
+        val (mine, joined) = synchronized(lock) {
+            val running = flight?.takeIf { it.key === key && it.generation == generation }
+            when {
+                running != null -> running to true
+                key !== current -> Flight<K, T>(key, generation) to false
+                else -> Flight<K, T>(key, generation).also { flight = it } to false
+            }
+        }
+        if (joined) {
+            try {
+                return mine.done.get()
+            } catch (failure: java.util.concurrent.ExecutionException) {
+                throw failure.cause ?: failure
+            }
+        }
+        var outcome: Result<T>? = null
+        try {
+            val result = read()
+            outcome = Result.success(result)
+            synchronized(lock) { if (mine.generation == generation && key === current) keep(result) }
+            return result
+        } catch (failure: Throwable) {
+            if (outcome == null) outcome = Result.failure(failure)
+            throw failure
+        } finally {
+            synchronized(lock) { if (flight === mine) flight = null }
+            outcome?.fold({ mine.done.complete(it) }, { mine.done.completeExceptionally(it) })
+        }
+    }
+}
+
 /* The mark a row shows under `state`: none while it loads, Couldn't check when it failed, otherwise the verdict. */
 fun markOf(node: NodeView, state: TrustState): Unverified? = when (state) {
     TrustState.Loading -> null

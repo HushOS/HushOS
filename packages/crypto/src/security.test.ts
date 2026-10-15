@@ -5,7 +5,9 @@ import {
     createSuccessor,
     openIdentityEncryptionKey,
     openIdentityKemKey,
+    openIdentityMlDsaKey,
     openIdentitySigningKey,
+    type IdentityEnvelope,
 } from './identity';
 import { rewrapAccountKeys } from './security';
 import { createWorkspaceGrant, openWorkspaceKey } from './workspace';
@@ -21,22 +23,25 @@ import { createWorkspaceGrant, openWorkspaceKey } from './workspace';
 const USER = '11111111-1111-4111-8111-111111111111';
 const WS = '22222222-2222-4222-8222-222222222222';
 
+/* Both private halves of an identity's signature, opened under its root. */
+async function hybridKeysOf(root: Uint8Array<ArrayBuffer>, identity: IdentityEnvelope) {
+    return {
+        signingKey: await openIdentitySigningKey(root, USER, identity),
+        mlDsaSecretKey: (await openIdentityMlDsaKey(root, USER, identity))!.secretKey,
+    };
+}
+
 describe('master-key rotation', () => {
     test('rewraps the identity, its history and the settings key, keeping versions and keys', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const next = crypto.getRandomValues(new Uint8Array(32));
         const first = await createIdentity(root, USER);
-        const second = await createSuccessor(
-            root,
-            USER,
-            first,
-            await openIdentitySigningKey(root, USER, first),
-        );
+        const second = await createSuccessor(root, USER, first, await hybridKeysOf(root, first));
         const third = await createSuccessor(
             root,
             USER,
             second.identity,
-            await openIdentitySigningKey(root, USER, second.identity),
+            await hybridKeysOf(root, second.identity),
         );
         const settings = await createSettingsKey(root, USER);
         const grant = await createWorkspaceGrant(root, USER, WS, 1);
@@ -57,6 +62,11 @@ describe('master-key rotation', () => {
             expect(identity.encryptionPublicKey).toBe(was.encryptionPublicKey);
             expect(identity.signingPublicKey).toBe(was.signingPublicKey);
             expect(identity.kem?.publicKey).toBe(was.kem?.publicKey);
+            expect(identity.mlDsa?.publicKey).toBe(was.mlDsa?.publicKey);
+            expect(identity.keysSignature).toBe(was.keysSignature);
+            expect((await openIdentityMlDsaKey(next, USER, identity))!.publicKey).toBe(
+                was.mlDsa!.publicKey,
+            );
             expect(await openIdentityEncryptionKey(next, USER, identity)).toEqual(
                 await openIdentityEncryptionKey(root, USER, was),
             );

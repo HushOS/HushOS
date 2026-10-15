@@ -131,6 +131,12 @@ export function UnverifiedMark({
                     description:
                         'The change is signed by their previous keys. Compare words in People you share with to be sure.',
                 });
+            else if (outcome === 'recheck')
+                toast.add({
+                    type: 'error',
+                    title: `${name}’s keys were upgraded`,
+                    description: 'Compare words with them again in People you share with.',
+                });
             else if (outcome === 'changed')
                 toast.add({
                     type: 'error',

@@ -71,7 +71,7 @@ struct Settings {
     }
 
     init(version: UInt64 = 0, keyEnvelope: SettingsKeyEnvelope? = nil) {
-        document = ["version": 1, "contacts": [String: Any]()]
+        document = ["version": 2, "contacts": [String: Any]()]
         self.version = version
         self.keyEnvelope = keyEnvelope
     }
@@ -117,9 +117,12 @@ struct Settings {
         raw["fingerprint"] = pin.fingerprint
         raw["pinnedAt"] = pin.pinnedAt
         raw["kemPublicKeyHash"] = pin.kemPublicKeyHash ?? NSNull()
+        // Absent, not null, on a pin from before the release, as the web leaves it.
+        raw["mlDsaPublicKeyHash"] = pin.mlDsaPublicKeyHash
         raw["keyVersion"] = pin.keyVersion.map { NSNumber(value: $0) } ?? NSNull()
         raw["previousSigningKeys"] = pin.previousSigningKeys
         raw["keysReplacedAt"] = pin.keysReplacedAt
+        if pin.resealShares == true { raw["resealShares"] = true }
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }
@@ -152,10 +155,10 @@ struct Settings {
         }
     }
 
-    /* The document as sealed: compact, keys sorted, version 1. */
+    /* The document as sealed: compact, keys sorted, version 2 (read as 1 or 2; the only one that may hold version 3 pins). */
     func json() throws -> String {
         var out = document
-        out["version"] = 1
+        out["version"] = 2
         if out["contacts"] == nil { out["contacts"] = [String: Any]() }
         let data = try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys, .withoutEscapingSlashes])
         return String(decoding: data, as: UTF8.self)
@@ -164,43 +167,32 @@ struct Settings {
 
 extension ContactPin {
     /*
-     * A pin made after a words check: it has the signing key the words cover, and its
-     * fingerprint is the current one over both keys. Pins from before the signing key
-     * joined the fingerprint, or a document someone edited, vouch for nothing.
+     * A version 3 pin made after a words check: it holds the ML-DSA and ML-KEM digests, and its
+     * fingerprint is the version 3 one over the X25519 and Ed25519 keys and both digests. A pin
+     * from before the post-quantum release (no ML-DSA digest), or one someone edited, vouches
+     * for nothing whatever the server serves (docs/identity-pq-design.md 2).
      */
     public var verified: Bool {
-        guard !signingPublicKey.isEmpty, let encryption = try? base64urlDecode(value: encryptionPublicKey),
-              let signing = try? base64urlDecode(value: signingPublicKey),
-              let print = try? identityFingerprint(encryptionPublicKey: encryption, signingPublicKey: signing) else { return false }
-        return print == fingerprint
+        pinVerified(encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                    mlDsaPublicKeyHash: mlDsaPublicKeyHash, kemPublicKeyHash: kemPublicKeyHash, fingerprint: fingerprint)
     }
 
     var displayName: String { name.isEmpty ? email : name }
 
     /*
-     * The keys a share to this person is sealed to, given what the server served for them:
-     * the pinned X25519 key and a post-quantum key the pin vouches for, never X25519 alone.
-     * A KEM key seen for the first time is taken when the pinned signing key signed it; its
-     * digest comes back to be remembered on the pin.
+     * The keys a share to this person is sealed to, given what the server serves for them: the
+     * pinned X25519 key and the served ML-KEM key, only when the comparison is `same` (so the
+     * ML-KEM and ML-DSA keys are the ones the version 3 pin's digests name). Never X25519 alone.
      */
-    func sealKeys(encryptionPublicKey served: String, kemPublicKey: String?, kemSignature: String?) throws -> (publicKey: Data, kem: Data, newDigest: String?) {
+    func sealKeys(_ served: ServedContactKeys) throws -> (publicKey: Data, kem: Data) {
         guard verified else { throw ContactError.recheck(displayName) }
-        guard served == encryptionPublicKey else { throw ContactError.changed }
-        let publicKey = try base64urlDecode(value: encryptionPublicKey)
-        guard let kemPublicKey, let kem = try? base64urlDecode(value: kemPublicKey) else {
-            throw ContactError.noKem(displayName)
+        switch compare(served) {
+        case .same: break
+        case .recheck: throw ContactError.recheck(displayName)
+        case .succession, .changed: throw ContactError.changed
         }
-        let digest = keyDigest(publicKey: kem)
-        if let known = kemPublicKeyHash {
-            guard known == digest else { throw ContactError.kemChanged(displayName) }
-            return (publicKey, kem, nil)
-        }
-        // Only the pinned signing key may vouch: the words compared cover it, the served one could be anyone's.
-        guard let kemSignature, kemBindingVerify(userId: userId, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
-                                                 kemPublicKey: kemPublicKey, signature: kemSignature) else {
-            throw ContactError.kemUnsigned(displayName)
-        }
-        return (publicKey, kem, digest)
+        guard let kemPublicKey = served.kemPublicKey, let kem = try? base64urlDecode(value: kemPublicKey) else { throw ContactError.changed }
+        return (try base64urlDecode(value: encryptionPublicKey), kem)
     }
 }
 
@@ -281,7 +273,7 @@ extension Vault {
                 SettingsMarks.shared.record(userId: session.userId, version: stored)
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
-                trustedSigners = nil
+                forgetSigners()
                 return settings
             } catch AuthError.conflict where attempt < 2 {
                 attempt += 1

@@ -216,7 +216,32 @@ const keyEnvelope = (value: string) => decodeEnvelope(value, KEY_ENVELOPE_BYTES)
 /* An Ed25519 signature: 64 bytes, checked against the writer's key in the repository. */
 const signature = (value: string) => decodeEnvelope(value, 64);
 /*
- * A share envelope as written now: suite 3, signed by the granter. An older
+ * Someone's public identity as a share, a rotation or a report shows it: all
+ * four public keys and a version 2 identity's keys statement
+ * (docs/identity-pq-design.md). Clients check the statement and the pin; a
+ * version 1 identity, with no ML-DSA key, is trusted with nothing.
+ */
+function publicIdentity(i: {
+    keyVersion: number;
+    identityVersion: number;
+    encryptionPublicKey: Buffer;
+    signingPublicKey: Buffer;
+    mlDsaPublicKey: Buffer | null;
+    kemPublicKey: Buffer | null;
+    keysSignature: Buffer | null;
+}) {
+    return {
+        keyVersion: i.keyVersion,
+        identityVersion: i.identityVersion === 2 ? (2 as const) : (1 as const),
+        encryptionPublicKey: b64(i.encryptionPublicKey),
+        signingPublicKey: b64(i.signingPublicKey),
+        mlDsaPublicKey: i.mlDsaPublicKey ? b64(i.mlDsaPublicKey) : null,
+        kemPublicKey: i.kemPublicKey ? b64(i.kemPublicKey) : null,
+        keysSignature: i.keysSignature ? b64(i.keysSignature) : null,
+    };
+}
+/*
+ * A share envelope as written now: suite 4, with the granter's hybrid signature. An older
  * suite is a client that has not updated, told so with 409; anything else is
  * not a share envelope at all.
  */
@@ -802,9 +827,9 @@ function shareView(row: Awaited<ReturnType<typeof driveRepository.listNodeShares
         role: row.role,
         keyEpoch: row.keyEpoch,
         createdAt: row.createdAt.toISOString(),
-        // Told apart by length in the query. Only the granter sees a row of suite 1 or 2,
-        // which grants nothing now, so they can re-seal it in suite 3 or revoke it.
-        suite: row.suite as 1 | 2 | 3,
+        // Told apart by length in the query. Only the granter sees a row of suite 1, 2 or 3,
+        // which grants nothing now, so they can re-seal it in suite 4 or revoke it.
+        suite: row.suite as 1 | 2 | 3 | 4,
         grantee: row.grantee,
     };
 }
@@ -856,7 +881,7 @@ export async function listNodeShares(userId: string, workspaceId: string, nodeId
     return { shares: (await driveRepository.listNodeShares(workspaceId, nodeId)).map(shareView) };
 }
 
-/* The granter re-seals a live share at the current epoch in suite 3: to a grantee's new keys, or a row left in an older suite. */
+/* The granter re-seals a live share at the current epoch in suite 4: to a grantee's new keys, or a row left in an older suite. */
 export async function resealShare(
     userId: string,
     workspaceId: string,
@@ -896,18 +921,7 @@ export async function listSharedByMe(userId: string) {
         shares: shares.map((row) => ({
             ...shareView(row),
             node: nodeView(row.node),
-            granteeIdentity: {
-                keyVersion: row.granteeIdentity.keyVersion,
-                encryptionPublicKey: b64(row.granteeIdentity.encryptionPublicKey),
-                signingPublicKey: b64(row.granteeIdentity.signingPublicKey),
-                kem:
-                    row.granteeIdentity.kemPublicKey && row.granteeIdentity.kemSignature
-                        ? {
-                              publicKey: b64(row.granteeIdentity.kemPublicKey),
-                              signature: b64(row.granteeIdentity.kemSignature),
-                          }
-                        : null,
-            },
+            granteeIdentity: publicIdentity(row.granteeIdentity),
         })),
         links: links.map((row) => ({ ...linkView(row), node: nodeView(row.node) })),
     };
@@ -932,9 +946,7 @@ export async function listSharedWithMe(userId: string) {
                 id: row.granter.id,
                 name: row.granter.name,
                 email: row.granter.email,
-                encryptionPublicKey: b64(row.granter.encryptionPublicKey),
-                signingPublicKey: b64(row.granter.signingPublicKey),
-                keyVersion: row.granter.keyVersion,
+                ...publicIdentity(row.granter),
             },
             node: granteeView(nodeView(row.node)),
         })),
@@ -1945,24 +1957,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
 
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
-function servedOperator(o: {
-    userId: string;
-    keyVersion: number;
-    encryptionPublicKey: Buffer;
-    signingPublicKey: Buffer;
-    kemPublicKey: Buffer | null;
-    kemSignature: Buffer | null;
-}) {
-    return {
-        userId: o.userId,
-        keyVersion: o.keyVersion,
-        encryptionPublicKey: b64(o.encryptionPublicKey),
-        signingPublicKey: b64(o.signingPublicKey),
-        kem:
-            o.kemPublicKey && o.kemSignature
-                ? { publicKey: b64(o.kemPublicKey), signature: b64(o.kemSignature) }
-                : null,
-    };
+function servedOperator(o: Parameters<typeof publicIdentity>[0] & { userId: string }) {
+    return { userId: o.userId, ...publicIdentity(o) };
 }
 
 /* A report key envelope of either suite: 112 bytes sealed under X25519 alone, 1224 hybrid. */
@@ -2346,18 +2342,15 @@ function rotationWorkView(row: RotationWorkRow) {
         shares: row.shares.map((share) => ({
             id: share.id,
             granteeUserId: share.granteeUserId,
-            grantee: {
+            grantee: publicIdentity({
                 keyVersion: share.granteeKeyVersion,
-                encryptionPublicKey: b64(share.granteePublicKey),
-                signingPublicKey: b64(share.granteeSigningPublicKey),
-                kem:
-                    share.granteeKemPublicKey && share.granteeKemSignature
-                        ? {
-                              publicKey: b64(share.granteeKemPublicKey),
-                              signature: b64(share.granteeKemSignature),
-                          }
-                        : null,
-            },
+                identityVersion: share.granteeIdentityVersion,
+                encryptionPublicKey: share.granteePublicKey,
+                signingPublicKey: share.granteeSigningPublicKey,
+                mlDsaPublicKey: share.granteeMlDsaPublicKey,
+                kemPublicKey: share.granteeKemPublicKey,
+                keysSignature: share.granteeKeysSignature,
+            }),
         })),
         links: row.links.map((link) => ({
             id: link.id,

@@ -15,7 +15,7 @@ import {
 } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
-import { driveRepository, growthRepository } from '@hushos/db';
+import { authRepository, driveRepository, growthRepository } from '@hushos/db';
 import {
     CLIENT_HEADER,
     LINK_TOKEN_HEADER,
@@ -81,6 +81,12 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
             });
         }
         if (/^\/api\/(drive|admin)\//.test(new URL(request.url).pathname)) {
+            // A signed write from an identity still on version 1: an outdated build (see signedBy).
+            if (error instanceof driveRepository.OutdatedIdentityError)
+                return status(409, {
+                    message: 'Update HushOS to save changes.',
+                    code: 'unsupported' as const,
+                });
             if (error instanceof drive.DriveError)
                 return status(error.status, {
                     message: error.message,
@@ -196,14 +202,15 @@ const reportEnvelopeSchema = t.Union([
     t.String({ minLength: 1632, maxLength: 1632, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
 /*
- * A share envelope of any suite by length (72, 1160 or 1256 bytes), so a client
- * still sealing an older suite hears 409 "Update HushOS to share" from the domain
- * rather than a bare 400.
+ * A share envelope of any suite by length (72, 1160, 1256 or 4565 bytes), so a
+ * client still sealing an older suite hears 409 "Update HushOS to share" from
+ * the domain rather than a bare 400.
  */
 const shareEnvelopeSchema = t.Union([
     keyEnvelopeSchema,
     t.String({ minLength: 1547, maxLength: 1547, pattern: '^[A-Za-z0-9_-]+$' }),
     t.String({ minLength: 1675, maxLength: 1675, pattern: '^[A-Za-z0-9_-]+$' }),
+    t.String({ minLength: 6087, maxLength: 6087, pattern: '^[A-Za-z0-9_-]+$' }),
 ]);
 /* A version envelope of suites 2 and 3 (84 bytes): the content key sealed with the sizes. */
 const versionEnvelopeSchema = t.String({
@@ -231,6 +238,12 @@ const documentEnvelopeSchema = t.String({
 const documentKindSchema = t.String({ pattern: '^[a-z][a-z0-9-]{0,31}$' });
 /* An Ed25519 signature, 64 bytes; the domain checks it against the writer's current key. */
 const signatureSchema = t.String({ minLength: 86, maxLength: 86, pattern: '^[A-Za-z0-9_-]+$' });
+/* A person's hybrid signature: Ed25519 then ML-DSA-65, 3373 bytes. */
+const hybridSignatureSchema = t.String({
+    minLength: 4498,
+    maxLength: 4498,
+    pattern: '^[A-Za-z0-9_-]+$',
+});
 const nodeEnvelopesSchema = {
     keyEpoch: epochSchema,
     parentKeyEpoch: epochSchema,
@@ -309,16 +322,8 @@ const recoverySchema = t.Object({
     publicKey: tokenSchema,
 });
 
-/* The KEM half of an identity: a 1184-byte public key, an 80-byte wrapped seed, a 64-byte signature. */
-const identityKemSchema = t.Object({
-    publicKey: t.String({ minLength: 1579, maxLength: 1579, pattern: '^[A-Za-z0-9_-]+$' }),
-    seedNonce: t.String({ minLength: 32, maxLength: 32 }),
-    encryptedSeed: t.String({ minLength: 107, maxLength: 107 }),
-    signature: t.String({ minLength: 86, maxLength: 86 }),
-});
-const identitySchema = t.Object({
-    version: t.Literal(1),
-    kem: t.Optional(t.Nullable(identityKemSchema)),
+/* The fields every identity version shares: the X25519 and Ed25519 halves under the root. */
+const identityCommon = {
     keyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
     wrappingSalt: tokenSchema,
     encryptionPublicKey: tokenSchema,
@@ -327,7 +332,44 @@ const identitySchema = t.Object({
     signingPublicKey: tokenSchema,
     signingSeedNonce: t.String({ minLength: 32, maxLength: 32 }),
     encryptedSigningSeed: t.String({ minLength: 64, maxLength: 64 }),
-});
+};
+/* A 1184-byte ML-KEM public key and its 80-byte wrapped seed. */
+const kemHalf = {
+    publicKey: t.String({ minLength: 1579, maxLength: 1579, pattern: '^[A-Za-z0-9_-]+$' }),
+    seedNonce: t.String({ minLength: 32, maxLength: 32 }),
+    encryptedSeed: t.String({ minLength: 107, maxLength: 107 }),
+};
+/*
+ * Version 2 (docs/identity-pq-design.md): all four halves and the keys
+ * statement, a 3373-byte hybrid signature. Version 1 is accepted only where an
+ * existing one is rewrapped (master-key rotation, its history); the domain
+ * refuses it anywhere a new identity is stored.
+ */
+const identitySchema = t.Union([
+    t.Object({
+        version: t.Literal(2),
+        ...identityCommon,
+        kem: t.Object(kemHalf),
+        mlDsa: t.Object({
+            publicKey: t.String({ minLength: 2603, maxLength: 2603, pattern: '^[A-Za-z0-9_-]+$' }),
+            seedNonce: t.String({ minLength: 32, maxLength: 32 }),
+            encryptedSeed: t.String({ minLength: 64, maxLength: 64 }),
+        }),
+        keysSignature: hybridSignatureSchema,
+    }),
+    t.Object({
+        version: t.Literal(1),
+        ...identityCommon,
+        kem: t.Optional(
+            t.Nullable(
+                t.Object({
+                    ...kemHalf,
+                    signature: t.Optional(t.Nullable(t.String({ minLength: 86, maxLength: 86 }))),
+                }),
+            ),
+        ),
+    }),
+]);
 
 /* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */
 const settingsKeySchema = t.Object({
@@ -531,7 +573,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 recovery: t.Optional(recoverySchema),
                 identity: t.Optional(identitySchema),
                 // Every earlier identity, re-wrapped under the new root by a master-key rotation.
-                identityHistory: t.Optional(t.Array(identitySchema, { maxItems: 1000 })),
+                identityHistory: t.Optional(
+                    t.Array(identitySchema, { maxItems: authRepository.IDENTITY_HISTORY_LIMIT }),
+                ),
                 settingsKey: t.Optional(settingsKeySchema),
                 workspaces: t.Optional(t.Array(workspaceKeySchema, { maxItems: 200 })),
             }),
@@ -553,13 +597,19 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ sessionToken, body }) => auth.confirmRecoveryBackup(sessionToken, body.recoveryVersion),
     )
     .get('/auth/identity', ({ sessionToken }) => auth.getIdentityEnvelope(sessionToken))
-    .post('/auth/identity/kem', { body: identityKemSchema }, ({ sessionToken, body }) =>
-        auth.addIdentityKem(sessionToken, body),
+    // The upgrade to a version 2 identity: the same keys, plus ML-DSA and the keys statement.
+    .post(
+        '/auth/identity/upgrade',
+        { body: t.Object({ identity: identitySchema }) },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.upgradeIdentity(sessionToken, body);
+        },
     )
-    // Identity succession: new keys at the next version, signed by the current signing key.
+    // Identity succession: new keys at the next version, signed by the current identity's hybrid signature.
     .post(
         '/auth/identity/succession',
-        { body: t.Object({ identity: identitySchema, signature: signatureSchema }) },
+        { body: t.Object({ identity: identitySchema, signature: hybridSignatureSchema }) },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.succeedIdentity(sessionToken, body);
@@ -1883,7 +1933,26 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
     // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
+    /*
+     * Auth bodies are small, so they are read whole under a cap. A few carry
+     * identities, which are about 9 KB each since they hold ML-DSA and ML-KEM
+     * public keys and a 3373-byte keys signature: a succession adds a hybrid
+     * signature, and a master-key rotation carries every earlier identity.
+     */
     const SETTINGS_BODY_LIMIT = 96 * 1024;
+    const bodyLimit = (path: string) =>
+        path === '/api/auth/settings'
+            ? SETTINGS_BODY_LIMIT
+            : path === '/api/auth/security/finish'
+              ? // Up to every earlier identity beside the current one; narrowed per account below.
+                (authRepository.IDENTITY_HISTORY_LIMIT + 1) * auth.SECURITY_CHANGE_IDENTITY_BYTES +
+                auth.SECURITY_CHANGE_REST_BYTES
+              : path === '/api/auth/identity/succession' ||
+                  path === '/api/auth/identity/upgrade' ||
+                  path === '/api/auth/register/finish' ||
+                  path === '/api/auth/setup'
+                ? 64 * 1024
+                : 16_384;
     if (!pathname.startsWith('/api/auth/')) return apiApp.fetch(request);
     const log = useLogger();
     log.set({ auth: { action: authLogAction(new URL(request.url).pathname) } });
@@ -1895,6 +1964,24 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     try {
         if (request.method !== 'GET' && request.method !== 'OPTIONS') {
             guardAuthMutation(request);
+            let limit = bodyLimit(pathname);
+            // The one route whose cap runs to megabytes is rate limited before its body is read,
+            // read only for a current session, and only as far as that account's identities need,
+            // so neither a stranger nor a fresh account can make the server buffer megabytes.
+            const large = limit > SETTINGS_BODY_LIMIT;
+            if (large) {
+                await auth.limitAuthMutation(requestAddress(request));
+                const allowed = await auth.securityChangeBodyLimit(readSessionToken(request));
+                if (allowed === null) {
+                    await request.body?.cancel();
+                    log.set({ auth: { outcome: 'rejected' } });
+                    return Response.json(
+                        { message: 'Sign in before changing account security.' },
+                        { status: 401, headers },
+                    );
+                }
+                limit = Math.min(limit, allowed);
+            }
             const reader = request.body?.getReader();
             const chunks: Uint8Array[] = [];
             let length = 0;
@@ -1903,9 +1990,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                     const { done, value } = await reader.read();
                     if (done) break;
                     length += value.byteLength;
-                    if (
-                        length > (pathname === '/api/auth/settings' ? SETTINGS_BODY_LIMIT : 16_384)
-                    ) {
+                    if (length > limit) {
                         await reader.cancel();
                         log.set({ auth: { outcome: 'rejected' } });
                         return Response.json(
@@ -1928,7 +2013,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                 body,
             });
             // Consume the budget only for requests that passed the cheap checks above.
-            await auth.limitAuthMutation(requestAddress(request));
+            if (!large) await auth.limitAuthMutation(requestAddress(request));
         }
         const result = await apiApp.fetch(request);
         log.set({

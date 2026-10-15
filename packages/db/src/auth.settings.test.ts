@@ -187,9 +187,11 @@ describe('identity lookup', () => {
             [
                 'email',
                 'encryptionPublicKey',
+                'identityVersion',
                 'kemPublicKey',
-                'kemSignature',
+                'keysSignature',
                 'keyVersion',
+                'mlDsaPublicKey',
                 'name',
                 'signingPublicKey',
                 'userId',

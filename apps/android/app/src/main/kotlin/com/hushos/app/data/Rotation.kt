@@ -39,14 +39,11 @@ class RotationStuck : Exception("The rotation could not finish. Try again.")
 /* How many nodes a rotation re-sealed, and the people it left out with why, to be said rather than dropped quietly. */
 data class RotationResult(val done: Int, val skipped: List<String>)
 
-/* A share row the rotation re-seals: the grantee's pinned X25519 key and their checked post-quantum key. */
+/* A share row the rotation re-seals: the grantee's pinned X25519 key and their checked ML-KEM key. */
 class ResealShare(val id: String, val granteeUserId: String, val publicKey: ByteArray, val kemPublicKey: ByteArray)
 
-/*
- * What one node's served shares and links come to: the share rows re-sealed, the links re-sealed, why anyone
- * was left out, and post-quantum key digests seen for the first time (user id -> digest), for their pins.
- */
-class ResealPlan(val shares: List<ResealShare>, val links: List<JSONObject>, val skipped: List<String>, val firstKems: Map<String, String>)
+/* What one node's served shares and links come to: the share rows re-sealed, the links re-sealed, and why anyone was left out. */
+class ResealPlan(val shares: List<ResealShare>, val links: List<JSONObject>, val skipped: List<String>)
 
 /*
  * Which of a node's served shares and links are sealed again: the server's lists are only a claim,
@@ -58,30 +55,20 @@ class ResealPlan(val shares: List<ResealShare>, val links: List<JSONObject>, val
 fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>, ledger: SharingLedger, pins: Map<String, ContactPin>): ResealPlan {
     val sealed = ArrayList<ResealShare>()
     val skipped = ArrayList<String>()
-    val firstKems = HashMap<String, String>()
     for (share in shares) {
         val granteeId = share.getString("granteeUserId")
         if (!ledger.hasShare(nodeId, granteeId)) continue
         val pin = pins[granteeId]
         if (pin == null) { skipped.add("Someone no longer in People you share with lost access."); continue }
-        val served = share.getJSONObject("grantee")
-        val identity = ServedIdentity.from(served)
-        if (!pin.matches(identity)) {
-            // Never followed here: newer keys wait for the person to check them again, then the next pass seals to them.
-            skipped.add(if (needsChain(pin, identity)) "${pin.displayName}’s sharing keys changed since you checked them. Check them again in People you share with, then share again."
-                else "${pin.displayName}’s key has changed since you pinned it. Check it’s them in People you share with, then share again.")
-            continue
-        }
-        val kem = served.optJSONObject("kem")
+        // Never followed here: newer keys wait for the person to check them again, then the next pass seals to them.
         try {
-            val checked = granteeKem(pin, kem?.optString("publicKey")?.ifEmpty { null }, kem?.optString("signature")?.ifEmpty { null })
-            sealed.add(ResealShare(share.getString("id"), granteeId, base64urlDecode(pin.encryptionPublicKey), checked.publicKey))
-            checked.firstHash?.let { firstKems[granteeId] = it }
+            val kem = granteeKem(pin, ServedIdentity.from(share.getJSONObject("grantee")))
+            sealed.add(ResealShare(share.getString("id"), granteeId, base64urlDecode(pin.encryptionPublicKey), kem))
         } catch (refused: SharingRefused) {
             skipped.add(refused.message ?: "${pin.displayName} lost access.")
         }
     }
-    return ResealPlan(sealed, links.filter { ledger.hasLink(it.getString("id"), nodeId) }, skipped, firstKems)
+    return ResealPlan(sealed, links.filter { ledger.hasLink(it.getString("id"), nodeId) }, skipped)
 }
 
 /*
@@ -110,7 +97,6 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     val pins = settings.contacts
     val ledger = settings.ledger
     val skipped = LinkedHashSet<String>()
-    val firstKems = HashMap<String, String>()
     val epochs = HashMap<String, ULong>().apply { nodes.rowsIn(ws).forEach { put(it.id, it.node.keyEpoch) } }
     val seals = ShareSeals.of(context)
     val previous = HashMap<String, Pair<ULong, ByteArray>>()
@@ -187,7 +173,6 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             }
             val plan = planReseal(node.id, entry.shares, entry.links, ledger, pins)
             skipped.addAll(plan.skipped)
-            firstKems.putAll(plan.firstKems)
             val shares = JSONArray()
             val sealedHere = HashMap<String, ShareSeals.Seal>()
             for (share in plan.shares) {
@@ -242,8 +227,6 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     }
     // Envelopes changed under every folder: what this device listed is stale.
     nodes.forgetRows()
-    // A post-quantum key first vouched for here joins its pin, so a different one later is refused.
-    if (firstKems.isNotEmpty()) runCatching { updateSettings { s -> firstKems.forEach { (user, hash) -> s.rememberKem(user, hash) } } }
     return RotationResult(done, skipped.toList())
 }
 

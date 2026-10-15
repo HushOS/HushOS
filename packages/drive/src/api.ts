@@ -272,18 +272,28 @@ export type ShareView = {
     createdAt: string;
     /*
      * 1: sealed under X25519 alone; 2: hybrid, with ML-KEM-768 beside it; 3: an
-     * ephemeral X25519 key and ML-KEM-768, signed by the granter. Only 3 is written.
+     * ephemeral X25519 key and ML-KEM-768, signed by the granter with Ed25519; 4:
+     * the same with the granter's hybrid signature. Only 4 is written or opened.
      */
-    suite: 1 | 2 | 3;
+    suite: 1 | 2 | 3 | 4;
     grantee: { id: string; name: string; email: string };
 };
 /* The grantee's identity as the server serves it, for the owner to check against a pin. */
+/*
+ * Someone's public identity as the server serves it (docs/identity-pq-design.md):
+ * all four public keys and a version 2 identity's keys statement. A version 1
+ * identity (not yet upgraded) has no ML-DSA key and no statement and is
+ * trusted with nothing; only a version 3 pin vouches for any of these.
+ */
 export type ServedIdentity = {
-    /* The identity's version: a succession raises it, and a contact asks for the chain from a pin's. */
+    /* The identity's generation: a succession raises it, and a contact asks for the chain from a pin's. */
     keyVersion: number;
+    identityVersion: 1 | 2;
     encryptionPublicKey: string;
     signingPublicKey: string;
-    kem: { publicKey: string; signature: string } | null;
+    mlDsaPublicKey: string | null;
+    kemPublicKey: string | null;
+    keysSignature: string | null;
 };
 /* A share received: the node as a root of its own, and the granter's key to check against a pin. */
 export type SharedWithMeView = {
@@ -297,15 +307,8 @@ export type SharedWithMeView = {
     createdAt: string;
     /* Where the share's feed starts: opaque and sealed, as the feed's own cursor. */
     cursor: string;
-    /* The granter's current identity: the signing key a suite 3 share is checked against. */
-    granter: {
-        id: string;
-        name: string;
-        email: string;
-        encryptionPublicKey: string;
-        signingPublicKey: string;
-        keyVersion: number;
-    };
+    /* The granter's current identity: the Ed25519 and ML-DSA keys a suite 4 share is checked against. */
+    granter: { id: string; name: string; email: string } & ServedIdentity;
     node: NodeView;
 };
 
@@ -474,7 +477,7 @@ export interface DriveApi {
         input: { granteeUserId: string; role: ShareRole; keyEpoch: number; shareEnvelope: string },
     ): Promise<{ share: ShareView }>;
     nodeShares(workspaceId: string, nodeId: string): Promise<{ shares: ShareView[] }>;
-    /* Replaces a live share's envelope at the current epoch with a suite 3 one; 409 for any other suite. */
+    /* Replaces a live share's envelope at the current epoch with a suite 4 one; 409 for any other suite. */
     resealShare(
         workspaceId: string,
         shareId: string,

@@ -1,3 +1,4 @@
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import {
     createHash,
     createPrivateKey,
@@ -63,6 +64,32 @@ export function signingKeyFromSeed(seed: Buffer) {
 
 export type TestSigner = ReturnType<typeof signingKeyFromSeed> & { userId: string };
 
+/*
+ * A person's hybrid signing keys for tests: Ed25519 from `seed` and ML-DSA-65
+ * from its SHA-256, signing Ed25519 || ML-DSA-65 under the identity context,
+ * as clients do (docs/identity-pq-design.md).
+ */
+export function hybridSignerFromSeed(seed: Buffer) {
+    const ed = signingKeyFromSeed(seed);
+    const lattice = ml_dsa65.keygen(createHash('sha256').update(seed).digest());
+    const context = new TextEncoder().encode('hushos/identity/v1');
+    return {
+        signingPublicKey: ed.publicKey,
+        mlDsaPublicKey: Buffer.from(lattice.publicKey),
+        /* Ed25519 alone, as a stripped or version 1 signature would be. */
+        signClassical: (message: Buffer) => ed.sign(message),
+        /* Only the ML-DSA half, to pair with another key's Ed25519 half. */
+        signLattice: (message: Buffer) =>
+            Buffer.from(ml_dsa65.sign(message, lattice.secretKey, { context })),
+        sign: (message: Buffer) =>
+            Buffer.concat([
+                ed.sign(message),
+                Buffer.from(ml_dsa65.sign(message, lattice.secretKey, { context })),
+            ]),
+    };
+}
+export type HybridSigner = ReturnType<typeof hybridSignerFromSeed>;
+
 const testSigners = new Map<string, TestSigner>();
 /* The signing key createTestIdentity gave an account. */
 export function signerFor(userId: string) {
@@ -83,8 +110,11 @@ export async function createTestIdentity(
     const key = signingKeyFromSeed(
         createHash('sha256').update(`hushos-test-signing:${userId}`).digest(),
     );
+    // A version 2 identity, as every account holds after the post-quantum release: the
+    // Ed25519 key signs for real; the lattice fields only have the lengths the table checks.
     await db.insert(accountIdentities).values({
         userId,
+        version: 2,
         wrappingSalt: randomBytes(32),
         encryptionPublicKey: randomBytes(32),
         encryptionPrivateKeyNonce: randomBytes(24),
@@ -92,6 +122,13 @@ export async function createTestIdentity(
         signingPublicKey: key.publicKey,
         signingSeedNonce: randomBytes(24),
         encryptedSigningSeed: randomBytes(48),
+        kemPublicKey: randomBytes(1184),
+        kemSeedNonce: randomBytes(24),
+        encryptedKemSeed: randomBytes(80),
+        mlDsaPublicKey: randomBytes(1952),
+        mlDsaSeedNonce: randomBytes(24),
+        encryptedMlDsaSeed: randomBytes(48),
+        keysSignature: randomBytes(3373),
         ...overrides,
     });
     const signer = { ...key, userId };

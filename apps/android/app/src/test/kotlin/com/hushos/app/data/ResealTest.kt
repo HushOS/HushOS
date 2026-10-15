@@ -6,7 +6,6 @@ import com.hushos.core.NodeKind
 import com.hushos.core.TrustedKeys
 import com.hushos.core.VersionStatement
 import com.hushos.core.base64urlEncode
-import com.hushos.core.identityFingerprint
 import com.hushos.core.metadataIntegrity
 import com.hushos.core.metadataSign
 import com.hushos.core.randomBytes
@@ -102,8 +101,7 @@ class ResealTest {
         val mayaSeed = randomBytes(32u)
         val mayaKey = signingPublicKey(mayaSeed)
         val enc = randomBytes(32u)
-        val pin = ContactPin(maya, "maya@example.org", "Maya", base64urlEncode(enc), base64urlEncode(mayaKey),
-            identityFingerprint(enc, mayaKey), "2026-10-01T00:00:00Z", null)
+        val pin = TestPins.verified(maya, "maya@example.org", "Maya", base64urlEncode(enc), base64urlEncode(mayaKey))
         val relocked = sourceNode(maya, mayaSeed).let { node ->
             node.copy(metadataSignature = base64urlEncode(com.hushos.core.metadataResealedSign(mayaSeed, source, envelope)))
         }

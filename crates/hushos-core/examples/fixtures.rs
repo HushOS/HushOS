@@ -20,6 +20,80 @@ fn uuid() -> String {
     )
 }
 
+/* An identity envelope as the API and the web write it. */
+fn envelope_json(envelope: &IdentityEnvelope) -> serde_json::Value {
+    json!({
+        "version": envelope.version, "keyVersion": envelope.key_version, "wrappingSalt": envelope.wrapping_salt,
+        "encryptionPublicKey": envelope.encryption_public_key, "encryptionPrivateKeyNonce": envelope.encryption_private_key_nonce,
+        "encryptedEncryptionPrivateKey": envelope.encrypted_encryption_private_key,
+        "signingPublicKey": envelope.signing_public_key, "signingSeedNonce": envelope.signing_seed_nonce, "encryptedSigningSeed": envelope.encrypted_signing_seed,
+        "kem": envelope.kem.as_ref().map(|k| {
+            let mut kem = json!({ "publicKey": k.public_key, "seedNonce": k.seed_nonce, "encryptedSeed": k.encrypted_seed });
+            if let Some(signature) = &k.signature {
+                kem["signature"] = json!(signature);
+            }
+            kem
+        }),
+        "mlDsa": envelope.ml_dsa.as_ref().map(|k| json!({ "publicKey": k.public_key, "seedNonce": k.seed_nonce, "encryptedSeed": k.encrypted_seed })),
+        "keysSignature": envelope.keys_signature,
+    })
+}
+
+fn envelope_of(value: &serde_json::Value) -> IdentityEnvelope {
+    let text = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or_else(|| panic!("{k}")).to_string();
+    IdentityEnvelope {
+        version: value["version"].as_u64().unwrap() as u32,
+        key_version: value["keyVersion"].as_u64().unwrap(),
+        wrapping_salt: text(value, "wrappingSalt"),
+        encryption_public_key: text(value, "encryptionPublicKey"),
+        encryption_private_key_nonce: text(value, "encryptionPrivateKeyNonce"),
+        encrypted_encryption_private_key: text(value, "encryptedEncryptionPrivateKey"),
+        signing_public_key: text(value, "signingPublicKey"),
+        signing_seed_nonce: text(value, "signingSeedNonce"),
+        encrypted_signing_seed: text(value, "encryptedSigningSeed"),
+        kem: value["kem"].as_object().map(|_| IdentityKem {
+            public_key: text(&value["kem"], "publicKey"),
+            seed_nonce: text(&value["kem"], "seedNonce"),
+            encrypted_seed: text(&value["kem"], "encryptedSeed"),
+            signature: value["kem"]["signature"].as_str().map(Into::into),
+        }),
+        ml_dsa: value["mlDsa"].as_object().map(|_| IdentityMlDsa {
+            public_key: text(&value["mlDsa"], "publicKey"),
+            seed_nonce: text(&value["mlDsa"], "seedNonce"),
+            encrypted_seed: text(&value["mlDsa"], "encryptedSeed"),
+        }),
+        keys_signature: value["keysSignature"].as_str().map(Into::into),
+    }
+}
+
+fn link_json(link: &SuccessionLink) -> serde_json::Value {
+    json!({
+        "oldKeyVersion": link.old_key_version, "newKeyVersion": link.new_key_version,
+        "oldEncryptionPublicKey": link.old_encryption_public_key, "oldSigningPublicKey": link.old_signing_public_key,
+        "oldMlDsaPublicKey": link.old_ml_dsa_public_key,
+        "newEncryptionPublicKey": link.new_encryption_public_key, "newSigningPublicKey": link.new_signing_public_key,
+        "newMlDsaPublicKey": link.new_ml_dsa_public_key, "newKemPublicKey": link.new_kem_public_key,
+        "signature": link.signature,
+    })
+}
+
+/* The link the server would serve for a succession from `old` to `next`. */
+fn link_of(old: &IdentityEnvelope, next: &IdentitySuccession) -> SuccessionLink {
+    let n = &next.identity;
+    SuccessionLink {
+        old_key_version: old.key_version,
+        new_key_version: n.key_version,
+        old_encryption_public_key: old.encryption_public_key.clone(),
+        old_signing_public_key: old.signing_public_key.clone(),
+        old_ml_dsa_public_key: old.ml_dsa.as_ref().unwrap().public_key.clone(),
+        new_encryption_public_key: n.encryption_public_key.clone(),
+        new_signing_public_key: n.signing_public_key.clone(),
+        new_ml_dsa_public_key: n.ml_dsa.as_ref().unwrap().public_key.clone(),
+        new_kem_public_key: n.kem.as_ref().unwrap().public_key.clone(),
+        signature: next.signature.clone(),
+    }
+}
+
 fn main() {
     let e = |bytes: &[u8]| base64url_encode(bytes.to_vec());
     let user_id = uuid();
@@ -161,15 +235,17 @@ fn main() {
     let web_user = web["account"]["userId"].as_str().unwrap().to_string();
     let web_root = base64url_decode(web["account"]["accountKey"].as_str().unwrap().into()).unwrap();
     let web_identity = &web["share"]["identity"];
+    let web_envelope = envelope_of(web_identity);
     let str_of = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap().to_string();
+    // The web's version 2 identity as an operator: its KEM key is used once its keys statement holds.
     let operator = OperatorKeys {
         user_id: web_user.clone(),
-        encryption_public_key: str_of(web_identity, "encryptionPublicKey"),
-        signing_public_key: str_of(web_identity, "signingPublicKey"),
-        kem: Some(OperatorKem {
-            public_key: str_of(&web_identity["kem"], "publicKey"),
-            signature: str_of(&web_identity["kem"], "signature"),
-        }),
+        key_version: web_envelope.key_version,
+        encryption_public_key: web_envelope.encryption_public_key.clone(),
+        signing_public_key: web_envelope.signing_public_key.clone(),
+        ml_dsa_public_key: web_envelope.ml_dsa.as_ref().map(|k| k.public_key.clone()),
+        kem_public_key: web_envelope.kem.as_ref().map(|k| k.public_key.clone()),
+        keys_signature: web_envelope.keys_signature.clone(),
     };
     let report_ctx = ReportContext {
         workspace_id: workspace_id.clone(),
@@ -181,14 +257,61 @@ fn main() {
     let report = json!({
         "ctx": { "workspaceId": report_ctx.workspace_id, "nodeId": report_ctx.node_id, "keyEpoch": report_ctx.key_epoch, "reportId": report_ctx.report_id, "operatorUserId": report_ctx.operator_user_id },
         "nodeKey": e(&node_key),
-        "hybrid": e(&report_seal_key(report_ctx, node_key.clone(), operator.clone()).unwrap()),
+        "hybrid": e(&report_seal_key(report_ctx.clone(), node_key.clone(), operator.clone()).unwrap()),
+        // The web's version 1 identity as an operator: sealed to its served KEM key, unchecked.
+        "legacyHybrid": e(&report_seal_key(report_ctx, node_key.clone(), {
+            let legacy = envelope_of(&web["upgrade"]["legacy"]);
+            OperatorKeys {
+                user_id: web_user.clone(),
+                key_version: legacy.key_version,
+                encryption_public_key: legacy.encryption_public_key.clone(),
+                signing_public_key: legacy.signing_public_key.clone(),
+                ml_dsa_public_key: None,
+                kem_public_key: legacy.kem.map(|k| k.public_key),
+                keys_signature: None,
+            }
+        }).unwrap()),
     });
-    // A node key shared to the web's identity in suite 3 by a granter minted here; settings sealed as
-    // version 2 under the web's settings key; and the web's identity succeeded here.
+    // A version 2 identity minted here, which the web opens; a node key it shares to the web's identity
+    // in suite 4; settings sealed as version 2 under the web's settings key; and the web's identity
+    // succeeded and upgraded here.
     let granter_root = random_bytes(32).unwrap();
     let granter_user = uuid();
     let granter_envelope = identity_create(granter_user.clone(), granter_root.clone(), 1).unwrap();
-    let granter = identity_open(granter_user.clone(), granter_root, granter_envelope).unwrap();
+    let granter =
+        identity_open(granter_user.clone(), granter_root.clone(), granter_envelope.clone()).unwrap();
+    let granter_public = public_identity(granter_envelope.clone()).unwrap();
+    let identity_made_here = json!({
+        "userId": granter_user,
+        "accountKey": e(&granter_root),
+        "envelope": envelope_json(&granter_envelope),
+    });
+    let keys = json!({
+        "userId": granter_user,
+        "identity": {
+            "keyVersion": granter_public.key_version, "encryptionPublicKey": granter_public.encryption_public_key,
+            "signingPublicKey": granter_public.signing_public_key, "mlDsaPublicKey": granter_public.ml_dsa_public_key,
+            "kemPublicKey": granter_public.kem_public_key, "keysSignature": granter_public.keys_signature,
+        },
+        "statement": e(&keys_statement(
+            granter_user.clone(),
+            granter_public.key_version,
+            granter_public.encryption_public_key.clone(),
+            granter_public.signing_public_key.clone(),
+            granter_public.ml_dsa_public_key.clone(),
+            granter_public.kem_public_key.clone(),
+        ).unwrap()),
+    });
+    let b = |value: &str| base64url_decode(value.to_string()).unwrap();
+    let fingerprints = json!({
+        "vector": identity_fingerprint(vec![1; 32], vec![2; 32], vec![3; 32], vec![4; 32]).unwrap(),
+        "identity": identity_fingerprint_of_keys(
+            b(&granter_public.encryption_public_key),
+            b(&granter_public.signing_public_key),
+            b(&granter_public.ml_dsa_public_key),
+            b(&granter_public.kem_public_key),
+        ).unwrap(),
+    });
     let share_ctx = ShareContext {
         workspace_id: workspace_id.clone(),
         node_id: node_id.clone(),
@@ -202,10 +325,22 @@ fn main() {
         "ctx": { "workspaceId": share_ctx.workspace_id, "nodeId": share_ctx.node_id, "keyEpoch": share_ctx.key_epoch, "granteeUserId": share_ctx.grantee_user_id, "granterUserId": share_ctx.granter_user_id },
         "nodeKey": e(&node_key),
         "granterSigningPublicKey": granter.signing_public_key,
+        "granterMlDsaPublicKey": granter.ml_dsa_public_key,
         "signed": e(&share_seal(share_ctx, node_key.clone(), granter.clone(), grantee_public, grantee_kem).unwrap()),
     });
     let web_settings = &web["settings"];
-    let settings_json = r#"{"version":1,"contacts":{}}"#;
+    // A version 3 pin, in a document read as version 1: sealed here as version 2.
+    let (pin_x, pin_ed, pin_ml_dsa, pin_kem) =
+        (random_bytes(32).unwrap(), random_bytes(32).unwrap(), pattern(1952, 3), pattern(1184, 4));
+    let pin = json!({
+        "userId": uuid(), "email": "friend@example.com", "name": "Friend",
+        "encryptionPublicKey": e(&pin_x), "signingPublicKey": e(&pin_ed),
+        "mlDsaPublicKeyHash": key_digest(pin_ml_dsa.clone()), "kemPublicKeyHash": key_digest(pin_kem.clone()),
+        "fingerprint": identity_fingerprint_of_keys(pin_x, pin_ed, pin_ml_dsa, pin_kem).unwrap(),
+        "pinnedAt": "2026-10-15T00:00:00.000Z", "keyVersion": 1,
+    });
+    let settings_json = json!({ "version": 1, "contacts": { uuid(): pin } }).to_string();
+    let settings_json = settings_json.as_str();
     let sealed_settings = settings_seal(
         web_user.clone(),
         base64url_decode(str_of(web_settings, "settingsKeyRaw")).unwrap(),
@@ -216,7 +351,8 @@ fn main() {
     let made_key = settings_key_create(web_user.clone(), web_root.clone()).unwrap();
     let settings = json!({
         "userId": web_user,
-        "json": settings_json,
+        // What was sealed, a document read as version 1; it opens as version 2.
+        "readJson": settings_json,
         "envelope": { "version": sealed_settings.version, "settingsVersion": sealed_settings.settings_version, "nonce": sealed_settings.nonce, "ciphertext": sealed_settings.ciphertext },
         // A settings key made here under the web's root.
         "settingsKey": { "nonce": made_key.envelope.nonce, "ciphertext": made_key.envelope.ciphertext },
@@ -309,44 +445,45 @@ fn main() {
         7,
     )
     .unwrap();
-    let kem = web_identity["kem"].as_object().map(|kem| IdentityKem {
-        public_key: kem["publicKey"].as_str().unwrap().into(),
-        seed_nonce: kem["seedNonce"].as_str().unwrap().into(),
-        encrypted_seed: kem["encryptedSeed"].as_str().unwrap().into(),
-        signature: kem["signature"].as_str().unwrap().into(),
-    });
-    let web_envelope = IdentityEnvelope {
-        version: web_identity["version"].as_u64().unwrap() as u32,
-        key_version: web_identity["keyVersion"].as_u64().unwrap(),
-        wrapping_salt: str_of(web_identity, "wrappingSalt"),
-        encryption_public_key: str_of(web_identity, "encryptionPublicKey"),
-        encryption_private_key_nonce: str_of(web_identity, "encryptionPrivateKeyNonce"),
-        encrypted_encryption_private_key: str_of(web_identity, "encryptedEncryptionPrivateKey"),
-        signing_public_key: str_of(web_identity, "signingPublicKey"),
-        signing_seed_nonce: str_of(web_identity, "signingSeedNonce"),
-        encrypted_signing_seed: str_of(web_identity, "encryptedSigningSeed"),
-        kem,
-    };
     let rewrapped_identity =
         identity_rewrap(web_user.clone(), web_root.clone(), new_root.clone(), web_envelope.clone()).unwrap();
-    // The web's identity succeeded here: a successor under the web's root, signed by its key.
+    // A version 1 identity in the history moves with the root too.
+    let web_legacy = envelope_of(&web["upgrade"]["legacy"]);
+    let rewrapped_legacy =
+        identity_rewrap(web_user.clone(), web_root.clone(), new_root.clone(), web_legacy.clone()).unwrap();
+    // The web's identity succeeded here twice, each link signed with the old identity's hybrid signature.
     let next = identity_succeed(web_user.clone(), web_root.clone(), web_envelope.clone()).unwrap();
-    let n = &next.identity;
+    let third = identity_succeed(web_user.clone(), web_root.clone(), next.identity.clone()).unwrap();
+    let first_link = link_of(&web_envelope, &next);
+    let second_link = link_of(&next.identity, &third);
+    let t = &third.identity;
     let succession = json!({
         "userId": web_user,
-        "identity": {
-            "version": n.version, "keyVersion": n.key_version, "wrappingSalt": n.wrapping_salt,
-            "encryptionPublicKey": n.encryption_public_key, "encryptionPrivateKeyNonce": n.encryption_private_key_nonce,
-            "encryptedEncryptionPrivateKey": n.encrypted_encryption_private_key,
-            "signingPublicKey": n.signing_public_key, "signingSeedNonce": n.signing_seed_nonce, "encryptedSigningSeed": n.encrypted_signing_seed,
-            "kem": n.kem.as_ref().map(|k| json!({ "publicKey": k.public_key, "seedNonce": k.seed_nonce, "encryptedSeed": k.encrypted_seed, "signature": k.signature })),
+        "identity": envelope_json(&next.identity),
+        "link": link_json(&first_link),
+        "statement": e(&succession_statement(web_user.clone(), first_link.clone()).unwrap()),
+        "chain": {
+            "links": [link_json(&first_link), link_json(&second_link)],
+            "pinned": {
+                "keyVersion": web_envelope.key_version,
+                "encryptionPublicKey": web_envelope.encryption_public_key,
+                "signingPublicKey": web_envelope.signing_public_key,
+                "mlDsaPublicKeyHash": key_digest(b(&web_envelope.ml_dsa.as_ref().unwrap().public_key)),
+            },
+            "served": {
+                "keyVersion": t.key_version, "encryptionPublicKey": t.encryption_public_key, "signingPublicKey": t.signing_public_key,
+                "mlDsaPublicKey": t.ml_dsa.as_ref().unwrap().public_key, "kemPublicKey": t.kem.as_ref().unwrap().public_key,
+            },
         },
-        "link": {
-            "oldKeyVersion": web_envelope.key_version, "newKeyVersion": n.key_version,
-            "oldEncryptionPublicKey": web_envelope.encryption_public_key, "oldSigningPublicKey": web_envelope.signing_public_key,
-            "newEncryptionPublicKey": n.encryption_public_key, "newSigningPublicKey": n.signing_public_key,
-            "newKemPublicKey": n.kem.as_ref().unwrap().public_key, "signature": next.signature,
-        },
+    });
+    // The web's version 1 identities upgraded here: the same keys and key version, and an ML-DSA key.
+    let web_legacy_no_kem = envelope_of(&web["upgrade"]["legacyNoKem"]);
+    let upgrade = json!({
+        "userId": web_user,
+        "legacy": envelope_json(&web_legacy),
+        "upgraded": envelope_json(&identity_upgrade(web_user.clone(), web_root.clone(), web_legacy.clone()).unwrap()),
+        "legacyNoKem": envelope_json(&web_legacy_no_kem),
+        "upgradedNoKem": envelope_json(&identity_upgrade(web_user.clone(), web_root.clone(), web_legacy_no_kem).unwrap()),
     });
     let rewrapped_settings_key = settings_key_rewrap(
         web_user.clone(),
@@ -369,13 +506,8 @@ fn main() {
             "version": g.version, "workspaceId": g.workspace_id, "keyVersion": g.key_version, "workspaceKeyVersion": g.workspace_key_version,
             "wrappingSalt": g.wrapping_salt, "wrappingNonce": g.wrapping_nonce, "encryptedKey": g.encrypted_key,
         },
-        "identity": {
-            "version": i.version, "keyVersion": i.key_version, "wrappingSalt": i.wrapping_salt,
-            "encryptionPublicKey": i.encryption_public_key, "encryptionPrivateKeyNonce": i.encryption_private_key_nonce,
-            "encryptedEncryptionPrivateKey": i.encrypted_encryption_private_key,
-            "signingPublicKey": i.signing_public_key, "signingSeedNonce": i.signing_seed_nonce, "encryptedSigningSeed": i.encrypted_signing_seed,
-            "kem": i.kem.as_ref().map(|k| json!({ "publicKey": k.public_key, "seedNonce": k.seed_nonce, "encryptedSeed": k.encrypted_seed, "signature": k.signature })),
-        },
+        "identity": envelope_json(i),
+        "legacyIdentity": envelope_json(&rewrapped_legacy),
     });
 
     let out = json!({
@@ -388,6 +520,10 @@ fn main() {
         "settings": settings,
         "signatures": signatures,
         "succession": succession,
+        "identity": identity_made_here,
+        "keys": keys,
+        "upgrade": upgrade,
+        "fingerprints": fingerprints,
         "ids": ids,
         "document": document,
         "account": account,

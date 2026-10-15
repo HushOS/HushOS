@@ -41,9 +41,12 @@ function node(id: string, parentId: string | null): NodeView {
 
 const identity = (id: string): ServedIdentity => ({
     keyVersion: 1,
+    identityVersion: 2,
     encryptionPublicKey: `x25519-${id}`,
     signingPublicKey: `ed25519-${id}`,
-    kem: { publicKey: `kem-${id}`, signature: `sig-${id}` },
+    mlDsaPublicKey: `ml-dsa-${id}`,
+    kemPublicKey: `kem-${id}`,
+    keysSignature: `keys-${id}`,
 });
 
 function ledgerOf(state: Awaited<ReturnType<SharingLedger['read']>>): SharingLedger {
@@ -57,7 +60,7 @@ function ledgerOf(state: Awaited<ReturnType<SharingLedger['read']>>): SharingLed
 }
 
 function harness(
-    shareSuites: Record<string, 1 | 2 | 3> = {},
+    shareSuites: Record<string, 1 | 2 | 3 | 4> = {},
     /* What the worker calls the root's metadata; A's is always someone not checked. */
     rootVerdict = 'verified',
 ) {
@@ -218,7 +221,7 @@ function harness(
     }) as unknown as Rpc;
     const trustGrantee = async (granteeUserId: string, served: ServedIdentity) => ({
         encryptionPublicKey: `pinned-${granteeUserId}`,
-        kemPublicKey: served.kem!.publicKey,
+        kemPublicKey: served.kemPublicKey!,
     });
     return {
         api,
@@ -275,8 +278,8 @@ describe('sealing again', () => {
 });
 
 describe('sealing again after a succession', () => {
-    test('suite 3 shares are sealed again only for grantees whose pin followed a succession', async () => {
-        const h = harness({ g1: 3, g2: 3 });
+    test('suite 4 shares are sealed again only for grantees whose pin followed a succession', async () => {
+        const h = harness({ g1: 4, g2: 4 });
         const done: string[][] = [];
         const client = createDriveClient(h.rpc, h.api, {
             trustGrantee: h.trustGrantee,
@@ -294,7 +297,7 @@ describe('sealing again after a succession', () => {
     });
 
     test('a grantee whose pin refuses stays owed, and replacing one’s own keys seals every share', async () => {
-        const h = harness({ g1: 3, g2: 3 });
+        const h = harness({ g1: 4, g2: 4 });
         const done: string[][] = [];
         const client = createDriveClient(h.rpc, h.api, {
             trustGrantee: async (grantee, served) => {
@@ -316,7 +319,7 @@ describe('sealing again after a succession', () => {
 
 describe('finishing a replacement of one’s own keys', () => {
     test('an interrupted re-seal is finished on the next pass, and only then marked done', async () => {
-        const h = harness({ g1: 3, g2: 3 });
+        const h = harness({ g1: 4, g2: 4 });
         let pending = true;
         let failOnce = true;
         const api = {
@@ -345,7 +348,7 @@ describe('finishing a replacement of one’s own keys', () => {
         await client.upgradeShares();
         expect(h.resealed).toEqual(['share-g1', 'share-g1', 'share-g2']);
         expect(pending).toBe(false);
-        // Done: suite 3 shares are left alone from now on.
+        // Done: suite 4 shares are left alone from now on.
         await client.upgradeShares();
         expect(h.resealed).toHaveLength(3);
     });
@@ -506,6 +509,7 @@ describe('signatures', () => {
         const client = createDriveClient(h.rpc, h.api, {
             trustGranter: async () => ({
                 signingPublicKey: 'ed25519-granter-newer',
+                mlDsaPublicKey: 'ml-dsa-granter-newer',
                 replaced: { name: 'Maya' },
             }),
             signers: async () => ({}),
@@ -520,7 +524,10 @@ describe('signatures', () => {
     test('a share is opened against the granter’s current key only', async () => {
         const h = harness();
         const client = createDriveClient(h.rpc, h.api, {
-            trustGranter: async () => ({ signingPublicKey: 'ed25519-granter-now' }),
+            trustGranter: async () => ({
+                signingPublicKey: 'ed25519-granter-now',
+                mlDsaPublicKey: 'ml-dsa-granter-now',
+            }),
             signers: async () => ({}),
         });
         await client.open('owner');

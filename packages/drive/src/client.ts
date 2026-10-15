@@ -152,12 +152,14 @@ export function splitPath(input: string) {
 
 export type Granter = SharedWithMeView['granter'];
 /*
- * The granter's current signing key, as the person's pin vouches for it: the
- * only key a received share opens with. A share signed with a key the granter
- * has since replaced stays shut until they seal it again.
+ * The granter's current Ed25519 and ML-DSA keys, as the person's version 3 pin
+ * vouches for them (the ML-DSA key by its digest): the only keys a received
+ * share opens with. A share signed with keys the granter has since replaced
+ * stays shut until they seal it again.
  */
 export type TrustedGranter = {
     signingPublicKey: string;
+    mlDsaPublicKey: string;
     /*
      * Set when the pin followed keys the granter has since replaced: a share
      * that will not open under the current key is then most likely one sealed
@@ -165,7 +167,7 @@ export type TrustedGranter = {
      */
     replaced?: { name: string };
 };
-/* A grantee's keys as a pin vouches for them: share suite 3 needs the KEM key. */
+/* A grantee's keys as a pin vouches for them: share suite 4 needs the KEM key. */
 export type TrustedGrantee = { encryptionPublicKey: string; kemPublicKey: string | null };
 export type DriveClientOptions = {
     /*
@@ -1001,7 +1003,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         role: ShareRole,
     ) {
         if (!currentUserId) throw new Error('Open Drive first.');
-        // Share suite 3 seals to the KEM key too; there is no sealing to X25519 alone any more.
+        // Share suite 4 seals to the KEM key too; there is no sealing to X25519 alone any more.
         if (!contact.kemPublicKey)
             throw new Error(
                 'They haven’t got post-quantum keys yet, so nothing was shared. They get them the next time they sign in.',
@@ -1029,7 +1031,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return (await api.nodeShares(node.workspaceId, node.id)).shares;
     }
     /*
-     * Seals shares again in suite 3, signed by this account's current keys: any
+     * Seals shares again in suite 4, signed by this account's current keys: any
      * share in an older suite, any whose grantee's pin followed a succession
      * (their new keys), and with `all`, every share in the ledger (after this
      * account replaced its own keys). Runs in the background after Drive opens;
@@ -1065,7 +1067,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         for (const share of mine.shares) {
             const grantee = share.grantee.id;
             if (waiting.has(grantee) && !owed.has(grantee)) owed.set(grantee, true);
-            if (share.suite === 3 && !all && !waiting.has(grantee)) continue;
+            if (share.suite === 4 && !all && !waiting.has(grantee)) continue;
             // Only a share the owner made: the server's list alone is no reason to seal.
             if (!ledger.shares[share.node.id]?.includes(grantee)) {
                 refused++;
@@ -1306,12 +1308,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             nodeId: node.id,
             keyEpoch: node.keyEpoch,
             reportId,
-            operators: missing.map(({ userId, encryptionPublicKey, signingPublicKey, kem }) => ({
-                userId,
-                encryptionPublicKey,
-                signingPublicKey,
-                kem,
-            })),
+            operators: missing.map(({ sealed: _sealed, ...operator }) => operator),
         });
         return options.reportApi.reseal(
             reportId,
@@ -1578,9 +1575,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         throw new Error('Shares cannot be opened on this client.');
                     // The granter's current key only: a share signed before they replaced
                     // their keys waits for them to seal it again.
-                    const { signingPublicKey, replaced } = await options.trustGranter(
-                        received.granter,
-                    );
+                    const { signingPublicKey, mlDsaPublicKey, replaced } =
+                        await options.trustGranter(received.granter);
                     try {
                         await rpc('driveOpenShare', {
                             workspaceId: received.workspaceId,
@@ -1588,6 +1584,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                             keyEpoch: received.keyEpoch,
                             granterUserId: received.granter.id,
                             granterSigningPublicKey: signingPublicKey,
+                            granterMlDsaPublicKey: mlDsaPublicKey,
                             granteeUserId,
                             // Not recorded on the share: the worker tries this account's identities in turn.
                             granteeKeyVersion: null,

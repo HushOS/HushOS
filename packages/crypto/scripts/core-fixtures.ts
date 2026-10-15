@@ -19,11 +19,18 @@ import {
     wrapNodeKey,
 } from '../src/drive';
 import sodium from 'libsodium-wrappers';
-import { createIdentity } from '../src/identity';
+import {
+    createIdentity,
+    openIdentityMlDsaKey,
+    publicIdentity,
+    upgradeIdentity,
+    type IdentityEnvelope,
+} from '../src/identity';
 import { decode, encode, wrappingKey } from '../src/keys';
 import { sealShareKey, shareContext } from '../src/shares';
-import { hybridKey } from '../src/hybrid';
+import { hybridKey, hybridKeyWithSalt } from '../src/hybrid';
 import { kemEncapsulate } from '../src/pq';
+import { fingerprint, fingerprintOfKeys, keyDigest } from '../src/fingerprint';
 import {
     generateLinkSecret,
     generateLinkSalt,
@@ -39,10 +46,13 @@ import {
     openIdentitySigningKey,
 } from '../src/identity';
 import {
+    digest,
+    keysStatement,
     metadataResealedStatement,
     metadataSavedStatement,
     metadataStatement,
     signStatement,
+    successionStatement,
     versionResealedStatement,
     versionSavedStatement,
     versionStatement,
@@ -262,18 +272,25 @@ const document = {
     ),
 };
 
-// The grantee's identity under the account key, and a node key shared to it by a granter in every
-// suite: 3, the one sealed now, and 1 and 2, which are still opened.
+// The grantee's identity under the account key (version 2), and a node key shared to it in suite 4 by
+// a granter with a version 2 identity of its own; and genuine suites 1, 2 and 3, refused everywhere now.
 await sodium.ready;
 const identity = await createIdentity(accountKey, userId, 2);
 const granter = sodium.crypto_box_keypair();
-const granterSigning = sodium.crypto_sign_keypair();
+const granterRoot = random(32);
+const granterUserId = uuid();
+const granterIdentity = await createIdentity(granterRoot, granterUserId, 1);
+const granterKeys = {
+    signingKey: await openIdentitySigningKey(granterRoot, granterUserId, granterIdentity),
+    mlDsaSecretKey: (await openIdentityMlDsaKey(granterRoot, granterUserId, granterIdentity))!
+        .secretKey,
+};
 const shareCtx = {
     workspaceId: uuid(),
     nodeId: uuid(),
     keyEpoch: 5,
     granteeUserId: userId,
-    granterUserId: uuid(),
+    granterUserId,
 };
 const sharedNodeKey = random(32);
 const grantee = {
@@ -293,7 +310,12 @@ const share = {
                 granter.privateKey,
             );
             const nonce = random(24);
-            const body = await encryptKey(sharedNodeKey, pair, nonce, shareContext(shareCtx, 1));
+            const body = await encryptKey(
+                sharedNodeKey,
+                pair,
+                nonce,
+                shareContext(shareCtx, 1 as never),
+            );
             return new Uint8Array([...nonce, ...body]);
         })(),
     ),
@@ -312,13 +334,73 @@ const share = {
                 'hushos/drive/share-key/v2',
             );
             const nonce = random(24);
-            const body = await encryptKey(sharedNodeKey, key, nonce, shareContext(shareCtx, 2));
+            const body = await encryptKey(
+                sharedNodeKey,
+                key,
+                nonce,
+                shareContext(shareCtx, 2 as never),
+            );
             return new Uint8Array([...nonce, ...ciphertext, ...body]);
         })(),
     ),
-    // Suite 3: an ephemeral key and ML-KEM, signed by the granter.
-    granterSigningPublicKey: encode(granterSigning.publicKey),
-    signed: encode(await sealShareKey(sharedNodeKey, grantee, granterSigning.privateKey, shareCtx)),
+    // Suite 3, as clients sealed it before this release: suite 4's layout with an Ed25519
+    // signature alone, by the same granter. Genuine, and refused.
+    suite3: encode(
+        await (async () => {
+            const ephemeral = sodium.crypto_box_keypair();
+            const dh = sodium.crypto_scalarmult(ephemeral.privateKey, grantee.encryptionPublicKey);
+            const { ciphertext, sharedSecret } = kemEncapsulate(grantee.kemPublicKey!);
+            const salt = new Uint8Array(
+                await crypto.subtle.digest(
+                    'SHA-256',
+                    new Uint8Array([
+                        ...ciphertext,
+                        ...ephemeral.publicKey,
+                        ...grantee.encryptionPublicKey,
+                    ]),
+                ),
+            );
+            const key = await hybridKeyWithSalt(
+                dh,
+                sharedSecret,
+                salt,
+                'hushos/drive/share-key/v3',
+            );
+            const nonce = random(24);
+            const body = await encryptKey(
+                sharedNodeKey,
+                key,
+                nonce,
+                shareContext(shareCtx, 3 as never),
+            );
+            const sealed = new Uint8Array([
+                ...ephemeral.publicKey,
+                ...ciphertext,
+                ...nonce,
+                ...body,
+            ]);
+            const statement = new TextEncoder().encode(
+                JSON.stringify([
+                    'hushos/drive/sig/share',
+                    3,
+                    shareCtx.workspaceId,
+                    shareCtx.nodeId,
+                    shareCtx.keyEpoch,
+                    shareCtx.granteeUserId.toLowerCase(),
+                    shareCtx.granterUserId,
+                    await digest(sealed),
+                ]),
+            );
+            return new Uint8Array([
+                ...sealed,
+                ...(await signStatement(statement, granterKeys.signingKey)),
+            ]);
+        })(),
+    ),
+    // Suite 4: an ephemeral key and ML-KEM, with the granter's hybrid signature.
+    granterSigningPublicKey: granterIdentity.signingPublicKey,
+    granterMlDsaPublicKey: granterIdentity.mlDsa!.publicKey,
+    signed: encode(await sealShareKey(sharedNodeKey, grantee, granterKeys, shareCtx)),
 };
 
 // A password link: what a visitor opens from the URL, and the owner's sealed copy of its secret.
@@ -355,6 +437,13 @@ const recovery = {
 // version 1, as sealed before the settings key, under a key off the identity's private key, which
 // no longer opens anywhere (it reads as no settings).
 const identityPrivateKey = await openIdentityEncryptionKey(accountKey, userId, identity);
+// A version 3 pin, in a document read as version 1: sealing raises it to version 2.
+const pinned = {
+    encryptionPublicKey: random(32),
+    signingPublicKey: random(32),
+    mlDsaPublicKey: random(1952),
+    kemPublicKey: random(1184),
+};
 const settingsJson = {
     version: 1 as const,
     contacts: {
@@ -362,11 +451,18 @@ const settingsJson = {
             userId: uuid(),
             email: 'friend@example.com',
             name: 'Friend',
-            encryptionPublicKey: encode(random(32)),
-            signingPublicKey: encode(random(32)),
-            fingerprint: 'abcd',
-            pinnedAt: '2026-09-22T00:00:00.000Z',
-            kemPublicKeyHash: null,
+            encryptionPublicKey: encode(pinned.encryptionPublicKey),
+            signingPublicKey: encode(pinned.signingPublicKey),
+            mlDsaPublicKeyHash: await keyDigest(pinned.mlDsaPublicKey),
+            kemPublicKeyHash: await keyDigest(pinned.kemPublicKey),
+            fingerprint: await fingerprintOfKeys(
+                pinned.encryptionPublicKey,
+                pinned.signingPublicKey,
+                pinned.mlDsaPublicKey,
+                pinned.kemPublicKey,
+            ),
+            pinnedAt: '2026-10-15T00:00:00.000Z',
+            keyVersion: 1,
         },
     },
 };
@@ -375,7 +471,9 @@ const settings = {
     userId,
     accountKey: encode(accountKey),
     identityPrivateKey: encode(identityPrivateKey),
-    json: JSON.stringify(settingsJson),
+    // What the version 2 envelope opens to: the document, always written as version 2.
+    json: JSON.stringify({ ...settingsJson, version: 2 }),
+    readJson: JSON.stringify(settingsJson),
     // Version 1: HKDF(identity private key, zeros, "hushos/settings/v1"), context version 1.
     envelope: await (async () => {
         const base = await crypto.subtle.importKey('raw', identityPrivateKey, 'HKDF', false, [
@@ -487,22 +585,120 @@ for (const [s, scopeId] of idScopes.entries())
         ids.push({ kind, scopeId, seed, id: await deriveId(kind, scopeId, seed) });
     }
 
-// The account's identity replaced by a successor at the next version, signed by the old key.
-const successor = await createSuccessor(accountKey, userId, identity, signingKey);
+// The account's identity replaced by a successor at the next version, and that one by a third,
+// each signed with the old identity's hybrid signature: one link, and a chain of two.
+const keysOf = async (envelope: IdentityEnvelope) => ({
+    signingKey: await openIdentitySigningKey(accountKey, userId, envelope),
+    mlDsaSecretKey: (await openIdentityMlDsaKey(accountKey, userId, envelope))!.secretKey,
+});
+const linkOf = (old: IdentityEnvelope, next: IdentityEnvelope, signature: string) => ({
+    oldKeyVersion: old.keyVersion,
+    newKeyVersion: next.keyVersion,
+    oldEncryptionPublicKey: old.encryptionPublicKey,
+    oldSigningPublicKey: old.signingPublicKey,
+    oldMlDsaPublicKey: old.mlDsa!.publicKey,
+    newEncryptionPublicKey: next.encryptionPublicKey,
+    newSigningPublicKey: next.signingPublicKey,
+    newMlDsaPublicKey: next.mlDsa!.publicKey,
+    newKemPublicKey: next.kem!.publicKey,
+    signature,
+});
+const successor = await createSuccessor(accountKey, userId, identity, await keysOf(identity));
+const third = await createSuccessor(
+    accountKey,
+    userId,
+    successor.identity,
+    await keysOf(successor.identity),
+);
+const firstLink = linkOf(identity, successor.identity, successor.signature);
 const succession = {
     userId,
     accountKey: encode(accountKey),
     identity: successor.identity,
-    link: {
-        oldKeyVersion: identity.keyVersion,
-        newKeyVersion: successor.identity.keyVersion,
-        oldEncryptionPublicKey: identity.encryptionPublicKey,
-        oldSigningPublicKey: identity.signingPublicKey,
-        newEncryptionPublicKey: successor.identity.encryptionPublicKey,
-        newSigningPublicKey: successor.identity.signingPublicKey,
-        newKemPublicKey: successor.identity.kem!.publicKey,
-        signature: successor.signature,
+    link: firstLink,
+    statement: encode(await successionStatement({ ...firstLink, userId })),
+    chain: {
+        links: [firstLink, linkOf(successor.identity, third.identity, third.signature)],
+        pinned: {
+            keyVersion: identity.keyVersion,
+            encryptionPublicKey: identity.encryptionPublicKey,
+            signingPublicKey: identity.signingPublicKey,
+            mlDsaPublicKeyHash: await keyDigest(decode(identity.mlDsa!.publicKey)),
+        },
+        served: {
+            keyVersion: third.identity.keyVersion,
+            encryptionPublicKey: third.identity.encryptionPublicKey,
+            signingPublicKey: third.identity.signingPublicKey,
+            mlDsaPublicKey: third.identity.mlDsa!.publicKey,
+            kemPublicKey: third.identity.kem!.publicKey,
+        },
     },
+};
+
+// The keys statement of the account's identity: its bytes, and the signature the identity carries.
+const keys = {
+    userId,
+    identity: publicIdentity(identity),
+    statement: encode(await keysStatement({ userId, ...publicIdentity(identity) })),
+};
+
+// Version 1 identities as accounts held them before the release (one with its ML-KEM key and Ed25519
+// binding, one from before hybrid sharing), and their upgrades: the same keys and key version.
+const legacySource = await createIdentity(accountKey, userId, 3);
+const legacySigning = await openIdentitySigningKey(accountKey, userId, legacySource);
+const versionOne = async (withKem: boolean): Promise<IdentityEnvelope> => ({
+    version: 1,
+    keyVersion: legacySource.keyVersion,
+    wrappingSalt: legacySource.wrappingSalt,
+    encryptionPublicKey: legacySource.encryptionPublicKey,
+    encryptionPrivateKeyNonce: legacySource.encryptionPrivateKeyNonce,
+    encryptedEncryptionPrivateKey: legacySource.encryptedEncryptionPrivateKey,
+    signingPublicKey: legacySource.signingPublicKey,
+    signingSeedNonce: legacySource.signingSeedNonce,
+    encryptedSigningSeed: legacySource.encryptedSigningSeed,
+    kem: withKem
+        ? {
+              publicKey: legacySource.kem!.publicKey,
+              seedNonce: legacySource.kem!.seedNonce,
+              encryptedSeed: legacySource.kem!.encryptedSeed,
+              signature: encode(
+                  await signStatement(
+                      new TextEncoder().encode(
+                          JSON.stringify([
+                              'hushos/identity/kem',
+                              1,
+                              userId.toLowerCase(),
+                              legacySource.encryptionPublicKey,
+                              legacySource.kem!.publicKey,
+                          ]),
+                      ),
+                      legacySigning,
+                  ),
+              ),
+          }
+        : null,
+});
+const legacy = await versionOne(true);
+const legacyNoKem = await versionOne(false);
+const upgrade = {
+    userId,
+    accountKey: encode(accountKey),
+    legacy,
+    upgraded: await upgradeIdentity(accountKey, userId, legacy),
+    legacyNoKem,
+    upgradedNoKem: await upgradeIdentity(accountKey, userId, legacyNoKem),
+};
+
+// Fingerprint version 3: the shared vector, and the account's identity's words.
+const fill = (byte: number) => new Uint8Array(32).fill(byte);
+const fingerprints = {
+    vector: await fingerprint(fill(1), fill(2), fill(3), fill(4)),
+    identity: await fingerprintOfKeys(
+        decode(identity.encryptionPublicKey, 32),
+        decode(identity.signingPublicKey, 32),
+        decode(identity.mlDsa!.publicKey, 1952),
+        decode(identity.kem!.publicKey, 1184),
+    ),
 };
 
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
@@ -524,6 +720,9 @@ await writeFile(
             settings,
             signatures,
             succession,
+            keys,
+            upgrade,
+            fingerprints,
             ids,
         },
         null,

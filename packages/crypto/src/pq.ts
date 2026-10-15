@@ -1,3 +1,4 @@
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
 import { CryptoError } from './errors';
 
@@ -47,4 +48,50 @@ export function kemDecapsulate(ciphertext: Uint8Array, secretKey: Uint8Array) {
         throw new CryptoError('Invalid share envelope.');
     if (secretKey.length !== KEM_SECRET_KEY_BYTES) throw new CryptoError('Invalid identity key.');
     return ml_kem768.decapsulate(ciphertext, secretKey) as Uint8Array<ArrayBuffer>;
+}
+
+/*
+ * ML-DSA-65 (FIPS 204, the pure form), the lattice half of a person's hybrid
+ * signature (docs/identity-pq-design.md). A key pair is expanded from the
+ * 32-byte key generation seed ξ, which the identity keeps wrapped under the
+ * account root beside the Ed25519 seed. Signing is hedged (fresh randomness),
+ * so two signatures over one message differ; both verify.
+ */
+export const ML_DSA_SEED_BYTES = 32;
+export const ML_DSA_PUBLIC_KEY_BYTES = 1952;
+export const ML_DSA_SECRET_KEY_BYTES = 4032;
+export const ML_DSA_SIGNATURE_BYTES = 3309;
+
+export function mlDsaKeypair(seed: Uint8Array) {
+    if (seed.length !== ML_DSA_SEED_BYTES) throw new CryptoError('Invalid key seed.');
+    const { publicKey, secretKey } = ml_dsa65.keygen(seed);
+    return {
+        publicKey: publicKey as Uint8Array<ArrayBuffer>,
+        secretKey: secretKey as Uint8Array<ArrayBuffer>,
+    };
+}
+
+export function mlDsaSign(message: Uint8Array, secretKey: Uint8Array, context: string) {
+    if (secretKey.length !== ML_DSA_SECRET_KEY_BYTES) throw new CryptoError('Invalid signing key.');
+    return ml_dsa65.sign(message, secretKey, {
+        context: new TextEncoder().encode(context),
+    }) as Uint8Array<ArrayBuffer>;
+}
+
+/* Anything malformed is simply not a valid signature. */
+export function mlDsaVerify(
+    signature: Uint8Array,
+    message: Uint8Array,
+    publicKey: Uint8Array,
+    context: string,
+) {
+    if (signature.length !== ML_DSA_SIGNATURE_BYTES || publicKey.length !== ML_DSA_PUBLIC_KEY_BYTES)
+        return false;
+    try {
+        return ml_dsa65.verify(signature, message, publicKey, {
+            context: new TextEncoder().encode(context),
+        });
+    } catch {
+        return false;
+    }
 }

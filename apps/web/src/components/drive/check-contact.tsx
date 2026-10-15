@@ -102,7 +102,8 @@ export function CheckContact({
     const first = found ? (found.contact.name.trim().split(/\s+/)[0] ?? found.contact.name) : '';
     const alreadyAdded =
         !recheck && found !== null && found.pinned !== null && !found.changed && !found.stale;
-    const unsignedKem = found?.kem !== null && found?.kem !== undefined && !found.kem.valid;
+    // Words can only be compared over an upgraded identity whose keys statement holds.
+    const notUpgraded = found !== null && !found.upgraded;
     const notWriter =
         writer !== undefined &&
         found !== null &&
@@ -181,6 +182,11 @@ export function CheckContact({
                     {first} replaced their sharing keys; the change is signed by their previous
                     keys. Ask {first} to read you their twelve words to be sure it was them.
                 </p>
+            ) : notUpgraded ? (
+                <p className="text-sm leading-snug text-muted-foreground">
+                    {first} hasn’t signed in since HushOS upgraded its keys. You can compare words
+                    once they have.
+                </p>
             ) : found.stale ? (
                 <p className="text-sm leading-snug text-muted-foreground">
                     You added {first} before the twelve words covered all of their keys. Read them
@@ -193,16 +199,11 @@ export function CheckContact({
                     words, on a call or in person. If they match these, it’s really them.
                 </p>
             )}
-            <FingerprintWords fingerprint={found.fingerprint} />
-            <p
-                data-kem={found.kem ? (found.kem.valid ? 'signed' : 'unsigned') : 'none'}
-                className={unsignedKem ? 'text-[13px] text-destructive' : 'sr-only'}
-            >
-                {unsignedKem
-                    ? `${first}’s newest key isn’t signed by their account. Don’t add them; ask them to sign in again first.`
-                    : found.kem
-                      ? 'Their newest key is signed by their account.'
-                      : 'They get their newest key the next time they sign in.'}
+            {found.fingerprint && <FingerprintWords fingerprint={found.fingerprint} />}
+            <p data-keys={found.upgraded ? 'signed' : 'not-upgraded'} className="sr-only">
+                {found.upgraded
+                    ? 'All four of their keys are signed by their account.'
+                    : 'Their keys are not upgraded yet.'}
             </p>
             {notWriter && (
                 <p role="alert" className="text-[13px] text-destructive">
@@ -242,7 +243,7 @@ export function CheckContact({
                         </Button>
                         <Button
                             variant={found.changed ? 'destructive' : 'default'}
-                            disabled={adding || unsignedKem || mismatch || notWriter}
+                            disabled={adding || notUpgraded || mismatch || notWriter}
                             onClick={() => void add()}
                         >
                             <ShieldCheckIcon />

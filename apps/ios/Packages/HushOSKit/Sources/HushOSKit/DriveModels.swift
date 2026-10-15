@@ -198,9 +198,13 @@ public struct SharedWithMeView: Codable, Sendable, Identifiable {
         public let name: String
         public let email: String
         public let encryptionPublicKey: String
-        /* The granter's current identity: the signing key a suite 3 share is checked against, and its version for the succession chain. */
+        /* The granter's current identity: the Ed25519 and ML-DSA keys a suite 4 share is checked against, and its version for the succession chain. */
         public var signingPublicKey: String? = nil
         public var keyVersion: UInt64? = nil
+        public var identityVersion: Int? = nil
+        public var mlDsaPublicKey: String? = nil
+        public var kemPublicKey: String? = nil
+        public var keysSignature: String? = nil
     }
     public let id: String
     public let workspaceId: String

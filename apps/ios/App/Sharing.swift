@@ -678,7 +678,8 @@ struct FingerprintWordsView: View {
 /*
  * Adding someone: their email, then their twelve words to compare on a call or in
  * person. They match adds them; a changed account is a warning to accept, never
- * applied quietly; a key their account didn't sign can't be added.
+ * applied quietly; someone whose keys aren't upgraded (or whose keys statement
+ * doesn't hold) has no words to compare yet.
  */
 struct CheckContactView: View {
     @Environment(DriveStore.self) private var store
@@ -696,7 +697,8 @@ struct CheckContactView: View {
     @State private var unfollowed = false
 
     private var first: String { found.map { ($0.contact.name.isEmpty ? $0.contact.email : $0.contact.name).split(separator: " ").first.map(String.init) ?? "them" } ?? "them" }
-    private var unsignedKem: Bool { found.map { $0.contact.kem != nil && !$0.contact.kemSigned } ?? false }
+    /* Words can only be compared over an upgraded identity whose keys statement holds. */
+    private var notUpgraded: Bool { found.map { !$0.upgraded } ?? false }
 
     var body: some View {
         List {
@@ -715,8 +717,11 @@ struct CheckContactView: View {
                     if found.followed || (found.pinned.map(ReplacedKeysSeen.notice) == true && !found.changed && !found.recheck) {
                         Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure, ask \(first) to read you their twelve words. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
+                    } else if notUpgraded {
+                        Text("\(first) hasn’t signed in since HushOS upgraded its keys. You can compare words once they have.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.recheck && !found.changed {
-                        Text("You added \(first) before HushOS checked both of their keys. Ask \(first) to open People you share with in HushOS and read you their twelve words. If they match these, it’s really them.")
+                        Text("\(first)’s keys were upgraded. Ask \(first) to open People you share with in HushOS and read you their twelve words. If they match these, it’s really them. Shares between you open again once you’ve both done it.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     } else if found.changed {
                         Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
@@ -733,10 +738,8 @@ struct CheckContactView: View {
                         Text("Ask \(first) to open People you share with in HushOS and read you their twelve words, on a call or in person. If they match these, it’s really them.")
                             .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
                     }
-                    FingerprintWordsView(fingerprint: found.contact.fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
-                    if unsignedKem {
-                        Text("\(first)’s newest key isn’t signed by their account. Don’t add them; ask them to sign in again first.")
-                            .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
+                    if let fingerprint = found.contact.fingerprint {
+                        FingerprintWordsView(fingerprint: fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     if mismatch {
                         Text("Don’t share with this account. Check the email address with \(first), then try again.")
@@ -754,7 +757,7 @@ struct CheckContactView: View {
                                 Label(adding ? "Adding…" : found.changed ? "Accept change" : "They match", systemImage: "checkmark.shield").frame(maxWidth: .infinity)
                             }
                             .buttonStyle(PrimaryCapsuleStyle())
-                            .disabled(adding || unsignedKem || mismatch)
+                            .disabled(adding || notUpgraded || mismatch)
                             Button { if mismatch { dismiss() } else { mismatch = true } } label: { Text(mismatch ? "Back" : "They don’t match").frame(maxWidth: .infinity) }
                                 .buttonStyle(SecondaryCapsuleStyle())
                         }
@@ -821,6 +824,8 @@ struct CheckContactView: View {
                 try await store.vault.pin(found.contact)
                 guard let pin = try await store.vault.contacts().first(where: { $0.userId == found.contact.userId }) else { throw ContactError.unpinned }
                 added(pin)
+            } catch let error as ContactError {
+                self.error = error.errorDescription ?? "They weren’t saved. Try again."
             } catch {
                 self.error = "They weren’t saved. Try again."
             }
@@ -885,7 +890,7 @@ struct PeopleView: View {
                                 }
                                 Spacer(minLength: 0)
                                 if !pin.verified {
-                                    Text("Check their words again").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
+                                    Text("Check words again").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
                                 } else if ReplacedKeysSeen.notice(pin) {
                                     Text("New keys").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                                 } else if let added = parseDate(pin.pinnedAt) {

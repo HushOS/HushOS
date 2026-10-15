@@ -20,7 +20,14 @@ export interface CryptoTransport {
     onLock(listener: () => void): void;
 }
 
-type WorkerMessage = { id: number; result?: unknown; error?: string; progress?: unknown };
+type WorkerMessage = {
+    id: number;
+    result?: unknown;
+    error?: string;
+    /* The worker refused without changing anything, and kept its keys. */
+    kept?: boolean;
+    progress?: unknown;
+};
 
 export function createBrowserCryptoTransport(createWorker: () => Worker): CryptoTransport {
     const worker = createWorker();
@@ -59,7 +66,10 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
         }
         pending.delete(event.data.id);
         clearTimeout(task.timer);
-        if (event.data.error) task.reject(new Error(event.data.error));
+        if (event.data.error)
+            task.reject(
+                Object.assign(new Error(event.data.error), event.data.kept ? { kept: true } : {}),
+            );
         else task.resolve(event.data.result);
     };
     worker.onerror = lock;

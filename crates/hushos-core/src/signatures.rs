@@ -9,12 +9,19 @@
 //! the re-sealed one ("I re-locked this; I don't vouch for who wrote it"),
 //! which a rotation or copy signs over a record it could not verify. Their
 //! domains differ, so no signature passes for another form.
+//!
+//! What decides whose keys to trust (the keys statement, successions and
+//! shares) is signed with the hybrid signature instead: Ed25519 and ML-DSA-65
+//! over the same statement, valid only if both halves verify
+//! (`docs/identity-pq-design.md`).
 
-use crate::bytes::{encode, expect_len};
+use crate::bytes::{decode, encode, expect_len};
 use crate::envelope::context;
 use crate::error::{input, CoreResult};
+use crate::identity::KEM_PUBLIC_KEY_BYTES;
+use crate::pq::{ml_dsa_sign, ml_dsa_verify, ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SIGNATURE_BYTES};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
@@ -619,6 +626,147 @@ pub fn signing_public_key(signing_seed: Vec<u8>) -> CoreResult<Vec<u8>> {
     expect_len("signing seed", &signing_seed, 32)?;
     let seed = Zeroizing::new(<[u8; 32]>::try_from(signing_seed.as_slice()).expect("32 bytes"));
     Ok(SigningKey::from_bytes(&seed).verifying_key().to_bytes().to_vec())
+}
+
+/*
+ * A person's hybrid signature (docs/identity-pq-design.md 1): Ed25519 over the
+ * statement, then ML-DSA-65 over the same bytes under this context, 3373
+ * bytes, valid only if both halves verify. It signs what decides whose keys to
+ * trust: the keys statement, successions and shares. File and folder
+ * signatures stay Ed25519.
+ */
+pub(crate) const HYBRID_SIGNATURE_BYTES: usize = SIGNATURE_BYTES + ML_DSA_SIGNATURE_BYTES; // 3373
+pub(crate) const IDENTITY_SIGNATURE_CONTEXT: &[u8] = b"hushos/identity/v1";
+
+/// The two public halves a hybrid signature verifies under: Ed25519 (32
+/// bytes) and ML-DSA-65 (1952 bytes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct HybridPublicKey {
+    pub signing_public_key: Vec<u8>,
+    pub ml_dsa_public_key: Vec<u8>,
+}
+
+/* Ed25519 || ML-DSA-65 over the same statement, from the two 32-byte seeds. */
+pub(crate) fn sign_hybrid(signing_seed: &[u8], ml_dsa_seed: &[u8], message: &[u8]) -> CoreResult<Vec<u8>> {
+    let mut signature = sign(signing_seed, message)?;
+    signature.extend(ml_dsa_sign(ml_dsa_seed, message, IDENTITY_SIGNATURE_CONTEXT)?);
+    debug_assert_eq!(signature.len(), HYBRID_SIGNATURE_BYTES);
+    Ok(signature)
+}
+
+/*
+ * Whether `signature` is both halves of the hybrid signature over `message`.
+ * The caller knows from context that the statement is a hybrid one; a
+ * signature of any other length is not valid, never a classical fallback.
+ */
+pub(crate) fn verify_hybrid(keys: &HybridPublicKey, message: &[u8], signature: &[u8]) -> bool {
+    if signature.len() != HYBRID_SIGNATURE_BYTES {
+        return false;
+    }
+    let (classical, lattice) = signature.split_at(SIGNATURE_BYTES);
+    verify(&keys.signing_public_key, message, classical)
+        && ml_dsa_verify(&keys.ml_dsa_public_key, message, lattice, IDENTITY_SIGNATURE_CONTEXT)
+}
+
+/// Signs `message` with a person's hybrid signature: Ed25519 with the 32-byte
+/// signing seed, then ML-DSA-65 (hedged, context `hushos/identity/v1`) with
+/// the 32-byte ML-DSA seed ([`crate::IdentityKeys::ml_dsa_seed`]). 3373 bytes.
+///
+/// ```
+/// use hushos_core::*;
+/// let root = random_bytes(32)?;
+/// let keys = identity_open("u".into(), root.clone(), identity_create("u".into(), root, 1)?)?;
+/// let signature = hybrid_sign(keys.signing_seed.to_vec(), keys.ml_dsa_seed.to_vec(), b"statement".to_vec())?;
+/// assert_eq!(signature.len(), 3373);
+/// let public = HybridPublicKey {
+///     signing_public_key: base64url_decode(keys.signing_public_key.clone())?,
+///     ml_dsa_public_key: base64url_decode(keys.ml_dsa_public_key.clone().unwrap())?,
+/// };
+/// assert!(hybrid_verify(public.clone(), b"statement".to_vec(), signature.clone()));
+/// // The Ed25519 half alone is never enough.
+/// assert!(!hybrid_verify(public, b"statement".to_vec(), signature[..64].to_vec()));
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn hybrid_sign(signing_seed: Vec<u8>, ml_dsa_seed: Vec<u8>, message: Vec<u8>) -> CoreResult<Vec<u8>> {
+    let (signing_seed, ml_dsa_seed) = (Zeroizing::new(signing_seed), Zeroizing::new(ml_dsa_seed));
+    sign_hybrid(&signing_seed, &ml_dsa_seed, &message)
+}
+
+/// Whether `signature` is both halves of `keys`' hybrid signature over
+/// `message`. Only a 3373-byte signature can hold: the statement's kind says
+/// it is hybrid, never the signature's length.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn hybrid_verify(keys: HybridPublicKey, message: Vec<u8>, signature: Vec<u8>) -> bool {
+    verify_hybrid(&keys, &message, &signature)
+}
+
+fn identifier(value: &str, what: &str) -> CoreResult<String> {
+    if value.is_empty() {
+        return Err(input(format!("Invalid {what}.")));
+    }
+    Ok(value.to_lowercase())
+}
+
+/* Canonical base64url of the right length, or refused. */
+fn public_key(value: &str, length: usize, what: &str) -> CoreResult<Value> {
+    decode(what, value, Some(length))?;
+    Ok(json!(value))
+}
+
+/// `["hushos/identity/keys",1,userId,keyVersion,x25519,ed25519,mlDsa,sha256(kemPublicKey)]`:
+/// what binds a version 2 identity's four public keys (base64url, as the
+/// server serves them) to the account. The identity signs it with its own
+/// hybrid signature. It replaces the Ed25519-only KEM binding.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn keys_statement(
+    user_id: String,
+    key_version: u64,
+    encryption_public_key: String,
+    signing_public_key: String,
+    ml_dsa_public_key: String,
+    kem_public_key: String,
+) -> CoreResult<Vec<u8>> {
+    let kem = decode("kemPublicKey", &kem_public_key, Some(KEM_PUBLIC_KEY_BYTES))?;
+    Ok(context(&[
+        json!("hushos/identity/keys"),
+        json!(1),
+        json!(identifier(&user_id, "user id")?),
+        json!(positive(key_version, "key version")?),
+        public_key(&encryption_public_key, 32, "encryptionPublicKey")?,
+        public_key(&signing_public_key, 32, "signingPublicKey")?,
+        public_key(&ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "mlDsaPublicKey")?,
+        json!(digest(&kem)),
+    ]))
+}
+
+/// `["hushos/identity/succession",2,userId,oldKeyVersion,newKeyVersion,oldX25519,oldEd25519,oldMlDsa,newX25519,newEd25519,newMlDsa,sha256(newKemPublicKey)]`:
+/// one link of an identity's succession, signed with the old identity's hybrid
+/// signature (the link's `signature` is not part of it). The new version is
+/// above the old one. Version 1 is refused everywhere.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn succession_statement(user_id: String, link: crate::SuccessionLink) -> CoreResult<Vec<u8>> {
+    // Minted at old + 1; a reader asks only that it rose (a rotation may lift it in between).
+    let old_version = positive(link.old_key_version, "key version")?;
+    if link.new_key_version <= old_version {
+        return Err(input("Invalid key version."));
+    }
+    let kem = decode("newKemPublicKey", &link.new_kem_public_key, Some(KEM_PUBLIC_KEY_BYTES))?;
+    Ok(context(&[
+        json!("hushos/identity/succession"),
+        json!(2),
+        json!(identifier(&user_id, "user id")?),
+        json!(old_version),
+        json!(link.new_key_version),
+        public_key(&link.old_encryption_public_key, 32, "oldEncryptionPublicKey")?,
+        public_key(&link.old_signing_public_key, 32, "oldSigningPublicKey")?,
+        public_key(&link.old_ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "oldMlDsaPublicKey")?,
+        public_key(&link.new_encryption_public_key, 32, "newEncryptionPublicKey")?,
+        public_key(&link.new_signing_public_key, 32, "newSigningPublicKey")?,
+        public_key(&link.new_ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "newMlDsaPublicKey")?,
+        json!(digest(&kem)),
+    ]))
 }
 
 #[cfg(test)]

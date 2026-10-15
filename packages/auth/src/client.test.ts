@@ -93,3 +93,28 @@ describe('saving device access at sign-in', () => {
         expect(state.rememberError).not.toBe('');
     });
 });
+
+describe('a worker refusal', () => {
+    test('that kept the keys leaves the account unlocked; any other failure locks it', async () => {
+        items.clear();
+        const refusing: CryptoTransport = {
+            request: async (operation) => {
+                if (operation === 'identitySucceed')
+                    throw Object.assign(new Error('Your keys changed on another device.'), {
+                        kept: true,
+                    });
+                if (operation === 'identityOpen') throw new Error('Identity keys do not match.');
+                return (operation === 'remember' ? bundle : {}) as never;
+            },
+            lock() {},
+            onLock() {},
+        };
+        const client = createAuthClient(() => refusing, keyStore([]).store, api);
+        await client.login('maya@example.com', 'correct horse');
+        expect(client.store.getState().unlockedUserId).toBe(user.id);
+        await expect(client.rpc('identitySucceed', {} as never)).rejects.toThrow('changed');
+        expect(client.store.getState().unlockedUserId).toBe(user.id);
+        await expect(client.rpc('identityOpen', {} as never)).rejects.toThrow('do not match');
+        expect(client.store.getState().unlockedUserId).toBeNull();
+    });
+});

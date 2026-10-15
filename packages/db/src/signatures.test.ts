@@ -1,10 +1,13 @@
+import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
-import { signingKeyFromSeed } from '../test/helpers';
+import { hybridSignerFromSeed, signingKeyFromSeed } from '../test/helpers';
 import {
+    keysStatement,
     metadataSigned,
     metadataStatement,
     successionStatement,
+    verifyHybrid,
     verifySignature,
     verifySigned,
     versionSigned,
@@ -149,9 +152,10 @@ describe('statements', () => {
         );
     });
 
-    test('succession: both key versions, the four public keys in Base64url, the new KEM key by digest', () => {
+    test('succession version 2: both key versions, the six public keys in Base64url, the new KEM key by digest', () => {
         const kem = Buffer.alloc(1184, 9);
         const key = (fill: number) => Buffer.alloc(32, fill);
+        const lattice = (fill: number) => Buffer.alloc(1952, fill);
         expect(
             successionStatement({
                 userId: NODE,
@@ -159,13 +163,78 @@ describe('statements', () => {
                 newKeyVersion: 3,
                 oldEncryptionPublicKey: key(1),
                 oldSigningPublicKey: key(2),
+                oldMlDsaPublicKey: lattice(5),
                 newEncryptionPublicKey: key(3),
                 newSigningPublicKey: key(4),
+                newMlDsaPublicKey: lattice(6),
                 newKemPublicKey: kem,
             }).toString('utf8'),
         ).toBe(
-            `["hushos/identity/succession",1,"7c9e6679-7425-40de-944b-e07fc1f90ae7",2,3,"${key(1).toString('base64url')}","${key(2).toString('base64url')}","${key(3).toString('base64url')}","${key(4).toString('base64url')}","${sha(kem)}"]`,
+            `["hushos/identity/succession",2,"7c9e6679-7425-40de-944b-e07fc1f90ae7",2,3,"${key(1).toString('base64url')}","${key(2).toString('base64url')}","${lattice(5).toString('base64url')}","${key(3).toString('base64url')}","${key(4).toString('base64url')}","${lattice(6).toString('base64url')}","${sha(kem)}"]`,
         );
+    });
+
+    test('keys statement: the account, the key version, four public keys, the KEM key by digest', () => {
+        const kem = Buffer.alloc(1184, 9);
+        const key = (fill: number) => Buffer.alloc(32, fill);
+        const lattice = Buffer.alloc(1952, 5);
+        expect(
+            keysStatement({
+                userId: NODE,
+                keyVersion: 4,
+                encryptionPublicKey: key(1),
+                signingPublicKey: key(2),
+                mlDsaPublicKey: lattice,
+                kemPublicKey: kem,
+            }).toString('utf8'),
+        ).toBe(
+            `["hushos/identity/keys",1,"7c9e6679-7425-40de-944b-e07fc1f90ae7",4,"${key(1).toString('base64url')}","${key(2).toString('base64url')}","${lattice.toString('base64url')}","${sha(kem)}"]`,
+        );
+    });
+});
+
+describe('hybrid verification', () => {
+    const signer = hybridSignerFromSeed(Buffer.alloc(32, 7));
+    const keys = {
+        signingPublicKey: signer.signingPublicKey,
+        mlDsaPublicKey: signer.mlDsaPublicKey,
+    };
+    const message = Buffer.from('["hushos/identity/keys",1]');
+
+    test('holds only when both halves verify', () => {
+        const signature = signer.sign(message);
+        expect(signature).toHaveLength(3373);
+        expect(verifyHybrid(keys, message, signature)).toBe(true);
+        for (const at of [3, 64 + 3, 3372]) {
+            const broken = Buffer.from(signature);
+            broken[at]! ^= 1;
+            expect(verifyHybrid(keys, message, broken)).toBe(false);
+        }
+        expect(verifyHybrid(keys, Buffer.from('another'), signature)).toBe(false);
+        const other = hybridSignerFromSeed(Buffer.alloc(32, 8));
+        expect(
+            verifyHybrid({ ...keys, mlDsaPublicKey: other.mlDsaPublicKey }, message, signature),
+        ).toBe(false);
+        expect(
+            verifyHybrid({ ...keys, signingPublicKey: other.signingPublicKey }, message, signature),
+        ).toBe(false);
+    });
+
+    test('never falls back to the Ed25519 half, and refuses a lattice half made under another context', () => {
+        const classical = signer.signClassical(message);
+        expect(verifyHybrid(keys, message, classical)).toBe(false);
+        expect(verifyHybrid(keys, message, Buffer.concat([classical, Buffer.alloc(3309)]))).toBe(
+            false,
+        );
+        // The ML-DSA half of a group signature (hushos/group/v1) is not an identity signature's.
+        const groupHalf = ml_dsa65.sign(
+            message,
+            ml_dsa65.keygen(createHash('sha256').update(Buffer.alloc(32, 7)).digest()).secretKey,
+            { context: new TextEncoder().encode('hushos/group/v1') },
+        );
+        expect(
+            verifyHybrid(keys, message, Buffer.concat([classical, Buffer.from(groupHalf)])),
+        ).toBe(false);
     });
 });
 

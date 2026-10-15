@@ -2,12 +2,13 @@ import type { SecurityAction } from '@hushos/crypto';
 /* Shown on the contacts page; re-exported so the app needs no direct crypto dependency. */
 export {
     fingerprint,
+    fingerprintOfKeys,
     fingerprintWords,
     keyDigest,
     publicKeyBytes,
 } from '@hushos/crypto/fingerprint';
 export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
-import type { IdentityKem } from '@hushos/crypto/identity';
+import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
 import { createAuthStore } from './store';
@@ -110,8 +111,15 @@ export function createAuthClient(
             // through onLock, which is the only Drive failure that should lock. While a
             // sign-in or security change runs, it owns the worker and locks on its own
             // failures: a background read refused by the locked worker (settings, an
-            // identity) must not throw away the change's state mid-way.
-            if (!String(operation).startsWith('drive') && !busy && transport === activeTransport)
+            // identity) must not throw away the change's state mid-way. A refusal the worker
+            // kept its keys through is an ordinary error too.
+            const kept = (error as { kept?: unknown } | null)?.kept === true;
+            if (
+                !kept &&
+                !String(operation).startsWith('drive') &&
+                !busy &&
+                transport === activeTransport
+            )
                 lock();
             throw error;
         }
@@ -371,7 +379,7 @@ export function createAuthClient(
         succeedIdentity: (input: Parameters<AuthApi['succeedIdentity']>[0]) =>
             api.succeedIdentity(input),
         contactSuccession: (userId: string, from: number) => api.contactSuccession(userId, from),
-        addIdentityKem: (kem: IdentityKem) => api.addIdentityKem(kem),
+        upgradeIdentity: (identity: IdentityEnvelope) => api.upgradeIdentity({ identity }),
         lookupContact: (email: string) => api.lookupContact(email),
         settings: () => api.settings(),
         saveSettings: (input: Parameters<AuthApi['saveSettings']>[0]) => api.saveSettings(input),

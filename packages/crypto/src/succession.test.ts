@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
+import { RefusedError } from './errors';
 import { createDeviceKey, rememberAccountKey } from './device';
 import {
     createIdentity,
     createSuccessor,
     openIdentityEncryptionKey,
+    openIdentityMlDsaKey,
     openIdentitySigningKey,
     rewrapIdentity,
     verifySuccessionChain,
@@ -14,11 +16,13 @@ import {
 import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode, encode } from './keys';
-import { signStatement, successionStatement } from './signatures';
+import { keyDigest } from './fingerprint';
+import { signHybrid, signStatement, successionStatement } from './signatures';
 
 /*
  * An identity is replaced by minting the next one under the same root and
- * signing the change with the old signing key. A contact follows a chain of
+ * signing the change with the old identity's hybrid signature (Ed25519 and
+ * ML-DSA-65, docs/identity-pq-design.md 2). A contact follows a chain of
  * such links from the keys they pinned to the keys served, and anything but an
  * unbroken chain signed link by link is a changed key. The account's devices
  * keep the earlier private keys, because shares sealed to them open with
@@ -40,104 +44,173 @@ function linkOf(old: IdentityEnvelope, next: IdentityEnvelope, signature: string
         newKeyVersion: next.keyVersion,
         oldEncryptionPublicKey: old.encryptionPublicKey,
         oldSigningPublicKey: old.signingPublicKey,
+        oldMlDsaPublicKey: old.mlDsa!.publicKey,
         newEncryptionPublicKey: next.encryptionPublicKey,
         newSigningPublicKey: next.signingPublicKey,
+        newMlDsaPublicKey: next.mlDsa!.publicKey,
         newKemPublicKey: next.kem!.publicKey,
         signature,
     };
 }
 
+/* Both private halves of an identity's signature, opened under its root. */
+async function keysOf(root: Uint8Array<ArrayBuffer>, userId: string, identity: IdentityEnvelope) {
+    return {
+        signingKey: await openIdentitySigningKey(root, userId, identity),
+        mlDsaSecretKey: (await openIdentityMlDsaKey(root, userId, identity))!.secretKey,
+    };
+}
+/* The keys a version 3 pin holds of an identity. */
+async function pinOf(identity: IdentityEnvelope, keyVersion: number | null = identity.keyVersion) {
+    return {
+        keyVersion,
+        encryptionPublicKey: identity.encryptionPublicKey,
+        signingPublicKey: identity.signingPublicKey,
+        mlDsaPublicKeyHash: await keyDigest(decode(identity.mlDsa!.publicKey)),
+    };
+}
+/* The keys the server serves for an identity. */
+function servedOf(identity: IdentityEnvelope, keyVersion = identity.keyVersion) {
+    return {
+        keyVersion,
+        encryptionPublicKey: identity.encryptionPublicKey,
+        signingPublicKey: identity.signingPublicKey,
+        mlDsaPublicKey: identity.mlDsa!.publicKey,
+        kemPublicKey: identity.kem!.publicKey,
+    };
+}
+const signerOf = (identity: IdentityEnvelope) => ({
+    signingPublicKey: identity.signingPublicKey,
+    mlDsaPublicKey: identity.mlDsa!.publicKey,
+});
+
 /* Three generations of one account's identity: v1 pinned by a contact, v3 served now. */
 async function generations() {
     const root = crypto.getRandomValues(new Uint8Array(32));
     const first = await createIdentity(root, USER);
-    const firstKey = await openIdentitySigningKey(root, USER, first);
-    const second = await createSuccessor(root, USER, first, firstKey);
-    const secondKey = await openIdentitySigningKey(root, USER, second.identity);
-    const third = await createSuccessor(root, USER, second.identity, secondKey);
+    const second = await createSuccessor(root, USER, first, await keysOf(root, USER, first));
+    const third = await createSuccessor(
+        root,
+        USER,
+        second.identity,
+        await keysOf(root, USER, second.identity),
+    );
     const links = [
         linkOf(first, second.identity, second.signature),
         linkOf(second.identity, third.identity, third.signature),
     ];
-    const pinned = {
-        keyVersion: first.keyVersion,
-        encryptionPublicKey: first.encryptionPublicKey,
-        signingPublicKey: first.signingPublicKey,
-    };
-    const served = {
-        keyVersion: third.identity.keyVersion,
-        encryptionPublicKey: third.identity.encryptionPublicKey,
-        signingPublicKey: third.identity.signingPublicKey,
-        kemPublicKey: third.identity.kem!.publicKey,
-    };
+    const pinned = await pinOf(first);
+    const served = servedOf(third.identity);
     return { root, first, second, third, links, pinned, served };
 }
 
 describe('succession', () => {
-    test('mints fresh keys at the next version, vouched for by the old signing key', async () => {
+    test('mints fresh keys at the next version, vouched for by both old signing keys', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const first = await createIdentity(root, USER);
-        const signingKey = await openIdentitySigningKey(root, USER, first);
-        const { identity, signature } = await createSuccessor(root, USER, first, signingKey);
+        const { identity, signature } = await createSuccessor(
+            root,
+            USER,
+            first,
+            await keysOf(root, USER, first),
+        );
         expect(identity.keyVersion).toBe(first.keyVersion + 1);
         expect(identity.encryptionPublicKey).not.toBe(first.encryptionPublicKey);
         expect(identity.signingPublicKey).not.toBe(first.signingPublicKey);
+        expect(identity.mlDsa!.publicKey).not.toBe(first.mlDsa!.publicKey);
         expect(identity.kem!.publicKey).not.toBe(first.kem!.publicKey);
         // The new identity is the account's own: it opens under the same root.
         await expect(openIdentityEncryptionKey(root, USER, identity)).resolves.toHaveLength(32);
         const link = linkOf(first, identity, signature);
-        expect(await verifySuccessionLink(USER, link)).toBe(true);
-        // Bound to the account, and to the new KEM key as much as the others.
-        expect(await verifySuccessionLink(FRIEND, link)).toBe(false);
-        const otherKem = (await createIdentity(root, USER)).kem!.publicKey;
-        expect(await verifySuccessionLink(USER, { ...link, newKemPublicKey: otherKem })).toBe(
-            false,
-        );
+        expect(decode(signature)).toHaveLength(3373);
+        expect(await verifySuccessionLink(USER, link, signerOf(first))).toBe(true);
+        // Bound to the account, and to the new ML-DSA and KEM keys as much as the others.
+        expect(await verifySuccessionLink(FRIEND, link, signerOf(first))).toBe(false);
+        const other = await createIdentity(root, USER);
+        expect(
+            await verifySuccessionLink(
+                USER,
+                { ...link, newKemPublicKey: other.kem!.publicKey },
+                signerOf(first),
+            ),
+        ).toBe(false);
+        expect(
+            await verifySuccessionLink(
+                USER,
+                { ...link, newMlDsaPublicKey: other.mlDsa!.publicKey },
+                signerOf(first),
+            ),
+        ).toBe(false);
         // A signing key that is not the current identity's vouches for nothing.
         const stranger = await createIdentity(root, FRIEND);
         await expect(
-            createSuccessor(
-                root,
-                USER,
-                first,
-                await openIdentitySigningKey(root, FRIEND, stranger),
-            ),
+            createSuccessor(root, USER, first, await keysOf(root, FRIEND, stranger)),
         ).rejects.toThrow('Identity keys do not match');
+    });
+
+    test('a succession signed with Ed25519 alone, or with either half broken, does not hold', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const first = await createIdentity(root, USER);
+        const { identity, signature } = await createSuccessor(
+            root,
+            USER,
+            first,
+            await keysOf(root, USER, first),
+        );
+        const link = linkOf(first, identity, signature);
+        const bytes = decode(signature);
+        // The Ed25519 half alone, as a stripped signature: the statement is a hybrid one.
+        const stripped = encode(bytes.slice(0, 64));
+        expect(
+            await verifySuccessionLink(USER, { ...link, signature: stripped }, signerOf(first)),
+        ).toBe(false);
+        // A valid Ed25519 signature over the statement on its own, the way version 1 signed.
+        const classical = encode(
+            await signStatement(
+                await successionStatement({ ...link, userId: USER }),
+                await openIdentitySigningKey(root, USER, first),
+            ),
+        );
+        expect(
+            await verifySuccessionLink(USER, { ...link, signature: classical }, signerOf(first)),
+        ).toBe(false);
+        // One half broken, the other intact, each way round.
+        for (const at of [5, 64 + 100]) {
+            const broken = bytes.slice();
+            broken[at]! ^= 1;
+            expect(
+                await verifySuccessionLink(
+                    USER,
+                    { ...link, signature: encode(broken) },
+                    signerOf(first),
+                ),
+            ).toBe(false);
+        }
     });
 
     test('a chain holds from the pinned keys to the served ones, and nothing else does', async () => {
         const { root, first, second, third, links, pinned, served } = await generations();
         expect(await verifySuccessionChain(USER, pinned, served, links)).toBe(true);
-        // A pin made before successions has no version: the chain is found from its keys.
+        // A pin made with no version: the chain is found from its keys.
         expect(
             await verifySuccessionChain(USER, { ...pinned, keyVersion: null }, served, links),
         ).toBe(true);
         // A pin at v2 needs only the second link; links before it are not the start.
-        const fromSecond = {
-            keyVersion: 2,
-            encryptionPublicKey: second.identity.encryptionPublicKey,
-            signingPublicKey: second.identity.signingPublicKey,
-        };
+        const fromSecond = await pinOf(second.identity);
         expect(await verifySuccessionChain(USER, fromSecond, served, links.slice(1))).toBe(true);
         // Links before the pinned keys are not part of the chain; the chain starts at them.
         expect(await verifySuccessionChain(USER, fromSecond, served, links)).toBe(true);
 
-        // A server that mints its own v3 and signs the link with a key it holds: v2's key did not sign.
+        // A server that mints its own v3 and signs the link with keys it holds: v2's keys did not sign.
         const forged = await createIdentity(root, USER, 3);
-        const forgedKey = await openIdentitySigningKey(root, USER, forged);
         const unsigned = linkOf(second.identity, forged, '');
         const ownSignature = encode(
-            await signStatement(
+            await signHybrid(
                 await successionStatement({ ...unsigned, userId: USER }),
-                forgedKey,
+                await keysOf(root, USER, forged),
             ),
         );
-        const forgedServed = {
-            keyVersion: 3,
-            encryptionPublicKey: forged.encryptionPublicKey,
-            signingPublicKey: forged.signingPublicKey,
-            kemPublicKey: forged.kem!.publicKey,
-        };
+        const forgedServed = servedOf(forged);
         expect(
             await verifySuccessionChain(USER, pinned, forgedServed, [
                 links[0]!,
@@ -150,6 +223,7 @@ describe('succession', () => {
             { keyVersion: 2 },
             { encryptionPublicKey: forged.encryptionPublicKey },
             { signingPublicKey: forged.signingPublicKey },
+            { mlDsaPublicKey: forged.mlDsa!.publicKey },
             { kemPublicKey: forged.kem!.publicKey },
         ])
             expect(await verifySuccessionChain(USER, pinned, { ...served, ...change }, links)).toBe(
@@ -175,23 +249,71 @@ describe('succession', () => {
         expect(await verifySuccessionChain(FRIEND, pinned, served, links)).toBe(false);
     });
 
+    test('a chain never verifies a half under an ML-DSA key the pin did not name', async () => {
+        const { root, first, second, third, links, pinned, served } = await generations();
+        // A quantum forger of Ed25519: the pinned X25519 and Ed25519 keys with an ML-DSA key of
+        // their own. The Ed25519 half is made with the real key (as a forger could), the ML-DSA
+        // half with theirs, and the link names theirs as the old one.
+        const forger = await createIdentity(root, USER, 2);
+        const forgerKeys = await keysOf(root, USER, forger);
+        const realEd = await openIdentitySigningKey(root, USER, first);
+        const statementOf = async (link: Omit<SuccessionLink, 'signature'>) =>
+            successionStatement({ ...link, userId: USER });
+        const hijack = {
+            ...linkOf(first, forger, ''),
+            oldMlDsaPublicKey: forger.mlDsa!.publicKey,
+        };
+        const half = await signHybrid(await statementOf(hijack), {
+            signingKey: realEd,
+            mlDsaSecretKey: forgerKeys.mlDsaSecretKey,
+        });
+        // Both halves verify under the keys the link itself names...
+        expect(
+            await verifySuccessionLink(
+                USER,
+                { ...hijack, signature: encode(half) },
+                {
+                    signingPublicKey: first.signingPublicKey,
+                    mlDsaPublicKey: forger.mlDsa!.publicKey,
+                },
+            ),
+        ).toBe(true);
+        // ...but the chain starts only where the pin's ML-DSA digest matches, so it never starts.
+        expect(
+            await verifySuccessionChain(USER, pinned, servedOf(forger), [
+                { ...hijack, signature: encode(half) },
+            ]),
+        ).toBe(false);
+        // A later link whose old ML-DSA key is not the previous link's new one breaks the chain,
+        // even under a signature valid for the keys that link names.
+        const swapped = {
+            ...linkOf(second.identity, third.identity, ''),
+            oldMlDsaPublicKey: forger.mlDsa!.publicKey,
+        };
+        const swappedSignature = await signHybrid(await statementOf(swapped), {
+            signingKey: await openIdentitySigningKey(root, USER, second.identity),
+            mlDsaSecretKey: forgerKeys.mlDsaSecretKey,
+        });
+        expect(
+            await verifySuccessionChain(USER, pinned, served, [
+                links[0]!,
+                { ...swapped, signature: encode(swappedSignature) },
+            ]),
+        ).toBe(false);
+    });
+
     test('a version raised by a rotation between two links leaves the chain whole', async () => {
         const { root, first, second, pinned } = await generations();
         // A master-key rotation lifted v2 to the root's revision, 4, before the next succession.
         const raised = { ...second.identity, keyVersion: 4 };
-        const secondKey = await openIdentitySigningKey(root, USER, second.identity);
-        const next = await createSuccessor(root, USER, raised, secondKey);
+        const secondKeys = await keysOf(root, USER, second.identity);
+        const next = await createSuccessor(root, USER, raised, secondKeys);
         expect(next.identity.keyVersion).toBe(5);
         const links = [
             linkOf(first, second.identity, second.signature),
             linkOf(raised, next.identity, next.signature),
         ];
-        const served = {
-            keyVersion: 5,
-            encryptionPublicKey: next.identity.encryptionPublicKey,
-            signingPublicKey: next.identity.signingPublicKey,
-            kemPublicKey: next.identity.kem!.publicKey,
-        };
+        const served = servedOf(next.identity, 5);
         expect(await verifySuccessionChain(USER, pinned, served, links)).toBe(true);
         // Raised again by a later rotation, the served version may be above the last link's.
         expect(await verifySuccessionChain(USER, pinned, { ...served, keyVersion: 6 }, links)).toBe(
@@ -199,22 +321,12 @@ describe('succession', () => {
         );
         // But versions never fall back along the chain, even under good signatures.
         const lowered = { ...second.identity, keyVersion: 1 };
-        const back = await createSuccessor(root, USER, lowered, secondKey);
+        const back = await createSuccessor(root, USER, lowered, secondKeys);
         const fallen = [links[0]!, linkOf(lowered, back.identity, back.signature)];
-        expect(await verifySuccessionLink(USER, fallen[1]!)).toBe(true);
-        expect(
-            await verifySuccessionChain(
-                USER,
-                pinned,
-                {
-                    keyVersion: 2,
-                    encryptionPublicKey: back.identity.encryptionPublicKey,
-                    signingPublicKey: back.identity.signingPublicKey,
-                    kemPublicKey: back.identity.kem!.publicKey,
-                },
-                fallen,
-            ),
-        ).toBe(false);
+        expect(await verifySuccessionLink(USER, fallen[1]!, signerOf(second.identity))).toBe(true);
+        expect(await verifySuccessionChain(USER, pinned, servedOf(back.identity, 2), fallen)).toBe(
+            false,
+        );
     });
 
     test('a master-key rotation keeps each identity’s key version and opens it under the new root', async () => {
@@ -223,7 +335,13 @@ describe('succession', () => {
         const rewrapped = await rewrapIdentity(root, next, USER, second.identity);
         expect(rewrapped.keyVersion).toBe(2);
         expect(rewrapped.signingPublicKey).toBe(second.identity.signingPublicKey);
+        expect(rewrapped.mlDsa!.publicKey).toBe(second.identity.mlDsa!.publicKey);
+        expect(rewrapped.keysSignature).toBe(second.identity.keysSignature);
         await expect(openIdentityEncryptionKey(next, USER, rewrapped)).resolves.toHaveLength(32);
+        // The ML-DSA seed moves with the rest and still opens to the same key.
+        const mlDsa = await openIdentityMlDsaKey(next, USER, rewrapped);
+        expect(mlDsa!.publicKey).toBe(second.identity.mlDsa!.publicKey);
+        await expect(openIdentityMlDsaKey(root, USER, rewrapped)).rejects.toThrow();
         await expect(openIdentityEncryptionKey(root, USER, rewrapped)).rejects.toThrow();
     });
 });
@@ -322,7 +440,9 @@ describe('succession in the worker', () => {
             identity: first,
         })) as { identity: IdentityEnvelope; signature: string };
         expect(second.keyVersion).toBe(2);
-        expect(await verifySuccessionLink(USER, linkOf(first, second, signature))).toBe(true);
+        expect(
+            await verifySuccessionLink(USER, linkOf(first, second, signature), signerOf(first)),
+        ).toBe(true);
         expect(
             (
                 (await me('identityOpen', { userId: USER, identity: first })) as {
@@ -332,7 +452,7 @@ describe('succession in the worker', () => {
         ).toBe(1);
         // A stale envelope (not the open identity) cannot be succeeded.
         await expect(me('identitySucceed', { userId: USER, identity: second })).rejects.toThrow(
-            'Open your identity first',
+            'Your keys changed on another device',
         );
 
         // The server took it: the device opens the new identity with the old one as history.
@@ -346,8 +466,28 @@ describe('succession in the worker', () => {
         expect(reopened.history.map((earlier) => earlier.keyVersion)).toEqual([1]);
         // History must be older than the current identity, oldest first.
         await expect(
-            me('identityOpen', { userId: USER, identity: first, history: [second], refresh: true }),
+            me('identityOpen', {
+                userId: USER,
+                identity: second,
+                history: [second],
+                refresh: true,
+            }),
         ).rejects.toThrow('out of order');
+        // And never older than the identity open: the replaced one still opens under this root.
+        await expect(
+            me('identityOpen', { userId: USER, identity: first, refresh: true }),
+        ).rejects.toBeInstanceOf(RefusedError);
+        expect(
+            (
+                (await me('identityOpen', {
+                    userId: USER,
+                    identity: second,
+                    history: [first],
+                })) as {
+                    keyVersion: number;
+                }
+            ).keyVersion,
+        ).toBe(2);
 
         const open = {
             workspaceId: WS,
@@ -355,6 +495,7 @@ describe('succession in the worker', () => {
             keyEpoch: 2,
             granterUserId: FRIEND,
             granterSigningPublicKey: friendIdentity.signingPublicKey,
+            granterMlDsaPublicKey: friendIdentity.mlDsa!.publicKey,
             granteeUserId: USER,
             shareEnvelope,
         };
@@ -381,6 +522,7 @@ describe('succession in the worker', () => {
             later('driveOpenShare', {
                 ...open,
                 granterSigningPublicKey: friendSecond.signingPublicKey,
+                granterMlDsaPublicKey: friendSecond.mlDsa!.publicKey,
             }),
         ).rejects.toThrow('not signed');
 
@@ -425,19 +567,90 @@ describe('succession in the worker', () => {
         // A contact checks the chain without unlocking anything.
         const chain = (await friend('identityVerifyChain', {
             userId: USER,
-            pinned: {
-                keyVersion: 1,
-                encryptionPublicKey: first.encryptionPublicKey,
-                signingPublicKey: first.signingPublicKey,
-            },
-            served: {
-                keyVersion: 2,
-                encryptionPublicKey: second.encryptionPublicKey,
-                signingPublicKey: second.signingPublicKey,
-                kemPublicKey: second.kem!.publicKey,
-            },
+            pinned: await pinOf(first),
+            served: servedOf(second),
             links: [linkOf(first, second, signature)],
         })) as { valid: boolean };
         expect(chain.valid).toBe(true);
+    });
+});
+
+describe('the worker’s open identity', () => {
+    test('a served identity other than the one open is opened, never answered from the cache', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        // The version 1 form of the same keys, as the account held before its upgrade.
+        const before: IdentityEnvelope = {
+            version: 1,
+            keyVersion: current.keyVersion,
+            wrappingSalt: current.wrappingSalt,
+            encryptionPublicKey: current.encryptionPublicKey,
+            encryptionPrivateKeyNonce: current.encryptionPrivateKeyNonce,
+            encryptedEncryptionPrivateKey: current.encryptedEncryptionPrivateKey,
+            signingPublicKey: current.signingPublicKey,
+            signingSeedNonce: current.signingSeedNonce,
+            encryptedSigningSeed: current.encryptedSigningSeed,
+            kem: { ...current.kem },
+        };
+        const me = await device(USER, root);
+        const first = (await me('identityOpen', { userId: USER, identity: before })) as {
+            identityVersion: number;
+        };
+        expect(first.identityVersion).toBe(1);
+        // The upgrade was stored but its answer was lost: the next open, without refresh, is
+        // handed the version 2 identity and must open it, not report the cached version 1.
+        const next = (await me('identityOpen', { userId: USER, identity: current })) as {
+            identityVersion: number;
+            mlDsaPublicKey: string | null;
+        };
+        expect(next.identityVersion).toBe(2);
+        expect(next.mlDsaPublicKey).toBe(current.mlDsa.publicKey);
+    });
+
+    test('the open identity answers only for the served envelope whole, its KEM key and keys statement too', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        const stranger = await createIdentity(root, FRIEND);
+        const me = await device(USER, root);
+        await me('identityOpen', { userId: USER, identity: current });
+        // Each would be answered from the cache if it were compared on the other keys alone,
+        // and is refused once opened: the KEM seed is sealed to its own public key, and the
+        // keys statement is over this identity's keys.
+        await expect(
+            me('identityOpen', {
+                userId: USER,
+                identity: {
+                    ...current,
+                    kem: { ...current.kem, publicKey: stranger.kem.publicKey },
+                },
+            }),
+        ).rejects.toThrow('This encrypted key could not be opened');
+        await expect(
+            me('identityOpen', {
+                userId: USER,
+                identity: { ...current, keysSignature: stranger.keysSignature },
+            }),
+        ).rejects.toThrow(/do not match/);
+    });
+
+    test('a succession signs only for the public keys of the identity it opened', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const current = await createIdentity(root, USER);
+        const stranger = await createIdentity(root, FRIEND);
+        const me = await device(USER, root);
+        await me('identityOpen', { userId: USER, identity: current });
+        // The same key version and Ed25519 key, but another X25519, ML-DSA or ML-KEM key served
+        // beside them: the statement would vouch for keys this device never proved it holds.
+        for (const served of [
+            { ...current, encryptionPublicKey: stranger.encryptionPublicKey },
+            { ...current, mlDsa: { ...current.mlDsa, publicKey: stranger.mlDsa.publicKey } },
+            { ...current, kem: { ...current.kem, publicKey: stranger.kem.publicKey } },
+        ])
+            await expect(
+                me('identitySucceed', { userId: USER, identity: served }),
+            ).rejects.toBeInstanceOf(RefusedError);
+        await expect(
+            me('identitySucceed', { userId: USER, identity: current }),
+        ).resolves.toBeDefined();
     });
 });

@@ -20,25 +20,27 @@ class ShareSealsTest {
 
     @Test
     fun aShareSealedNowByThisIdentityToThePinnedKeysIsLeftAlone() {
-        assertFalse(needsReseal(3, seal(3uL, 2uL), current, 2uL))
+        assertFalse(needsReseal(4, seal(3uL, 2uL), current, 2uL))
         // A pin from before successions has no version to compare: left alone.
-        assertFalse(needsReseal(3, seal(3uL, 2uL), current, null))
+        assertFalse(needsReseal(4, seal(3uL, 2uL), current, null))
     }
 
     @Test
     fun anOlderSuiteAShareNeverRecordedOrOneSignedByAReplacedIdentityIsSealedAgain() {
+        // Suite 3 (Ed25519 only) no longer opens anywhere: sealed again in suite 4, even when this device sealed it now.
+        assertTrue(needsReseal(3, seal(3uL, 2uL), current, 2uL))
         assertTrue(needsReseal(2, seal(3uL, 2uL), current, 2uL))
         assertTrue(needsReseal(1, seal(3uL, 2uL), current, 2uL))
-        assertTrue(needsReseal(3, null, current, 2uL))
-        assertTrue(needsReseal(3, seal(2uL, 2uL), current, 2uL))
+        assertTrue(needsReseal(4, null, current, 2uL))
+        assertTrue(needsReseal(4, seal(2uL, 2uL), current, 2uL))
     }
 
     @Test
     fun aGranteeWhoseReplacedKeysThePersonCheckedAgainGetsTheShareSealedToTheNewOnes() {
-        assertTrue(needsReseal(3, seal(3uL, 2uL), current, 3uL))
-        assertTrue(needsReseal(3, seal(3uL, null), current, 1uL))
+        assertTrue(needsReseal(4, seal(3uL, 2uL), current, 3uL))
+        assertTrue(needsReseal(4, seal(3uL, null), current, 1uL))
         // A pin at a lower version than the one sealed to is no reason (it never moves down).
-        assertFalse(needsReseal(3, seal(3uL, 4uL), current, 3uL))
+        assertFalse(needsReseal(4, seal(3uL, 4uL), current, 3uL))
     }
 
     @Test

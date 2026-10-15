@@ -4,7 +4,10 @@ import type {
     SecurityUpdate,
     WorkspaceKeyEnvelope,
 } from '@hushos/crypto';
-import { kemBinding, type IdentityEnvelope, type IdentityKem } from '@hushos/crypto/identity';
+import type { IdentityEnvelope } from '@hushos/crypto/identity';
+
+/* Ed25519 then ML-DSA-65: a person's hybrid signature (docs/identity-pq-design.md). */
+const HYBRID_SIGNATURE_BYTES = 3373;
 import { SETTINGS_MAX_BYTES, SETTINGS_PAD_STEP } from '@hushos/crypto/contacts';
 import {
     verifyRecoveryReset,
@@ -12,11 +15,12 @@ import {
     type RecoveryReset,
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
-import { createHash, randomBytes, verify } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { adminRepository, authRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import { sendShareEmail, sendVerificationEmail } from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
+import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 
 import {
     ENVELOPE_VERSION,
@@ -34,6 +38,7 @@ import {
 } from './tokens';
 
 export { AuthError } from './tokens';
+export { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 
 /*
  * The auth domain. Nothing here reads a request: callers hand in the session or
@@ -298,7 +303,7 @@ export async function finishRegistration(
     const result = await authRepository.registerAccount({
         enrollmentTokenHash: hash(token),
         recovery: decodeRecovery(input.recovery, 1),
-        identity: decodeIdentity(input.identity),
+        identity: decodeIdentity(input.identity, 1, enrollment.id, { current: true }),
         workspace: decodeWorkspaceGrant(input.workspace, 1),
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
         name,
@@ -474,12 +479,41 @@ type IdentityRow = Pick<
     | 'signingPublicKey'
     | 'signingSeedNonce'
     | 'encryptedSigningSeed'
+    | 'version'
     | 'kemPublicKey'
     | 'kemSeedNonce'
     | 'encryptedKemSeed'
     | 'kemSignature'
+    | 'mlDsaPublicKey'
+    | 'mlDsaSeedNonce'
+    | 'encryptedMlDsaSeed'
+    | 'keysSignature'
 >;
 function encodeIdentity(i: IdentityRow): IdentityEnvelope {
+    const b64 = (bytes: Buffer) => bytes.toString('base64url');
+    if (i.version === 2)
+        return {
+            version: 2,
+            keyVersion: i.keyVersion,
+            wrappingSalt: b64(i.wrappingSalt),
+            encryptionPublicKey: b64(i.encryptionPublicKey),
+            encryptionPrivateKeyNonce: b64(i.encryptionPrivateKeyNonce),
+            encryptedEncryptionPrivateKey: b64(i.encryptedEncryptionPrivateKey),
+            signingPublicKey: b64(i.signingPublicKey),
+            signingSeedNonce: b64(i.signingSeedNonce),
+            encryptedSigningSeed: b64(i.encryptedSigningSeed),
+            kem: {
+                publicKey: b64(i.kemPublicKey!),
+                seedNonce: b64(i.kemSeedNonce!),
+                encryptedSeed: b64(i.encryptedKemSeed!),
+            },
+            mlDsa: {
+                publicKey: b64(i.mlDsaPublicKey!),
+                seedNonce: b64(i.mlDsaSeedNonce!),
+                encryptedSeed: b64(i.encryptedMlDsaSeed!),
+            },
+            keysSignature: b64(i.keysSignature!),
+        };
     return {
         version: 1,
         keyVersion: i.keyVersion,
@@ -511,31 +545,46 @@ export async function getIdentityEnvelope(sessionToken: string | null) {
 }
 
 /*
- * An identity made before hybrid sharing gets its KEM key: minted and signed on
- * the person's device, checked here against the signing key on record, and
- * stored once. A second device that raced is told so and re-reads.
+ * The upgrade of a version 1 identity to version 2, made on the person's device
+ * (docs/identity-pq-design.md 2): the same keys and key version plus an ML-DSA
+ * key and the keys statement, checked here before the repository, under the
+ * account's lock, checks the keys are the current ones. A device that lost a
+ * race is answered 409 with the identity that won, to open and adopt.
  */
-export async function addIdentityKem(sessionToken: string | null, kem: IdentityKem) {
-    const { user } = await requireSession(sessionToken, 'Sign in to finish account setup.');
-    const i = await authRepository.getIdentity(user.id);
-    if (!i) throw new AuthError('Finish account setup first.', 409);
-    if (i.kemPublicKey) throw new AuthError('This account already has a post-quantum key.', 409);
-    const decoded = decodeKem(
-        user.id,
-        i.encryptionPublicKey.toString('base64url'),
-        i.signingPublicKey,
-        kem,
-    );
-    if (!(await authRepository.addIdentityKem({ userId: user.id, ...decoded })))
-        throw new AuthError('This account already has a post-quantum key.', 409);
-    return { ok: true as const };
+export async function upgradeIdentity(
+    sessionToken: string | null,
+    input: { identity: IdentityEnvelope },
+) {
+    const { user, token } = await requireSession(sessionToken, 'Sign in to upgrade your keys.');
+    const decoded = decodeIdentity(input.identity, input.identity.keyVersion, user.id, {
+        current: true,
+    });
+    const result = await authRepository.upgradeIdentity({
+        userId: user.id,
+        credentialVersion: user.credentialVersion,
+        sessionTokenHash: hash(token),
+        identity: decoded as authRepository.IdentityV2,
+    });
+    switch (result.status) {
+        case 'ok':
+            return { identity: encodeIdentity({ ...decoded, version: 2 } as IdentityRow) };
+        case 'stale':
+            // Another device won: the caller reads the identity again and opens that one.
+            throw new AuthError('Your keys were upgraded on another device.', 409);
+        case 'session':
+            throw new AuthError('Sign in again to upgrade your keys.', 401);
+        case 'no-identity':
+            throw new AuthError('Finish account setup first.', 409);
+        case 'mismatch':
+            throw new AuthError('An upgrade must keep your current keys.', 400);
+    }
 }
 
 /*
  * Replaces the person's identity with one minted on their device at the next
- * key version, vouched for by the current signing key (docs/integrity-design.md).
- * The new KEM key's binding is checked against the new signing key here; the
- * succession statement, the key version and the session are checked under the
+ * key version, vouched for by the current identity's hybrid signature
+ * (docs/identity-pq-design.md 2). The new identity's keys statement is checked
+ * here; the succession statement, the key version and the session under the
  * account's lock in the repository. The old identity stays, sealed, in the
  * history, because shares sealed to it still open only with it.
  */
@@ -544,14 +593,15 @@ export async function succeedIdentity(
     input: { identity: IdentityEnvelope; signature: string },
 ) {
     const { user, token } = await requireSession(sessionToken, 'Sign in to replace your keys.');
-    if (!input.identity.kem) throw new AuthError('A new identity needs its post-quantum key.', 400);
-    const decoded = decodeIdentity(input.identity, input.identity.keyVersion, user.id);
+    const decoded = decodeIdentity(input.identity, input.identity.keyVersion, user.id, {
+        current: true,
+    });
     const result = await authRepository.succeedIdentity({
         userId: user.id,
         credentialVersion: user.credentialVersion,
         sessionTokenHash: hash(token),
-        identity: { ...decoded, kemPublicKey: decoded.kemPublicKey! },
-        signature: decodeField(input.signature, 64),
+        identity: decoded as authRepository.IdentityV2,
+        signature: decodeField(input.signature, HYBRID_SIGNATURE_BYTES),
     });
     switch (result.status) {
         case 'ok':
@@ -560,13 +610,28 @@ export async function succeedIdentity(
             throw new AuthError('Sign in again to replace your keys.', 401);
         case 'no-identity':
             throw new AuthError('Finish account setup first.', 409);
+        case 'not-upgraded':
+            throw new AuthError('Update HushOS to replace your keys.', 409);
         case 'stale':
             throw new AuthError('Your keys changed on another device. Reload and try again.', 409);
         case 'unchanged':
             throw new AuthError('The new keys must differ from the current ones.', 400);
         case 'bad-signature':
             throw new AuthError('The new keys are not signed by your current keys.', 400);
+        case 'history-full':
+            throw new AuthError('This account has replaced its keys as many times as it can.', 409);
     }
+}
+
+/*
+ * The most bytes a security change may send for this session's account (see
+ * limits.ts). Null without a current session.
+ */
+export async function securityChangeBodyLimit(sessionToken: string | null) {
+    const user = await getSessionUser(sessionToken);
+    if (!user) return null;
+    const earlier = await authRepository.countIdentityHistory(user.id);
+    return (earlier + 1) * SECURITY_CHANGE_IDENTITY_BYTES + SECURITY_CHANGE_REST_BYTES;
 }
 
 /* The person's own earlier identities, oldest first, to open shares sealed to earlier keys. */
@@ -612,17 +677,27 @@ export async function contactSuccession(
     const chain = await authRepository.successionChain(userId, from);
     if (!chain) throw new AuthError('No HushOS account with that id has finished setup.', 404);
     const b64 = (bytes: Buffer) => bytes.toString('base64url');
+    // Only hybrid (version 2) links: a chain through a link signed with Ed25519 alone is
+    // not followed anywhere, so it is not served; the gap shows as the changed-key warning.
     return {
-        links: chain.map((link) => ({
-            oldKeyVersion: link.oldKeyVersion,
-            newKeyVersion: link.newKeyVersion,
-            oldEncryptionPublicKey: b64(link.oldEncryptionPublicKey),
-            oldSigningPublicKey: b64(link.oldSigningPublicKey),
-            newEncryptionPublicKey: b64(link.newEncryptionPublicKey),
-            newSigningPublicKey: b64(link.newSigningPublicKey),
-            newKemPublicKey: b64(link.newKemPublicKey),
-            signature: b64(link.signature),
-        })),
+        links: chain.flatMap((link) =>
+            link.oldMlDsaPublicKey && link.newMlDsaPublicKey
+                ? [
+                      {
+                          oldKeyVersion: link.oldKeyVersion,
+                          newKeyVersion: link.newKeyVersion,
+                          oldEncryptionPublicKey: b64(link.oldEncryptionPublicKey),
+                          oldSigningPublicKey: b64(link.oldSigningPublicKey),
+                          oldMlDsaPublicKey: b64(link.oldMlDsaPublicKey),
+                          newEncryptionPublicKey: b64(link.newEncryptionPublicKey),
+                          newSigningPublicKey: b64(link.newSigningPublicKey),
+                          newMlDsaPublicKey: b64(link.newMlDsaPublicKey),
+                          newKemPublicKey: b64(link.newKemPublicKey),
+                          signature: b64(link.signature),
+                      },
+                  ]
+                : [],
+        ),
     };
 }
 
@@ -641,16 +716,7 @@ export async function lookupContact(sessionToken: string | null, email: string, 
             userId: found.userId,
             name: found.name,
             email: found.email,
-            keyVersion: found.keyVersion,
-            encryptionPublicKey: found.encryptionPublicKey.toString('base64url'),
-            signingPublicKey: found.signingPublicKey.toString('base64url'),
-            kem:
-                found.kemPublicKey && found.kemSignature
-                    ? {
-                          publicKey: found.kemPublicKey.toString('base64url'),
-                          signature: found.kemSignature.toString('base64url'),
-                      }
-                    : null,
+            ...publicIdentityOf(found),
         },
     };
 }
@@ -1172,80 +1238,99 @@ function encodeWorkspaceGrant(
         encryptedKey: grant.encryptedKey.toString('base64url'),
     };
 }
-/* Ed25519 raw public keys, as Node wants them: the SubjectPublicKeyInfo prefix in front. */
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 /*
- * The KEM half of an identity, with its binding checked against the signing
- * key: the server never mints or replaces a KEM key, but it refuses to store one
- * the identity did not sign, so a stored key is always one a contact can verify.
+ * Someone's public identity as contacts and shares see it: every public key,
+ * and a version 2 identity's keys statement. A version 1 identity (not yet
+ * upgraded) has no ML-DSA key and no keys statement, and nothing about it is
+ * trusted; its ML-KEM key is served bare, without the old binding.
  */
-function decodeKem(
-    userId: string,
-    encryptionPublicKey: string,
-    signingPublicKey: Buffer,
-    kem: IdentityKem,
-) {
-    const decoded = {
-        kemPublicKey: decodeField(kem.publicKey, 1184),
-        kemSeedNonce: decodeField(kem.seedNonce, 24),
-        encryptedKemSeed: decodeField(kem.encryptedSeed, 80),
-        kemSignature: decodeField(kem.signature, 64),
+export function publicIdentityOf(i: {
+    keyVersion: number;
+    identityVersion: number;
+    encryptionPublicKey: Buffer;
+    signingPublicKey: Buffer;
+    mlDsaPublicKey: Buffer | null;
+    kemPublicKey: Buffer | null;
+    keysSignature: Buffer | null;
+}) {
+    const b64 = (bytes: Buffer | null) => bytes?.toString('base64url') ?? null;
+    return {
+        keyVersion: i.keyVersion,
+        identityVersion: i.identityVersion === 2 ? (2 as const) : (1 as const),
+        encryptionPublicKey: i.encryptionPublicKey.toString('base64url'),
+        signingPublicKey: i.signingPublicKey.toString('base64url'),
+        mlDsaPublicKey: b64(i.mlDsaPublicKey),
+        kemPublicKey: b64(i.kemPublicKey),
+        keysSignature: b64(i.keysSignature),
     };
-    let valid = false;
-    try {
-        valid = verify(
-            null,
-            Buffer.from(kemBinding(userId, encryptionPublicKey, kem.publicKey)),
-            {
-                key: Buffer.concat([ED25519_SPKI_PREFIX, signingPublicKey]),
-                format: 'der',
-                type: 'spki',
-            },
-            decoded.kemSignature,
-        );
-    } catch {
-        valid = false;
-    }
-    if (!valid) throw new AuthError('The post-quantum key is not signed by this identity.');
-    return decoded;
 }
-function decodeIdentity(input: IdentityEnvelope, keyVersion = 1, userId?: string) {
+
+/*
+ * An identity envelope's columns, refused unless well formed. A version 2
+ * identity needs its ML-KEM and ML-DSA halves and a keys statement that holds
+ * for `userId`; `current` (registration, initialization, upgrade, succession)
+ * accepts version 2 only. Version 1 is accepted only where an existing one is
+ * rewrapped (master-key rotation), with its old KEM binding as stored.
+ */
+function decodeIdentity(
+    input: IdentityEnvelope,
+    keyVersion: number,
+    userId: string,
+    options: { current?: boolean } = {},
+) {
     if (
-        input.version !== 1 ||
+        (input.version !== 1 && input.version !== 2) ||
+        (options.current && input.version !== 2) ||
         input.keyVersion !== keyVersion ||
         !Number.isSafeInteger(keyVersion) ||
         keyVersion < 1
     )
-        throw new AuthError('Unsupported identity key version.');
-    const signingPublicKey = decodeField(input.signingPublicKey, 32);
-    const kem =
-        input.kem && userId
-            ? decodeKem(userId, input.encryptionPublicKey, signingPublicKey, input.kem)
-            : input.kem
-              ? {
-                    kemPublicKey: decodeField(input.kem.publicKey, 1184),
-                    kemSeedNonce: decodeField(input.kem.seedNonce, 24),
-                    encryptedKemSeed: decodeField(input.kem.encryptedSeed, 80),
-                    kemSignature: decodeField(input.kem.signature, 64),
-                }
-              : {
-                    kemPublicKey: null,
-                    kemSeedNonce: null,
-                    encryptedKemSeed: null,
-                    kemSignature: null,
-                };
-    return {
-        version: 1,
+        throw new AuthError(
+            input.version === 1
+                ? 'Update HushOS to save changes.'
+                : 'Unsupported identity version.',
+            input.version === 1 ? 409 : 400,
+        );
+    const common = {
+        version: input.version,
         keyVersion,
         wrappingSalt: decodeField(input.wrappingSalt, 32),
         encryptionPublicKey: decodeField(input.encryptionPublicKey, 32),
         encryptionPrivateKeyNonce: decodeField(input.encryptionPrivateKeyNonce, 24),
         encryptedEncryptionPrivateKey: decodeField(input.encryptedEncryptionPrivateKey, 48),
-        signingPublicKey,
+        signingPublicKey: decodeField(input.signingPublicKey, 32),
         signingSeedNonce: decodeField(input.signingSeedNonce, 24),
         encryptedSigningSeed: decodeField(input.encryptedSigningSeed, 48),
-        ...kem,
     };
+    if (input.version === 1)
+        return {
+            ...common,
+            kemPublicKey: input.kem ? decodeField(input.kem.publicKey, 1184) : null,
+            kemSeedNonce: input.kem ? decodeField(input.kem.seedNonce, 24) : null,
+            encryptedKemSeed: input.kem ? decodeField(input.kem.encryptedSeed, 80) : null,
+            kemSignature: input.kem?.signature ? decodeField(input.kem.signature, 64) : null,
+            mlDsaPublicKey: null,
+            mlDsaSeedNonce: null,
+            encryptedMlDsaSeed: null,
+            keysSignature: null,
+        };
+    if (!input.kem || !input.mlDsa || !input.keysSignature)
+        throw new AuthError('An identity needs all four of its keys.', 400);
+    const identity = {
+        ...common,
+        version: 2 as const,
+        kemPublicKey: decodeField(input.kem.publicKey, 1184),
+        kemSeedNonce: decodeField(input.kem.seedNonce, 24),
+        encryptedKemSeed: decodeField(input.kem.encryptedSeed, 80),
+        kemSignature: null,
+        mlDsaPublicKey: decodeField(input.mlDsa.publicKey, 1952),
+        mlDsaSeedNonce: decodeField(input.mlDsa.seedNonce, 24),
+        encryptedMlDsaSeed: decodeField(input.mlDsa.encryptedSeed, 48),
+        keysSignature: decodeField(input.keysSignature, HYBRID_SIGNATURE_BYTES),
+    };
+    if (!authRepository.identityKeysHold(userId, identity))
+        throw new AuthError('These keys are not signed by this identity.', 400);
+    return identity;
 }
 
 export async function startAccountDeletion(sessionToken: string | null, startLoginRequest: string) {
@@ -1328,7 +1413,9 @@ export async function initializeAccount(
         sessionTokenHash: hash(token),
         initialQuotaBytes: authEnv.INITIAL_STORAGE_QUOTA_BYTES,
         recovery: input.recovery ? decodeRecovery(input.recovery, 1, keyVersion) : undefined,
-        identity: input.identity ? decodeIdentity(input.identity, keyVersion, user.id) : undefined,
+        identity: input.identity
+            ? decodeIdentity(input.identity, keyVersion, user.id, { current: true })
+            : undefined,
         workspace: input.workspace
             ? decodeWorkspaceGrant(input.workspace, undefined, keyVersion)
             : undefined,

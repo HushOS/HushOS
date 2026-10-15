@@ -10,7 +10,10 @@ import com.hushos.core.keyDigest
 import com.hushos.core.randomBytes
 import com.hushos.core.shareSeal
 import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -19,124 +22,171 @@ import java.io.File
 
 /*
  * Who a node key is sealed to, and which received shares open. The identity is the web's own fixture
- * (crates/hushos-core/fixtures/web.json): its X25519, Ed25519 and ML-KEM keys and the KEM binding the
- * web signed. A pin vouches only when its fingerprint is the current one over both pinned keys; a share
- * is sealed only hybrid, to a post-quantum key the pin remembers or the pinned identity signed; a
- * rotation re-seals only what the owner's ledger holds.
+ * (crates/hushos-core/fixtures/web.json): a version 2 identity with its four public keys and the keys statement the
+ * web signed. A pin vouches only when it is version 3 (the ML-DSA digest, and the version 3 fingerprint over all four
+ * keys); a share is sealed only hybrid, to the ML-KEM key whose digest the pin holds; a rotation re-seals only what
+ * the owner's ledger holds.
  */
 class SharingTrustTest {
     private val fixture = JSONObject(File("../../../crates/hushos-core/fixtures/web.json").readText())
     private val userId = fixture.getJSONObject("account").getString("userId")
-    private val identity = fixture.getJSONObject("share").getJSONObject("identity")
-    private val enc = identity.getString("encryptionPublicKey")
-    private val sig = identity.getString("signingPublicKey")
-    private val kem = identity.getJSONObject("kem").getString("publicKey")
-    private val kemSignature = identity.getJSONObject("kem").getString("signature")
+    private val envelope = WebFixture.identity(fixture.getJSONObject("share").getJSONObject("identity"))
+    private val served = WebFixture.served(envelope)
+    private val enc = served.encryptionPublicKey
+    private val sig = served.signingPublicKey
+    private val kem = served.kemPublicKey!!
     private val nodeId = "722d2ea4-f3a4-4d34-8843-1965d8233f83"
 
-    private fun fingerprint(e: String, s: String) = identityFingerprint(base64urlDecode(e), base64urlDecode(s))
-    private val verified = ContactPin(userId, "ada@example.org", "Ada", enc, sig, fingerprint(enc, sig), "2026-10-01T00:00:00Z", null)
-    /* Pinned before signing keys were kept: nothing to check the words against. */
-    private val noSigningKey = verified.copy(signingPublicKey = "", fingerprint = "")
+    private val verified = ContactPin.ofServed(userId, "ada@example.org", "Ada", served, "2026-10-01T00:00:00Z")!!
+    /* Pinned before the release: the same keys, no ML-DSA digest. */
+    private val preRelease = TestPins.preRelease(verified)
     /* A stored fingerprint that isn't the current one over the pinned keys (an older format, or tampered). */
-    private val staleFingerprint = verified.copy(fingerprint = fingerprint(enc, base64urlEncode(ByteArray(32) { 7 })))
-    private val flippedKem = base64urlEncode(base64urlDecode(kem).also { it[0] = (it[0].toInt() xor 1).toByte() })
+    private val staleFingerprint = verified.copy(fingerprint = identityFingerprint(base64urlDecode(enc), ByteArray(32) { 7 }, ByteArray(32) { 3 }, ByteArray(32) { 4 }))
+    private fun flipped(key: String) = base64urlEncode(base64urlDecode(key).also { it[0] = (it[0].toInt() xor 1).toByte() })
 
     @Test
-    fun aVerifiedPinTakesTheSignedFirstKeyAndThenOnlyThatKey() {
+    fun theWordsAreTheWebsAndOnlyAnUpgradedIdentityWhoseKeysStatementHoldsHasThem() {
+        val contact = Contact(userId, "Ada", "ada@example.org", served)
+        assertTrue(contact.upgraded)
+        assertEquals(fixture.getJSONObject("fingerprints").getString("identity"), contact.fingerprint)
+        // Words are never shown over a statement that does not hold: a flipped signature, an ML-KEM key it does not
+        // name (a server swapping in its own), or the version 1 form of the same keys.
+        for (bad in listOf(served.copy(keysSignature = flipped(served.keysSignature!!)), served.copy(kemPublicKey = flipped(kem)),
+            served.copy(identityVersion = 1), served.copy(mlDsaPublicKey = null))) {
+            val other = Contact(userId, "Ada", "ada@example.org", bad)
+            assertFalse(other.upgraded)
+            assertNull(other.fingerprint)
+            assertNull(ContactPin.ofServed(userId, "ada@example.org", "Ada", bad.copy(mlDsaPublicKey = null), "now"))
+        }
+        // The statement binds the account: the same keys served for someone else do not hold.
+        assertFalse(Contact("another-user", "Ada", "ada@example.org", served).upgraded)
+    }
+
+    @Test
+    fun theFingerprintChangesWithEachOfTheFourKeys() {
+        val base = verified.fingerprint
+        for (other in listOf(served.copy(encryptionPublicKey = flipped(enc)), served.copy(signingPublicKey = flipped(sig)),
+            served.copy(mlDsaPublicKey = flipped(served.mlDsaPublicKey!!)), served.copy(kemPublicKey = flipped(kem)))) {
+            assertNotEquals(base, ContactPin.ofServed(userId, "a", "A", other, "now")!!.fingerprint)
+        }
+    }
+
+    @Test
+    fun aVersionThreePinSealsOnlyToTheMlKemKeyItsDigestNames() {
         assertTrue(verified.verified)
-        val first = granteeKem(verified, kem, kemSignature)
-        assertEquals(keyDigest(base64urlDecode(kem)), first.firstHash)
-        val remembered = verified.copy(kemPublicKeyHash = first.firstHash)
-        assertNull(granteeKem(remembered, kem, null).firstHash)
-        val changed = assertThrows(SharingRefused::class.java) { granteeKem(remembered, flippedKem, kemSignature) }
-        assertEquals("Ada’s post-quantum key has changed since you pinned it. Check with them before sharing.", changed.message)
-    }
-
-    @Test
-    fun anUnverifiedPinIsRefusedForSharing() {
-        for (pin in listOf(noSigningKey, staleFingerprint)) {
-            val refused = assertThrows(SharingRefused::class.java) { granteeKem(pin, kem, kemSignature) }
-            assertEquals("Check Ada’s words again in People you share with before you share with them.", refused.message)
+        assertEquals(keyDigest(base64urlDecode(served.mlDsaPublicKey!!)), verified.mlDsaPublicKeyHash)
+        assertArrayEquals(base64urlDecode(kem), granteeKem(verified, served))
+        // Beside the pinned X25519 and Ed25519 keys: another ML-KEM key, another ML-DSA key, or none (the version 1 form).
+        for (swapped in listOf(served.copy(kemPublicKey = flipped(kem)), served.copy(mlDsaPublicKey = flipped(served.mlDsaPublicKey!!)),
+            served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), served.copy(kemPublicKey = null))) {
+            val refused = assertThrows(SharingRefused::class.java) { granteeKem(verified, swapped) }
+            assertEquals("Ada’s keys have changed since you checked them. Check it’s them in People you share with.", refused.message)
         }
     }
 
     @Test
-    fun anUnverifiedPinKeepsTheirSharesShut() {
-        for (pin in listOf(noSigningKey, staleFingerprint)) {
-            val shut = assertThrows(GranterTrust.Recheck::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to pin)) }
-            assertEquals("Check Ada’s words again in People you share with to open what they shared.", shut.message)
+    fun aPinThatVouchesForNothingIsRefusedForSharing() {
+        for (pin in listOf(preRelease, staleFingerprint)) {
+            val refused = assertThrows(SharingRefused::class.java) { granteeKem(pin, served) }
+            assertEquals("Check Ada’s words again in People you share with: this pin was made before the words covered all their keys.", refused.message)
         }
-        val granter = granterKey(userId, "Ada", ServedIdentity(2uL, enc, sig, null), mapOf(userId to verified))
+    }
+
+    @Test
+    fun whatAPinSaysAboutServedKeys() {
+        assertEquals(PinComparison.SAME, comparePin(verified, served))
+        // The person upgraded (same classical keys) and was pinned before: words again, nothing trusted until then.
+        assertEquals(PinComparison.RECHECK, comparePin(preRelease, served))
+        assertEquals(PinComparison.RECHECK, comparePin(preRelease, served.copy(mlDsaPublicKey = null, identityVersion = 1)))
+        val newer = TestPins.served(base64urlEncode(ByteArray(32) { 5 }), base64urlEncode(ByteArray(32) { 6 }), 3uL)
+        assertEquals(PinComparison.SUCCESSION, comparePin(verified, newer))
+        // Only a version 3 pin passes trust on, and only to version 2 keys at a higher key version.
+        assertEquals(PinComparison.CHANGED, comparePin(preRelease, newer))
+        assertEquals(PinComparison.CHANGED, comparePin(verified, newer.copy(mlDsaPublicKey = null)))
+        assertEquals(PinComparison.CHANGED, comparePin(verified, newer.copy(keyVersion = 2uL)))
+    }
+
+    @Test
+    fun aPinThatVouchesForNothingKeepsTheirSharesShut() {
+        for (pin in listOf(preRelease, staleFingerprint))
+            assertThrows(GranterTrust.Recheck::class.java) { granterKey(userId, "Ada", served, mapOf(userId to pin)) }
+        val granter = granterKey(userId, "Ada", served, mapOf(userId to verified))
         assertEquals(sig, base64urlEncode(granter.signingPublicKey))
         // Other keys at the pinned version are a change no succession explains.
         val atTwo = mapOf(userId to verified.copy(keyVersion = 2uL))
-        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, base64urlEncode(ByteArray(32) { 3 }), sig, null), atTwo) }
-        // A swapped signing key under the pinned X25519 key is a changed account too: suite 3 shares are checked against it.
-        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", ServedIdentity(2uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), atTwo) }
+        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", served.copy(encryptionPublicKey = base64urlEncode(ByteArray(32) { 3 })), atTwo) }
+        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", served.copy(signingPublicKey = base64urlEncode(ByteArray(32) { 4 })), atTwo) }
         // At a newer version they may be a succession, followed only once the person checks again: shut until then.
-        assertThrows(GranterTrust.Replaced::class.java) { granterKey(userId, "Ada", ServedIdentity(3uL, enc, base64urlEncode(ByteArray(32) { 4 }), null), atTwo) }
+        assertThrows(GranterTrust.Replaced::class.java) { granterKey(userId, "Ada", served.copy(keyVersion = 3uL, signingPublicKey = base64urlEncode(ByteArray(32) { 4 })), atTwo) }
     }
 
     @Test
-    fun aMissingOrUnsignedPostQuantumKeyIsRefusedRatherThanSealedClassic() {
-        val missing = assertThrows(SharingRefused::class.java) { granteeKem(verified, null, null) }
-        assertEquals("Ada hasn’t set up post-quantum keys yet.", missing.message)
-        // Signed by the identity, but for another key; and the right key with no signature at all.
-        for ((key, signature) in listOf(flippedKem to kemSignature, kem to null)) {
-            val unsigned = assertThrows(SharingRefused::class.java) { granteeKem(verified, key, signature) }
-            assertEquals("Ada’s post-quantum key is not signed by their identity.", unsigned.message)
+    fun aPinFromBeforeTheReleaseServedOtherKeysIsTheChangedKeyWarningNotAnUpgrade() {
+        // Only the same X25519 and Ed25519 keys under a pin that vouches for nothing is "keys were upgraded".
+        for (pin in listOf(preRelease, staleFingerprint)) {
+            val pins = mapOf(userId to pin)
+            for (other in listOf(served.copy(encryptionPublicKey = flipped(enc)), served.copy(signingPublicKey = flipped(sig)),
+                served.copy(keyVersion = 3uL, signingPublicKey = flipped(sig))))
+                assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", other, pins) }
         }
     }
 
-    private fun served(id: String, grantee: String, kemKey: String?) = JSONObject().put("id", id).put("granteeUserId", grantee)
-        .put("grantee", JSONObject().put("encryptionPublicKey", enc).put("signingPublicKey", sig)
-            .put("kem", kemKey?.let { JSONObject().put("publicKey", it).put("signature", kemSignature) } ?: JSONObject.NULL))
+    private fun row(id: String, grantee: String, identity: ServedIdentity = served) =
+        JSONObject().put("id", id).put("granteeUserId", grantee).put("grantee", identity.toJson())
 
     private fun link(id: String) = JSONObject().put("id", id).put("hasPassword", false).put("secretEnvelope", JSONObject.NULL)
 
     @Test
-    fun aRotationResealsOnlyWhatTheLedgerHolds() {
+    fun aRotationResealsOnlyWhatTheLedgerHoldsInSuiteFour() {
         val stranger = "6f1c2b3a-0000-4000-8000-0000000000ff"
         val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), mapOf("link-1" to nodeId, "link-2" to "another-node"))
         val plan = planReseal(
             nodeId,
             // The server adds a share to someone pinned but never shared with, and lists three links.
-            listOf(served("share-1", userId, kem), served("share-2", stranger, kem)),
+            listOf(row("share-1", userId), row("share-2", stranger)),
             listOf(link("link-1"), link("link-2"), link("link-3")),
             ledger, mapOf(userId to verified, stranger to verified.copy(userId = stranger)),
         )
         assertEquals(listOf("share-1"), plan.shares.map { it.id })
         assertEquals(listOf("link-1"), plan.links.map { it.getString("id") })
         assertTrue(plan.skipped.isEmpty())
-        // What the rotation seals for that row is suite 3 (1256 bytes: an ephemeral key, ML-KEM, the granter's
-        // signature), never the 72-byte X25519-only envelope, which the core no longer makes at all.
+        // What the rotation seals for that row is suite 4 (4565 bytes: an ephemeral key, ML-KEM, both signatures).
         val granterId = "8286d83e-31bc-4b1e-93bd-d18435de6b02"
         val ctx = ShareContext("654850ba-18bc-430a-ad22-5ffd1c105aa2", nodeId, 6uL, userId, granterId)
         val root = randomBytes(32u)
         val granter = identityOpen(granterId, root, identityCreate(granterId, root, 1uL))
         val share = plan.shares.single()
         val sealed = shareSeal(ctx, randomBytes(32u), granter, share.publicKey, share.kemPublicKey)
-        assertEquals(1256, sealed.size)
+        assertEquals(4565, sealed.size)
         assertTrue(runCatching { shareSeal(ctx, randomBytes(32u), granter, share.publicKey, ByteArray(0)) }.isFailure)
+    }
+
+    @Test
+    fun anIdentityThatIsNotUpgradedCannotSeal() {
+        // A version 1 identity has no ML-DSA key to sign suite 4 with: the app upgrades on unlock, before any share.
+        val upgrade = fixture.getJSONObject("upgrade")
+        val legacy = identityOpen(upgrade.getString("userId"), base64urlDecode(upgrade.getString("accountKey")), WebFixture.identity(upgrade.getJSONObject("legacy")))
+        assertEquals(1u, legacy.identityVersion)
+        val ctx = ShareContext("654850ba-18bc-430a-ad22-5ffd1c105aa2", nodeId, 6uL, userId, upgrade.getString("userId"))
+        assertTrue(runCatching { shareSeal(ctx, randomBytes(32u), legacy, base64urlDecode(enc), base64urlDecode(kem)) }.isFailure)
     }
 
     @Test
     fun aRotationSaysWhoItLeftOutInsteadOfSealingClassic() {
         val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
-        val cases = mapOf(
-            "Ada hasn’t set up post-quantum keys yet." to Pair(verified, served("share-1", userId, null)),
-            "Check Ada’s words again in People you share with before you share with them." to Pair(staleFingerprint, served("share-1", userId, kem)),
-            "Ada’s post-quantum key is not signed by their identity." to Pair(verified, served("share-1", userId, flippedKem)),
+        val changed = "Ada’s keys have changed since you checked them. Check it’s them in People you share with."
+        val cases = listOf(
+            Triple(verified, served.copy(kemPublicKey = null), changed),
+            Triple(verified, served.copy(kemPublicKey = flipped(kem)), changed),
+            Triple(verified, served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), changed),
+            Triple(staleFingerprint, served, "Check Ada’s words again in People you share with: this pin was made before the words covered all their keys."),
+            Triple(preRelease, served, "Check Ada’s words again in People you share with: this pin was made before the words covered all their keys."),
         )
-        for ((reason, case) in cases) {
-            val plan = planReseal(nodeId, listOf(case.second), emptyList(), ledger, mapOf(userId to case.first))
+        for ((pin, identity, reason) in cases) {
+            val plan = planReseal(nodeId, listOf(row("share-1", userId, identity)), emptyList(), ledger, mapOf(userId to pin))
             assertTrue(plan.shares.isEmpty())
             assertEquals(listOf(reason), plan.skipped)
         }
-        // A first key checked here is handed back to be remembered on the pin.
-        val plan = planReseal(nodeId, listOf(served("share-1", userId, kem)), emptyList(), ledger, mapOf(userId to verified))
-        assertEquals(keyDigest(base64urlDecode(kem)), plan.firstKems[userId])
     }
 
     @Test

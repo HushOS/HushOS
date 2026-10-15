@@ -142,11 +142,11 @@ describe('the auth block', () => {
 
     test('a listed action and outcome pass through', () => {
         const event = redact({
-            path: '/api/auth/identity/kem',
-            auth: { action: 'identity/kem', outcome: 'rejected' },
+            path: '/api/auth/identity/upgrade',
+            auth: { action: 'identity/upgrade', outcome: 'rejected' },
         });
-        expect(event.path).toBe('/api/auth/identity/kem');
-        expect(event.auth).toEqual({ action: 'identity/kem', outcome: 'rejected' });
+        expect(event.path).toBe('/api/auth/identity/upgrade');
+        expect(event.auth).toEqual({ action: 'identity/upgrade', outcome: 'rejected' });
     });
 
     test('an auth value that is not an object is removed', () => {

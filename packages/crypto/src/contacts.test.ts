@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { createIdentity, openIdentityEncryptionKey, verifyIdentitySigningKey } from './identity';
+import {
+    createIdentity,
+    openIdentityEncryptionKey,
+    publicIdentity,
+    upgradeIdentity,
+    verifyIdentityKeys,
+    verifyOwnIdentity,
+    type IdentityEnvelope,
+} from './identity';
+import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
     createSettingsKey,
     EMPTY_SETTINGS,
@@ -66,41 +75,168 @@ async function identityWithKey(userId = USER) {
 }
 
 describe('fingerprints', () => {
-    test('are stable for a key, differ between keys, and are ten groups of four hex digits', async () => {
+    test('are stable for an identity, differ between identities, and are ten groups of four hex digits', async () => {
         const a = await identityWithKey();
         const b = await identityWithKey();
-        const keys = (envelope: typeof a.envelope) =>
+        const keys = (envelope: IdentityEnvelope) =>
             [
                 decode(envelope.encryptionPublicKey, 32),
                 decode(envelope.signingPublicKey, 32),
+                decode(envelope.mlDsa!.publicKey, 1952),
+                decode(envelope.kem!.publicKey, 1184),
             ] as const;
-        const first = await fingerprint(...keys(a.envelope));
+        const first = await fingerprintOfKeys(...keys(a.envelope));
         expect(first).toMatch(/^([0-9a-f]{4} ){9}[0-9a-f]{4}$/);
-        expect(await fingerprint(...keys(a.envelope))).toBe(first);
-        expect(await fingerprint(...keys(b.envelope))).not.toBe(first);
-        // The same X25519 key beside another identity's signing key: not the same person.
-        expect(
-            await fingerprint(
-                decode(a.envelope.encryptionPublicKey, 32),
-                decode(b.envelope.signingPublicKey, 32),
+        expect(await fingerprintOfKeys(...keys(a.envelope))).toBe(first);
+        expect(await fingerprintOfKeys(...keys(b.envelope))).not.toBe(first);
+        // Any one of the four keys from another identity: not the same person.
+        for (let at = 0; at < 4; at++) {
+            const mixed = [...keys(a.envelope)] as [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+            mixed[at] = keys(b.envelope)[at]!;
+            expect(await fingerprintOfKeys(...mixed)).not.toBe(first);
+        }
+        await expect(
+            fingerprint(
+                new Uint8Array(31),
+                new Uint8Array(32),
+                new Uint8Array(32),
+                new Uint8Array(32),
             ),
-        ).not.toBe(first);
-        await expect(fingerprint(new Uint8Array(31), new Uint8Array(32))).rejects.toThrow();
+        ).rejects.toThrow();
     });
 });
 
-describe('own signing key', () => {
-    test('is proven against the seed under the root, so a swapped one is refused', async () => {
+describe('own identity', () => {
+    test('every private half is proven against its public key under the root, so a swapped one is refused', async () => {
         const { root, envelope } = await identityWithKey();
-        expect(await verifyIdentitySigningKey(root, USER, envelope)).toBe(
-            envelope.signingPublicKey,
+        await expect(verifyOwnIdentity(root, USER, envelope)).resolves.toBeUndefined();
+        const other = (await identityWithKey()).envelope;
+        for (const swapped of [
+            { ...envelope, signingPublicKey: other.signingPublicKey },
+            { ...envelope, encryptionPublicKey: other.encryptionPublicKey },
+            { ...envelope, mlDsa: { ...envelope.mlDsa!, publicKey: other.mlDsa!.publicKey } },
+            { ...envelope, kem: { ...envelope.kem!, publicKey: other.kem!.publicKey } },
+            // The keys statement of another identity beside this one's keys.
+            { ...envelope, keysSignature: other.keysSignature },
+        ])
+            await expect(verifyOwnIdentity(root, USER, swapped)).rejects.toThrow();
+        await expect(verifyOwnIdentity(root, OTHER, envelope)).rejects.toThrow();
+    });
+});
+
+describe('the keys statement', () => {
+    test('binds all four keys, the account and the key version, signed with both signing keys', async () => {
+        const a = (await identityWithKey()).envelope;
+        const b = (await identityWithKey(OTHER)).envelope;
+        const keys = publicIdentity(a);
+        expect(decode(keys.keysSignature)).toHaveLength(3373);
+        expect(await verifyIdentityKeys(USER, keys)).toBe(true);
+        expect(await verifyIdentityKeys(OTHER, keys)).toBe(false);
+        expect(await verifyIdentityKeys(USER, { ...keys, keyVersion: 2 })).toBe(false);
+        // A server that swaps in a key of its own cannot sign for it, whichever key it is.
+        const other = publicIdentity(b);
+        for (const field of [
+            'encryptionPublicKey',
+            'signingPublicKey',
+            'mlDsaPublicKey',
+            'kemPublicKey',
+        ] as const)
+            expect(await verifyIdentityKeys(USER, { ...keys, [field]: other[field] })).toBe(false);
+        // Stripped to its Ed25519 half: the statement is a hybrid one.
+        expect(
+            await verifyIdentityKeys(USER, {
+                ...keys,
+                keysSignature: encode(decode(keys.keysSignature).subarray(0, 64)),
+            }),
+        ).toBe(false);
+    });
+});
+
+/* A version 1 identity as accounts held them before the release, from a version 2 one's keys. */
+function versionOne(envelope: IdentityEnvelope, kem = true): IdentityEnvelope {
+    return {
+        version: 1,
+        keyVersion: envelope.keyVersion,
+        wrappingSalt: envelope.wrappingSalt,
+        encryptionPublicKey: envelope.encryptionPublicKey,
+        encryptionPrivateKeyNonce: envelope.encryptionPrivateKeyNonce,
+        encryptedEncryptionPrivateKey: envelope.encryptedEncryptionPrivateKey,
+        signingPublicKey: envelope.signingPublicKey,
+        signingSeedNonce: envelope.signingSeedNonce,
+        encryptedSigningSeed: envelope.encryptedSigningSeed,
+        kem: kem ? { ...envelope.kem!, signature: encode(new Uint8Array(64)) } : null,
+    };
+}
+
+describe('the upgrade', () => {
+    test('keeps the X25519, Ed25519 and ML-KEM keys and the key version, and adds an ML-DSA key that opens', async () => {
+        const { openIdentityMlDsaKey, rewrapIdentity } = await import('./identity');
+        const { root, envelope } = await identityWithKey();
+        const legacy = versionOne({ ...envelope, keyVersion: 1 });
+        const upgraded = await upgradeIdentity(root, USER, legacy);
+        expect(upgraded.version).toBe(2);
+        expect(upgraded.keyVersion).toBe(legacy.keyVersion);
+        expect(upgraded.encryptionPublicKey).toBe(legacy.encryptionPublicKey);
+        expect(upgraded.signingPublicKey).toBe(legacy.signingPublicKey);
+        expect(upgraded.kem!.publicKey).toBe(legacy.kem!.publicKey);
+        // The Ed25519 KEM binding is gone: the keys statement replaces it.
+        expect('signature' in upgraded.kem).toBe(false);
+        expect(await verifyIdentityKeys(USER, publicIdentity(upgraded))).toBe(true);
+        expect((await openIdentityMlDsaKey(root, USER, upgraded))!.publicKey).toBe(
+            upgraded.mlDsa!.publicKey,
         );
-        const swapped = {
-            ...envelope,
-            signingPublicKey: (await identityWithKey()).envelope.signingPublicKey,
-        };
-        await expect(verifyIdentitySigningKey(root, USER, swapped)).rejects.toThrow();
-        await expect(verifyIdentitySigningKey(root, OTHER, envelope)).rejects.toThrow();
+        await expect(verifyOwnIdentity(root, USER, upgraded)).resolves.toBeUndefined();
+        // Only once: an upgraded identity is not upgraded again with a second ML-DSA key.
+        await expect(upgradeIdentity(root, USER, upgraded)).rejects.toThrow(/already/);
+        // Master-key rotation after the upgrade keeps the ML-DSA seed openable under the new root.
+        const nextRoot = crypto.getRandomValues(new Uint8Array(32));
+        const rotated = await rewrapIdentity(root, nextRoot, USER, upgraded);
+        expect((await openIdentityMlDsaKey(nextRoot, USER, rotated))!.publicKey).toBe(
+            upgraded.mlDsa!.publicKey,
+        );
+        await expect(openIdentityMlDsaKey(root, USER, rotated)).rejects.toThrow();
+        expect(await verifyIdentityKeys(USER, publicIdentity(rotated))).toBe(true);
+    });
+
+    test('gives a version 1 identity from before hybrid sharing its ML-KEM key too', async () => {
+        const { openIdentityKemKey } = await import('./identity');
+        const { root, envelope } = await identityWithKey();
+        const upgraded = await upgradeIdentity(root, USER, versionOne(envelope, false));
+        expect(upgraded.kem!.publicKey).not.toBe(envelope.kem!.publicKey);
+        expect((await openIdentityKemKey(root, USER, upgraded))!.publicKey).toBe(
+            upgraded.kem!.publicKey,
+        );
+        expect(await verifyIdentityKeys(USER, publicIdentity(upgraded))).toBe(true);
+    });
+
+    test('refuses an identity whose keys do not open under this root', async () => {
+        const { root, envelope } = await identityWithKey();
+        const stranger = (await identityWithKey()).envelope;
+        await expect(
+            upgradeIdentity(
+                root,
+                USER,
+                versionOne({ ...envelope, signingPublicKey: stranger.signingPublicKey }),
+            ),
+        ).rejects.toThrow();
+        await expect(
+            upgradeIdentity(root, USER, {
+                ...versionOne(envelope),
+                kem: { ...envelope.kem!, publicKey: stranger.kem!.publicKey },
+            }),
+        ).rejects.toThrow();
+        // An X25519 key the server swapped in: the upgrade would sign for a key this device
+        // never proved it holds.
+        await expect(
+            upgradeIdentity(
+                root,
+                USER,
+                versionOne({ ...envelope, encryptionPublicKey: stranger.encryptionPublicKey }),
+            ),
+        ).rejects.toThrow();
+        await expect(
+            upgradeIdentity(crypto.getRandomValues(new Uint8Array(32)), USER, versionOne(envelope)),
+        ).rejects.toThrow();
     });
 });
 
@@ -120,7 +256,7 @@ describe('identity private key', () => {
 
 describe('settings', () => {
     const settings: Settings = {
-        version: 1,
+        version: 2,
         contacts: {
             [OTHER]: {
                 userId: OTHER,
@@ -202,9 +338,39 @@ describe('settings', () => {
         expect(await openSettings(only(settingsKey), USER, two)).toEqual(settings);
     });
 
+    test('fifty contacts’ version 3 pins fit under the cap', async () => {
+        const { settingsKey: key } = await withSettingsKey();
+        const many: Settings = { version: 2, contacts: {} };
+        const sample = (await identityWithKey()).envelope;
+        for (let i = 0; i < 50; i++) {
+            const userId = `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`;
+            many.contacts[userId] = {
+                userId,
+                email: `contact-${i}@a-long-company-domain.example`,
+                name: `Contact with a fairly long display name ${i}`,
+                encryptionPublicKey: sample.encryptionPublicKey,
+                signingPublicKey: sample.signingPublicKey,
+                mlDsaPublicKeyHash: await keyDigest(decode(sample.mlDsa!.publicKey)),
+                kemPublicKeyHash: await keyDigest(decode(sample.kem!.publicKey)),
+                fingerprint: '0000 0000 0000 0000 0000 0000 0000 0000 0000 0000',
+                pinnedAt: new Date().toISOString(),
+                keyVersion: 1,
+            };
+        }
+        await expect(sealSettings(key, USER, 1, many)).resolves.toBeDefined();
+    });
+
+    test('a version 1 document still opens, and is sealed again as version 2', async () => {
+        const { settingsKey: key } = await withSettingsKey();
+        const old: Settings = { ...settings, version: 1 };
+        const sealed = await sealSettings(key, USER, 3, old);
+        const reopened = await openSettings(key, USER, sealed);
+        expect(reopened).toEqual({ ...old, version: 2 });
+    });
+
     test('refuses a document over the size cap', async () => {
         const { settingsKey: key } = await withSettingsKey();
-        const big: Settings = { version: 1, contacts: {} };
+        const big: Settings = { version: 2, contacts: {} };
         for (let i = 0; i < 700; i++)
             big.contacts[`u${i}`] = {
                 ...settings.contacts[OTHER]!,
@@ -231,67 +397,10 @@ describe('the identity’s KEM key', () => {
             }),
         ).rejects.toThrow();
         await expect(openIdentityKemKey(root, OTHER, envelope)).rejects.toThrow();
-        expect(await openIdentityKemKey(root, USER, { ...envelope, kem: null })).toBeNull();
+        // A version 1 identity from before hybrid sharing has none.
+        expect(await openIdentityKemKey(root, USER, versionOne(envelope, false))).toBeNull();
         // The seed alone reproduces the pair: what a device expands, nothing else is stored.
         expect(kemKeypair(new Uint8Array(64)).publicKey).toHaveLength(1184);
-    });
-
-    test('the binding is signed by the identity and fails for another identity, user or key', async () => {
-        const { verifyKemBinding } = await import('./identity');
-        const a = await identityWithKey();
-        const b = await identityWithKey(OTHER);
-        const ok = (envelope: typeof a.envelope, userId = USER) =>
-            verifyKemBinding(
-                userId,
-                envelope.encryptionPublicKey,
-                envelope.signingPublicKey,
-                envelope.kem!,
-            );
-        expect(await ok(a.envelope)).toBe(true);
-        expect(await ok(b.envelope, OTHER)).toBe(true);
-        expect(await ok(a.envelope, OTHER)).toBe(false);
-        // A server that swaps in its own KEM key cannot sign for it.
-        expect(
-            await ok({
-                ...a.envelope,
-                kem: { ...a.envelope.kem!, publicKey: b.envelope.kem!.publicKey },
-            }),
-        ).toBe(false);
-        expect(await ok({ ...a.envelope, signingPublicKey: b.envelope.signingPublicKey })).toBe(
-            false,
-        );
-        expect(
-            await ok({ ...a.envelope, encryptionPublicKey: b.envelope.encryptionPublicKey }),
-        ).toBe(false);
-    });
-
-    test('an identity from before hybrid sharing gets a key that opens, verifies, and survives a rewrap', async () => {
-        const { addIdentityKem, openIdentityKemKey, rewrapIdentity, verifyKemBinding } =
-            await import('./identity');
-        const { root, envelope } = await identityWithKey();
-        const legacy = { ...envelope, kem: undefined };
-        const kem = await addIdentityKem(root, USER, legacy);
-        const upgraded = { ...legacy, kem };
-        expect(
-            await verifyKemBinding(
-                USER,
-                upgraded.encryptionPublicKey,
-                upgraded.signingPublicKey,
-                kem,
-            ),
-        ).toBe(true);
-        expect((await openIdentityKemKey(root, USER, upgraded))?.publicKey).toBe(kem.publicKey);
-        await expect(addIdentityKem(root, USER, upgraded)).rejects.toThrow();
-        // Master-key rotation rewraps the seed under the new root; the public key and signature stay.
-        const nextRoot = crypto.getRandomValues(new Uint8Array(32));
-        const rewrapped = await rewrapIdentity(root, nextRoot, USER, upgraded);
-        expect(rewrapped.kem?.publicKey).toBe(kem.publicKey);
-        expect(rewrapped.kem?.signature).toBe(kem.signature);
-        expect(rewrapped.kem?.encryptedSeed).not.toBe(kem.encryptedSeed);
-        expect((await openIdentityKemKey(nextRoot, USER, rewrapped))?.publicKey).toBe(
-            kem.publicKey,
-        );
-        await expect(openIdentityKemKey(root, USER, rewrapped)).rejects.toThrow();
     });
 });
 

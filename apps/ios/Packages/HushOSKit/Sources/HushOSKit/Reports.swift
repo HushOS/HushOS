@@ -1,16 +1,26 @@
 import Foundation
 import HushOSCore
 
-/* An operator as `GET /api/drive/reports/operators` lists them: the server's word, not a key anyone checked. */
+/*
+ * An operator as `GET /api/drive/reports/operators` lists them: the server's word, not a key
+ * anyone checked. The core seals to a version 2 operator's ML-KEM key only once their keys
+ * statement holds, to a version 1 operator's as served, and refuses one with none.
+ */
 public struct ReportOperator: Codable, Sendable {
-    public struct Kem: Codable, Sendable {
-        public let publicKey: String
-        public let signature: String
-    }
     public let userId: String
+    public let keyVersion: UInt64
+    public var identityVersion: Int? = nil
     public let encryptionPublicKey: String
     public let signingPublicKey: String
-    public let kem: Kem?
+    public var mlDsaPublicKey: String? = nil
+    public var kemPublicKey: String? = nil
+    public var keysSignature: String? = nil
+
+    /* What the core seals to: every key and the statement as served, for it to check. */
+    var keys: OperatorKeys {
+        OperatorKeys(userId: userId, keyVersion: keyVersion, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                     mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey, keysSignature: keysSignature)
+    }
 }
 
 struct OperatorsResponse: Codable, Sendable { let operators: [ReportOperator] }
@@ -52,11 +62,7 @@ public enum Reports {
                 workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch,
                 reportId: reportId, operatorUserId: operator_.userId
             )
-            let keys = OperatorKeys(
-                userId: operator_.userId, encryptionPublicKey: operator_.encryptionPublicKey, signingPublicKey: operator_.signingPublicKey,
-                kem: operator_.kem.map { OperatorKem(publicKey: $0.publicKey, signature: $0.signature) }
-            )
-            return ["operatorUserId": operator_.userId, "keyEnvelope": base64urlEncode(bytes: try reportSealKey(ctx: ctx, nodeKey: nodeKey, operator: keys))]
+            return ["operatorUserId": operator_.userId, "keyEnvelope": base64urlEncode(bytes: try reportSealKey(ctx: ctx, nodeKey: nodeKey, operator: operator_.keys))]
         }
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return [

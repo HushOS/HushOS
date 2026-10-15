@@ -160,7 +160,7 @@ describe('rotation', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: project.keyEpoch,
-            shareEnvelope: randomBytes(1256),
+            shareEnvelope: randomBytes(4565),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const linked = await drive.createLink({
@@ -246,7 +246,7 @@ describe('rotation', () => {
             ...ws,
             nodes: [
                 rotated(project, rootEpoch, {
-                    shares: [{ id: shared.share.id, shareEnvelope: randomBytes(1256) }],
+                    shares: [{ id: shared.share.id, shareEnvelope: randomBytes(4565) }],
                 }),
             ],
         });
@@ -265,7 +265,7 @@ describe('rotation', () => {
             .where(eq(driveShares.id, shared.share.id));
         expect(share?.keyEpoch).toBe(targetEpoch);
         expect(share?.prevKeyEpoch).toBe(project.keyEpoch);
-        expect(share?.prevShareEnvelope).toHaveLength(1256);
+        expect(share?.prevShareEnvelope).toHaveLength(4565);
         expect(share?.revokedAt).toBeNull();
         // The grantee's view carries both envelopes mid-rotation.
         const mine = await drive.listSharesForGrantee(guest.userId);
@@ -400,7 +400,7 @@ describe('rotation', () => {
             granteeUserId: guest.userId,
             role: 'viewer',
             keyEpoch: inner.keyEpoch,
-            shareEnvelope: randomBytes(1256),
+            shareEnvelope: randomBytes(4565),
         });
         if (shared.status !== 'ok') throw new Error(shared.status);
         const started = await rotations.startRotation({

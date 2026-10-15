@@ -1,6 +1,7 @@
 import sodium from 'libsodium-wrappers';
 import { CryptoError } from './errors';
 import { decode, encode } from './keys';
+import { ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SIGNATURE_BYTES, mlDsaSign, mlDsaVerify } from './pq';
 
 /*
  * What a signature in HushOS covers, as docs/integrity-design.md fixes it.
@@ -17,6 +18,14 @@ export const SIGNATURE_BYTES = 64;
 export const SIGNING_PUBLIC_KEY_BYTES = 32;
 /* libsodium's Ed25519 secret key: the 32-byte seed followed by the public key. */
 export const SIGNING_SECRET_KEY_BYTES = 64;
+/*
+ * A person's hybrid signature (docs/identity-pq-design.md): Ed25519 over the
+ * statement, then ML-DSA-65 over the same bytes under this context. Valid only
+ * if both halves verify. It signs what decides whose keys to trust: the keys
+ * statement, successions and shares. File and folder signatures stay Ed25519.
+ */
+export const HYBRID_SIGNATURE_BYTES = SIGNATURE_BYTES + ML_DSA_SIGNATURE_BYTES; // 3373
+export const IDENTITY_SIGNATURE_CONTEXT = 'hushos/identity/v1';
 
 export type NodeKind = 'folder' | 'file';
 /*
@@ -89,8 +98,10 @@ export type SuccessionStatement = {
     newKeyVersion: number;
     oldEncryptionPublicKey: string;
     oldSigningPublicKey: string;
+    oldMlDsaPublicKey: string;
     newEncryptionPublicKey: string;
     newSigningPublicKey: string;
+    newMlDsaPublicKey: string;
     newKemPublicKey: string;
 };
 
@@ -276,7 +287,7 @@ export function copyForm(prior: Integrity | null, fromLink: boolean): SignatureF
 export async function shareStatement(ctx: ShareStatement, sealed: Uint8Array) {
     return statement([
         'hushos/drive/sig/share',
-        3,
+        4,
         text(ctx.workspaceId, 'workspace id'),
         text(ctx.nodeId, 'node id'),
         count(ctx.keyEpoch, 'key epoch'),
@@ -286,11 +297,19 @@ export async function shareStatement(ctx: ShareStatement, sealed: Uint8Array) {
     ]);
 }
 
+/* Canonical base64url of the right length, or refused: decode checks both. */
+function key(value: string, length: number) {
+    decode(value, length);
+    return value;
+}
+
 /*
- * ["hushos/identity/succession", 1, userId, oldKeyVersion, newKeyVersion,
- *  oldX25519, oldEd25519, newX25519, newEd25519, sha256(newKemPublicKey)]
+ * ["hushos/identity/succession", 2, userId, oldKeyVersion, newKeyVersion,
+ *  oldX25519, oldEd25519, oldMlDsa, newX25519, newEd25519, newMlDsa,
+ *  sha256(newKemPublicKey)]
  * Keys are base64url as the server serves them; the KEM key is digested from
  * its bytes. The new version is above the old one (one above, when minted).
+ * Signed with the old identity's hybrid signature. Version 1 is refused.
  */
 export async function successionStatement(link: SuccessionStatement) {
     // A succession mints current + 1; a reader asks only that the version rose, since a
@@ -298,23 +317,82 @@ export async function successionStatement(link: SuccessionStatement) {
     const oldVersion = count(link.oldKeyVersion, 'key version');
     if (!Number.isSafeInteger(link.newKeyVersion) || link.newKeyVersion <= oldVersion)
         throw new CryptoError('Invalid key version.');
-    // Canonical base64url of the right length, or refused: decode checks both.
-    const key = (value: string, length: number) => {
-        decode(value, length);
-        return value;
-    };
     return statement([
         'hushos/identity/succession',
-        1,
+        2,
         text(link.userId, 'user id'),
         oldVersion,
         link.newKeyVersion,
         key(link.oldEncryptionPublicKey, 32),
         key(link.oldSigningPublicKey, SIGNING_PUBLIC_KEY_BYTES),
+        key(link.oldMlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
         key(link.newEncryptionPublicKey, 32),
         key(link.newSigningPublicKey, SIGNING_PUBLIC_KEY_BYTES),
+        key(link.newMlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
         await digest(decode(link.newKemPublicKey, 1184)),
     ]);
+}
+
+/*
+ * ["hushos/identity/keys", 1, userId, keyVersion, x25519, ed25519, mlDsa,
+ *  sha256(kemPublicKey)]
+ * What binds a version 2 identity's four public keys to the account. The
+ * identity signs it with its own hybrid signature, proving it holds both
+ * signing keys. It replaces the Ed25519-only KEM binding.
+ */
+export type KeysStatement = {
+    userId: string;
+    keyVersion: number;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKey: string;
+    kemPublicKey: string;
+};
+export async function keysStatement(keys: KeysStatement) {
+    return statement([
+        'hushos/identity/keys',
+        1,
+        text(keys.userId, 'user id'),
+        count(keys.keyVersion, 'key version'),
+        key(keys.encryptionPublicKey, 32),
+        key(keys.signingPublicKey, SIGNING_PUBLIC_KEY_BYTES),
+        key(keys.mlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
+        await digest(decode(keys.kemPublicKey, 1184)),
+    ]);
+}
+
+/* The two private halves of a person's signature: libsodium's 64-byte Ed25519 key and ML-DSA-65's. */
+export type HybridSigningKey = { signingKey: Uint8Array; mlDsaSecretKey: Uint8Array };
+/* The two public halves it verifies under. */
+export type HybridPublicKey = { signingPublicKey: Uint8Array; mlDsaPublicKey: Uint8Array };
+
+/* Ed25519 || ML-DSA-65 over the same statement: 3373 bytes. */
+export async function signHybrid(message: Uint8Array, keys: HybridSigningKey) {
+    const classical = await signStatement(message, keys.signingKey);
+    const lattice = mlDsaSign(message, keys.mlDsaSecretKey, IDENTITY_SIGNATURE_CONTEXT);
+    const signature = new Uint8Array(HYBRID_SIGNATURE_BYTES);
+    signature.set(classical);
+    signature.set(lattice, SIGNATURE_BYTES);
+    return signature;
+}
+
+/*
+ * Whether `signature` is both halves of `keys`' hybrid signature over
+ * `message`. The caller knows from context that the statement is a hybrid one;
+ * a signature of any other length is not valid, never a classical fallback.
+ */
+export async function verifyHybrid(
+    message: Uint8Array,
+    signature: Uint8Array,
+    keys: HybridPublicKey,
+) {
+    if (signature.length !== HYBRID_SIGNATURE_BYTES) return false;
+    const classical = signature.subarray(0, SIGNATURE_BYTES);
+    const lattice = signature.subarray(SIGNATURE_BYTES);
+    return (
+        (await verifyStatement(message, classical, keys.signingPublicKey)) &&
+        mlDsaVerify(lattice, message, keys.mlDsaPublicKey, IDENTITY_SIGNATURE_CONTEXT)
+    );
 }
 
 /* Ed25519, detached, with libsodium's 64-byte secret key. */

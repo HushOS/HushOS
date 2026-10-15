@@ -3,13 +3,16 @@
 //! report's context, sealed to each operator's identity with no account of the
 //! reporter's involved. Suite 1 (112 bytes) is a libsodium sealed box to the
 //! operator's X25519 key; suite 2 (1224 bytes) adds an ML-KEM-768
-//! encapsulation, the body key being HKDF over both secrets. An operator's KEM
-//! key is used only when its Ed25519 binding to the identity checks out.
+//! encapsulation, the body key being HKDF over both secrets. Only suite 2 is
+//! sealed. A version 2 operator's KEM key is used only once their keys
+//! statement holds; a version 1 operator's is used as the server serves it.
 
 use crate::bytes::{decode, expect_len, random, KEY_BYTES, NONCE_BYTES};
 use crate::envelope::{context, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
-use crate::identity::{kem_encapsulate, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES};
+use crate::identity::{
+    identity_verify_keys, kem_encapsulate, PublicIdentity, KEM_CIPHERTEXT_BYTES, KEM_PUBLIC_KEY_BYTES,
+};
 #[cfg(test)]
 use blake2::digest::consts::U24;
 use blake2::digest::consts::U32;
@@ -18,7 +21,6 @@ use blake2::{Blake2b, Digest as _};
 use crypto_secretbox::aead::{AeadInPlace as _, KeyInit as _};
 #[cfg(test)]
 use crypto_secretbox::XSalsa20Poly1305;
-use ed25519_dalek::{Signature, VerifyingKey};
 use hkdf::Hkdf;
 use salsa20::cipher::consts::U10;
 use salsa20::hsalsa;
@@ -61,22 +63,19 @@ pub struct ReportContext {
     pub operator_user_id: String,
 }
 
-/// An operator's KEM key with the signature its identity made over it.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OperatorKem {
-    pub public_key: String,
-    pub signature: String,
-}
-
-/// An operator as `GET /api/drive/reports/operators` lists them.
+/// An operator as `GET /api/drive/reports/operators` lists them. A version 2
+/// identity carries its ML-DSA key, ML-KEM key and keys signature; a version 1
+/// identity carries none of them that count.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct OperatorKeys {
     pub user_id: String,
+    pub key_version: u64,
     pub encryption_public_key: String,
     pub signing_public_key: String,
-    pub kem: Option<OperatorKem>,
+    pub ml_dsa_public_key: Option<String>,
+    pub kem_public_key: Option<String>,
+    pub keys_signature: Option<String>,
 }
 
 fn report_context(ctx: &ReportContext, suite: u32) -> Vec<u8> {
@@ -95,40 +94,6 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     Blake2b::<U32>::digest(bytes).into()
 }
 
-/// Whether a KEM key belongs to the identity whose X25519 and Ed25519 keys
-/// these are: the binding `["hushos/identity/kem",1,userId,x25519,kem]`
-/// carries a signature by the identity's signing key.
-///
-/// ```
-/// use hushos_core::kem_binding_verify;
-/// assert!(!kem_binding_verify("u".into(), "x".into(), "s".into(), "k".into(), "sig".into()));
-/// ```
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn kem_binding_verify(
-    user_id: String,
-    encryption_public_key: String,
-    signing_public_key: String,
-    kem_public_key: String,
-    signature: String,
-) -> bool {
-    let check = || -> CoreResult<bool> {
-        decode("kem publicKey", &kem_public_key, Some(KEM_PUBLIC_KEY_BYTES))?;
-        let key: [u8; 32] =
-            decode("signingPublicKey", &signing_public_key, Some(32))?.try_into().expect("32 bytes");
-        let key = VerifyingKey::from_bytes(&key).map_err(|_| input("signing key"))?;
-        let signature: [u8; 64] = decode("signature", &signature, Some(64))?.try_into().expect("64 bytes");
-        let message = context(&[
-            json!("hushos/identity/kem"),
-            json!(1),
-            json!(user_id.to_lowercase()),
-            json!(encryption_public_key),
-            json!(kem_public_key),
-        ]);
-        Ok(key.verify_strict(&message, &Signature::from_bytes(&signature)).is_ok())
-    };
-    check().unwrap_or(false)
-}
-
 /* A hybrid envelope's associated data: the report's context and the ephemeral key it carries. */
 fn hybrid_report_data(ctx: &ReportContext, ephemeral_public: &[u8]) -> Vec<u8> {
     let mut data = report_context(ctx, 2);
@@ -136,31 +101,43 @@ fn hybrid_report_data(ctx: &ReportContext, ephemeral_public: &[u8]) -> Vec<u8> {
     data
 }
 
-/// Seals the node key to one operator for a report: 1224 bytes, hybrid. Refuses
-/// an operator without a KEM key, since a classical seal is a harvest-now,
-/// decrypt-later target, and a KEM key whose binding does not verify, so a
-/// swapped key on the wire cannot redirect the report.
+/// Seals the node key to one operator for a report: 1224 bytes, hybrid. A
+/// version 2 operator's KEM key is used only once their keys statement holds,
+/// and refused otherwise. A version 1 operator (no ML-DSA key or keys
+/// signature) is sealed to the KEM key the server serves, unchecked: operator
+/// keys come from the server and nobody pins them, so no binding could protect
+/// against the server. An operator with no KEM key at all is refused, since a
+/// classical seal is a harvest-now, decrypt-later target.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: OperatorKeys) -> CoreResult<Vec<u8>> {
     expect_len("node key", &node_key, KEY_BYTES)?;
     let operator_public = decode("operator encryptionPublicKey", &operator.encryption_public_key, Some(32))
         .map_err(|_| input("Invalid operator key."))?;
-    let kem = match operator.kem {
-        None => None,
-        Some(kem) => {
-            if !kem_binding_verify(
-                operator.user_id.clone(),
-                operator.encryption_public_key.clone(),
-                operator.signing_public_key.clone(),
-                kem.public_key.clone(),
-                kem.signature.clone(),
-            ) {
-                return Err(CoreError::Sealed(
-                    "An operator's post-quantum key does not match their identity.".into(),
-                ));
-            }
-            Some(decode("operator kem publicKey", &kem.public_key, Some(KEM_PUBLIC_KEY_BYTES))?)
+    // A version 2 identity (ML-DSA key, KEM key and keys signature all served) is used only once
+    // its keys statement holds. Anything else is a version 1 identity, whose KEM key is used as
+    // served: operator keys come from the server and nobody pins them, so the Ed25519 binding it
+    // once carried never protected against the server either.
+    if let (Some(ml_dsa), Some(kem), Some(signature)) =
+        (&operator.ml_dsa_public_key, &operator.kem_public_key, &operator.keys_signature)
+    {
+        let identity = PublicIdentity {
+            key_version: operator.key_version,
+            encryption_public_key: operator.encryption_public_key.clone(),
+            signing_public_key: operator.signing_public_key.clone(),
+            ml_dsa_public_key: ml_dsa.clone(),
+            kem_public_key: kem.clone(),
+            keys_signature: signature.clone(),
+        };
+        if !identity_verify_keys(operator.user_id.clone(), identity) {
+            return Err(CoreError::Sealed("An operator's key does not match their identity.".into()));
         }
+    }
+    let kem = match &operator.kem_public_key {
+        Some(kem) => Some(
+            decode("operator kemPublicKey", kem, Some(KEM_PUBLIC_KEY_BYTES))
+                .map_err(|_| input("Invalid operator key."))?,
+        ),
+        None => None,
     };
     // Hybrid only: a classical seal of a node key is a harvest-now, decrypt-later target.
     let Some(kem_public) = kem else {
@@ -201,11 +178,10 @@ pub fn report_seal_key(ctx: ReportContext, node_key: Vec<u8>, operator: Operator
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::bytes::encode;
+
     use crate::envelope::open_with_nonce;
-    use crate::identity::{kem_decapsulate, kem_public_key_from_seed, KEM_SEED_BYTES};
+    use crate::identity::kem_decapsulate;
     use crypto_secretbox::aead::generic_array::GenericArray;
-    use ed25519_dalek::{Signer as _, SigningKey};
 
     /* The operator's side, as the web's `openReportKey` does it: what proves a seal is right. */
     pub(crate) fn open(
@@ -266,29 +242,26 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn operator(with_kem: bool) -> (OperatorKeys, [u8; 32], Vec<u8>, Vec<u8>) {
-        let secret: [u8; 32] = random(32).try_into().unwrap();
-        let public = PublicKey::from(&StaticSecret::from(secret)).to_bytes().to_vec();
-        let signing = SigningKey::from_bytes(&random(32).try_into().unwrap());
-        let kem_seed = random(KEM_SEED_BYTES);
-        let kem_public = encode(&kem_public_key_from_seed(&kem_seed).unwrap());
-        let binding = context(&[
-            json!("hushos/identity/kem"),
-            json!(1),
-            json!("op"),
-            json!(encode(&public)),
-            json!(kem_public),
-        ]);
-        let keys = OperatorKeys {
+    /* An operator as the server lists them, version 2 or (stripped) version 1, with their private halves. */
+    pub(crate) fn operator(version_2: bool) -> (OperatorKeys, Vec<u8>, Vec<u8>, Vec<u8>) {
+        operator_with(version_2, true)
+    }
+
+    fn operator_with(version_2: bool, with_kem: bool) -> (OperatorKeys, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let root = random(32);
+        let envelope = crate::identity::identity_create("Op".into(), root.clone(), 1).unwrap();
+        let keys = crate::identity::identity_open("op".into(), root, envelope.clone()).unwrap();
+        let operator = OperatorKeys {
             user_id: "Op".into(),
-            encryption_public_key: encode(&public),
-            signing_public_key: encode(signing.verifying_key().as_bytes()),
-            kem: with_kem.then(|| OperatorKem {
-                public_key: kem_public,
-                signature: encode(&signing.sign(&binding).to_bytes()),
-            }),
+            key_version: 1,
+            encryption_public_key: envelope.encryption_public_key.clone(),
+            signing_public_key: envelope.signing_public_key.clone(),
+            ml_dsa_public_key: version_2.then(|| envelope.ml_dsa.clone().unwrap().public_key),
+            kem_public_key: with_kem.then(|| envelope.kem.clone().unwrap().public_key),
+            keys_signature: version_2.then(|| envelope.keys_signature.clone().unwrap()),
         };
-        (keys, secret, public, kem_seed)
+        let public = decode("k", &envelope.encryption_public_key, Some(32)).unwrap();
+        (operator, keys.encryption_private_key.to_vec(), public, keys.kem_seed.to_vec())
     }
 
     #[test]
@@ -316,32 +289,59 @@ pub(crate) mod tests {
         recoded[31] ^= 0x80;
         assert!(open(&recoded, &public, &secret, Some(&kem_seed), &ctx()).is_err());
         // No KEM key: nothing is sealed rather than a classical envelope.
-        let (classical, ..) = operator(false);
+        let (classical, ..) = operator_with(false, false);
         assert!(matches!(report_seal_key(ctx(), node_key, classical), Err(CoreError::Input(_))));
     }
 
     #[test]
-    fn a_kem_key_with_a_bad_binding_is_refused_rather_than_downgraded() {
-        let (mut keys, ..) = operator(true);
-        let (other, ..) = operator(true);
-        keys.kem = other.kem;
-        assert!(matches!(report_seal_key(ctx(), random(32), keys.clone()), Err(CoreError::Sealed(_))));
-        assert!(!kem_binding_verify(
-            keys.user_id.clone(),
-            keys.encryption_public_key.clone(),
-            keys.signing_public_key.clone(),
-            keys.kem.as_ref().unwrap().public_key.clone(),
-            keys.kem.as_ref().unwrap().signature.clone()
-        ));
+    fn a_kem_key_the_keys_statement_does_not_vouch_for_is_refused_rather_than_downgraded() {
         let (good, ..) = operator(true);
-        let kem = good.kem.clone().unwrap();
-        assert!(kem_binding_verify(
-            good.user_id,
-            good.encryption_public_key,
-            good.signing_public_key,
-            kem.public_key,
-            kem.signature
-        ));
+        let (other, ..) = operator(true);
+        assert!(report_seal_key(ctx(), random(32), good.clone()).is_ok());
+        // Another operator's KEM key, ML-DSA key or keys signature served beside these keys.
+        for swapped in [
+            OperatorKeys { kem_public_key: other.kem_public_key.clone(), ..good.clone() },
+            OperatorKeys { ml_dsa_public_key: other.ml_dsa_public_key.clone(), ..good.clone() },
+            OperatorKeys { keys_signature: other.keys_signature.clone(), ..good.clone() },
+            OperatorKeys { key_version: 2, ..good.clone() },
+            OperatorKeys { user_id: "someone-else".into(), ..good.clone() },
+        ] {
+            assert!(matches!(report_seal_key(ctx(), random(32), swapped), Err(CoreError::Sealed(_))));
+        }
+    }
+
+    #[test]
+    fn a_version_1_operator_is_sealed_to_the_served_kem_key_and_only_no_kem_key_is_refused() {
+        let node_key = random(32);
+        // Version 1 (no ML-DSA key, no keys statement): a hybrid envelope to the served KEM key.
+        let (legacy, secret, public, kem_seed) = operator(false);
+        assert!(legacy.ml_dsa_public_key.is_none() && legacy.keys_signature.is_none());
+        let sealed = report_seal_key(ctx(), node_key.clone(), legacy.clone()).unwrap();
+        assert_eq!(sealed.len(), HYBRID_BYTES);
+        assert_eq!(open(&sealed, &public, &secret, Some(&kem_seed), &ctx()).unwrap(), node_key);
+        // It needs both halves: the X25519 key alone, or another KEM seed, opens nothing.
+        let (_, _, _, other_seed) = operator(false);
+        assert!(open(&sealed, &public, &secret, Some(&other_seed), &ctx()).is_err());
+        // Partly version 2 (an ML-DSA key but no keys statement) is read as version 1, as the web reads it.
+        let partial = OperatorKeys { keys_signature: None, ..operator(true).0 };
+        assert_eq!(report_seal_key(ctx(), node_key.clone(), partial).unwrap().len(), HYBRID_BYTES);
+        // Version 2 with a broken keys statement: refused, never downgraded to the served key.
+        let (good, ..) = operator(true);
+        let mut signature = crate::bytes::decode("s", good.keys_signature.as_ref().unwrap(), None).unwrap();
+        signature[64 + 11] ^= 1;
+        let broken = OperatorKeys { keys_signature: Some(crate::bytes::encode(&signature)), ..good };
+        assert!(matches!(report_seal_key(ctx(), node_key.clone(), broken), Err(CoreError::Sealed(_))));
+        // No KEM key at all, version 1 or 2: refused.
+        for (version_2, with_kem) in [(false, false), (true, false)] {
+            let (none, ..) = operator_with(version_2, with_kem);
+            assert!(matches!(
+                report_seal_key(ctx(), node_key.clone(), none),
+                Err(CoreError::Input(message)) if message.contains("no post-quantum key")
+            ));
+        }
+        // A served KEM key of the wrong length is refused, not sealed to.
+        let short = OperatorKeys { kem_public_key: Some(crate::bytes::encode(&[1; 32])), ..legacy };
+        assert!(matches!(report_seal_key(ctx(), node_key, short), Err(CoreError::Input(_))));
     }
 
     #[test]

@@ -296,7 +296,7 @@ function People() {
                         <DialogDescription>
                             {rechecking && replacementUnseen(rechecking)
                                 ? 'Their keys are new, so their twelve words are too. Read them together once more.'
-                                : 'Their twelve words now cover all of their keys. Read them together once more.'}
+                                : 'Their twelve words now cover all of their keys. Read them together once more; shares between you open again once you’ve both done it.'}
                         </DialogDescription>
                     </DialogHeader>
                     {rechecking && (
