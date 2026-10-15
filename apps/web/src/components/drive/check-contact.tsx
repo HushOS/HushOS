@@ -195,8 +195,9 @@ export function CheckContact({
                 </p>
             ) : (
                 <p className="text-sm leading-snug text-muted-foreground">
-                    Ask {first} to open People you share with in HushOS and read you their twelve
-                    words, on a call or in person. If they match these, it’s really them.
+                    Ask {first} to open People you share with in HushOS, choose Your twelve words,
+                    and read them to you, on a call or in person. If they match these, it’s really
+                    them.
                 </p>
             )}
             {found.fingerprint && <FingerprintWords fingerprint={found.fingerprint} />}

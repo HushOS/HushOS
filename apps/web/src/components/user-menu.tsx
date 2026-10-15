@@ -9,6 +9,7 @@ import {
     LockKeyholeOpenIcon,
     LogOutIcon,
     SettingsIcon,
+    TextQuoteIcon,
     Volume2Icon,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -16,6 +17,7 @@ import { useStore } from 'zustand';
 import type { NavItem } from '@/components/app-sidebar';
 import { lockDevice, openDeviceDialog } from '@/components/device-control';
 import { TextSwap } from '@/components/motion';
+import { OwnWordsDialog } from '@/components/own-words-dialog';
 import { ThemeRadioItems } from '@/components/theme-toggle';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -104,6 +106,7 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
     const unlocked = useStore(authClient.store, (state) => state.unlockedUserId) === user.id;
     const restoring = useStore(authClient.store, (state) => state.restoring);
     const [signingOut, setSigningOut] = useState(false);
+    const [showingWords, setShowingWords] = useState(false);
     return (
         <>
             <DropdownMenu>
@@ -134,6 +137,12 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
                                     <item.icon aria-hidden="true" /> {item.label}
                                 </DropdownMenuItem>
                             ))}
+                        {/* Read aloud while someone adds you, from whatever page is open. */}
+                        {unlocked && (
+                            <DropdownMenuItem onClick={() => setShowingWords(true)}>
+                                <TextQuoteIcon aria-hidden="true" /> Your twelve words
+                            </DropdownMenuItem>
+                        )}
                         {contact && (
                             <DropdownMenuItem
                                 render={<a href={`mailto:${contact}`} aria-label="Help" />}
@@ -169,6 +178,7 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
                 </DropdownMenuContent>
             </DropdownMenu>
             <SignOutDialog open={signingOut} onOpenChange={setSigningOut} unlocked={unlocked} />
+            <OwnWordsDialog userId={user.id} open={showingWords} onOpenChange={setShowingWords} />
         </>
     );
 }

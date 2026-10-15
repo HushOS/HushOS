@@ -42,7 +42,7 @@ test('goes places from any page, and the folder view lends its actions', async (
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/app\/people/);
     // The address changes before the page commits; the next test's goto must not cut it off.
-    await expect(page.getByRole('heading', { name: 'Your twelve words' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'People you share with' })).toBeVisible();
 });
 
 test('empties the trash from anywhere, after asking', async () => {
