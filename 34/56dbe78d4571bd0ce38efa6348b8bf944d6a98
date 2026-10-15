@@ -1,0 +1,41 @@
+apps/android/AGENTS.md
+  s_c56e31c87cddde::t_928e05d276ec44 24
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_c56e31c87cddde::t_1d1a96c6bab8e4 484-521
+apps/android/app/src/main/kotlin/com/hushos/app/data/OwnIdentity.kt
+  s_c56e31c87cddde::t_64b5fc51b11d35 103-113
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c56e31c87cddde::t_c353d1bfe7acb1 427-434
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_c56e31c87cddde::t_45b3c22df510c9 35,44,117,155-157,176
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c56e31c87cddde::t_b9bf31c434e5e0 212,361,376,758-768,996-997
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c56e31c87cddde::t_636d88ea165413 250-254
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_c56e31c87cddde::t_ea025721c0c084 165,167,169
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_c56e31c87cddde::t_554e0bdc872870 16,20,33,39,55,75-76,93-95,97-100,103,119,125,681,683-684,688,714-717,721,723-728,737-739,742,745-802,806,810-812,833-834,845-874,881
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_c56e31c87cddde::t_e684ce4ced20d0 66-67,102-103,148-150
+apps/android/app/src/test/kotlin/com/hushos/app/data/OpenedIdentitiesTest.kt
+  s_c56e31c87cddde::t_01ac61dba46bc1 8,90-114
+apps/android/app/src/test/kotlin/com/hushos/app/data/PeopleFilterTest.kt
+  s_c56e31c87cddde::t_e99a4d441aebc5 1-62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3456dbe78d4571bd0ce38efa6348b8bf944d6a98",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
