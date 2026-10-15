@@ -32,6 +32,8 @@ public enum AuthError: Error, LocalizedError, Sendable, Equatable {
     case noSession
     /* The server refused a write based on a version that is no longer current (409). */
     case conflict(String)
+    /* The server no longer knows this session (401): signed out elsewhere, a password change, or expiry. */
+    case sessionEnded
 
     public var errorDescription: String? {
         switch self {
@@ -39,8 +41,16 @@ public enum AuthError: Error, LocalizedError, Sendable, Equatable {
         case .wrongPassword: return "That email and password don’t match. Check them and try again."
         case .noSession: return "Signed in, but the session was not returned."
         case .conflict(let text): return text
+        case .sessionEnded: return "Your session ended. Sign in again."
         }
     }
+}
+
+/* Whether a request failed because the session is gone (a 401 from the Drive API or the account API): sign-in, not a retry. */
+public func endsSession(_ error: Error) -> Bool {
+    if case DriveAPIError.notAuthenticated = error { return true }
+    if case AuthError.sessionEnded = error { return true }
+    return false
 }
 
 /*

@@ -211,7 +211,25 @@ extension Vault {
      * public keys the core re-derived from the private halves it opened, never the served ones.
      */
     public func ownFingerprint() async throws -> String {
-        let keys = try await identityKeys()
+        try fingerprint(of: try await identityKeys())
+    }
+
+    /*
+     * The words for Your twelve words, as of now: the served identity is read first, and when it
+     * is not the one this vault opened (the keys were replaced on another device; the one in use
+     * is otherwise re-checked only before a signed write, at most every five minutes), that one
+     * is forgotten and the served one opened, so the words are those of the identity the server
+     * serves at this moment, re-derived from its private halves. It needs the server: offline it
+     * fails rather than show words it can't confirm are current, and a 401 is `AuthError.sessionEnded`.
+     */
+    public func currentOwnFingerprint() async throws -> String {
+        let served = try await Auth.identity()
+        if let opened = identityEnvelope, !served.servesSameIdentity(as: opened) { forgetIdentity() }
+        identityCheckedAt = Date()
+        return try fingerprint(of: try await identityKeys())
+    }
+
+    private func fingerprint(of keys: IdentityKeys) throws -> String {
         guard let mlDsa = keys.mlDsaPublicKey, let kem = keys.kemPublicKey else { throw AuthError.message("Your keys couldn’t be upgraded. Try again.") }
         return try identityFingerprintOfKeys(
             encryptionPublicKey: try base64urlDecode(value: keys.encryptionPublicKey), signingPublicKey: try base64urlDecode(value: keys.signingPublicKey),
@@ -390,5 +408,45 @@ extension Vault {
         }
         for link in reply.links { index.entries[link.node.id, default: .init()].links += 1 }
         return index
+    }
+}
+
+/*
+ * "Find someone" on People, by the web's rule: offered from eight people (a shorter list
+ * fits on a screen and is found by eye), kept while anything is typed so a list that shrank
+ * below eight never hides the field holding the text, and matching a name or an email,
+ * trimmed and case-insensitive. Both sides are NFC first, so a name stored decomposed matches
+ * what a keyboard types; accents still count ("e" doesn't find "é"), as on the web.
+ */
+public enum PeopleFilter {
+    public static let from = 8
+
+    public static func offered(count: Int, query: String) -> Bool { count >= from || !query.isEmpty }
+
+    /* The query as typed, trimmed: what People quotes back. */
+    public static func typed(_ query: String) -> String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /* The query as matched: blank means everyone. */
+    public static func needle(_ query: String) -> String { folded(typed(query)) }
+
+    public static func matches(name: String, email: String, query: String) -> Bool {
+        let needle = needle(query)
+        return needle.isEmpty || folded(name).contains(needle) || folded(email).contains(needle)
+    }
+
+    /*
+     * What the filter found, in the web's words: shown in the list when nobody matches, and said
+     * to VoiceOver either way. Nil while nothing (or only spaces) is typed.
+     */
+    public static func result(shown: Int, of total: Int, query: String) -> String? {
+        let typed = typed(query)
+        guard !typed.isEmpty else { return nil }
+        return shown == 0 ? "Nobody here matches “\(typed)”." : "\(shown) of \(total) shown"
+    }
+
+    private static func folded(_ text: String) -> String { text.precomposedStringWithCanonicalMapping.lowercased() }
+
+    public static func shown(_ pins: [ContactPin], query: String) -> [ContactPin] {
+        pins.filter { matches(name: $0.name, email: $0.email, query: query) }
     }
 }

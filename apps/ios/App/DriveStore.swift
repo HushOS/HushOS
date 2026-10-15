@@ -696,10 +696,7 @@ final class DriveStore {
         }
     }
 
-    private func isSessionEnd(_ error: Error) -> Bool {
-        if case DriveAPIError.notAuthenticated = error { return true }
-        return false
-    }
+    private func isSessionEnd(_ error: Error) -> Bool { endsSession(error) }
 
     /* The new folder, or nil when it could not be made (the failure is reported). */
     @discardableResult
@@ -1454,7 +1451,7 @@ final class DriveStore {
             try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
         } catch {
             if case DriveAPIError.transport = error { offline = true }
-            if case DriveAPIError.notAuthenticated = error { self.error = Self.sessionEnded }
+            if endsSession(error) { self.error = Self.sessionEnded }
             throw error
         }
         return file
@@ -1486,7 +1483,7 @@ final class DriveStore {
 
     func report(_ error: Error) {
         error_: do {
-            if case DriveAPIError.notAuthenticated = error { self.error = Self.sessionEnded; break error_ }
+            if endsSession(error) { self.error = Self.sessionEnded; break error_ }
             // No network: say so at the top rather than interrupting; kept files still open.
             if case DriveAPIError.transport = error { offline = true; break error_ }
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

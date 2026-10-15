@@ -178,6 +178,8 @@ final class IdentityServer: @unchecked Sendable {
     var winner: IdentityEnvelope?
     var upgrades: [IdentityEnvelope] = []
     var bodies: [[String: Any]] = []
+    /* The session was ended on the server: every request is a 401. */
+    var sessionGone = false
     /* The account's earlier identities, oldest first. */
     var history: [IdentityEnvelope] = []
     private let lock = NSLock()
@@ -217,6 +219,7 @@ final class IdentityServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let path = request.url?.path ?? ""
+        if sessionGone { return (401, ["message": "Sign in to continue."]) }
         if path == "/api/auth/identity", request.httpMethod == "GET" { return (200, ["identity": Auth.json(stored)]) }
         if path == "/api/auth/identity/history", request.httpMethod == "GET" { return (200, ["identities": history.map { Auth.json($0) }]) }
         if path == "/api/auth/settings", request.httpMethod == "GET" { return (200, ["settingsVersion": 0]) }

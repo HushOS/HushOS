@@ -20,6 +20,7 @@ struct AccountView: View {
     @State private var changingPassword = false
     @State private var showingPhrase = false
     @State private var showingPeople = false
+    @State private var showingWords = false
     @State private var signingOut = false
     @State private var showingTrash = false
 
@@ -49,6 +50,7 @@ struct AccountView: View {
                     Button { changingPassword = true } label: { row("key", "Change password", nil, chevron: true) }.alpineRow()
                     Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
                     Button { showingPeople = true } label: { row("person.2", "People you share with", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
+                    Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
                     sectionLabel("Sign-in and recovery")
                 }
@@ -82,6 +84,7 @@ struct AccountView: View {
             .sheet(isPresented: $changingPassword) { ChangePasswordSheet().environment(store) }
             .sheet(isPresented: $showingPhrase) { RecoveryPhraseSheet().environment(store) }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
+            .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
             .alert("Sign out of HushOS?", isPresented: $signingOut) {
                 Button("Cancel", role: .cancel) {}
                 Button("Sign out", role: .destructive) { Task { await model.signOut() } }
