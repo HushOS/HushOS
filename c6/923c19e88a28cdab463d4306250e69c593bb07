@@ -1,0 +1,32 @@
+apps/web/src/start.ts
+  s_c56e31c87cddde::t_568035179378e4 1-25
+  s_c56e31c87cddde::t_b355f0d869c5e5 26
+apps/web/src/lib/form.ts
+  s_c56e31c87cddde::t_cab1ed55f82117 28-29
+apps/web/src/lib/growth.ts
+  s_c56e31c87cddde::t_bdcb9b7b1d7dab 36
+apps/web/src/lib/theme.ts
+  s_c56e31c87cddde::t_300b1d03c66a79 17-18,40-41
+apps/web/src/routeTree.gen.ts
+  s_c56e31c87cddde::t_89d16e6be6f847 1350,1355
+packages/logging/src/nitro.test.ts
+  s_c56e31c87cddde::t_c38d7a4a751261 1,3,116-150
+packages/logging/src/nitro.ts
+  s_c56e31c87cddde::t_d3bf71c6747976 35-39,41-48,50-70,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c6923c19e88a28cdab463d4306250e69c593bb07",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
