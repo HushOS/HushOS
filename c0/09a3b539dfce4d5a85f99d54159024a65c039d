@@ -1,0 +1,25 @@
+DESIGN.md
+  s_c56e31c87cddde::t_7b6f826b065f49 342
+apps/web/src/components/drive/check-contact.tsx
+  s_c56e31c87cddde::t_7c20f693e92a08 183-184,193-196
+apps/web/src/components/own-words-dialog.tsx
+  s_c56e31c87cddde::t_f127068252e6d4 42-44
+apps/web/src/lib/contacts.ts
+  s_c56e31c87cddde::t_fa47d5acd65bd0 241-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c009a3b539dfce4d5a85f99d54159024a65c039d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
