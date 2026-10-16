@@ -247,7 +247,7 @@ function LinkHeader() {
                         to="/"
                         className={buttonVariants({
                             variant: 'ghost',
-                            className: 'max-[379px]:hidden',
+                            className: 'max-[380px]:hidden',
                         })}
                     >
                         Get HushOS
@@ -527,15 +527,19 @@ function LinkContents({ opened }: { opened: Opened }) {
             </span>
             <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pt-2 pb-5">
                 <div className="flex min-w-0 flex-col gap-1">
-                    {/* A file's name, not a headline: smaller on a phone, and its extension never split. */}
-                    <h1 className="text-[22px] leading-[1.15] font-extrabold tracking-[-0.02em] wrap-anywhere sm:text-[30px] sm:leading-[1.1] sm:tracking-[-0.03em]">
-                        <NodeName name={opened.node.name} />
+                    {/* A page title at the app's scale (PageHeader); dir=auto for a right-to-left name. */}
+                    <h1
+                        dir="auto"
+                        className="text-xl leading-tight font-extrabold tracking-[-0.03em] wrap-anywhere sm:text-[28px]"
+                    >
+                        <NodeName name={opened.node.name} kind={opened.node.kind} />
                     </h1>
                     {count && <span className="text-sm text-muted-foreground">{count}</span>}
                 </div>
                 {/*
-                 * Download first, in reading and focus order alike: it is what most visitors came
-                 * for. On a phone the three stack across the width; from sm up they sit in a row.
+                 * Download first, in reading and focus order alike, unlike the app's rows that end
+                 * on the blue button: it is what most visitors came for (DESIGN.md, Share). On a
+                 * phone the two stack across the width; from sm up they sit in a row.
                  */}
                 <div className="flex w-full flex-col gap-2 *:w-full sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:*:w-auto">
                     <Button onClick={() => void downloadNodes([opened.node])}>
@@ -543,7 +547,6 @@ function LinkContents({ opened }: { opened: Opened }) {
                         {opened.node.kind === 'folder' ? 'Download all' : 'Download'}
                     </Button>
                     <SaveToDrive opened={opened} />
-                    <ReportButton opened={opened} />
                 </div>
             </div>
             <div className="flex flex-col overflow-hidden rounded-2xl border border-rule bg-card">
@@ -672,6 +675,10 @@ function LinkContents({ opened }: { opened: Opened }) {
                     </>
                 )}
             </div>
+            {/* The least-used action, quiet under what it is about rather than in the row. */}
+            <div className="flex justify-end pt-2">
+                <ReportButton opened={opened} />
+            </div>
             <Preview
                 files={opened.node.kind === 'file' ? [opened.node] : files}
                 current={previewing}
@@ -686,22 +693,28 @@ function LinkContents({ opened }: { opened: Opened }) {
 const LINK_ROW =
     'grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-4 px-5 sm:grid-cols-[minmax(0,1fr)_9rem_7rem] sm:px-6';
 
-/* Anyone holding the link can report what it opens; the operators alone get the key. */
 /*
- * A name with its extension kept whole: a long name breaks anywhere in its stem,
- * never inside ".json". Folders and names without a short extension are as they are.
+ * A file's name with its extension as one piece: the line breaks at the dot before
+ * anywhere else, and splits the extension only when it alone is wider than the line,
+ * so the page never scrolls sideways. Each part is isolated, so bidi controls in a
+ * name cannot make "invoice\u202Efdp.exe" read as a PDF. Folders and names whose
+ * last dot starts no short extension are one piece.
  */
-function NodeName({ name }: { name: string }) {
+const EXTENSION = /^\.[^\s.]{1,9}$/u;
+function NodeName({ name, kind }: { name: string; kind: DriveNode['kind'] }) {
     const dot = name.lastIndexOf('.');
-    if (dot <= 0 || name.length - dot > 10) return name;
+    const extension = kind === 'file' && dot > 0 ? name.slice(dot) : '';
+    if (!EXTENSION.test(extension)) return <bdi>{name}</bdi>;
     return (
         <>
-            {name.slice(0, dot)}
-            <span className="whitespace-nowrap">{name.slice(dot)}</span>
+            <bdi>{name.slice(0, dot)}</bdi>
+            <wbr />
+            <bdi>{extension}</bdi>
         </>
     );
 }
 
+/* Anyone holding the link can report what it opens; the operators alone get the key. */
 function ReportButton({ opened }: { opened: Opened }) {
     const { hasSession } = useRouteContext({ from: '__root__' });
     const [reporting, setReporting] = useState(false);
