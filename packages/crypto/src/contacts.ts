@@ -1,6 +1,7 @@
 import { CryptoError } from './errors';
 import { decryptKey, encryptKey } from './aead';
 import { decode, encode } from './keys';
+import type { GroupPin } from './pins';
 
 /*
  * Contacts and the settings they are pinned in.
@@ -56,6 +57,16 @@ export type ContactPin = {
      * before successions; the chain is then found from the pinned keys.
      */
     keyVersion?: number | null;
+    /*
+     * The group a pin was trusted through ("Trust as Acme does",
+     * trustAsGroupDoes in group-trust.ts): the group's word for these keys,
+     * not the reader's own words check. Absent or null for a words check.
+     * Group verdicts ask the successor's consent of links from such a pin, and
+     * no member is admitted from one. Every shipped client keeps fields it does
+     * not know when it rewrites a pin, so this one survives them; a new words
+     * check over the keys clears it.
+     */
+    trustedVia?: string | null;
 };
 
 export type Settings = {
@@ -73,6 +84,12 @@ export type Settings = {
      * client keeps fields it does not know when it saves.
      */
     sharing?: { shares: Record<string, string[]>; links: Record<string, string> };
+    /*
+     * Per group, the checked version 1 key and the marks a server must not take
+     * back (docs/groups-design.md 2.7); checkGroupPin in pins.ts refuses a
+     * malformed one. Only a version 2 document holds it.
+     */
+    groups?: Record<string, GroupPin>;
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };

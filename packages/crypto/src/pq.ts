@@ -62,6 +62,11 @@ export const ML_DSA_PUBLIC_KEY_BYTES = 1952;
 export const ML_DSA_SECRET_KEY_BYTES = 4032;
 export const ML_DSA_SIGNATURE_BYTES = 3309;
 
+/* The ML-DSA-65 public key of a secret key: what a signer checks it signs as. */
+export function mlDsaPublicKeyOf(secretKey: Uint8Array) {
+    return ml_dsa65.getPublicKey(secretKey);
+}
+
 export function mlDsaKeypair(seed: Uint8Array) {
     if (seed.length !== ML_DSA_SEED_BYTES) throw new CryptoError('Invalid key seed.');
     const { publicKey, secretKey } = ml_dsa65.keygen(seed);

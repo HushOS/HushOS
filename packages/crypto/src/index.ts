@@ -27,7 +27,31 @@ export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './securi
 export type { WorkspaceKeyEnvelope } from './workspace';
 export type { NodeMetadata } from './drive';
 export type { Integrity, NodeKind, SignatureForm } from './signatures';
-export { deriveId, newId, type IdKind } from './ids';
+export { checkId, deriveId, newId, type GroupIdKind, type IdKind } from './ids';
 export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';
 export type { PinnedKeys, ServedKeys, SuccessionLink } from './identity';
 export { fingerprint, keyDigest, publicKeyBytes } from './fingerprint';
+export type {
+    GroupKind,
+    GroupPublicKey,
+    GroupRole,
+    GroupSignature,
+    MemberStatus,
+    Roster,
+    RosterArea,
+    RosterMember,
+    SignedGroupStatement,
+} from './groups';
+export type {
+    AcceptInput,
+    JoinMark,
+    AcceptedRosters,
+    StoredChain,
+    GroupChainCache,
+    GroupIntegrity,
+    GroupReading,
+    GroupWriterTrust,
+    RosterChain,
+    RosterFork,
+} from './group-trust';
+export type { GroupPin } from './pins';

@@ -8,7 +8,9 @@ import {
     openIdentityMlDsaKey,
     openIdentitySigningKey,
     rewrapIdentity,
+    SUCCESSION_CONSENT_BYTES,
     verifySuccessionChain,
+    verifySuccessionConsent,
     verifySuccessionLink,
     type IdentityEnvelope,
     type SuccessionLink,
@@ -17,7 +19,13 @@ import { createCryptoSession } from './session';
 import { createWorkspaceGrant } from './workspace';
 import { decode, encode } from './keys';
 import { keyDigest } from './fingerprint';
-import { signHybrid, signStatement, successionStatement } from './signatures';
+import {
+    signHybrid,
+    signStatement,
+    successionConsentStatement,
+    successionStatement,
+    verifyHybrid,
+} from './signatures';
 
 /*
  * An identity is replaced by minting the next one under the same root and
@@ -148,6 +156,84 @@ describe('succession', () => {
         ).rejects.toThrow('Identity keys do not match');
     });
 
+    test('the successor co-signs its link, and only both keys, each in its role, make consent', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const first = await createIdentity(root, USER);
+        const { identity, signature, consent } = await createSuccessor(
+            root,
+            USER,
+            first,
+            await keysOf(root, USER, first),
+        );
+        const oneSided = linkOf(first, identity, signature);
+        const consented = { ...oneSided, consent };
+        const bytes = decode(consent);
+        expect(bytes).toHaveLength(SUCCESSION_CONSENT_BYTES);
+        expect(await verifySuccessionConsent(USER, consented)).toBe(true);
+        // No consent, another account, or a byte flipped in either key's half.
+        expect(await verifySuccessionConsent(USER, oneSided)).toBe(false);
+        expect(await verifySuccessionConsent(FRIEND, consented)).toBe(false);
+        for (const at of [5, 3373 + 5, SUCCESSION_CONSENT_BYTES - 1]) {
+            const flipped = bytes.slice();
+            flipped[at]! ^= 1;
+            expect(
+                await verifySuccessionConsent(USER, { ...oneSided, consent: encode(flipped) }),
+                `byte ${at}`,
+            ).toBe(false);
+        }
+        // The halves swapped: each half is checked under its own key.
+        const [oldHalf, newHalf] = [bytes.slice(0, 3373), bytes.slice(3373)];
+        const join = (...parts: Uint8Array[]) =>
+            encode(Uint8Array.from(parts.flatMap((p) => [...p])));
+        expect(
+            await verifySuccessionConsent(USER, { ...oneSided, consent: join(newHalf, oldHalf) }),
+        ).toBe(false);
+        // The version 2 signature is no consent, alone, doubled, or beside the new key's half:
+        // the consent has its own domain.
+        const v2 = decode(signature);
+        for (const forged of [encode(v2), join(v2, v2), join(v2, newHalf)])
+            expect(await verifySuccessionConsent(USER, { ...oneSided, consent: forged })).toBe(
+                false,
+            );
+        // What a holder of the old keys alone can make: the old keys' signature in both roles.
+        const fields = { ...oneSided, userId: USER };
+        const oldKeys = await keysOf(root, USER, first);
+        const byOld = await signHybrid(await successionConsentStatement(fields, 'old'), oldKeys);
+        expect(
+            await verifyHybrid(await successionConsentStatement(fields, 'old'), byOld, {
+                signingPublicKey: decode(first.signingPublicKey),
+                mlDsaPublicKey: decode(first.mlDsa!.publicKey),
+            }),
+        ).toBe(true);
+        const byOldAsNew = await signHybrid(
+            await successionConsentStatement(fields, 'new'),
+            oldKeys,
+        );
+        for (const forged of [join(byOld, byOld), join(byOld, byOldAsNew)])
+            expect(await verifySuccessionConsent(USER, { ...oneSided, consent: forged })).toBe(
+                false,
+            );
+        // The role tag: the new keys' signature over the "old" statement is no "new" half.
+        const newKeys = await keysOf(root, USER, identity);
+        const newAsOld = await signHybrid(await successionConsentStatement(fields, 'old'), newKeys);
+        expect(
+            await verifySuccessionConsent(USER, { ...oneSided, consent: join(oldHalf, newAsOld) }),
+        ).toBe(false);
+        await expect(
+            successionConsentStatement(fields, 'both' as unknown as 'old'),
+        ).rejects.toThrow('Invalid consent role.');
+        // The consent binds the new keys: moved onto a link to another identity, it fails.
+        const other = await createIdentity(root, USER);
+        expect(
+            await verifySuccessionConsent(USER, { ...linkOf(first, other, signature), consent }),
+        ).toBe(false);
+        // The personal verifier is unchanged: it follows the link with or without consent.
+        for (const link of [oneSided, consented])
+            expect(
+                await verifySuccessionChain(USER, await pinOf(first), servedOf(identity), [link]),
+            ).toBe(true);
+    });
+
     test('a succession signed with Ed25519 alone, or with either half broken, does not hold', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const first = await createIdentity(root, USER);
@@ -231,6 +317,10 @@ describe('succession', () => {
             );
         // A gap, links out of order, a flipped signature, a fork, or no chain at all.
         expect(await verifySuccessionChain(USER, pinned, served, links.slice(1))).toBe(false);
+        // Anything served after the chain breaks it too: callers take every link from the start
+        // to the end as the contact's earlier keys, so a junk link naming another key never holds.
+        const junk = { ...links[1]!, oldSigningPublicKey: forged.signingPublicKey };
+        expect(await verifySuccessionChain(USER, pinned, served, [...links, junk])).toBe(false);
         expect(await verifySuccessionChain(USER, pinned, served, [links[1]!, links[0]!])).toBe(
             false,
         );

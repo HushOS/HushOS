@@ -95,3 +95,32 @@ export function publicKeyBytes(value: string) {
     const binary = atob(value.replaceAll('-', '+').replaceAll('_', '/'));
     return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
+
+/*
+ * Contact pins keep key digests as hex (as they always have); group
+ * statements and group pins as base64url (docs/groups-design.md 2.1). These
+ * convert one 32-byte digest between the two, refusing anything else, so a
+ * pin and a roster entry are only ever compared as the same bytes.
+ */
+export function digestHex(base64url: string) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(base64url)) throw new CryptoError('Invalid key digest.');
+    const bytes = publicKeyBytes(base64url);
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    if (bytes.length !== 32 || digestBase64url(hex) !== base64url)
+        throw new CryptoError('Invalid key digest.');
+    return hex;
+}
+export function digestBase64url(hex: string) {
+    return btoa(String.fromCharCode(...hexBytes(hex)))
+        .replaceAll('+', '-')
+        .replaceAll('/', '_')
+        .replace(/=+$/, '');
+}
+/* Whether a pin's hex digest and a statement's base64url digest name the same key; malformed is never. */
+export function sameKeyDigest(hex: string | null | undefined, base64url: string) {
+    try {
+        return typeof hex === 'string' && digestHex(base64url) === hex;
+    } catch {
+        return false;
+    }
+}

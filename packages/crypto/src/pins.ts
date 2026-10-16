@@ -1,3 +1,5 @@
+import { bytesOf, digestOf, integer, uuid } from './canonical';
+import { CryptoError } from './errors';
 import { fingerprint, hexBytes, publicKeyBytes } from './fingerprint';
 
 /*
@@ -55,4 +57,67 @@ function canonicalKey(value: string) {
  */
 export function settingsRolledBack(served: number | null, seen: number) {
     return served === null ? seen > 0 : served < seen;
+}
+
+/*
+ * What the settings document keeps per group (docs/groups-design.md 2.7): the
+ * version 1 group key whose words were checked (the ML-DSA key by its
+ * SHA-256, base64url, since the document has no room for the key), when, and
+ * the marks a server must never take back: the latest roster this person's
+ * devices accepted (version and digest), the group key at that point
+ * (version and the digest of both halves), and per area the highest
+ * workspace key version opened. Every device verifies the roster chain from
+ * version 1; the pin is never a starting point, only a mark the served chain
+ * must reach (else a rollback) and pass through (else a fork).
+ */
+export type GroupPin = {
+    firstEd25519PublicKey: string;
+    firstMlDsaPublicKeyDigest: string;
+    checkedAt: string;
+    keyVersion: number;
+    groupKeyDigest: string;
+    rosterVersion: number;
+    rosterDigest: string;
+    areas: Record<string, number>;
+};
+
+/*
+ * A group pin as the settings document holds it, or refused: canonical
+ * base64url keys and digests, versions from 1 to 2^53 - 1, lowercase area
+ * ids, and nothing else. A pin that does not pass is not a pin, and nothing
+ * is trusted through it.
+ */
+/*
+ * A check time as pins carry it: the 24 ASCII characters of an ISO 8601 UTC
+ * time to the millisecond (`Date.prototype.toISOString`), so every client
+ * orders check times alike, byte by byte.
+ */
+const CHECK_TIME =
+    /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{3}Z$/;
+export function checkTime(value: unknown) {
+    if (typeof value !== 'string' || !CHECK_TIME.test(value))
+        throw new CryptoError('Invalid group pin.');
+    return value;
+}
+
+export function checkGroupPin(groupId: string, value: unknown): GroupPin {
+    uuid(groupId, 'group id');
+    if (typeof value !== 'object' || value === null) throw new CryptoError('Invalid group pin.');
+    const pin = value as GroupPin;
+    checkTime(pin.checkedAt);
+    if (typeof pin.areas !== 'object' || pin.areas === null || Array.isArray(pin.areas))
+        throw new CryptoError('Invalid group pin.');
+    const areas: Record<string, number> = {};
+    for (const [workspaceId, version] of Object.entries(pin.areas))
+        areas[uuid(workspaceId, 'workspace id')] = integer(version, 'workspace key version');
+    return {
+        firstEd25519PublicKey: bytesOf(pin.firstEd25519PublicKey, 32, 'group key'),
+        firstMlDsaPublicKeyDigest: digestOf(pin.firstMlDsaPublicKeyDigest, 'key digest'),
+        checkedAt: pin.checkedAt,
+        keyVersion: integer(pin.keyVersion, 'group key version'),
+        groupKeyDigest: digestOf(pin.groupKeyDigest, 'key digest'),
+        rosterVersion: integer(pin.rosterVersion, 'roster version'),
+        rosterDigest: digestOf(pin.rosterDigest, 'roster digest'),
+        areas,
+    };
 }

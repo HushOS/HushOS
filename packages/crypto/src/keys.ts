@@ -2,10 +2,11 @@ import { CryptoError } from './errors';
 import { OPAQUE_PROFILE_VERSION, PASSWORD_WRAPPING_CONTEXT } from './protocol';
 
 export function encode(value: Uint8Array) {
-    return btoa(String.fromCharCode(...value))
-        .replaceAll('+', '-')
-        .replaceAll('/', '_')
-        .replace(/=+$/, '');
+    // In chunks: spreading a large array into one call exceeds the engine's argument limit.
+    let binary = '';
+    for (let at = 0; at < value.length; at += 0x2000)
+        binary += String.fromCharCode(...value.subarray(at, at + 0x2000));
+    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 export function decode(value: string, length?: number) {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new CryptoError('Invalid key encoding.');
