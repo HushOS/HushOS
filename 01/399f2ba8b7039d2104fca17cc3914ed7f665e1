@@ -1,0 +1,25 @@
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_258a00eba85b22 907
+packages/db/src/auth.test.ts
+  s_c56e31c87cddde::t_e73ffa8dbd9f41 16,141-248
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_1888b4ecbd846e 174,181-183,1201,1206,1235
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_67d92573ff7573 1961
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01399f2ba8b7039d2104fca17cc3914ed7f665e1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
