@@ -93,7 +93,8 @@ export type WorkspaceView = {
 /* Rotation                                                                   */
 /* ------------------------------------------------------------------------- */
 
-export type RotationView = { nodeId: string; targetEpoch: number };
+/* `id` is served since 1c; servers before it sent only the node and the target. */
+export type RotationView = { id?: string; nodeId: string; targetEpoch: number };
 
 /* ------------------------------------------------------------------------- */
 /* Change feeds                                                               */

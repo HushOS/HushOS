@@ -461,8 +461,9 @@ export const accountIdentityHistory = pgTable(
          * the old identity's hybrid signature over the consent statement as "old",
          * then the new identity's as "new", 6746 bytes. Checked on upload; null on
          * links made before it, or by a client that does not send it yet. Set with
-         * the link and never rewritten: a master-key rotation re-wraps the private
-         * keys of this row and leaves it alone.
+         * the link, or once later by the account's own backfill (only while null,
+         * backfillSuccessionConsent), and never rewritten: a master-key rotation
+         * re-wraps the private keys of this row and leaves it alone.
          */
         successionConsent: bytea('succession_consent'),
     },

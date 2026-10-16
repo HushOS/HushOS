@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
 import {
@@ -12,6 +12,7 @@ import {
 import { areaKeyCommitment } from '../../crypto/src/area-keys';
 import { db } from '../../db/src/client';
 import {
+    accountIdentityHistory,
     areaGrants,
     driveNodes,
     driveRotations,
@@ -26,6 +27,7 @@ import { closeDatabase, resetDatabase } from '../../db/test/helpers';
 import {
     ADDRESS,
     accepted,
+    b64,
     admitted,
     entries,
     family,
@@ -676,9 +678,11 @@ describe('who reads what', () => {
             code: 'forbidden',
             status: 403,
         });
+        // Every entry on the head roster: the former member's is still there (not yet marked
+        // left); the newcomer, accepted but not admitted, has none.
         const opened = await groups.getIdentities(fam.organizer.userId, fam.groupId, null);
         expect(opened.identities.map((i) => i.userId).sort()).toEqual(
-            [fam.organizer.userId].sort(),
+            [fam.organizer.userId, former.userId].sort(),
         );
     });
 
@@ -1558,7 +1562,7 @@ describe('holds between holders', () => {
         expect(
             await refusal(groups.hold(fam.organizer.userId, fam.groupId, holder.userId)),
         ).toMatchObject({ code: 'held', status: 409 });
-        // Every holder sees the hold; a member without the role sees no due list at all.
+        // Every holder sees the hold; a member without the role sees only the grants they could fill.
         const view = await groups.getGroup(fam.organizer.userId, fam.groupId);
         expect(view.due).toMatchObject({
             holds: [{ userId: fam.organizer.userId, heldBy: holder.userId }],
@@ -1620,5 +1624,375 @@ describe('holds between holders', () => {
         expect(await db.select().from(groupHolds)).toHaveLength(1);
         await groups.leave(second.holder.userId, second.fam.groupId);
         expect(await db.select().from(groupHolds)).toEqual([]);
+    });
+});
+
+describe('what a client opens an area with (route 25)', () => {
+    test('an area serves its root, change sequence and running rotation; mid-rotation the root’s previous envelope is its old key under the new area key', async () => {
+        const fam = await family();
+        const plain = await member();
+        await admitted(fam, plain);
+        const area = async () => (await groups.spaces(plain.userId))[0]!.areas[0]!;
+        const rootId = fam.body.area.root.id;
+        const before = await area();
+        expect(before).toMatchObject({
+            workspaceId: fam.areaId,
+            workspaceKeyVersion: 1,
+            root: {
+                id: rootId,
+                keyEpoch: 1,
+                parentKeyEpoch: 1,
+                keyEnvelope: fam.body.area.root.keyEnvelope,
+                prevKeyEnvelope: null,
+            },
+            rotation: null,
+        });
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam, [plain]);
+        const send = (previousRootKeyEnvelope: string) =>
+            groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: { ...rotation, previousRootKeyEnvelope },
+                grants,
+            });
+        // Without the old root key under the new area key, nobody given only the new key could
+        // open what the walk has not reached: refused, and nothing moves.
+        for (const malformed of [b64(randomBytes(71)), undefined as unknown as string])
+            expect(await refusal(send(malformed))).toMatchObject({
+                code: 'invalid',
+                data: { reason: 'rotation-root-previous' },
+            });
+        expect(await area()).toMatchObject({ workspaceKeyVersion: 1, rotation: null });
+        expect(await send(rotation.previousRootKeyEnvelope)).toMatchObject({ version: 3 });
+        const during = await area();
+        const [running] = await db
+            .select()
+            .from(driveRotations)
+            .where(
+                and(eq(driveRotations.workspaceId, fam.areaId), isNull(driveRotations.finishedAt)),
+            );
+        expect(during).toMatchObject({
+            workspaceKeyVersion: 2,
+            root: {
+                id: rootId,
+                keyEpoch: rotation.targetEpoch,
+                parentKeyEpoch: 2,
+                keyEnvelope: rotation.root.keyEnvelope,
+                prevKeyEnvelope: rotation.previousRootKeyEnvelope,
+                prevKeyEpoch: 1,
+                // Under the area key a member now holds, not the version the rotation retired.
+                prevParentKeyEpoch: 2,
+            },
+            rotation: { id: running!.id, nodeId: rootId, targetEpoch: rotation.targetEpoch },
+        });
+        expect(during.changeSeq).toBeGreaterThan(before.changeSeq);
+        // The holder who rotated sees the same area.
+        expect((await groups.spaces(fam.organizer.userId))[0]!.areas[0]).toEqual({
+            ...during,
+            grant: expect.anything(),
+            selfGrant: expect.anything(),
+        });
+        expect(
+            await rotationsRepository.finishRotation({
+                workspaceId: fam.areaId,
+                rootId,
+                targetEpoch: rotation.targetEpoch,
+            }),
+        ).toBe(true);
+        expect(await area()).toMatchObject({
+            root: { prevKeyEnvelope: null, prevParentKeyEpoch: null },
+            rotation: null,
+        });
+    });
+});
+
+describe('grants any member can fill (route 3)', () => {
+    test('every active member sees the gaps they hold the key to fill, never their own, and one fill clears it for all', async () => {
+        const fam = await family();
+        const [a, b, c, d] = [await member(), await member(), await member(), await member()];
+        for (const m of [a, b, c, d]) await admitted(fam, m);
+        // d wraps the area key for themselves, then loses the grant: they still hold the key.
+        await groups.putSelfGrant(d.userId, fam.groupId, fam.areaId, {
+            grant: selfGrant(fam.areaId, 1),
+        });
+        // As a rotation too large for one call leaves it: grants still to come on route 22.
+        await db
+            .delete(areaGrants)
+            .where(inArray(areaGrants.granteeUserId, [b.userId, c.userId, d.userId]));
+        const dueOf = async (m: Member) => (await groups.getGroup(m.userId, fam.groupId)).due;
+        const gaps = (...owed: Member[]) =>
+            owed
+                .map((m) => ({ workspaceId: fam.areaId, userId: m.userId }))
+                .sort((x, y) => (x.userId < y.userId ? -1 : 1));
+        // a holds a grant: b, c and d are owed one, and a member without the role sees only that.
+        expect(await dueOf(a)).toEqual({ grants: gaps(b, c, d) });
+        // b and c hold no key: nothing they could seal.
+        expect(await dueOf(b)).toEqual({ grants: [] });
+        // d holds it by their own wrap: b and c, never d's own gap (route 22 refuses self-grants).
+        expect(await dueOf(d)).toEqual({ grants: gaps(b, c) });
+        expect(await dueOf(fam.organizer)).toMatchObject({ grants: gaps(b, c, d), markLeft: [] });
+        // Someone accepted but not admitted is owed nothing and told nothing.
+        const waiting = await member();
+        await accepted(fam, waiting);
+        expect(await dueOf(waiting)).toBeUndefined();
+        // a fills b's gap: nobody is asked to fill it again, and b can now fill the others.
+        const at = await head(fam.groupId);
+        expect(
+            await groups.postGrants(a.userId, fam.groupId, fam.areaId, {
+                grants: [
+                    await grantWire(fam.groupId, fam.areaId, 1, a.who, b.who, {
+                        rosterVersion: at.rosterVersion,
+                        rosterDigest: at.rosterDigest,
+                    }),
+                ],
+            }),
+        ).toEqual({ stored: 1 });
+        expect(await dueOf(d)).toEqual({ grants: gaps(c) });
+        expect(await dueOf(b)).toEqual({ grants: gaps(c, d) });
+    });
+});
+
+describe('identities for every entry on the head roster (route 6)', () => {
+    test('members marked left are served with their links, a deleted account with none, and nobody off the roster', async () => {
+        const fam = await family();
+        const left = await member();
+        const gone = await member();
+        await admitted(fam, left);
+        await admitted(fam, gone);
+        // A succession of their own: the link a reader needs to retire their first keys.
+        await succeedIdentity(left);
+        await groups.leave(left.userId, fam.groupId);
+        // And one after they left, which is none of the group's business.
+        await succeedIdentity(left);
+        const [{ leftAt }] = (await db
+            .select({ leftAt: groupMemberships.leftAt })
+            .from(groupMemberships)
+            .where(
+                and(
+                    eq(groupMemberships.groupId, fam.groupId),
+                    eq(groupMemberships.userId, left.userId),
+                ),
+            )) as [{ leftAt: Date }];
+        // Times set apart explicitly: the database's clock and this process's need not agree.
+        for (const [keyVersion, offset] of [
+            [1, -60_000],
+            [2, 60_000],
+        ] as const)
+            await db
+                .update(accountIdentityHistory)
+                .set({ replacedAt: new Date(leftAt.getTime() + offset) })
+                .where(
+                    and(
+                        eq(accountIdentityHistory.userId, left.userId),
+                        eq(accountIdentityHistory.keyVersion, keyVersion),
+                    ),
+                );
+        await groups.leave(gone.userId, fam.groupId);
+        await db.delete(users).where(eq(users.id, gone.userId));
+        const marked = entries(fam.h).map((entry) =>
+            entry.userId === left.userId || entry.userId === gone.userId
+                ? { ...entry, status: 'left' as const }
+                : entry,
+        );
+        const { at, call } = await nextRoster(fam, fam.organizer, marked);
+        expect(
+            await groups.postRoster(fam.organizer.userId, fam.groupId, {
+                ...call,
+                rotations: [await rotationWire(fam.areaId, fam.organizer.who, 1)],
+                grants: [
+                    await grantWire(
+                        fam.groupId,
+                        fam.areaId,
+                        2,
+                        fam.organizer.who,
+                        fam.organizer.who,
+                        at,
+                    ),
+                ],
+            }),
+        ).toMatchObject({ version: 4 });
+        const waiting = await member();
+        await accepted(fam, waiting);
+        const served = await groups.getIdentities(fam.organizer.userId, fam.groupId, null);
+        const ids = [fam.organizer.userId, left.userId, gone.userId].sort();
+        expect(served.identities.map((entry) => entry.userId)).toEqual(ids);
+        expect(served.next).toBeNull();
+        const byId = new Map(served.identities.map((entry) => [entry.userId, entry]));
+        // Their links up to their departure only: the one made after it is not served.
+        expect(byId.get(left.userId)!.links).toMatchObject([
+            { oldKeyVersion: 1, newKeyVersion: 2, consent: null },
+        ]);
+        expect(byId.get(left.userId)!.links).toHaveLength(1);
+        // An active member's links are all served.
+        await succeedIdentity(fam.organizer);
+        const organizer = (
+            await groups.getIdentities(fam.organizer.userId, fam.groupId, null)
+        ).identities.find((entry) => entry.userId === fam.organizer.userId)!;
+        expect(organizer.links.map((link) => link.newKeyVersion)).toEqual([2]);
+        expect(byId.get(gone.userId)).toEqual({ userId: gone.userId, identity: null, links: [] });
+        // The cursor continues after the id it names.
+        expect(
+            (await groups.getIdentities(fam.organizer.userId, fam.groupId, ids[0]!)).identities.map(
+                (entry) => entry.userId,
+            ),
+        ).toEqual(ids.slice(1));
+        // Those who left read none of it.
+        expect(await refusal(groups.getIdentities(left.userId, fam.groupId, null))).toMatchObject({
+            code: 'not-member',
+        });
+    });
+});
+
+describe('what counts as holding an area key for due.grants', () => {
+    test('a grant from someone who has left does not count', async () => {
+        const { fam, holder } = await withHolder();
+        const [a, b] = [await member(), await member()];
+        for (const m of [a, b]) await admitted(fam, m);
+        await db.delete(areaGrants).where(eq(areaGrants.granteeUserId, b.userId));
+        // a's key came from the holder, who then leaves: a's client would not accept it.
+        await db
+            .update(areaGrants)
+            .set({ granterUserId: holder.userId })
+            .where(eq(areaGrants.granteeUserId, a.userId));
+        const owed = [{ workspaceId: fam.areaId, userId: b.userId }];
+        expect((await groups.getGroup(a.userId, fam.groupId)).due).toEqual({ grants: owed });
+        await groups.leave(holder.userId, fam.groupId);
+        expect((await groups.getGroup(a.userId, fam.groupId)).due).toEqual({ grants: [] });
+        expect((await groups.getGroup(fam.organizer.userId, fam.groupId)).due).toMatchObject({
+            grants: owed,
+        });
+    });
+
+    test('a grant or self-grant of an older key version does not count', async () => {
+        const fam = await family();
+        const [a, b] = [await member(), await member()];
+        for (const m of [a, b]) await admitted(fam, m);
+        await groups.putSelfGrant(b.userId, fam.groupId, fam.areaId, {
+            grant: selfGrant(fam.areaId, 1),
+        });
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam, [a, b]);
+        await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+            ...rotated.call,
+            rotation,
+            grants,
+        });
+        // Both lose their grant of version 2: a keeps one of version 1, b a self-grant of it.
+        await db
+            .delete(areaGrants)
+            .where(
+                and(
+                    inArray(areaGrants.granteeUserId, [a.userId, b.userId]),
+                    eq(areaGrants.workspaceKeyVersion, 2),
+                ),
+            );
+        for (const m of [a, b])
+            expect((await groups.getGroup(m.userId, fam.groupId)).due).toEqual({ grants: [] });
+        expect((await groups.getGroup(fam.organizer.userId, fam.groupId)).due).toMatchObject({
+            grants: [a, b]
+                .map((m) => ({ workspaceId: fam.areaId, userId: m.userId }))
+                .sort((x, y) => (x.userId < y.userId ? -1 : 1)),
+        });
+    });
+});
+
+describe("repairing the root's previous envelope (route 28)", () => {
+    test('only a holder, not held, for the running rotation, replaces it; the change sequence moves', async () => {
+        const { fam, holder } = await withHolder();
+        const plain = await member();
+        await admitted(fam, plain);
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam, [holder, plain]);
+        await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+            ...rotated.call,
+            rotation,
+            grants,
+        });
+        const area = async () => (await groups.spaces(plain.userId))[0]!.areas[0]!;
+        const before = await area();
+        const rotationId = before.rotation!.id;
+        const repaired = b64(randomBytes(72));
+        const put = (who: Member, body: { rotationId: string; previousRootKeyEnvelope: string }) =>
+            groups.putPreviousRoot(who.userId, fam.groupId, fam.areaId, body);
+        const unchanged = async () =>
+            expect((await area()).root).toMatchObject({
+                prevKeyEnvelope: rotation.previousRootKeyEnvelope,
+            });
+        // A member without `members`: refused, never told they are out.
+        expect(
+            await refusal(put(plain, { rotationId, previousRootKeyEnvelope: repaired })),
+        ).toMatchObject({ code: 'forbidden', status: 403 });
+        const stranger = await member();
+        expect(
+            await refusal(put(stranger, { rotationId, previousRootKeyEnvelope: repaired })),
+        ).toMatchObject({ code: 'not-member', status: 404 });
+        // Another run than the one running, or not 72 bytes.
+        expect(
+            await refusal(
+                put(holder, { rotationId: randomUUID(), previousRootKeyEnvelope: repaired }),
+            ),
+        ).toMatchObject({ code: 'not-rotating', status: 409 });
+        expect(
+            await refusal(
+                put(holder, { rotationId, previousRootKeyEnvelope: b64(randomBytes(71)) }),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'rotation-root-previous' } });
+        await unchanged();
+        // Held ahead of a removal, a holder may not touch it either.
+        await groups.hold(fam.organizer.userId, fam.groupId, holder.userId);
+        expect(
+            await refusal(put(holder, { rotationId, previousRootKeyEnvelope: repaired })),
+        ).toMatchObject({ code: 'held', status: 409 });
+        await unchanged();
+        const done = await put(fam.organizer, { rotationId, previousRootKeyEnvelope: repaired });
+        expect(done.changeSeq).toBeGreaterThan(before.changeSeq);
+        expect(await area()).toMatchObject({
+            changeSeq: done.changeSeq,
+            root: {
+                // The root itself carries the new change sequence: the change feed hands it on.
+                changeSeq: done.changeSeq,
+                prevKeyEnvelope: repaired,
+                // The same old root key at its own epoch, under the current area key.
+                prevKeyEpoch: before.root!.prevKeyEpoch,
+                prevParentKeyEpoch: 2,
+                keyEnvelope: before.root!.keyEnvelope,
+            },
+        });
+        // Once the walk is finished there is nothing left to repair.
+        expect(
+            await rotationsRepository.finishRotation({
+                workspaceId: fam.areaId,
+                rootId: before.root!.id,
+                targetEpoch: rotation.targetEpoch,
+            }),
+        ).toBe(true);
+        expect(
+            await refusal(put(fam.organizer, { rotationId, previousRootKeyEnvelope: repaired })),
+        ).toMatchObject({ code: 'not-rotating', status: 409 });
+        expect((await area()).root).toMatchObject({ prevKeyEnvelope: null });
+    });
+
+    test('a roster rotation over a root that still carries a previous envelope is its own 409, with nothing changed', async () => {
+        const fam = await family();
+        // A previous envelope no running rotation accounts for (a bug, or a hand-edited row).
+        await db
+            .update(driveNodes)
+            .set({ prevKeyEnvelope: randomBytes(72), prevKeyEpoch: 1, prevParentKeyEpoch: 1 })
+            .where(and(eq(driveNodes.workspaceId, fam.areaId), isNull(driveNodes.parentId)));
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        expect(
+            await refusal(
+                groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                    ...rotated.call,
+                    rotation,
+                    grants,
+                }),
+            ),
+        ).toMatchObject({ code: 'root-mid-rotation', status: 409 });
+        const [area] = await db.select().from(workspaces).where(eq(workspaces.id, fam.areaId));
+        expect(area!.workspaceKeyVersion).toBe(1);
+        expect(
+            await db
+                .select()
+                .from(driveRotations)
+                .where(eq(driveRotations.workspaceId, fam.areaId)),
+        ).toEqual([]);
     });
 });

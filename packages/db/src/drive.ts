@@ -3193,19 +3193,54 @@ export async function resealShare(input: {
     });
 }
 
-export async function revokeShare(workspaceId: string, shareId: string) {
-    const [row] = await db
-        .update(driveShares)
-        .set({ revokedAt: new Date(), updatedAt: new Date() })
-        .where(
-            and(
-                eq(driveShares.id, shareId),
-                eq(driveShares.workspaceId, workspaceId),
-                isNull(driveShares.revokedAt),
-            ),
-        )
-        .returning({ id: driveShares.id, nodeId: driveShares.nodeId });
+/*
+ * Stopping a share or link does not take back the node key its recipient
+ * already has: only a rotation does. In a group area every revocation marks
+ * the area due for rotation, whoever made it, and its holders see it in
+ * `due.rotations` (docs/groups-server.md 3): a member without `members` may
+ * not rotate at all, and a holder whose device stops before it rotates would
+ * otherwise leave no trace of the rotation owed. Only a roster rotation of the
+ * area clears the mark. The area's row is locked before the share's, as a
+ * departure locks them, so the two cannot wait on each other.
+ */
+async function lockForRevocation(tx: Tx, workspaceId: string) {
+    const [row] = await tx
+        .select({ ownerKind: workspaces.ownerKind })
+        .from(workspaces)
+        .where(eq(workspaces.id, workspaceId))
+        .for('no key update');
     return row ?? null;
+}
+async function rotationDueAfterRevocation(
+    tx: Tx,
+    workspace: { ownerKind: string },
+    workspaceId: string,
+) {
+    if (workspace.ownerKind !== 'group') return;
+    await tx
+        .update(workspaces)
+        .set({ rotationDueAt: sql`coalesce(${workspaces.rotationDueAt}, now())` })
+        .where(eq(workspaces.id, workspaceId));
+}
+
+export async function revokeShare(workspaceId: string, shareId: string) {
+    return db.transaction(async (tx) => {
+        const workspace = await lockForRevocation(tx, workspaceId);
+        if (!workspace) return null;
+        const [row] = await tx
+            .update(driveShares)
+            .set({ revokedAt: new Date(), updatedAt: new Date() })
+            .where(
+                and(
+                    eq(driveShares.id, shareId),
+                    eq(driveShares.workspaceId, workspaceId),
+                    isNull(driveShares.revokedAt),
+                ),
+            )
+            .returning({ id: driveShares.id, nodeId: driveShares.nodeId });
+        if (row) await rotationDueAfterRevocation(tx, workspace, workspaceId);
+        return row ?? null;
+    });
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3334,19 +3369,25 @@ export async function updateLink(input: {
     });
 }
 
+/* A link stopped; in a group area the area is due for rotation (revokeShare). */
 export async function revokeLink(workspaceId: string, linkId: string) {
-    const [row] = await db
-        .update(driveLinks)
-        .set({ revokedAt: new Date() })
-        .where(
-            and(
-                eq(driveLinks.id, linkId),
-                eq(driveLinks.workspaceId, workspaceId),
-                isNull(driveLinks.revokedAt),
-            ),
-        )
-        .returning({ id: driveLinks.id, nodeId: driveLinks.nodeId });
-    return row ?? null;
+    return db.transaction(async (tx) => {
+        const workspace = await lockForRevocation(tx, workspaceId);
+        if (!workspace) return null;
+        const [row] = await tx
+            .update(driveLinks)
+            .set({ revokedAt: new Date() })
+            .where(
+                and(
+                    eq(driveLinks.id, linkId),
+                    eq(driveLinks.workspaceId, workspaceId),
+                    isNull(driveLinks.revokedAt),
+                ),
+            )
+            .returning({ id: driveLinks.id, nodeId: driveLinks.nodeId });
+        if (row) await rotationDueAfterRevocation(tx, workspace, workspaceId);
+        return row ?? null;
+    });
 }
 
 /*

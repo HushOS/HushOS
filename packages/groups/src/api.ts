@@ -70,6 +70,13 @@ export type AreaWire = {
  * An area's key rotation riding on a roster: the root re-keyed at
  * `targetEpoch` (drawn from the area's epochs first) under the new workspace
  * key, and the rotator's self-grant at the new version.
+ *
+ * `previousRootKeyEnvelope` is the root's old key wrapped again under the new
+ * area key: a node key envelope (72 bytes) with the context `{ workspaceId,
+ * nodeId: root, parentId: workspaceId, parentKeyEpoch: toVersion, keyEpoch:
+ * the root's key epoch before the rotation }`. The server stores it as the
+ * root's previous envelope, so anyone holding only the new area key still opens
+ * the children the Drive walk has not re-keyed yet (docs/groups-server.md 8).
  */
 export type RotationWire = {
     workspaceId: string;
@@ -77,6 +84,7 @@ export type RotationWire = {
     toVersion: number;
     targetEpoch: number;
     root: RotatedNodeWire;
+    previousRootKeyEnvelope: string;
     selfGrant: SelfGrantWire;
 };
 

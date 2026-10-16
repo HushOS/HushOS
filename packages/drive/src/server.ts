@@ -19,6 +19,7 @@ import {
     validObjectSize,
 } from '@hushos/crypto/drive';
 import { objectKey, primaryStore } from './storage';
+import { groupsEnv } from '@hushos/env/groups';
 import { storageEnv } from '@hushos/env/storage';
 import {
     ANCESTOR_WALK_CAP,
@@ -81,6 +82,8 @@ export function capabilities(): Capabilities {
         nameMaxCodePoints: NAME_MAX_CODE_POINTS,
         tombstoneDays: TOMBSTONE_DAYS,
         trashRetentionDays: TRASH_RETENTION_DAYS,
+        // Whether this server serves groups (GROUPS_ENABLED): a client offers families only then.
+        groups: groupsEnv.GROUPS_ENABLED,
     };
 }
 
@@ -414,7 +417,11 @@ export async function getWorkspace(userId: string) {
             : null,
         root: workspace.root ? nodeView(workspace.root) : null,
         rotation: workspace.rotation
-            ? { nodeId: workspace.rotation.nodeId, targetEpoch: workspace.rotation.targetEpoch }
+            ? {
+                  id: workspace.rotation.id,
+                  nodeId: workspace.rotation.nodeId,
+                  targetEpoch: workspace.rotation.targetEpoch,
+              }
             : null,
     };
 }
@@ -2386,6 +2393,7 @@ export async function startRotation(userId: string, workspaceId: string, nodeId:
             if (result.rotation.nodeId === nodeId)
                 return {
                     rotation: {
+                        id: result.rotation.id,
                         nodeId: result.rotation.nodeId,
                         targetEpoch: result.rotation.targetEpoch,
                     },
@@ -2398,6 +2406,7 @@ export async function startRotation(userId: string, workspaceId: string, nodeId:
         case 'ok':
             return {
                 rotation: {
+                    id: result.rotation.id,
                     nodeId: result.rotation.nodeId,
                     targetEpoch: result.rotation.targetEpoch,
                 },

@@ -771,6 +771,49 @@ export async function succeedIdentity(
 }
 
 /*
+ * The successor's consent for one of the person's own earlier successions,
+ * made before their client sent it (docs/groups-server.md 5): checked as the
+ * /succession consent is, under the keys the stored link names, and stored
+ * only where the link has none. Idempotent: a stored consent is never
+ * replaced, and a second upload that holds answers `stored: false`. Bounded
+ * per account (each check is two hybrid verifications) on top of the auth
+ * edge's per-address budget.
+ */
+export async function backfillSuccessionConsent(
+    sessionToken: string | null,
+    input: { oldKeyVersion: number; consent: string },
+) {
+    const { user, token } = await requireSession(sessionToken, 'Sign in to update your keys.');
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`identity:consent:user:${user.id}`),
+            60,
+            60 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many requests. Please try again shortly.', 429);
+    const result = await authRepository.backfillSuccessionConsent({
+        userId: user.id,
+        credentialVersion: user.credentialVersion,
+        sessionTokenHash: hash(token),
+        oldKeyVersion: input.oldKeyVersion,
+        consent: decodeField(input.consent, SUCCESSION_CONSENT_BYTES),
+    });
+    switch (result.status) {
+        case 'ok':
+            return { stored: result.stored };
+        case 'session':
+            throw new AuthError('Sign in again to update your keys.', 401);
+        case 'no-link':
+            throw new AuthError('These keys never replaced others on this account.', 404);
+        case 'not-upgraded':
+            throw new AuthError('Keys from before this version of HushOS cannot consent.', 409);
+        case 'bad-signature':
+            throw new AuthError('This consent is not signed by both sets of keys.', 400);
+    }
+}
+
+/*
  * The most bytes a security change may send for this session's account (see
  * limits.ts). Null without a current session.
  */
