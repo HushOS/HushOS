@@ -1,0 +1,87 @@
+apps/web/src/lib/groups/join-only.test.ts
+  s_c56e31c87cddde::t_c23024c7448225 1-82
+apps/web/src/lib/consent-backfill.test.ts
+  s_c56e31c87cddde::t_2f2a661c17a0a2 1-94
+apps/web/src/lib/groups/sync.test.ts
+  s_c56e31c87cddde::t_e1cd36aabc0587 1-246
+apps/web/src/lib/groups/context.ts
+  s_c56e31c87cddde::t_640275052a2f6f 1-125
+apps/web/src/lib/groups/join.test.ts
+  s_c56e31c87cddde::t_c6c1bb5cb13c7c 1-397
+packages/auth/src/worker.test.ts
+  s_c56e31c87cddde::t_a4fe21c9ba6592 1-53
+apps/web/src/lib/groups/two-tabs.test.ts
+  s_c56e31c87cddde::t_688ced8999574c 1-233
+apps/web/src/lib/groups/store.test.ts
+  s_c56e31c87cddde::t_a1a086b9de1547 1-79
+apps/web/src/lib/groups/client.ts
+  s_c56e31c87cddde::t_c20eb5cd03aeab 1-65
+apps/web/src/lib/groups/outbox.test.ts
+  s_c56e31c87cddde::t_268f3cde091400 1-629
+apps/web/src/lib/groups/api.ts
+  s_c56e31c87cddde::t_49bed2c146de71 1-197
+apps/web/src/lib/groups/store.ts
+  s_c56e31c87cddde::t_d86224a0276d10 1-251
+apps/web/src/lib/groups/pins.ts
+  s_c56e31c87cddde::t_520263cd5a8b34 1-140
+apps/web/src/lib/groups/pins.test.ts
+  s_c56e31c87cddde::t_88b35df0fecb93 1-198
+apps/web/src/lib/groups/sync.ts
+  s_c56e31c87cddde::t_9f6c934adbb041 1-382
+apps/web/src/lib/consent-backfill.ts
+  s_c56e31c87cddde::t_436cadfbd63f01 1-65
+apps/web/src/lib/groups/outbox.ts
+  s_c56e31c87cddde::t_ad764bd7f90a55 1-754
+apps/web/src/lib/contacts.succession.test.ts
+  s_c56e31c87cddde::t_15835a06d041c7 1-54
+apps/web/src/components/drive/drive-shell.tsx
+  s_c56e31c87cddde::t_54cfaf899ce931 12,80-82,85
+apps/web/src/lib/auth-api.ts
+  s_c56e31c87cddde::t_0f5ac5bb4b1e65 40
+apps/web/src/lib/contacts.ts
+  s_c56e31c87cddde::t_9a727c3618d847 22,63,68,143-150,157-190,304-346
+apps/web/src/lib/groups/join.ts
+  s_c56e31c87cddde::t_d5a7373d31f08c 1-254
+apps/web/src/lib/groups/test-harness.ts
+  s_c56e31c87cddde::t_65afcd3aaa25f3 1-353
+apps/web/src/lib/groups/worker-testkit.ts
+  s_c56e31c87cddde::t_e75686d52e0a60 1-112
+apps/web/src/lib/sign-out.test.ts
+  s_c56e31c87cddde::t_ca05d88d00128e 11,14,23,27,31,37,43-47
+apps/web/src/lib/sign-out.ts
+  s_c56e31c87cddde::t_39738f924a779b 9-10,14-21,33-35
+docs/groups-server.md
+  s_c56e31c87cddde::t_5c36aa484d3762 17,224,252,260-261
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_c9159a01ae87f9 143-151
+packages/auth/src/client.test.ts
+  s_c56e31c87cddde::t_7c2ca4826b9532 112,121-122,133-136
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_29cdc6b442e2dd 14,136-137,146,576-577
+packages/auth/src/ordinary-failure.ts
+  s_c56e31c87cddde::t_132663ddf2a370 1-16
+packages/auth/src/worker.ts
+  s_c56e31c87cddde::t_252320edd805d4 8,26-28,30
+packages/crypto/src/protocol.ts
+  s_c56e31c87cddde::t_6123e339db0cbd 32-56
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_f2b3a2b6cd8b60 78,374-379,476-477,479,496-497,499-505,522-527,544-545,548-552,613-617,947-986,1406-1407,1426-1427,1720-1734,1753-1754,1756-1759,1785-1796,1823-1842,1856,2301,2400,2422,2445,2482,2515,2529-2534,2746-2760
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_8ad853f04bf655 19,232-235,532,535-540,544-547,550-558,560-565,569-575,577-582,670-671,674,725,728-732,833-889,2004,2007,2010,2026-2100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0edfedda0d8458b9ccb47eaffb4bfb6798577397",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
