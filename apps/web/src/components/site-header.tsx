@@ -3,8 +3,9 @@ import { cn } from 'cn';
 import { CheckIcon, MenuIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Brand, Wordmark } from '@/components/brand';
-import { container, StartFree } from '@/components/site';
-import { ThemeToggle } from '@/components/theme-toggle';
+import { container, SiteSwitch, StartFree } from '@/components/site';
+import { useTheme } from '@/components/theme-provider';
+import { ThemeToggle, themeOptions } from '@/components/theme-toggle';
 import { buttonVariants } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { comparisons } from '@/lib/compare';
@@ -131,7 +132,7 @@ function AppHeader() {
 /* Below the wide breakpoint: every page in a sheet from the top, with the same two actions. */
 function PhoneMenu({ shown, pathname }: { shown: Page[]; pathname: string }) {
     const [open, setOpen] = useState(false);
-    const { hasSession } = useRouteContext({ from: '__root__' });
+    const { hasSession, billingEnabled } = useRouteContext({ from: '__root__' });
     const signIn = useSignIn();
     const all: Page[] = [{ to: '/', label: 'Drive' }, ...shown];
     return (
@@ -148,7 +149,8 @@ function PhoneMenu({ shown, pathname }: { shown: Page[]; pathname: string }) {
             <Sheet open={open} onOpenChange={setOpen}>
                 <SheetContent
                     side="top"
-                    className="gap-0 rounded-b-2xl border-rule bg-card px-4 pt-3 pb-5"
+                    // A short phone (an SE, a landscape phone) cannot show the whole menu; it scrolls.
+                    className="max-h-dvh gap-0 overflow-y-auto overscroll-contain rounded-b-2xl border-rule bg-card px-4 pt-3 pb-5"
                 >
                     <SheetTitle className="flex h-11 items-center">
                         <Brand />
@@ -198,16 +200,61 @@ function PhoneMenu({ shown, pathname }: { shown: Page[]; pathname: string }) {
                                 Sign in
                             </Link>
                         )}
-                        <div className="flex items-center justify-between pt-1">
-                            <span className="text-sm text-muted-foreground">
-                                {hasSession ? '' : 'No card needed.'}
-                            </span>
-                            <ThemeToggle />
-                        </div>
+                        {/* Only where plans are sold: a server that sells nothing has no card to ask for. */}
+                        {!hasSession && billingEnabled && (
+                            <p className="text-center text-sm text-muted-foreground">
+                                No card needed.
+                            </p>
+                        )}
                     </div>
+                    <AppearanceRow />
                 </SheetContent>
             </Sheet>
         </>
+    );
+}
+
+/*
+ * The phone menu's appearance: there is room to say what it is, so a labelled row
+ * with the three choices in view, rather than the header's lone icon.
+ */
+function AppearanceRow() {
+    const { theme, setTheme, isPending, error } = useTheme();
+    return (
+        <div className="mt-5 flex flex-col gap-2 border-t border-rule pt-4">
+            <SiteSwitch
+                label="Appearance"
+                showLabel
+                disabled={isPending}
+                value={theme}
+                onChange={setTheme}
+                options={(['light', 'dark', 'system'] as const).map((value) => {
+                    const Icon = themeOptions[value].icon;
+                    return {
+                        value,
+                        label: (
+                            <>
+                                <Icon className="size-4" aria-hidden="true" />
+                                {value === 'system' ? (
+                                    <>
+                                        Auto
+                                        <span className="sr-only">(same as this computer)</span>
+                                    </>
+                                ) : (
+                                    themeOptions[value].label
+                                )}
+                            </>
+                        ),
+                    };
+                })}
+                className="w-full [&_button]:px-2"
+            />
+            {error && (
+                <p role="alert" className="text-sm text-destructive">
+                    {error}
+                </p>
+            )}
+        </div>
     );
 }
 

@@ -393,7 +393,7 @@ Sound confirms that something happened; nothing sounds for a hover, a press or a
 
 The voice is plain, calm and specific. Sentence case. Contractions are fine. One idea per sentence; no jargon in primary UI.
 
-- **Words, the same on every client:** Share; Who can open; Only you; Same as folder; Anyone with the link; Stop sharing; Turn off link; Copy link; People you share with; Check it's them; Move to Trash; Restore; Delete forever; Empty Trash; Keep on this phone; Remove from this phone; Send a copy (the system share sheet); Open in… (iOS); Info; Versions; My files; Account; Plan and storage; Lock on this browser (web).
+- **Words, the same on every client:** Share; Who can open; Only you; Same as folder; Anyone with the link; Stop sharing; Turn off link; Copy link; People you share with; Check it's them; Move to Trash; Restore; Delete forever; Empty Trash; Keep on this phone; Remove from this phone; Send a copy (the system share sheet); Open in… (iOS); Info; Versions; My files; Account; Plan and storage; Lock on this browser (web). Appearance is Light, Dark and Same as this computer; a narrow switch (the site's phone menu) shows the last as Auto, read to screen readers as "Auto (same as this computer)".
 - **Trash** keeps items for 30 days, and says so. Removing a file from the phone says it stays in HushOS.
 - **Dates**, on every client: "Today, 14:02", "Yesterday", "29 Sept" this year, "29 Sept 2025" in another; day and month the en-GB way, the time on the person's own 12 or 24 hour clock. In a sentence: "Added today, 14:02", "on 3 Sept", "until 12 Oct". Web helpers: `formatWhen`, `formatDay`, `formatTime` in `apps/web/src/lib/drive.ts`.
 - **Sizes:** "1.6 KB", "1.5 GB of 2 GB used", "512 MB free"; quotas never show decimals they don't have.

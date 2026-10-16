@@ -195,22 +195,32 @@ export function TalkToUs({
 /* Questions that open in place: the shadcn accordion, styled for the site. */
 export { Faq, type FaqItem as Question } from '@/components/faq';
 
-/* Two or three choices in one switch; the chosen one is raised and bold. */
+/*
+ * Two or three choices in one switch; the chosen one is raised and bold. `showLabel`
+ * draws the legend above it as the visible label, so the name is said once; `disabled`
+ * holds every choice while a change is saving.
+ */
 export function SiteSwitch<T extends string>({
     label,
     options,
     value,
     onChange,
+    showLabel = false,
+    disabled = false,
     className,
 }: {
     label: string;
     options: { value: T; label: ReactNode }[];
     value: T;
     onChange: (value: T) => void;
+    showLabel?: boolean;
+    disabled?: boolean;
     className?: string;
 }) {
-    return (
+    const choices = (
         <fieldset
+            disabled={disabled}
+            aria-busy={disabled || undefined}
             className={cn('m-0 flex min-w-0 gap-1 rounded-md border-0 bg-muted p-1', className)}
         >
             <legend className="sr-only">{label}</legend>
@@ -221,7 +231,8 @@ export function SiteSwitch<T extends string>({
                     aria-pressed={value === option.value}
                     onClick={() => onChange(option.value)}
                     className={cn(
-                        'flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-4 text-[15px] whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                        // 40px drawn, 44px to a finger: the tap area reaches into the track's padding.
+                        "relative flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-4 text-[15px] whitespace-nowrap outline-none after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60",
                         value === option.value
                             ? 'bg-card font-bold text-foreground shadow-sm'
                             : 'font-medium text-muted-foreground hover:text-foreground',
@@ -231,5 +242,15 @@ export function SiteSwitch<T extends string>({
                 </button>
             ))}
         </fieldset>
+    );
+    if (!showLabel) return choices;
+    // The visible label is a heading over the switch, hidden from screen readers, who hear the legend.
+    return (
+        <div className="flex flex-col gap-2">
+            <span aria-hidden="true" className="text-sm font-semibold">
+                {label}
+            </span>
+            {choices}
+        </div>
     );
 }
