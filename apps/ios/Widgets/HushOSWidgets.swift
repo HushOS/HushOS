@@ -100,9 +100,9 @@ private struct Palette {
 
     init(scheme: ColorScheme, high: Bool) {
         if scheme == .dark {
-            surface = hex(high ? 0x0A0D16 : 0x161A26); ink = hex(high ? 0xFFFFFF : 0xE4E8F4); muted = hex(high ? 0xD3D9EA : 0x9AA3BE)
+            surface = hex(high ? 0x0A0A0B : 0x17181C); ink = hex(high ? 0xFFFFFF : 0xECEDF1); muted = hex(high ? 0xD6D8DE : 0x9A9EA9)
             primary = hex(high ? 0xC9D3FF : 0xAAB8F4); success = hex(high ? 0xA3EBC8 : 0x7FD1AD); danger = hex(high ? 0xFFB8B0 : 0xF2A69F)
-            track = hex(high ? 0x8D95AF : 0x262B3A)
+            track = hex(high ? 0x8F939D : 0x2A2C33)
         } else {
             surface = hex(0xFFFFFF); ink = hex(high ? 0x070B18 : 0x17203A); muted = hex(high ? 0x2E3650 : 0x5A6380)
             primary = hex(high ? 0x1A2C6B : 0x2C428E); success = hex(high ? 0x0C4A30 : 0x24704F); danger = hex(high ? 0x7E120C : 0xB3261E)

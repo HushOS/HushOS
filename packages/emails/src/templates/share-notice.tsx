@@ -62,24 +62,24 @@ export default function ShareNotice({
                     :root { color-scheme: light dark; supported-color-schemes: light dark; }
                     html { background-color: #f3f4f8; }
                     @media (prefers-color-scheme: dark) {
-                        html { background-color: #0e111a !important; }
-                        .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                        .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                        .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                        html { background-color: #0f1013 !important; }
+                        .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                        .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                        .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
                         .email-logo { background-color: #3a3a3a !important; }
-                        .email-cell { border-color: #262b3a !important; }
-                        .email-heading, .email-value { color: #e4e8f4 !important; }
-                        .email-muted { color: #9aa3be !important; }
+                        .email-cell { border-color: #2a2c33 !important; }
+                        .email-heading, .email-value { color: #ecedf1 !important; }
+                        .email-muted { color: #9a9ea9 !important; }
                         .email-link { color: #aab8f4 !important; }
                         .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     }
-                    [data-ogsc] .email-body { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0e111a !important; color: #e4e8f4 !important; }
-                    [data-ogsc] .email-card { background-color: #161a26 !important; border-color: #262b3a !important; }
+                    [data-ogsc] .email-body { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                    [data-ogsc] .email-body > table > tbody > tr > td { background-color: #0f1013 !important; color: #ecedf1 !important; }
+                    [data-ogsc] .email-card { background-color: #17181c !important; border-color: #2a2c33 !important; }
                     [data-ogsc] .email-logo { background-color: #3a3a3a !important; }
-                    [data-ogsc] .email-cell { border-color: #262b3a !important; }
-                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #e4e8f4 !important; }
-                    [data-ogsc] .email-muted { color: #9aa3be !important; }
+                    [data-ogsc] .email-cell { border-color: #2a2c33 !important; }
+                    [data-ogsc] .email-heading, [data-ogsc] .email-value { color: #ecedf1 !important; }
+                    [data-ogsc] .email-muted { color: #9a9ea9 !important; }
                     [data-ogsc] .email-link { color: #aab8f4 !important; }
                     [data-ogsc] .email-button { background-color: #aab8f4 !important; color: #121833 !important; }
                     @media (max-width: 480px) {

@@ -92,7 +92,7 @@ await Bun.write(
             "appearances": [{ "appearance": "luminosity", "value": "dark" }],
             "color": {
                 "color-space": "srgb",
-                "components": ${components('#0e111a')}
+                "components": ${components('#0f1013')}
             },
             "idiom": "universal"
         }

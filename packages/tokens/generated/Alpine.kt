@@ -42,12 +42,12 @@ object AlpineLight {
 }
 
 object AlpineDark {
-    val Surface = Color(0xFF161A26)
-    val Ground = Color(0xFF0E111A)
-    val Ink = Color(0xFFE4E8F4)
-    val InkMuted = Color(0xFF9AA3BE)
-    val Rule = Color(0xFF262B3A)
-    val Field = Color(0xFF6A7390)
+    val Surface = Color(0xFF17181C)
+    val Ground = Color(0xFF0F1013)
+    val Ink = Color(0xFFECEDF1)
+    val InkMuted = Color(0xFF9A9EA9)
+    val Rule = Color(0xFF2A2C33)
+    val Field = Color(0xFF70737D)
     val Primary = Color(0xFFAAB8F4)
     val PrimaryPressed = Color(0xFFBCC7F8)
     val OnPrimary = Color(0xFF121833)
@@ -61,7 +61,7 @@ object AlpineDark {
     val SuccessSoft = Color(0xFF16302A)
     val Danger = Color(0xFFF2A69F)
     val DangerSoft = Color(0xFF3A1F1D)
-    val Snackbar = Color(0xFFE4E8F4)
+    val Snackbar = Color(0xFFECEDF1)
     val OnSnackbar = Color(0xFF17203A)
     val SnackbarAction = Color(0xFF2C428E)
     val Edge = Color(0x14FFFFFF)
@@ -113,12 +113,12 @@ object AlpineLightHigh {
 }
 
 object AlpineDarkHigh {
-    val Surface = Color(0xFF0A0D16)
+    val Surface = Color(0xFF0A0A0B)
     val Ground = Color(0xFF000000)
     val Ink = Color(0xFFFFFFFF)
-    val InkMuted = Color(0xFFD3D9EA)
-    val Rule = Color(0xFF8D95AF)
-    val Field = Color(0xFFD3D9EA)
+    val InkMuted = Color(0xFFD6D8DE)
+    val Rule = Color(0xFF8F939D)
+    val Field = Color(0xFFD6D8DE)
     val Primary = Color(0xFFC9D3FF)
     val PrimaryPressed = Color(0xFFE0E6FF)
     val OnPrimary = Color(0xFF05081A)
@@ -135,7 +135,7 @@ object AlpineDarkHigh {
     val Snackbar = Color(0xFFFFFFFF)
     val OnSnackbar = Color(0xFF05081A)
     val SnackbarAction = Color(0xFF1A2C6B)
-    val Edge = Color(0xFFD3D9EA)
+    val Edge = Color(0xFFD6D8DE)
     val Avatar1 = Color(0xFF1F2849)
     val OnAvatar1 = Color(0xFFE6EBFF)
     val Avatar2 = Color(0xFF2E2040)

@@ -48,12 +48,12 @@
 
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
-        --surface: #161a26;
-        --ground: #0e111a;
-        --ink: #e4e8f4;
-        --ink-muted: #9aa3be;
-        --rule: #262b3a;
-        --field: #6a7390;
+        --surface: #17181c;
+        --ground: #0f1013;
+        --ink: #ecedf1;
+        --ink-muted: #9a9ea9;
+        --rule: #2a2c33;
+        --field: #70737d;
         --primary: #aab8f4;
         --primary-pressed: #bcc7f8;
         --on-primary: #121833;
@@ -67,7 +67,7 @@
         --success-soft: #16302a;
         --danger: #f2a69f;
         --danger-soft: #3a1f1d;
-        --snackbar: #e4e8f4;
+        --snackbar: #ecedf1;
         --on-snackbar: #17203a;
         --snackbar-action: #2c428e;
         --edge: #ffffff14;
@@ -89,12 +89,12 @@
 }
 
 .dark {
-    --surface: #161a26;
-    --ground: #0e111a;
-    --ink: #e4e8f4;
-    --ink-muted: #9aa3be;
-    --rule: #262b3a;
-    --field: #6a7390;
+    --surface: #17181c;
+    --ground: #0f1013;
+    --ink: #ecedf1;
+    --ink-muted: #9a9ea9;
+    --rule: #2a2c33;
+    --field: #70737d;
     --primary: #aab8f4;
     --primary-pressed: #bcc7f8;
     --on-primary: #121833;
@@ -108,7 +108,7 @@
     --success-soft: #16302a;
     --danger: #f2a69f;
     --danger-soft: #3a1f1d;
-    --snackbar: #e4e8f4;
+    --snackbar: #ecedf1;
     --on-snackbar: #17203a;
     --snackbar-action: #2c428e;
     --edge: #ffffff14;
@@ -171,12 +171,12 @@
 
 @media (prefers-contrast: more) and (prefers-color-scheme: dark) {
     :root:not(.light) {
-        --surface: #0a0d16;
+        --surface: #0a0a0b;
         --ground: #000000;
         --ink: #ffffff;
-        --ink-muted: #d3d9ea;
-        --rule: #8d95af;
-        --field: #d3d9ea;
+        --ink-muted: #d6d8de;
+        --rule: #8f939d;
+        --field: #d6d8de;
         --primary: #c9d3ff;
         --primary-pressed: #e0e6ff;
         --on-primary: #05081a;
@@ -193,7 +193,7 @@
         --snackbar: #ffffff;
         --on-snackbar: #05081a;
         --snackbar-action: #1a2c6b;
-        --edge: #d3d9ea;
+        --edge: #d6d8de;
         --avatar1: #1f2849;
         --on-avatar1: #e6ebff;
         --avatar2: #2e2040;
@@ -252,12 +252,12 @@
 /* Forced high contrast with the scheme left to the system: dark when the system is. */
 @media (prefers-color-scheme: dark) {
     .hc:not(.light) {
-        --surface: #0a0d16;
+        --surface: #0a0a0b;
         --ground: #000000;
         --ink: #ffffff;
-        --ink-muted: #d3d9ea;
-        --rule: #8d95af;
-        --field: #d3d9ea;
+        --ink-muted: #d6d8de;
+        --rule: #8f939d;
+        --field: #d6d8de;
         --primary: #c9d3ff;
         --primary-pressed: #e0e6ff;
         --on-primary: #05081a;
@@ -274,7 +274,7 @@
         --snackbar: #ffffff;
         --on-snackbar: #05081a;
         --snackbar-action: #1a2c6b;
-        --edge: #d3d9ea;
+        --edge: #d6d8de;
         --avatar1: #1f2849;
         --on-avatar1: #e6ebff;
         --avatar2: #2e2040;
@@ -292,12 +292,12 @@
 }
 
 .dark.hc {
-    --surface: #0a0d16;
+    --surface: #0a0a0b;
     --ground: #000000;
     --ink: #ffffff;
-    --ink-muted: #d3d9ea;
-    --rule: #8d95af;
-    --field: #d3d9ea;
+    --ink-muted: #d6d8de;
+    --rule: #8f939d;
+    --field: #d6d8de;
     --primary: #c9d3ff;
     --primary-pressed: #e0e6ff;
     --on-primary: #05081a;
@@ -314,7 +314,7 @@
     --snackbar: #ffffff;
     --on-snackbar: #05081a;
     --snackbar-action: #1a2c6b;
-    --edge: #d3d9ea;
+    --edge: #d6d8de;
     --avatar1: #1f2849;
     --on-avatar1: #e6ebff;
     --avatar2: #2e2040;

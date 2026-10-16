@@ -99,7 +99,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { name: 'apple-mobile-web-app-title', content: 'HushOS' },
             { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
             { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f3f4f8' },
-            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0e111a' },
+            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0f1013' },
             { name: 'msapplication-TileColor', content: '#000000' },
             { name: 'msapplication-config', content: '/browserconfig.xml' },
         ],

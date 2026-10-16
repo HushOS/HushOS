@@ -27,44 +27,44 @@ export interface Role {
 export const color = {
     surface: {
         light: '#FFFFFF',
-        dark: '#161A26',
+        dark: '#17181C',
         lightHigh: '#FFFFFF',
-        darkHigh: '#0A0D16',
+        darkHigh: '#0A0A0B',
         use: 'Sheets, cards, list groups, inputs.',
     },
     ground: {
         light: '#F3F4F8',
-        dark: '#0E111A',
+        dark: '#0F1013',
         lightHigh: '#F2F4F9',
         darkHigh: '#000000',
         use: 'Screen background behind surfaces.',
     },
     ink: {
         light: '#17203A',
-        dark: '#E4E8F4',
+        dark: '#ECEDF1',
         lightHigh: '#070B18',
         darkHigh: '#FFFFFF',
         use: 'Text and icons.',
     },
     inkMuted: {
         light: '#5A6380',
-        dark: '#9AA3BE',
+        dark: '#9A9EA9',
         lightHigh: '#2E3650',
-        darkHigh: '#D3D9EA',
+        darkHigh: '#D6D8DE',
         use: 'Metadata and labels. Never for anything clickable.',
     },
     rule: {
         light: '#E2E5EE',
-        dark: '#262B3A',
+        dark: '#2A2C33',
         lightHigh: '#5F6886',
-        darkHigh: '#8D95AF',
+        darkHigh: '#8F939D',
         use: 'Hairlines and dividers.',
     },
     field: {
         light: '#7A8299',
-        dark: '#6A7390',
+        dark: '#70737D',
         lightHigh: '#1B2238',
-        darkHigh: '#D3D9EA',
+        darkHigh: '#D6D8DE',
         use: 'Input and outline-button borders; 3:1 against the surface so edges stay visible.',
     },
     primary: {
@@ -160,7 +160,7 @@ export const color = {
     },
     snackbar: {
         light: '#1E2638',
-        dark: '#E4E8F4',
+        dark: '#ECEDF1',
         lightHigh: '#070B18',
         darkHigh: '#FFFFFF',
         use: 'Snackbar and toast container.',
@@ -183,7 +183,7 @@ export const color = {
         light: '#17203A14',
         dark: '#FFFFFF14',
         lightHigh: '#1B2238',
-        darkHigh: '#D3D9EA',
+        darkHigh: '#D6D8DE',
         use: 'Outline on raised surfaces: faint normally, a solid border in high contrast where shadows carry no meaning.',
     },
     avatar1: {
@@ -282,7 +282,7 @@ export const type = {
 
 /*
  * Elevation, tinted with ink so shadows read as the same scene as the blue. Dark mode
- * leans on deeper black and a faint top highlight, because a navy shadow vanishes there.
+ * leans on deeper black and a faint top highlight, because a shadow vanishes on near-black.
  * Native clients use their platform's elevation; these are for the web and the board.
  */
 export const shadow = {

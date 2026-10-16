@@ -64,7 +64,7 @@ export function wordmarkSvg(fill = '#000000', background?: string) {
  */
 export const LOGO_BLACK = '#000000';
 export const LOGO_WHITE = '#ffffff';
-export const BRAND_GROUND_DARK = '#0e111a';
+export const BRAND_GROUND_DARK = '#0f1013';
 const BADGE = 539;
 const MARK_SCALE = (BADGE * 0.58) / 419;
 

@@ -1,32 +1,32 @@
 ---
 version: alpha
 name: HushOS Alpine
-description: Design system for HushOS, an open-source, self-hostable, end-to-end encrypted productivity suite, on the web, iOS and Android. Hush blue on navy-tinted neutrals, white surfaces on a cool ground, calm 56px rows, one brand colour. Every colour role has four schemes; dark, light high contrast and dark high contrast carry the -dark, -light-high and -dark-high suffixes.
+description: Design system for HushOS, an open-source, self-hostable, end-to-end encrypted productivity suite, on the web, iOS and Android. Hush blue on cool neutrals in the light and near-black ones in the dark, white surfaces on a cool ground, calm 56px rows, one brand colour. Every colour role has four schemes; dark, light high contrast and dark high contrast carry the -dark, -light-high and -dark-high suffixes.
 colors:
     surface: '#ffffff'
-    surface-dark: '#161a26'
+    surface-dark: '#17181c'
     surface-light-high: '#ffffff'
-    surface-dark-high: '#0a0d16'
+    surface-dark-high: '#0a0a0b'
     ground: '#f3f4f8'
-    ground-dark: '#0e111a'
+    ground-dark: '#0f1013'
     ground-light-high: '#f2f4f9'
     ground-dark-high: '#000000'
     ink: '#17203a'
-    ink-dark: '#e4e8f4'
+    ink-dark: '#ecedf1'
     ink-light-high: '#070b18'
     ink-dark-high: '#ffffff'
     ink-muted: '#5a6380'
-    ink-muted-dark: '#9aa3be'
+    ink-muted-dark: '#9a9ea9'
     ink-muted-light-high: '#2e3650'
-    ink-muted-dark-high: '#d3d9ea'
+    ink-muted-dark-high: '#d6d8de'
     rule: '#e2e5ee'
-    rule-dark: '#262b3a'
+    rule-dark: '#2a2c33'
     rule-light-high: '#5f6886'
-    rule-dark-high: '#8d95af'
+    rule-dark-high: '#8f939d'
     field: '#7a8299'
-    field-dark: '#6a7390'
+    field-dark: '#70737d'
     field-light-high: '#1b2238'
-    field-dark-high: '#d3d9ea'
+    field-dark-high: '#d6d8de'
     primary: '#2c428e'
     primary-dark: '#aab8f4'
     primary-light-high: '#1a2c6b'
@@ -80,7 +80,7 @@ colors:
     danger-soft-light-high: '#f8e3e1'
     danger-soft-dark-high: '#3d1512'
     snackbar: '#1e2638'
-    snackbar-dark: '#e4e8f4'
+    snackbar-dark: '#ecedf1'
     snackbar-light-high: '#070b18'
     snackbar-dark-high: '#ffffff'
     on-snackbar: '#f1f3f9'
@@ -94,7 +94,7 @@ colors:
     edge: '#17203a14'
     edge-dark: '#ffffff14'
     edge-light-high: '#1b2238'
-    edge-dark-high: '#d3d9ea'
+    edge-dark-high: '#d6d8de'
     avatar1: '#dce3f7'
     avatar1-dark: '#2a3358'
     avatar1-light-high: '#dce2f5'
@@ -287,9 +287,9 @@ Principles:
 
 Every role has four values: light, dark, light high contrast, dark high contrast. High contrast follows `prefers-contrast: more` (or `.hc` on the web), iOS Increase Contrast and Android's contrast setting, and meets WCAG AAA: 7:1 for every text role, 4.5:1 for control edges, focus and meaningful marks. Standard schemes meet AA. A component names a role, never a hex value and never a scheme.
 
-- **Ground (#f3f4f8, dark #0e111a):** the screen background, the web sidebar, behind grouped lists. **Surface (#ffffff, dark #161a26):** the page panel, cards, sheets, list groups, inputs, menus.
-- **Ink (#17203a, dark #e4e8f4):** text and icons. Never black. **Ink muted (#5a6380, dark #9aa3be):** metadata and labels only, never anything clickable.
-- **Rule (#e2e5ee, dark #262b3a):** hairlines between rows. **Field (#7a8299, dark #6a7390):** input and outline-button edges, 3:1 against the surface. **Edge:** the outline on raised surfaces, ink at 8% (white at 8% in dark), a solid line in high contrast where shadows are dropped.
+- **Ground (#f3f4f8, dark #0f1013):** the screen background, the web sidebar, behind grouped lists. **Surface (#ffffff, dark #17181c):** the page panel, cards, sheets, list groups, inputs, menus.
+- **Ink (#17203a, dark #ecedf1):** text and icons. Never black. **Ink muted (#5a6380, dark #9a9ea9):** metadata and labels only, never anything clickable.
+- **Rule (#e2e5ee, dark #2a2c33):** hairlines between rows. **Field (#7a8299, dark #70737d):** input and outline-button edges, 3:1 against the surface. **Edge:** the outline on raised surfaces, ink at 8% (white at 8% in dark), a solid line in high contrast where shadows are dropped.
 - **Primary, Hush blue (#2c428e, dark #aab8f4; pressed #24387a / #bcc7f8):** the one brand colour. Text on it is `on-primary`.
 - **Tint (#dce3f7, dark #232a44) with on-tint (#2c428e / #c0cbf8):** selection, hover, active navigation, soft chips. Never the only sign of a state: selected rows add a check; navigation and segmented controls add a solid fill or a heavier label.
 - **Folder back and front:** the two sheets of the folder mark, the back darker.
