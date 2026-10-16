@@ -1,0 +1,27 @@
+DESIGN.md
+  s_a965107c48ca30::t_ebfb69ef1e11c4 366,382-383,408
+apps/web/src/components/cover.tsx
+  s_a965107c48ca30::t_4ce0a12f99dd24 3,59,70-71,150,232
+apps/web/src/components/recovery-phrase.tsx
+  s_a965107c48ca30::t_95a070e2e8734c 5-6,11,15,61,186,199,254-305,336,351-368,372
+apps/web/src/lib/content.ts
+  s_a965107c48ca30::t_3360df94b8359d 15-17
+apps/web/src/routes/_authenticated/app/recovery-key.tsx
+  s_a965107c48ca30::t_cb84bb2ea9c85d 8-14,95,108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2cc6f24035db76244abf12197cb32f1e22951326",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
