@@ -1,0 +1,21 @@
+packages/db/src/drive.rotations.test.ts
+  s_dfc8fc6b30a2e3::t_156a4a4ae28a41 232-233,235-237,250,470-595
+packages/db/src/drive.ts
+  s_dfc8fc6b30a2e3::t_d13d8f36ad3688 2964-2974,2984,2991,3175,3196,3281-3283,3291,3359-3360,3376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05b3b8b736874bec162e1783a03ae2cb62840a4f",
+  "prompts": {},
+  "sessions": {
+    "s_dfc8fc6b30a2e3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a69b2d17a22b844a7",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
