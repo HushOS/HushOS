@@ -182,19 +182,8 @@ export function sortNodes(nodes: DriveNode[]) {
     });
 }
 
-// Counted in 1024s and labelled as people know them, as in formatQuota.
-const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
-export function formatBytes(value: number | string | bigint | null | undefined) {
-    if (value === null || value === undefined) return '';
-    let n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return '';
-    let unit = 0;
-    while (n >= 1024 && unit < UNITS.length - 1) {
-        n /= 1024;
-        unit++;
-    }
-    return `${unit === 0 ? n : n.toFixed(n >= 100 ? 0 : 1)} ${UNITS[unit]}`;
-}
+// Lives in lib/format, which public pages load without the drive client; re-exported here.
+export { formatBytes } from '@/lib/format';
 
 /*
  * Dates as the phones say them: "Today, 14:08", "Yesterday", "29 Sept", and the year
