@@ -3,6 +3,7 @@ import { makeZip, predictLength } from 'client-zip';
 import { openSink } from '@/lib/download-sinks';
 import { driveClient } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
+import { safeFileName } from '@/lib/save-file';
 
 /*
  * A sealed copy: an item exactly as the service holds it, for keeping offline.
@@ -127,8 +128,6 @@ export function sealedManifest(root: DriveNode, nodes: SealedRecord[]): SealedMa
     };
 }
 
-const safe = (name: string) => name.replaceAll(/[\\/:*?"<>|]/g, '_');
-
 /* Streams the zip to disk through the sinks a download uses; returns the file name. */
 export async function saveSealedCopy(
     root: DriveNode,
@@ -141,7 +140,7 @@ export async function saveSealedCopy(
         { name: 'manifest.json', size: manifest.byteLength },
         ...files.map((file) => ({ name: file.object, size: Number(file.ciphertextSize) })),
     ];
-    const name = `${safe(root.name)}.hushos.zip`;
+    const name = `${safeFileName(root.name)}.hushos.zip`;
     const sink = await openSink({ name, size: Number(predictLength(sizes)) });
     let done = 0;
     async function* entries() {

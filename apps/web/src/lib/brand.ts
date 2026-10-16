@@ -9,10 +9,19 @@ export const LOGO_PATHS = [
     'M128.915 230C120.444 256.674 95.4788 276 66 276C29.5492 276 0 246.451 0 210C0 173.549 29.5492 144 66 144C95.4788 144 120.444 163.326 128.915 190L280 190C291.046 190 300 198.954 300 210V260C300 271.046 291.046 280 280 280C268.954 280 260 271.046 260 260V230L128.915 230ZM106 210C106 232.091 88.0914 250 66 250C43.9086 250 26 232.091 26 210C26 187.909 43.9086 170 66 170C88.0914 170 106 187.909 106 210Z',
 ] as const;
 
+/* The mark's upright bar, drawn as a rect; the QR code's saved image draws it from here too. */
+export const LOGO_BAR: Readonly<Record<'x' | 'y' | 'width' | 'height' | 'radius', number>> = {
+    x: 194,
+    y: 0,
+    width: 40,
+    height: 360,
+    radius: 20,
+};
+
 function paths(fill: string) {
     return [
         `<path fill-rule="evenodd" clip-rule="evenodd" d="${LOGO_PATHS[0]}" fill="${fill}"/>`,
-        `<rect x="194" width="40" height="360" rx="20" fill="${fill}"/>`,
+        `<rect x="${LOGO_BAR.x}"${LOGO_BAR.y ? ` y="${LOGO_BAR.y}"` : ''} width="${LOGO_BAR.width}" height="${LOGO_BAR.height}" rx="${LOGO_BAR.radius}" fill="${fill}"/>`,
         `<path fill-rule="evenodd" clip-rule="evenodd" d="${LOGO_PATHS[1]}" fill="${fill}"/>`,
         `<path fill-rule="evenodd" clip-rule="evenodd" d="${LOGO_PATHS[2]}" fill="${fill}"/>`,
     ].join('');
@@ -24,6 +33,13 @@ function backdrop(background: string | undefined, width: number, height: number)
         : '';
 }
 
+/* The square in pixels an SVG from these helpers rasterises to; wordmarks keep their ratio. */
+export const LOGO_SIDE = 539;
+
+/* The mark's own width and the margin round it on the 539-unit square logoSvg draws. */
+export const LOGO_WIDTH = 300;
+export const LOGO_MARGIN = 60;
+
 /*
  * The mark on a square canvas, the mark itself centred, so an icon, a QR
  * centre or a copied asset is square with the same margin all round. Pass
@@ -32,14 +48,12 @@ function backdrop(background: string | undefined, width: number, height: number)
 export function logoSvg(fill = '#000000', background?: string, radius = 0, scale = 1) {
     // `scale` shrinks the mark on the canvas: a maskable icon keeps it inside the
     // circle a launcher may cut, which is 80% of the side.
-    const side = 539 / scale;
-    const left = -60 - (side - 420) / 2;
-    const top = -60 - (side - 539) / 2;
+    const side = LOGO_SIDE / scale;
+    const left = -LOGO_MARGIN - (side - (LOGO_WIDTH + 2 * LOGO_MARGIN)) / 2;
+    const top = -LOGO_MARGIN - (side - LOGO_SIDE) / 2;
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${left} ${top} ${side} ${side}" width="${side}" height="${side}" fill="none">${background ? `<rect x="${left}" y="${top}" width="${side}" height="${side}" rx="${radius}" fill="${background}"/>` : ''}${paths(fill)}</svg>`;
 }
 
-/* The square in pixels an SVG from the helpers above rasterises to; wordmarks keep their ratio. */
-export const LOGO_SIDE = 539;
 export const WORDMARK_SIZE = { width: 1600, height: 539 };
 
 /*
