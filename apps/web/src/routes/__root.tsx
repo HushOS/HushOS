@@ -45,6 +45,8 @@ import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import { isAppleTouch, viewportContent } from '@/lib/viewport';
 import { forgetReturn } from '@/lib/return-to';
 import styles from '@/styles.css?url';
+import { ThemeColor } from '@/components/theme-color';
+import { SitePage } from '@/components/site';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
@@ -98,8 +100,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { name: 'apple-mobile-web-app-capable', content: 'yes' },
             { name: 'apple-mobile-web-app-title', content: 'HushOS' },
             { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
-            { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f3f4f8' },
-            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0f1013' },
+            // theme-color is in Document's head: the router keeps one meta per name, and
+            // following the computer takes two, one per scheme.
             { name: 'msapplication-TileColor', content: '#000000' },
             { name: 'msapplication-config', content: '/browserconfig.xml' },
         ],
@@ -164,11 +166,13 @@ function StatusPage({
     description: string;
     action?: ReactNode;
 }) {
+    // A public page, so its edges match it (identities.css, Browser edges); the panel is
+    // raised off the page's own card.
     return (
-        <div className="flex min-h-svh flex-col">
+        <SitePage>
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-4 py-16">
-                <div className="sheet px-6 py-8 sm:px-8">
+                <div className="rounded-2xl border border-rule bg-popover px-6 py-8 shadow-sm sm:px-8">
                     <p className="eyebrow text-muted-foreground">{code}</p>
                     <h1 className="mt-3 text-2xl font-bold tracking-tight text-balance">{title}</h1>
                     <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
@@ -183,7 +187,7 @@ function StatusPage({
                 </div>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 
@@ -225,8 +229,29 @@ function Document({ children, release }: { children: ReactNode; release: string 
         <html lang="en" className={contrast ? `${theme} hc` : theme}>
             <head>
                 <HeadContent />
+                {/*
+                 * The ground of the chosen appearance, or one per scheme when it follows the
+                 * computer's; ThemeColor then keeps them equal to what the page paints.
+                 */}
+                {theme === 'light' || theme === 'dark' ? (
+                    <meta name="theme-color" content={theme === 'dark' ? '#0f1013' : '#f3f4f8'} />
+                ) : (
+                    <>
+                        <meta
+                            name="theme-color"
+                            media="(prefers-color-scheme: light)"
+                            content="#f3f4f8"
+                        />
+                        <meta
+                            name="theme-color"
+                            media="(prefers-color-scheme: dark)"
+                            content="#0f1013"
+                        />
+                    </>
+                )}
             </head>
             <body>
+                <ThemeColor />
                 <MotionProvider>
                     <TooltipProvider delay={0} closeDelay={0}>
                         <Toaster>{children}</Toaster>
