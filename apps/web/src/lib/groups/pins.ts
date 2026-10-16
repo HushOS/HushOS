@@ -117,7 +117,7 @@ export async function settlePin(
         // Read (and so opened in the worker) before anything is compared or saved.
         const { settings, version } = await ctx.settings.read();
         const current = settings.groups?.[groupId] ?? null;
-        // A joining acceptance without its join mark yet keeps no pin.
+        // An acceptance that wrote no pin has none to save.
         if (!pin) return { status: 'settled', pin: current };
         const merged = mergePin(current, pin, options.opened);
         if (merged === null || merged === 'conflict') {

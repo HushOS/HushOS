@@ -39,6 +39,7 @@ export const GROUP_OPERATIONS = [
     'groupCreate',
     'groupWords',
     'groupAccept',
+    'groupJoinPreview',
     'groupOpenSeal',
     'groupOpenArea',
     'groupStage',

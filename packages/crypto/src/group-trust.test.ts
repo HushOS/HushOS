@@ -473,7 +473,7 @@ describe('the person’s marks', () => {
                     acceptRosters(
                         newcomer(f, { pins: [pin2], firstKeys, rosters, successions: [] }),
                     ),
-                ).rejects.toThrow('not the group keys whose words were checked');
+                ).rejects.toThrow('not the group keys this person checked');
         // Two of the person's own pins naming other version 1 keys: the warning, marks only.
         const firstMark = async (key: { ed25519PublicKey: string; mlDsaPublicKey: string }) =>
             digest(
@@ -1493,7 +1493,7 @@ describe('the device’s cache', () => {
             acceptRosters(
                 newcomer(f, { cache, rosters: rest, firstKeys: (await groupKeyAt(7)).publicKey }),
             ),
-        ).rejects.toThrow('not the group keys whose words were checked');
+        ).rejects.toThrow('not the group keys this person checked');
         // A cache through 4, given nothing to extend it with: it alone must hold together.
         const { cache: four } = await accepted(newcomer(f));
         const foreign = await resigned(f, 4, { groupId: OTHER_GROUP });

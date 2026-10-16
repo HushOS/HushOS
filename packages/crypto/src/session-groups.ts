@@ -14,6 +14,7 @@ import {
     type NodeMetadata,
 } from './drive';
 import { CryptoError } from './errors';
+import { sameKeyDigest } from './fingerprint';
 import {
     acceptRosters,
     firstRoster,
@@ -47,6 +48,7 @@ import {
     newGroupSeed,
     openAreaGrant,
     openGroupKey,
+    parseRoster,
     rosterDigest,
     rosterEntry,
     sameGroupKey,
@@ -57,6 +59,7 @@ import {
     type GroupKeyPair,
     type GroupPublicKey,
     type GroupRole,
+    type Roster,
     type RosterMember,
     type SignedGroupStatement,
     type SignerHistory,
@@ -371,12 +374,13 @@ export type GroupRequests = {
      * settingsSeal; refused when it has opened none), and this device's sealed
      * record (its cache and device pin). With no
      * mark at all only two callers may vouch for the first keys: `joining`
-     * (the join flow, after the words check) and `creating` (the creator's
-     * outbox entry, whose seed must derive the served first keys; refused when
-     * any mark exists). Where marks exist, `joining` vouches for nothing: the
-     * marks decide, and its join mark is one more. A refusal throws, and the
-     * group then reads unavailable. Staged calls whose roster the accepted
-     * chain holds are dropped and named in `dropped`.
+     * (the join flow, with the join code the person compared with the admin's
+     * screen as its mark) and `creating` (the creator's outbox entry, whose
+     * seed must derive the served first keys; refused when any mark exists).
+     * Where marks exist, `joining` vouches for nothing: the marks decide, and
+     * its join mark is one more. A refusal throws, and the group then reads
+     * unavailable. Staged calls whose roster the accepted chain holds are
+     * dropped and named in `dropped`.
      */
     groupAccept: {
         userId: string;
@@ -384,8 +388,23 @@ export type GroupRequests = {
         served: ServedChain;
         record: string | null;
         checkedAt: string;
-        joining?: { joinMark: JoinMark | null } | null;
+        joining?: { joinMark: JoinMark } | null;
         creating?: { stagedEnvelope: string } | null;
+    };
+    /*
+     * The join code a newcomer compares with the admin's screen (design 2.4,
+     * 3.2): the served chain verified against this person's marks, or, with
+     * none, from version 1 over the served first keys, and the code of the
+     * roster at which this account's entry last became active (the one that
+     * admitted them). Nothing is committed, kept or marked, and a fork sets
+     * nothing: only groupAccept with this code as `joining.joinMark`, once the
+     * person said the two match, does.
+     */
+    groupJoinPreview: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
     };
     /* Opens the group key's seal to this account (route 8), with the sealer's identity and links from route 6. */
     groupOpenSeal: {
@@ -450,8 +469,19 @@ export type GroupRequests = {
         writers: GroupWriter[];
         nodes: DriveSignedNode[];
     };
-    /* The join code of a roster on the committed chain, to show it again. */
-    groupJoinCode: { groupId: string; version: number };
+    /*
+     * The join code an admin reads to a newcomer: over the committed chain,
+     * the roster at which `userId`'s entry last became active. `rosters` is
+     * route 5 from version 1; only those whose digest is the committed chain's
+     * at their version are read. With `pin` (the admin's contact pin of them),
+     * whether their entry on that roster names exactly the pinned keys.
+     */
+    groupJoinCode: {
+        groupId: string;
+        userId: string;
+        rosters: SignedStatementWire[];
+        pin?: ContactPin | null;
+    };
     groupTrustAs: {
         groupId: string;
         userId: string;
@@ -485,13 +515,19 @@ export type GroupResults = {
         stagedEnvelope: string;
     };
     groupWords: { words: string[] };
+    groupJoinPreview:
+        | { status: 'code'; rosterVersion: number; code: string[] }
+        /* The served chain holds no active entry for this account at its head: not let in yet. */
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
     groupAccept:
         | {
               status: 'accepted';
               view: GroupView;
-              /* The sealed record to keep (cache and device pin); null while joining without a mark. */
+              /* The sealed record to keep (cache and device pin). */
               record: string | null;
-              /* The pin after this acceptance, for the settings document; null with `record`. */
+              /* The pin after this acceptance, for the settings document. */
               pin: GroupPin | null;
               /* Outbox ids of this device's staged calls the served chain holds: they landed. */
               dropped: string[];
@@ -536,7 +572,7 @@ export type GroupResults = {
             versions: { id: string; integrity: GroupIntegrity; via: string | null }[];
         }[];
     };
-    groupJoinCode: { code: string[] };
+    groupJoinCode: { rosterVersion: number; code: string[]; pinMatches: boolean | null };
     groupTrustAs: { pin: ContactPin };
     identityConsent: { consent: string };
     groupForget: { forgotten: boolean };
@@ -993,6 +1029,79 @@ const NOT_CHECKED_KEYS = 'Couldn’t check this folder’s keys. Reload to conti
 /* ------------------------------------------------------------------------- */
 /* The session                                                               */
 /* ------------------------------------------------------------------------- */
+
+/*
+ * The roster at which `userId`'s entry last became active on a verified chain
+ * (the roster that admitted them, or let them in again): the earliest version
+ * of the run of active entries that reaches the head. Only served rosters
+ * whose digest is the chain's at their version are read, so what the server
+ * adds beside them changes nothing; one missing from the run is refused.
+ * Null when the head has no active entry for them.
+ */
+export async function admittedAt(
+    rosterDigests: readonly string[],
+    served: readonly SignedStatementWire[],
+    userId: string,
+) {
+    return runStart(await onChain(rosterDigests, served), rosterDigests.length, userId);
+}
+
+/* The served rosters whose digest is the chain's at their version, by version. */
+async function onChain(rosterDigests: readonly string[], served: readonly SignedStatementWire[]) {
+    const out = new Map<number, Roster>();
+    for (const wire of served) {
+        try {
+            const statement = decode(wire.statement);
+            const roster = parseRoster(statement);
+            if (rosterDigests[roster.rosterVersion - 1] === (await rosterDigest(statement)))
+                out.set(roster.rosterVersion, roster);
+        } catch {
+            // Not a roster of this chain: ignored, as acceptance ignores it.
+        }
+    }
+    return out;
+}
+
+function runStart(rosters: Map<number, Roster>, head: number, userId: string) {
+    const at = (version: number) => {
+        const roster = rosters.get(version);
+        if (!roster) throw new CryptoError('The server left out part of the family’s member list.');
+        return activeWith(rosterEntry(roster, userId));
+    };
+    let version = head;
+    if (version === 0 || !at(version)) return null;
+    while (version > 1 && at(version - 1)) version--;
+    return version;
+}
+
+/* Whether an entry names exactly the keys a contact pin holds (the lattice keys by digest). */
+function entryIsPin(entry: RosterMember | undefined, pin: ContactPin) {
+    return (
+        entry !== undefined &&
+        entry.encryptionPublicKey === pin.encryptionPublicKey &&
+        entry.signingPublicKey === pin.signingPublicKey &&
+        sameKeyDigest(pin.mlDsaPublicKeyHash, entry.mlDsaPublicKeyDigest) &&
+        sameKeyDigest(pin.kemPublicKeyHash, entry.kemPublicKeyDigest)
+    );
+}
+
+/*
+ * The join code of the roster at `version` on a verified chain, under the group key it is under.
+ * Both screens' code comes from here; acceptance works its own out (group-trust.ts), and the two
+ * must agree at every version (session-groups.join.test.ts).
+ */
+export async function codeAt(chain: AcceptedRosters, version: number) {
+    if (!Number.isSafeInteger(version) || version < 1 || version > chain.rosterDigests.length)
+        throw new CryptoError('This member list is not on the family’s history.');
+    // The group key that roster is under: one above every succession tied to an earlier roster.
+    let keyVersion = 1;
+    for (const out of chain.cache.successions) if (out.lastRosterVersion < version) keyVersion++;
+    return joinCode(
+        chain.rosterDigests[version - 1]!,
+        chain.groupKeys[keyVersion - 1]!,
+        keyVersion,
+    );
+}
 
 export function createGroupSession(host: GroupHost) {
     /* Committed chains, from what the server served only. */
@@ -1733,16 +1842,18 @@ export function createGroupSession(host: GroupHost) {
         }
     }
 
-    async function accept(
-        input: GroupRequests['groupAccept'],
-    ): Promise<GroupResults['groupAccept']> {
+    /*
+     * This person's marks for a group: the settings pin (from settings this
+     * worker opened) and this device's record, opened. `marks` also counts what
+     * this session holds, a committed chain or a fork. `null`: the record did
+     * not open (sealed under an earlier account root).
+     */
+    async function marksOf(input: { userId: string; groupId: string; record: string | null }) {
         const groupId = uuid(input.groupId, 'group id');
         const { userId, root } = host.unlocked();
-        let record: { cache: GroupChainCache | null; pin: GroupPin | null } | null = null;
-        let firstKeysChecked = false;
-        let pins: GroupPin[] = [];
         try {
             if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            let record: { cache: GroupChainCache | null; pin: GroupPin | null } | null = null;
             if (input.record) {
                 let value: { v?: number; cache?: GroupChainCache; pin?: GroupPin } | null;
                 try {
@@ -1755,10 +1866,10 @@ export function createGroupSession(host: GroupHost) {
                     )) as typeof value;
                 } catch (error) {
                     // Sealed under an earlier account root: the caller starts over without it.
-                    if (error instanceof CryptoError) return { status: 'record-unreadable' };
+                    if (error instanceof CryptoError) return null;
                     throw error;
                 }
-                if (value?.v !== 1) return { status: 'record-unreadable' };
+                if (value?.v !== 1) return null;
                 record = { cache: value.cache ?? null, pin: value.pin ?? null };
             }
             if (!settingsPins || settingsPins.userId !== userId)
@@ -1766,7 +1877,7 @@ export function createGroupSession(host: GroupHost) {
             const settingsPin = Object.hasOwn(settingsPins.pins, groupId)
                 ? settingsPins.pins[groupId]!
                 : null;
-            pins = [settingsPin, record?.pin ?? null].filter(
+            const pins = [settingsPin, record?.pin ?? null].filter(
                 (pin): pin is GroupPin => pin !== null && pin !== undefined,
             );
             // Marks include what this session already holds: a committed chain, or a fork.
@@ -1775,16 +1886,36 @@ export function createGroupSession(host: GroupHost) {
                 (record?.cache ?? null) !== null ||
                 chains.has(groupId) ||
                 forked.has(groupId);
-            if (input.joining && input.creating)
-                throw new CryptoError('A family is either joined or created, not both.');
-            // Creation vouches for the first keys only where nothing marks the family (F1).
-            if (input.creating && marks)
-                throw new CryptoError('This device has already checked this family.');
-            // Joining vouches for them only where nothing does either. With marks (a rejoin after
-            // a not-member wipe, which keeps the settings pin) the marks decide the first keys and
-            // the history, and the join mark only adds to them.
-            if (input.joining && !marks) firstKeysChecked = true;
-            if (input.creating) {
+            return { groupId, userId, pins, cache: record?.cache ?? null, marks };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    async function accept(
+        input: GroupRequests['groupAccept'],
+    ): Promise<GroupResults['groupAccept']> {
+        if (input.joining && input.creating)
+            throw new CryptoError('A family is either joined or created, not both.');
+        // Joining always carries the join code the person compared: there is no joining without
+        // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
+        if (input.joining && !input.joining.joinMark)
+            throw new CryptoError('Compare the join code first.');
+        const marked = await marksOf(input);
+        if (!marked) return { status: 'record-unreadable' };
+        const { groupId, userId, pins, cache, marks } = marked;
+        let firstKeysChecked = false;
+        // Creation vouches for the first keys only where nothing marks the family (F1).
+        if (input.creating && marks)
+            throw new CryptoError('This device has already checked this family.');
+        // Joining vouches for them only where nothing does either, through its join mark, which the
+        // chain must pass through (a made-up history gives another code). With marks (a rejoin
+        // after a not-member wipe, which keeps the settings pin) the marks decide the first keys
+        // and the history, and the join mark only adds to them.
+        if (input.joining && !marks) firstKeysChecked = true;
+        if (input.creating) {
+            const { root } = host.unlocked();
+            try {
                 const { secrets } = await openStaged(
                     root,
                     userId,
@@ -1803,9 +1934,9 @@ export function createGroupSession(host: GroupHost) {
                 } finally {
                     zeroSecrets(secrets);
                 }
+            } finally {
+                root.fill(0);
             }
-        } finally {
-            root.fill(0);
         }
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
@@ -1832,7 +1963,7 @@ export function createGroupSession(host: GroupHost) {
                 successions: input.served.successions.map(unwire),
                 mlDsaKeys: { ...input.served.signerKeys },
                 me: { userId, identities },
-                cache: record?.cache ?? null,
+                cache,
                 joinMark: input.joining?.joinMark ?? null,
             });
         } catch (error) {
@@ -1844,16 +1975,6 @@ export function createGroupSession(host: GroupHost) {
             uncommit(groupId, true);
             return { status: 'fork', fork: chain };
         }
-        // A newcomer without a join mark yet has checked the words, nothing more: a view, no mark,
-        // and no chain kept, so nothing seals, opens, stages or trusts through it.
-        if (input.joining && !input.joining.joinMark)
-            return {
-                status: 'accepted',
-                view: viewOf(chain),
-                record: null,
-                pin: null,
-                dropped: [],
-            };
         // Staged calls whose roster the server served and this acceptance took: they landed (another
         // tab sent them, or a resend this tab never heard back from), and go with their secrets.
         // Only after acceptance held, so junk served beside them, or under them, drops nothing.
@@ -1885,6 +2006,39 @@ export function createGroupSession(host: GroupHost) {
         } finally {
             unlocked.root.fill(0);
         }
+    }
+
+    /*
+     * The newcomer's join code, over what route 5 serves (groupJoinPreview):
+     * verified as acceptance would verify it, then nothing done with it. No
+     * commit, no uncommit, no fork set, no staged call dropped, no record or
+     * pin: the chain is dropped here, and the code is all that leaves.
+     */
+    async function joinPreview(
+        input: GroupRequests['groupJoinPreview'],
+    ): Promise<GroupResults['groupJoinPreview']> {
+        const marked = await marksOf(input);
+        if (!marked) return { status: 'record-unreadable' };
+        const { groupId, userId, pins, cache, marks } = marked;
+        const { me, identities } = ownIdentities();
+        if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        const chain = await acceptRosters({
+            groupId,
+            firstKeys: input.served.firstKeys,
+            // With no mark, over the served first keys, for the code only: the person compares it
+            // with the admin's next, and only the acceptance that carries it vouches for anything.
+            firstKeysChecked: !marks,
+            pins,
+            rosters: input.served.rosters.map(unwire),
+            successions: input.served.successions.map(unwire),
+            mlDsaKeys: { ...input.served.signerKeys },
+            me: { userId, identities },
+            cache,
+        });
+        if (chain.status === 'fork') return { status: 'fork', fork: chain };
+        const version = await admittedAt(chain.rosterDigests, input.served.rosters, userId);
+        if (version === null) return { status: 'not-admitted' };
+        return { status: 'code', rosterVersion: version, code: await codeAt(chain, version) };
     }
 
     async function openSeal(
@@ -2663,19 +2817,15 @@ export function createGroupSession(host: GroupHost) {
         input: GroupRequests['groupJoinCode'],
     ): Promise<GroupResults['groupJoinCode']> {
         const chain = committed(input.groupId);
-        const version = input.version;
-        if (!Number.isSafeInteger(version) || version < 1 || version > chain.roster.rosterVersion)
-            throw new CryptoError('This member list is not on the family’s history.');
-        // The group key that roster is under: one above every succession tied to an earlier roster.
-        let keyVersion = 1;
-        for (const out of chain.cache.successions)
-            if (out.lastRosterVersion < version) keyVersion++;
+        const rosters = await onChain(chain.rosterDigests, input.rosters);
+        const version = runStart(rosters, chain.rosterDigests.length, input.userId);
+        if (version === null)
+            throw new CryptoError('This person is not in the family’s member list yet.');
+        const entry = rosterEntry(rosters.get(version)!, input.userId);
         return {
-            code: await joinCode(
-                chain.rosterDigests[version - 1]!,
-                chain.groupKeys[keyVersion - 1]!,
-                keyVersion,
-            ),
+            rosterVersion: version,
+            code: await codeAt(chain, version),
+            pinMatches: input.pin ? entryIsPin(entry, input.pin) : null,
         };
     }
 
@@ -2798,6 +2948,8 @@ export function createGroupSession(host: GroupHost) {
                 return { words: await groupWords(message.input.groupId, message.input.firstKeys) };
             case 'groupAccept':
                 return accept(message.input);
+            case 'groupJoinPreview':
+                return joinPreview(message.input);
             case 'groupOpenSeal':
                 return openSeal(message.input);
             case 'groupOpenArea':

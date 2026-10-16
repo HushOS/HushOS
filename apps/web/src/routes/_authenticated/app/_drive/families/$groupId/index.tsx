@@ -27,6 +27,7 @@ import {
     familiesQueryOptions,
     familyContext,
     familyQueryOptions,
+    firstName,
     firstNames,
     invitationsQueryOptions,
     pendingQueryOptions,
@@ -114,6 +115,10 @@ function FamilyPage() {
     const family = summary.name;
     const names = firstNames(detail.data);
     const result = sync.data?.result;
+    // Let in, but nothing on this device or account checked the family yet: the join code is
+    // compared on the join screen.
+    if (result?.status === 'unchecked')
+        return <Navigate to="/app/families/$groupId/join" params={{ groupId }} replace />;
     const view = result?.status === 'accepted' ? result.view : null;
     const markLeft = detail.data?.due?.markLeft ?? [];
     const ownWrong = view ? view.ownEntryWrongAt.length > 0 : false;
@@ -176,7 +181,16 @@ function FamilyPage() {
                         </AlertDescription>
                     </Alert>
                 )}
-                {sync.data && <NoticeList notices={sync.data.notices} nameOf={() => family} />}
+                {sync.data && (
+                    <NoticeList
+                        notices={sync.data.notices}
+                        nameOf={() => family}
+                        personOf={(id) => {
+                            const waiting = pending.data?.find((at) => at.userId === id);
+                            return waiting ? firstName(waiting.name) : names[id];
+                        }}
+                    />
+                )}
             </div>
 
             {detail.isPending && <SkeletonRows rows={2} />}

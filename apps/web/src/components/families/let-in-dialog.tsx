@@ -15,7 +15,6 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -32,36 +31,31 @@ import {
     familyKeys,
     firstName,
     pendingQueryOptions,
-    pinnedFamilyWords,
     type PendingPerson,
 } from '@/lib/families';
 import { groupsApi } from '@/lib/groups/api';
 import { errorCopy, leftDueCopy, outcomeCopy } from '@/lib/groups/copy';
-import {
-    confirmAdmission,
-    dropAdmission,
-    stageChange,
-    waitingAdmission,
-    type OutboxEntry,
-} from '@/lib/groups/outbox';
+import { memberJoinCode } from '@/lib/groups/join';
+import { dropKeptAdmission, letIn, type OutboxEntry } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
 import { CompareGuidance, WordList } from './word-list';
 
 /*
- * "Let Sam in" (the 1c plan, "The admin's dialog"). Three checks, in order,
- * and one blue button:
+ * "Let Sam in" (docs/groups-design.md 3.2). One check, the blue button, then
+ * one comparison:
  *
  * 1. Sam's twelve words, read from Sam's screen. "They match" saves Sam as
  *    someone you checked (a version 3 pin), which the member list entry is
  *    built from. The keys looked up must be the ones route 16 served for Sam.
- * 2. The family's twelve words, which Sam reads from their screen.
- * 3. Only then is the admitting member list signed (kept on this device,
- *    never sent by itself), and its join code shown for Sam to type.
+ * 2. "Let them in" signs the admitting member list over that pin and sends it
+ *    (letIn). A family that changed meanwhile (409 stale) is signed again over
+ *    the new head and sent, a couple of times at most.
+ * 3. Once it landed, the join code of the member list that let Sam in, worked
+ *    out from this device's committed chain (the stored roster, never the
+ *    staged one), for Sam to compare with their screen.
  *
- * "Let them in" sends it once all three are ticked. A family that changed
- * meanwhile (409 stale) gets a new member list and a new code, read again.
- * Closing the dialog keeps the signed change: reopening, even after a reload,
- * comes back to the same code. "Not now" drops it and turns Sam down.
+ * "Not now" turns Sam down. A send with no answer stays on this device and
+ * goes again later; the code is then under Members ("Show Sam's join code").
  */
 
 type Props = {
@@ -107,25 +101,15 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
     const first = firstName(person.name);
     const [personChecked, setPersonChecked] = useState(false);
     const [personMismatch, setPersonMismatch] = useState(false);
-    const [familyChecked, setFamilyChecked] = useState(false);
-    const [codeTyped, setCodeTyped] = useState(false);
-    // undefined: whatever an earlier visit left waiting (below); null: none, or dropped since.
-    const [entryState, setEntry] = useState<OutboxEntry | null | undefined>(undefined);
-    const [busy, setBusy] = useState<'pin' | 'stage' | 'send' | 'decline' | null>(null);
+    // The join code once Sam is in, from the committed chain.
+    const [admitted, setAdmitted] = useState<string[] | null>(null);
+    const [busy, setBusy] = useState<'pin' | 'send' | 'decline' | null>(null);
     const [error, setError] = useState('');
     const [note, setNote] = useState('');
-
-    // An admission signed before (this tab or an earlier visit) comes back at its join code.
-    const waiting = useQuery({
-        queryKey: ['families', userId, 'family', groupId, 'waiting', person.userId],
-        queryFn: () => waitingAdmission(ctx, groupId, person.userId),
-        staleTime: 0,
-        gcTime: 0,
-        retry: false,
-    });
-    const entry = entryState === undefined ? (waiting.data ?? null) : entryState;
-    // A waiting admission was signed only after both word checks: they were done then.
-    const resumed = entryState === undefined && Boolean(waiting.data);
+    // A kept admission sealed to keys Sam no longer has as checked: dropped only on Maya's say.
+    const [keptOther, setKeptOther] = useState<OutboxEntry | null>(null);
+    // "Sam says they don't match", after Sam is in.
+    const [notMatching, setNotMatching] = useState(false);
 
     const lookup = useQuery({
         queryKey: ['families', userId, 'family', groupId, 'lookup', person.userId],
@@ -137,7 +121,6 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 );
             return found;
         },
-        enabled: !waiting.isPending && entry === null,
         staleTime: Infinity,
         gcTime: 0,
         retry: false,
@@ -150,17 +133,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         !lookup.data.changed &&
         !lookup.data.stale;
     const changedSince = lookup.data?.changed ? lookup.data.pinned : null;
-    const personDone = personChecked || alreadyChecked || resumed;
-    const familyDone = familyChecked || resumed;
-
-    const familyWords = useQuery({
-        queryKey: ['families', userId, 'family', groupId, 'words'],
-        queryFn: () => pinnedFamilyWords(userId, groupId),
-        enabled: !waiting.isPending && entry === null,
-        staleTime: Infinity,
-        gcTime: 0,
-        retry: false,
-    });
+    const personDone = personChecked || alreadyChecked;
 
     async function theyMatch() {
         if (!lookup.data) return;
@@ -179,40 +152,104 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         }
     }
 
-    /* Signs the admitting member list over Sam's checked keys, kept awaiting the code check. */
-    async function stage(message = '') {
-        setBusy('stage');
-        setError('');
+    /*
+     * The join code of the member list that let Sam in, from this device's committed chain, once
+     * Sam's entry there is the keys Maya's pin holds (someone else may have let them in, with
+     * other keys): otherwise no code, and a warning.
+     */
+    async function showCode(message = '') {
+        const { settings } = await readSettingsForWrite(userId);
+        const pin = (settings.contacts[person.userId] ?? null) as unknown as ContactPin | null;
+        const { code, pinMatches } = await memberJoinCode(ctx, groupId, person.userId, pin);
+        if (pinMatches !== true)
+            throw new Error(
+                `${first} is in ${family}, but not with the keys you checked. Don’t compare a join code with them yet: ask whether their account changed, and check their words again.`,
+            );
+        setAdmitted(code);
         setNote(message);
-        setCodeTyped(false);
+        focusStep(3);
+    }
+
+    /* "Let them in": signed over Sam's checked keys and sent; a stale answer signs it again. */
+    async function letThemIn() {
+        setBusy('send');
+        setError('');
+        setNote('');
         try {
-            const fresh = (
-                await queryClient.fetchQuery({
-                    ...pendingQueryOptions(userId, groupId),
-                    staleTime: 0,
-                })
-            ).find((at) => at.userId === person.userId);
-            if (!fresh?.identity) throw new Error(`${first} isn’t waiting to join any more.`);
-            const { settings } = await readSettingsForWrite(userId);
-            const pin = settings.contacts[person.userId];
-            if (!pin) throw new Error(`Check ${first}’s words first.`);
-            const staged = await stageChange(ctx, groupId, {
-                kind: 'admit',
-                userId: person.userId,
-                pin: pin as unknown as ContactPin,
-                served: fresh.identity,
-                roles: fresh.roles,
-            });
-            if (staged.status === 'awaiting-check') {
-                setEntry(staged.entry);
-                focusStep(3);
-                return;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const fresh = (
+                    await queryClient.fetchQuery({
+                        ...pendingQueryOptions(userId, groupId),
+                        staleTime: 0,
+                    })
+                ).find((at) => at.userId === person.userId);
+                if (!fresh?.identity) {
+                    // Let in meanwhile (another manager, or a send this device never heard back
+                    // from): their code is the one to compare.
+                    if (attempt > 0) {
+                        await showCode(`${first} was let in meanwhile. This is their join code.`);
+                        cue('success');
+                        return;
+                    }
+                    throw new Error(`${first} isn’t waiting to join any more.`);
+                }
+                const { settings } = await readSettingsForWrite(userId);
+                const pin = settings.contacts[person.userId];
+                if (!pin) throw new Error(`Check ${first}’s words first.`);
+                const staged = await letIn(ctx, groupId, {
+                    kind: 'admit',
+                    userId: person.userId,
+                    pin: pin as unknown as ContactPin,
+                    served: fresh.identity,
+                    roles: fresh.roles,
+                });
+                if (staged.status === 'kept-other-keys') {
+                    setKeptOther(staged.entry);
+                    return;
+                }
+                if (staged.status === 'not-synced' && staged.sync.status === 'fork')
+                    throw new Error(
+                        `${family}’s member list was shown differently to you. Don’t let anyone in until that’s sorted.`,
+                    );
+                if (staged.status !== 'sent')
+                    throw new Error(`Couldn’t check ${family}. Try again.`);
+                const outcome = staged.outcome;
+                void afterFamilyChange(queryClient, userId);
+                switch (outcome.status) {
+                    case 'landed':
+                        cue('success');
+                        await showCode(
+                            attempt > 0
+                                ? `${family} changed while you were letting ${first} in, so HushOS signed it again.`
+                                : '',
+                        );
+                        return;
+                    case 'stale':
+                        // Dropped and synced by the outbox: signed again over the new head.
+                        continue;
+                    case 'pending':
+                        toast.add({
+                            type: 'info',
+                            title: 'Saved on this device',
+                            description: `HushOS couldn’t reach the server. ${first} is let in once it can; then compare the join code from Members.`,
+                        });
+                        onOpenChange(false);
+                        return;
+                    case 'membership-moved':
+                        cue('error');
+                        setError(
+                            outcome.code === 'left-due'
+                                ? leftDueCopy(outcome.data, { names })
+                                : (outcomeCopy(outcome, { family, person: first, names }) ?? ''),
+                        );
+                        return;
+                    default:
+                        cue('error');
+                        setError(outcomeCopy(outcome, { family, person: first, names }) ?? '');
+                        return;
+                }
             }
-            if (staged.status === 'not-synced' && staged.sync.status === 'fork')
-                throw new Error(
-                    `${family}’s member list was shown differently to you. Don’t let anyone in until that’s sorted.`,
-                );
-            throw new Error(`Couldn’t check ${family}. Try again.`);
+            throw new Error(`${family} keeps changing. Try again in a moment.`);
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family, person: first, names }));
@@ -221,70 +258,35 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         }
     }
 
-    async function letIn() {
-        if (!entry) return;
+    /* Maya drops the kept admission with the old keys; Sam is still waiting, so it never landed. */
+    async function dropAndLetIn() {
+        if (!keptOther) return;
         setBusy('send');
         setError('');
-        setNote('');
         try {
-            const outcome = await confirmAdmission(ctx, entry);
-            void afterFamilyChange(queryClient, userId);
-            switch (outcome.status) {
-                case 'landed':
-                    cue('success');
-                    toast.add({ type: 'success', title: `${first} is in ${family}` });
-                    onOpenChange(false);
-                    return;
-                case 'stale':
-                    // Dropped and synced by the outbox: a new member list and a new code, read again.
-                    setPersonChecked(true);
-                    setFamilyChecked(true);
-                    setEntry(null);
-                    setBusy(null);
-                    await stage(
-                        `The family changed while you were checking. Read ${first} the new join code.`,
-                    );
-                    return;
-                case 'pending':
-                    toast.add({
-                        type: 'info',
-                        title: 'Saved on this device',
-                        description: `HushOS couldn’t reach the server. ${first} is let in once it can.`,
-                    });
-                    onOpenChange(false);
-                    return;
-                case 'membership-moved':
-                    setEntry(null);
-                    setError(
-                        outcome.code === 'left-due'
-                            ? leftDueCopy(outcome.data, { names })
-                            : (outcomeCopy(outcome, { family, person: first, names }) ?? ''),
-                    );
-                    return;
-                case 'dropped':
-                    setEntry(null);
-                    setError(outcomeCopy(outcome) ?? '');
-                    void waiting.refetch();
-                    return;
-                default:
-                    setEntry(null);
-                    cue('error');
-                    setError(outcomeCopy(outcome, { family, person: first, names }) ?? '');
-            }
+            const fresh = (
+                await queryClient.fetchQuery({
+                    ...pendingQueryOptions(userId, groupId),
+                    staleTime: 0,
+                })
+            ).find((at) => at.userId === person.userId);
+            if (!fresh) throw new Error(`${first} isn’t waiting to join any more.`);
+            await dropKeptAdmission(ctx, keptOther);
+            setKeptOther(null);
         } catch (cause) {
             cue('error');
             setError(errorCopy(cause, { family, person: first, names }));
-        } finally {
-            setBusy((current) => (current === 'send' ? null : current));
+            setBusy(null);
+            return;
         }
+        setBusy(null);
+        await letThemIn();
     }
 
     async function notNow() {
         setBusy('decline');
         setError('');
         try {
-            const current = entry ?? (await waitingAdmission(ctx, groupId, person.userId));
-            if (current) await dropAdmission(ctx, current);
             await groupsApi.decline(groupId, person.userId);
             cue('droplet');
             toast.add({
@@ -310,13 +312,13 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         );
     const [confirmingDecline, setConfirmingDecline] = useState(false);
 
-    const loading = waiting.isPending;
     return (
         <>
             <DialogHeader>
                 <DialogTitle>Let {first} in</DialogTitle>
                 <DialogDescription>
-                    Do this with {first} on a call or in person. Three checks, then they’re in.
+                    Do this with {first} on a call or in person. Check their words, let them in,
+                    then compare a join code.
                 </DialogDescription>
             </DialogHeader>
             <div className="flex items-center gap-3">
@@ -328,7 +330,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                     </span>
                 </div>
             </div>
-            {blocked && (
+            {blocked && !admitted && (
                 <p
                     role="alert"
                     className="rounded-xl bg-warning-soft px-3.5 py-3 text-sm text-foreground"
@@ -337,189 +339,141 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 </p>
             )}
             <CompareGuidance />
-            {loading ? (
-                <output className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-                    <Spinner className="size-4" />
-                    Opening
-                </output>
-            ) : (
-                <ol ref={steps} className="flex flex-col gap-6">
-                    <Step
-                        n={1}
-                        title={`${first}’s twelve words`}
-                        done={personDone}
-                        doneLine={
-                            entry
-                                ? `You checked ${first}’s words.`
-                                : alreadyChecked
-                                  ? `You checked ${first}’s words on ${formatDay(lookup.data!.pinned!.pinnedAt)}.`
-                                  : `They match. ${first} is saved as someone you checked.`
-                        }
-                    >
-                        {lookup.isPending ? (
-                            <Spinner className="size-4 text-muted-foreground" />
-                        ) : lookup.isError ? (
-                            <p role="alert" className="text-sm text-destructive">
-                                {errorCopy(lookup.error)}
-                            </p>
-                        ) : !lookup.data.upgraded ? (
-                            <p className="text-sm text-muted-foreground">
-                                {first} needs to sign in to HushOS once more before you can compare
-                                words.
-                            </p>
-                        ) : changedSince && !personChecked ? (
-                            <div className="flex flex-col gap-3">
+            <ol ref={steps} className="flex flex-col gap-6">
+                <Step
+                    n={1}
+                    title={`${first}’s twelve words`}
+                    done={personDone || Boolean(admitted)}
+                    doneLine={
+                        personChecked
+                            ? `They match. ${first} is saved as someone you checked.`
+                            : alreadyChecked
+                              ? `You checked ${first}’s words on ${formatDay(lookup.data!.pinned!.pinnedAt)}.`
+                              : `You checked ${first}’s words.`
+                    }
+                >
+                    {lookup.isPending ? (
+                        <Spinner className="size-4 text-muted-foreground" />
+                    ) : lookup.isError ? (
+                        <p role="alert" className="text-sm text-destructive">
+                            {errorCopy(lookup.error)}
+                        </p>
+                    ) : !lookup.data.upgraded ? (
+                        <p className="text-sm text-muted-foreground">
+                            {first} needs to sign in to HushOS once more before you can compare
+                            words.
+                        </p>
+                    ) : personMismatch ? (
+                        <p role="alert" className="text-sm text-destructive">
+                            Don’t let {first} in. Check the email address with them; if it’s right,
+                            HushOS may not be showing you their real keys.
+                        </p>
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            {changedSince ? (
                                 <p className="rounded-xl bg-accent px-3.5 py-3 text-sm text-accent-foreground">
                                     {first}’s account has changed since you checked it on{' '}
                                     {formatDay(changedSince.pinnedAt)}. That can be a new phone or a
                                     reset, or someone pretending. Compare their words before you let
                                     them in.
                                 </p>
-                                {lookup.data.fingerprint && (
-                                    <FingerprintWords fingerprint={lookup.data.fingerprint} />
-                                )}
-                                <div className="flex flex-wrap gap-2">
-                                    <Button
-                                        variant="outline"
-                                        disabled={busy !== null || personMismatch}
-                                        onClick={() => void theyMatch()}
-                                    >
-                                        {busy === 'pin' ? 'Saving…' : 'They match'}
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        disabled={busy !== null}
-                                        onClick={() => setPersonMismatch(true)}
-                                    >
-                                        They don’t match
-                                    </Button>
-                                </div>
-                                {personMismatch && (
-                                    <p role="alert" className="text-sm text-destructive">
-                                        Don’t let {first} in. Check the email address with them; if
-                                        it’s right, HushOS may not be showing you their real keys.
-                                    </p>
-                                )}
-                            </div>
-                        ) : personMismatch ? (
-                            <p role="alert" className="text-sm text-destructive">
-                                Don’t let {first} in. Check the email address with them; if it’s
-                                right, HushOS may not be showing you their real keys.
-                            </p>
-                        ) : (
-                            <div className="flex flex-col gap-3">
+                            ) : (
                                 <p className="text-sm text-muted-foreground">
-                                    Ask {first} to open Your twelve words (in the account menu) and
-                                    read them to you.
+                                    Ask {first} to read you the twelve words on their join screen.
                                 </p>
-                                {lookup.data.fingerprint && (
-                                    <FingerprintWords fingerprint={lookup.data.fingerprint} />
-                                )}
-                                <div className="flex flex-wrap gap-2">
-                                    <Button
-                                        variant="outline"
-                                        disabled={busy !== null}
-                                        onClick={() => void theyMatch()}
-                                    >
-                                        {busy === 'pin' ? 'Saving…' : 'They match'}
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        disabled={busy !== null}
-                                        onClick={() => setPersonMismatch(true)}
-                                    >
-                                        They don’t match
-                                    </Button>
-                                </div>
-                            </div>
-                        )}
-                    </Step>
-                    <Step
-                        n={2}
-                        title="The family’s twelve words"
-                        done={familyDone && Boolean(entry)}
-                        doneLine={`${first} said the family’s words match.`}
-                    >
-                        {familyWords.isPending ? (
-                            <Spinner className="size-4 text-muted-foreground" />
-                        ) : familyWords.isError ? (
-                            <p role="alert" className="text-sm text-destructive">
-                                {errorCopy(familyWords.error)}
-                            </p>
-                        ) : (
-                            <div className="flex flex-col gap-3">
-                                <p className="text-sm text-muted-foreground">
-                                    Compare these with {first}’s screen, word for word.
-                                </p>
-                                <WordList
-                                    words={familyWords.data}
-                                    label="The family’s twelve words"
-                                    kind="family-words"
-                                />
-                                <label className="flex items-center gap-2.5 text-sm">
-                                    <Checkbox
-                                        checked={familyDone}
-                                        disabled={!personDone}
-                                        onCheckedChange={(checked) =>
-                                            setFamilyChecked(checked === true)
-                                        }
-                                    />
-                                    {first} says they match
-                                </label>
-                            </div>
-                        )}
-                    </Step>
-                    <Step n={3} title="Join code" done={false}>
-                        {entry?.joinCode ? (
-                            <div className="flex flex-col gap-3">
-                                {note && (
-                                    <output className="block text-sm font-medium">{note}</output>
-                                )}
-                                <p className="text-sm text-muted-foreground">
-                                    Read this to {first}. They type it on their screen and check
-                                    that it says member list {entry.joinCode.rosterVersion} too.
-                                </p>
-                                <p className="text-[15px] font-semibold">
-                                    Join code for member list {entry.joinCode.rosterVersion}
-                                </p>
-                                <WordList
-                                    words={entry.joinCode.code}
-                                    label="Join code"
-                                    kind="join-code"
-                                />
-                                <label className="flex items-center gap-2.5 text-sm">
-                                    <Checkbox
-                                        checked={codeTyped}
-                                        onCheckedChange={(checked) =>
-                                            setCodeTyped(checked === true)
-                                        }
-                                    />
-                                    {first} typed the join code
-                                </label>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col gap-2">
-                                <p className="text-sm text-muted-foreground">
-                                    Once both of you have checked the words, HushOS makes a join
-                                    code for {first} to type.
-                                </p>
+                            )}
+                            {lookup.data.fingerprint && (
+                                <FingerprintWords fingerprint={lookup.data.fingerprint} />
+                            )}
+                            <div className="flex flex-wrap gap-2">
                                 <Button
                                     variant="outline"
-                                    className="self-start"
-                                    disabled={
-                                        !personDone ||
-                                        !familyDone ||
-                                        busy !== null ||
-                                        Boolean(blocked)
-                                    }
-                                    onClick={() => void stage()}
+                                    disabled={busy !== null}
+                                    onClick={() => void theyMatch()}
                                 >
-                                    {busy === 'stage' ? 'Making the code…' : 'Show join code'}
+                                    {busy === 'pin' ? 'Saving' : 'They match'}
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    disabled={busy !== null}
+                                    onClick={() => setPersonMismatch(true)}
+                                >
+                                    They don’t match
                                 </Button>
                             </div>
-                        )}
-                    </Step>
-                </ol>
+                        </div>
+                    )}
+                </Step>
+                <Step
+                    n={2}
+                    title={`Let ${first} in`}
+                    done={Boolean(admitted)}
+                    doneLine={`${first} is in ${family}.`}
+                >
+                    <p className="text-sm text-muted-foreground">
+                        Once their words match, let them in. Their screen then shows a join code.
+                    </p>
+                </Step>
+                <Step n={3} title="Compare the join code" done={false}>
+                    {admitted ? (
+                        <div className="flex flex-col gap-3">
+                            {note && <output className="block text-sm font-medium">{note}</output>}
+                            <p className="text-sm text-muted-foreground">
+                                Read all twelve words to {first}. Two are hidden on {first}’s
+                                screen; {first} types those.
+                            </p>
+                            <WordList words={admitted} label="Join code" kind="join-code" />
+                            {notMatching ? (
+                                <div role="alert" className="flex flex-col gap-2 text-sm">
+                                    <p>
+                                        First check that {first} is on their own join screen and
+                                        that you both read this code, word for word. If it still
+                                        doesn’t match, HushOS may be showing {first} a different
+                                        member list.
+                                    </p>
+                                    <p>
+                                        {first} is in {family}’s member list, but their device won’t
+                                        use the family until the codes match, so their folders stay
+                                        closed to them. Don’t share anything with {first} through
+                                        the family until you’ve sorted it out together. Removing
+                                        someone from a family isn’t available in this version yet.
+                                    </p>
+                                </div>
+                            ) : (
+                                <Button
+                                    variant="ghost"
+                                    className="self-start"
+                                    onClick={() => setNotMatching(true)}
+                                >
+                                    {first} says they don’t match
+                                </Button>
+                            )}
+                        </div>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">
+                            After you let {first} in, the two of you compare it here.
+                        </p>
+                    )}
+                </Step>
+            </ol>
+            {keptOther && !admitted && (
+                <div
+                    role="alert"
+                    className="flex flex-col items-start gap-2 rounded-xl bg-warning-soft px-3.5 py-3 text-sm text-foreground"
+                >
+                    <p>
+                        An earlier “Let them in” for {first}, made before their account changed,
+                        hasn’t reached the server, and it is for their old keys. Drop it and let
+                        them in with the keys you just checked.
+                    </p>
+                    <Button
+                        variant="outline"
+                        disabled={busy !== null}
+                        onClick={() => void dropAndLetIn()}
+                    >
+                        Drop it and let them in
+                    </Button>
+                </div>
             )}
             {error && (
                 <p role="alert" className="text-sm text-destructive">
@@ -527,27 +481,31 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                 </p>
             )}
             <div className="flex flex-wrap justify-end gap-2 border-t border-rule pt-4">
-                <Button
-                    variant="outline"
-                    disabled={busy !== null}
-                    onClick={() => setConfirmingDecline(true)}
-                >
-                    {busy === 'decline' ? 'Turning down…' : 'Not now'}
-                </Button>
-                <Button
-                    // A departure to finish first: the server would refuse, and the signed admission go.
-                    disabled={
-                        !entry ||
-                        !personDone ||
-                        !familyDone ||
-                        !codeTyped ||
-                        busy !== null ||
-                        Boolean(blocked)
-                    }
-                    onClick={() => void letIn()}
-                >
-                    {busy === 'send' ? 'Letting them in…' : 'Let them in'}
-                </Button>
+                {admitted ? (
+                    <Button onClick={() => onOpenChange(false)}>Done</Button>
+                ) : (
+                    <>
+                        <Button
+                            variant="outline"
+                            disabled={busy !== null}
+                            onClick={() => setConfirmingDecline(true)}
+                        >
+                            {busy === 'decline' ? 'Turning down' : 'Not now'}
+                        </Button>
+                        <Button
+                            // A departure to finish first: the server would refuse the admission.
+                            disabled={
+                                !personDone ||
+                                busy !== null ||
+                                Boolean(blocked) ||
+                                Boolean(keptOther)
+                            }
+                            onClick={() => void letThemIn()}
+                        >
+                            {busy === 'send' ? 'Letting them in' : 'Let them in'}
+                        </Button>
+                    </>
+                )}
             </div>
             <AlertDialog open={confirmingDecline} onOpenChange={setConfirmingDecline}>
                 <AlertDialogContent>

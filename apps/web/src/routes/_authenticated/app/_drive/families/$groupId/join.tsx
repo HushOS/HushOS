@@ -4,9 +4,8 @@ import { RotateCcwIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
-import { CodeEntry } from '@/components/families/code-entry';
 import { ForkAlert } from '@/components/families/family-alerts';
-import { CompareGuidance, WordList } from '@/components/families/word-list';
+import { CompareGuidance } from '@/components/families/word-list';
 import { FingerprintWords } from '@/components/fingerprint-words';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
@@ -21,15 +20,9 @@ import {
     familyQueryOptions,
     firstName,
 } from '@/lib/families';
-import type { RosterFork, GroupPublicKey } from '@hushos/crypto';
+import type { JoinMark, RosterFork } from '@hushos/crypto';
 import { errorCopy } from '@/lib/groups/copy';
-import {
-    enterJoinCode,
-    familyWords,
-    finishJoin,
-    joinProgress,
-    wordsMatch,
-} from '@/lib/groups/join';
+import { confirmJoin, joinStatus, type JoinOutcome } from '@/lib/groups/join';
 import { cue } from '@/lib/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/families/$groupId/join')({
@@ -38,25 +31,27 @@ export const Route = createFileRoute('/_authenticated/app/_drive/families/$group
 });
 
 /*
- * The newcomer's side (the 1c plan, "Words check and join code"; join.ts):
- * 1. read your own twelve words to the person letting you in, and compare the
- *    family's twelve words with theirs;
- * 2. type the join code they read out, for the member list that lets you in;
- * 3. wait until they have, then this device checks the family from its start
- *    with the code as a mark.
- * Each step survives a reload. A code that doesn't match is typed again: this
- * device can't tell a typo from a different history, and says so.
+ * The newcomer's side (docs/groups-design.md 3.2; join.ts):
+ * 1. read your twelve words to the person letting you in, and wait while they
+ *    check them and let you in;
+ * 2. when their screen shows a join code, they read it out: this device shows
+ *    the code it works out with two words hidden, at positions it picks for
+ *    this showing; the person checks the other ten and types the two. "They
+ *    match" joins only if the two are the code's, with the code as this
+ *    device's mark; anything else keeps nothing and says not to use the family
+ *    yet. The page never says the person was let in: when route 2 says so is
+ *    the server's call, which is why the two words are typed.
+ * Waiting and comparing survive a reload: the code is worked out again, with
+ * new hidden positions.
  */
 
 type Step =
     | { kind: 'loading' }
-    | { kind: 'words'; words: string[]; firstKeys: GroupPublicKey }
-    | { kind: 'mismatch' }
-    /* `version`: the member list the last typed code was for, when it didn't match. */
-    | { kind: 'code'; before: boolean; error: string; mismatch?: boolean; version?: number }
     /* `n` tells one entry into waiting from the next, so polling starts again each time. */
-    /* `later`: the first check waits a poll interval (back from a check that said to recheck). */
-    | { kind: 'waiting'; n: number; later?: boolean }
+    | { kind: 'waiting'; n: number }
+    /* `hidden`: the two positions this showing hides. `changed`: an earlier code no longer holds. */
+    | { kind: 'compare'; mark: JoinMark; hidden: [number, number]; changed?: boolean }
+    | { kind: 'mismatch' }
     | { kind: 'fork'; fork: RosterFork };
 
 const POLL_MS = 3_000;
@@ -69,7 +64,7 @@ function JoinFamily() {
     const ctx = familyContext(userId);
     const families = useQuery(familiesQueryOptions(userId));
     const summary = families.data?.find((family) => family.id === groupId);
-    // Route 3 answers someone who accepted: who manages the family, and the head the code is for.
+    // Route 3 answers someone who accepted: who manages the family.
     const detail = useQuery({
         ...familyQueryOptions(userId, groupId),
         enabled: Boolean(summary),
@@ -78,6 +73,8 @@ function JoinFamily() {
     const [step, setStep] = useState<Step>({ kind: 'loading' });
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    // The two hidden words as typed, for the showing on screen.
+    const [typed, setTyped] = useState<[string, string]>(['', '']);
     const started = useRef(false);
 
     const family = summary?.name ?? 'the family';
@@ -90,18 +87,6 @@ function JoinFamily() {
     const themFull = only
         ? `${only.name}${only.email ? ` (${only.email})` : ''}`
         : 'the person letting you in';
-    // Waiting to be let in, the code is for the member list after the newest; once let in (a
-    // code that didn't match only says so then), for the one that did it, which the other
-    // person's screen names.
-    const admitted = summary?.state === 'active';
-    const nextVersion = detail.data ? detail.data.head.version + 1 : null;
-    // Worded when shown, so it names whoever the page knows by then.
-    const codeError =
-        step.kind !== 'code'
-            ? ''
-            : step.mismatch
-              ? `The join code didn’t match. Check it with ${them} again. If it still doesn’t match after you’ve both read it carefully, HushOS may be showing you a different member list than ${them} sees: don’t use this family until you’ve sorted it out together.`
-              : step.error;
 
     async function joined() {
         cue('success');
@@ -110,37 +95,44 @@ function JoinFamily() {
         await navigate({ to: '/app/families/$groupId', params: { groupId }, replace: true });
     }
 
-    /* Where to resume: the record this device kept, then the words the server serves. */
-    async function resume(options: { fromPoll?: boolean } = {}) {
+    /* Each answer from join.ts, as a step. */
+    function show(outcome: JoinOutcome | { status: 'member' }) {
+        setError('');
+        switch (outcome.status) {
+            case 'joined':
+                return void joined();
+            case 'member':
+                // This device already holds the family: nothing to join.
+                return void navigate({
+                    to: '/app/families/$groupId',
+                    params: { groupId },
+                    replace: true,
+                });
+            case 'waiting':
+                return setStep((current) =>
+                    current.kind === 'waiting' ? current : { kind: 'waiting', n: Date.now() },
+                );
+            case 'compare':
+                if (outcome.changed) cue('error');
+                setTyped(['', '']);
+                return setStep({
+                    kind: 'compare',
+                    mark: outcome.mark,
+                    hidden: outcome.hidden,
+                    changed: outcome.changed,
+                });
+            case 'mismatch':
+                cue('error');
+                return setStep({ kind: 'mismatch' });
+            case 'fork':
+                return setStep({ kind: 'fork', fork: outcome.fork });
+        }
+    }
+
+    async function resume() {
         setError('');
         try {
-            const progress = await joinProgress(ctx, groupId);
-            if (progress.status === 'checked' && progress.joinMark)
-                return setStep({ kind: 'waiting', n: Date.now(), later: options.fromPoll });
-            if (progress.status === 'checked')
-                return setStep({ kind: 'code', before: false, error: '' });
-            // The words were compared over other first keys than the server serves now: that
-            // check no longer holds, and nothing typed since does either (joinProgress cleared it).
-            if (progress.status === 'keys-changed') {
-                cue('error');
-                setError(
-                    `The family’s keys changed since you compared the words. Compare them again with ${them}, and if they don’t match, don’t join.`,
-                );
-            }
-            const words = await familyWords(ctx, groupId);
-            if (words.status === 'already-checked') {
-                // An active member whose devices already hold the family: nothing to join.
-                if (summary?.state === 'active')
-                    return void navigate({
-                        to: '/app/families/$groupId',
-                        params: { groupId },
-                        replace: true,
-                    });
-                // Checked before (a rejoin): the marks decide, so only the code is needed.
-                await wordsMatch(ctx, groupId, words.firstKeys);
-                return setStep({ kind: 'code', before: true, error: '' });
-            }
-            setStep({ kind: 'words', words: words.words, firstKeys: words.firstKeys });
+            show(await joinStatus(ctx, groupId));
         } catch (cause) {
             // The retry button belongs to the loading step: whatever step this came from.
             setStep({ kind: 'loading' });
@@ -157,76 +149,36 @@ function JoinFamily() {
     }, [summary]);
 
     async function match() {
-        if (step.kind !== 'words') return;
+        if (step.kind !== 'compare') return;
         setBusy(true);
         setError('');
         try {
-            setError('');
-            const checked = await wordsMatch(ctx, groupId, step.firstKeys);
-            if (checked.status === 'fork') return setStep({ kind: 'fork', fork: checked.fork });
-            setStep({ kind: 'code', before: checked.status === 'already-checked', error: '' });
+            show(await confirmJoin(ctx, groupId, step.mark, typed));
         } catch (cause) {
             cue('error');
-            setError(
-                cause instanceof Error && /keys changed/.test(cause.message)
-                    ? cause.message
-                    : `Couldn’t check ${family}. Try again.`,
-            );
+            setError(errorCopy(cause, { family }));
         } finally {
             setBusy(false);
         }
     }
 
-    async function saveCode(code: string[], rosterVersion: number) {
-        setBusy(true);
-        try {
-            await enterJoinCode(ctx, groupId, { rosterVersion, code });
-            setStep({ kind: 'waiting', n: Date.now() });
-        } catch (cause) {
-            cue('error');
-            setStep({ kind: 'code', before: false, error: errorCopy(cause, { family }) });
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    // Waiting: route 2 polled through finishJoin until the person is let in.
+    // Waiting: route 2 polled through joinStatus until the person is let in.
     useEffect(() => {
         if (step.kind !== 'waiting') return;
         let active = true;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const tick = async () => {
             try {
-                const outcome = await finishJoin(ctx, groupId);
+                const outcome = await joinStatus(ctx, groupId);
                 if (!active) return;
+                if (outcome.status !== 'waiting') return show(outcome);
                 setError('');
-                switch (outcome.status) {
-                    case 'joined':
-                        return void joined();
-                    case 'code-mismatch':
-                        cue('error');
-                        void families.refetch();
-                        return setStep({
-                            kind: 'code',
-                            before: false,
-                            version: outcome.fork.version,
-                            mismatch: true,
-                            error: '',
-                        });
-                    case 'fork':
-                        return setStep({ kind: 'fork', fork: outcome.fork });
-                    case 'needs-check':
-                        return void resume({ fromPoll: true });
-                    case 'waiting':
-                        break;
-                }
             } catch (cause) {
                 if (active) setError(errorCopy(cause, { family }));
             }
             if (active) timer = setTimeout(() => void tick(), POLL_MS);
         };
-        if (step.later) timer = setTimeout(() => void tick(), POLL_MS);
-        else void tick();
+        timer = setTimeout(() => void tick(), POLL_MS);
         return () => {
             active = false;
             clearTimeout(timer);
@@ -238,25 +190,25 @@ function JoinFamily() {
     // Each step's heading takes focus as the step changes, so a keyboard or screen reader
     // carries on from there rather than from the top of the page.
     const stepHeading = useRef<HTMLHeadingElement>(null);
-    const stepKey = step.kind === 'waiting' ? `waiting:${step.n}` : step.kind;
+    const stepKey =
+        step.kind === 'waiting'
+            ? `waiting:${step.n}`
+            : step.kind === 'compare'
+              ? `compare:${step.hidden.join(',')}:${step.mark.code.join(' ')}`
+              : step.kind;
     useEffect(() => {
         if (stepKey !== 'loading') stepHeading.current?.focus();
     }, [stepKey]);
     const status =
-        step.kind === 'words'
-            ? 'Compare the twelve words.'
-            : step.kind === 'code'
-              ? // A code that didn't match is said once, by its own alert under the fields.
-                codeError
-                  ? ''
-                  : 'Type the join code.'
-              : step.kind === 'waiting'
-                ? `Waiting for ${them} to let you in.`
-                : step.kind === 'mismatch'
-                  ? `Don’t join ${family} yet.`
-                  : step.kind === 'fork'
-                    ? `${family}’s member list was shown differently to you.`
-                    : '';
+        step.kind === 'waiting'
+            ? `Read your twelve words to ${them}, then wait for their join code.`
+            : step.kind === 'compare'
+              ? 'Compare the join code, and type the two hidden words.'
+              : step.kind === 'mismatch'
+                ? `Don’t use ${family} yet.`
+                : step.kind === 'fork'
+                  ? `${family}’s member list was shown differently to you.`
+                  : '';
 
     if (families.isPending) return <SkeletonRows rows={3} />;
     if (families.isError || !summary)
@@ -308,29 +260,89 @@ function JoinFamily() {
                         </Button>
                     </div>
                 )}
-                {step.kind === 'words' && (
-                    <WordsStep
-                        headingRef={stepHeading}
-                        userId={userId}
-                        them={them}
-                        words={step.words}
-                        busy={busy}
-                        onMatch={() => void match()}
-                        onMismatch={() => setStep({ kind: 'mismatch' })}
-                    />
+                {step.kind === 'waiting' && (
+                    <>
+                        <OwnWords userId={userId} them={them} headingRef={stepHeading} />
+                        <section className="flex flex-col items-start gap-2">
+                            <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+                                <Spinner className="size-4 text-muted-foreground" />
+                                Waiting for {them} to let you in
+                            </h2>
+                            <p className="text-sm text-muted-foreground">
+                                Keep this page open. When {them}’s screen shows a join code, they’ll
+                                read it to you. Check the words match and type the two that are
+                                hidden.
+                            </p>
+                        </section>
+                    </>
+                )}
+                {step.kind === 'compare' && (
+                    <section className="flex flex-col gap-3" aria-label="Join code">
+                        <h2
+                            ref={stepHeading}
+                            tabIndex={-1}
+                            className="text-[17px] font-bold outline-none"
+                        >
+                            Compare the join code
+                        </h2>
+                        {step.changed && (
+                            <Alert variant="warning">
+                                <AlertDescription>
+                                    {family}’s member list changed since the code you compared.
+                                    Compare this one with {them}.
+                                </AlertDescription>
+                            </Alert>
+                        )}
+                        <p className="text-[15px]">
+                            When {them}’s screen shows a join code, they’ll read it to you. Check
+                            the words match and type the two that are hidden.
+                        </p>
+                        <HiddenCode
+                            shown={step.mark.code.map((word, at) =>
+                                step.hidden.includes(at) ? null : word,
+                            )}
+                            hidden={step.hidden}
+                            typed={typed}
+                            onType={setTyped}
+                        />
+                        <CompareGuidance />
+                        <div className="flex flex-wrap gap-2">
+                            <Button
+                                disabled={busy || typed.some((word) => !word.trim())}
+                                onClick={() => void match()}
+                            >
+                                {busy ? 'Joining' : 'They match'}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => {
+                                    cue('error');
+                                    setStep({ kind: 'mismatch' });
+                                }}
+                            >
+                                They don’t match
+                            </Button>
+                        </div>
+                    </section>
                 )}
                 {step.kind === 'mismatch' && (
-                    <Alert variant="destructive">
+                    <Alert variant="destructive" data-mismatch>
                         <AlertTitle>
                             <h2 ref={stepHeading} tabIndex={-1} className="outline-none">
-                                Don’t join {family} yet
+                                Don’t use {family} yet
                             </h2>
                         </AlertTitle>
                         <AlertDescription>
                             <p>
-                                The words don’t match, so HushOS may be showing you a different
-                                family than {them} sees. Tell {them}, and compare them again once
-                                you’ve both reloaded.
+                                The join code doesn’t match what {them} sees. HushOS may be showing
+                                you a different member list. Don’t use this family until you’ve
+                                sorted it out together.
+                            </p>
+                            <p className="mt-2">
+                                First check that {them} is reading your join code, not someone
+                                else’s, and that you typed the two hidden words as they read them.
+                                Then compare again: nothing was saved on this device.
                             </p>
                             <Button
                                 variant="outline"
@@ -345,67 +357,6 @@ function JoinFamily() {
                         </AlertDescription>
                     </Alert>
                 )}
-                {step.kind === 'code' && (
-                    <section className="flex flex-col gap-3" aria-label="Join code">
-                        <h2
-                            ref={stepHeading}
-                            tabIndex={-1}
-                            className="text-[17px] font-bold outline-none"
-                        >
-                            Type the join code
-                        </h2>
-                        <p className="text-[15px]">
-                            {step.before
-                                ? `You’ve checked ${family} before. Enter the join code ${them} reads to you.`
-                                : `${them[0]!.toUpperCase()}${them.slice(1)} reads you a join code once you’ve both checked the words. Type it here.`}
-                        </p>
-                        {admitted || step.version !== undefined ? (
-                            <CodeEntry
-                                key={`admitted:${codeError}`}
-                                // The other screen shows the newest member list's code by default.
-                                rosterVersion={Math.max(
-                                    step.version ?? 1,
-                                    detail.data?.head.version ?? 1,
-                                )}
-                                versionEditable
-                                pending={busy}
-                                error={codeError}
-                                onSubmit={(code, version) => void saveCode(code, version)}
-                            />
-                        ) : nextVersion === null ? (
-                            <Spinner className="size-4 text-muted-foreground" />
-                        ) : (
-                            <CodeEntry
-                                key={`waiting:${codeError}`}
-                                rosterVersion={nextVersion}
-                                pending={busy}
-                                error={codeError}
-                                onSubmit={(code, version) => void saveCode(code, version)}
-                            />
-                        )}
-                    </section>
-                )}
-                {step.kind === 'waiting' && (
-                    <section className="flex flex-col items-start gap-3">
-                        <h2
-                            ref={stepHeading}
-                            tabIndex={-1}
-                            className="flex items-center gap-2 text-[15px] font-semibold outline-none"
-                        >
-                            <Spinner className="size-4 text-muted-foreground" />
-                            Waiting for {them} to let you in
-                        </h2>
-                        <p className="text-sm text-muted-foreground">
-                            Keep this page open. It moves on by itself once they have.
-                        </p>
-                        <Button
-                            variant="ghost"
-                            onClick={() => setStep({ kind: 'code', before: false, error: '' })}
-                        >
-                            Enter the join code again
-                        </Button>
-                    </section>
-                )}
                 {step.kind === 'fork' && (
                     <>
                         <h2 ref={stepHeading} tabIndex={-1} className="sr-only">
@@ -419,59 +370,97 @@ function JoinFamily() {
     );
 }
 
-const screenOf = (name: string) =>
-    name.startsWith('the ') ? `the screen of ${name}` : `${name}’s screen`;
-
-function WordsStep({
-    headingRef,
+/* Step 1: this account's own twelve words, which the person letting you in checks. */
+function OwnWords({
     userId,
     them,
-    words,
-    busy,
-    onMatch,
-    onMismatch,
+    headingRef,
 }: {
-    headingRef: RefObject<HTMLHeadingElement | null>;
     userId: string;
     them: string;
-    words: string[];
-    busy: boolean;
-    onMatch: () => void;
-    onMismatch: () => void;
+    headingRef: RefObject<HTMLHeadingElement | null>;
 }) {
     const own = useQuery({ ...ownFingerprintQueryOptions(userId), staleTime: 0 });
     return (
-        <>
-            <section className="flex flex-col gap-3" aria-label="Your twelve words">
-                <h2 ref={headingRef} tabIndex={-1} className="text-[17px] font-bold outline-none">
-                    Read your twelve words to {them}
-                </h2>
-                {own.isPending ? (
-                    <Spinner className="size-4 text-muted-foreground" />
-                ) : own.isError ? (
-                    <p role="alert" className="text-sm text-destructive">
-                        {errorCopy(own.error)}
-                    </p>
-                ) : (
-                    <FingerprintWords fingerprint={own.data} />
-                )}
-            </section>
-            <section className="flex flex-col gap-3" aria-label="The family’s twelve words">
-                <h2 className="text-[17px] font-bold">The family’s twelve words</h2>
-                <p className="text-sm text-muted-foreground">
-                    Compare these with {screenOf(them)}, word for word.
+        <section className="flex flex-col gap-3" aria-label="Your twelve words">
+            <h2 ref={headingRef} tabIndex={-1} className="text-[17px] font-bold outline-none">
+                Read your twelve words to {them}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+                They check them against what their screen shows for you.
+            </p>
+            {own.isPending ? (
+                <Spinner className="size-4 text-muted-foreground" />
+            ) : own.isError ? (
+                <p role="alert" className="text-sm text-destructive">
+                    {errorCopy(own.error)}
                 </p>
-                <WordList words={words} label="The family’s twelve words" kind="family-words" />
-                <CompareGuidance />
-                <div className="flex flex-wrap gap-2">
-                    <Button disabled={busy} onClick={onMatch}>
-                        {busy ? 'Checking…' : 'They match'}
-                    </Button>
-                    <Button variant="outline" disabled={busy} onClick={onMismatch}>
-                        They don’t match
-                    </Button>
-                </div>
-            </section>
-        </>
+            ) : (
+                <FingerprintWords fingerprint={own.data} />
+            )}
+            <CompareGuidance />
+        </section>
+    );
+}
+
+/*
+ * The join code with two words hidden: a field for each, typed as the person
+ * letting you in reads them. The hidden words are not in the page at all.
+ */
+function HiddenCode({
+    shown,
+    hidden,
+    typed,
+    onType,
+}: {
+    /* The code with the hidden words already taken out (null). */
+    shown: readonly (string | null)[];
+    hidden: readonly [number, number];
+    typed: readonly [string, string];
+    onType: (typed: [string, string]) => void;
+}) {
+    return (
+        <ol
+            aria-label="Join code"
+            data-kind="join-code"
+            data-words={shown.map((word) => word ?? '?').join(' ')}
+            data-hidden={hidden.map((at) => at + 1).join(' ')}
+            className="grid w-full grid-cols-3 gap-1.5 sm:grid-cols-4"
+        >
+            {shown.map((word, at) => {
+                const slot = hidden.indexOf(at);
+                return (
+                    <li
+                        key={at}
+                        className="flex items-baseline gap-1.5 rounded-md bg-muted px-2.5 py-2"
+                    >
+                        <span
+                            aria-hidden="true"
+                            className="w-4 text-right text-[11px] text-muted-foreground tabular-nums"
+                        >
+                            {at + 1}
+                        </span>
+                        {word !== null || slot < 0 ? (
+                            <span className="text-[15px] font-medium">{word}</span>
+                        ) : (
+                            <input
+                                aria-label={`Word ${at + 1}`}
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={typed[slot]}
+                                onChange={(event) => {
+                                    const next: [string, string] = [typed[0], typed[1]];
+                                    next[slot] = event.target.value;
+                                    onType(next);
+                                }}
+                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                        )}
+                    </li>
+                );
+            })}
+        </ol>
     );
 }

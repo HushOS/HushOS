@@ -1,7 +1,6 @@
 /*
- * Twelve words two people read to each other: the family's words (over its
- * first keys) or a join code (over the roster that lets someone in). The
- * same grid as a person's own words, in the text face: whole words are read
+ * Twelve words two people read to each other: a join code (over the roster
+ * that let someone in). The same grid as a person's own words, in the text face: whole words are read
  * aloud, not characters one by one, so mono (DESIGN.md, Typography) is not
  * for them.
  */
@@ -12,7 +11,7 @@ export function WordList({
 }: {
     words: readonly string[];
     label: string;
-    kind: 'family-words' | 'join-code';
+    kind: 'join-code';
 }) {
     return (
         <ol
