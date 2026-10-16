@@ -1,0 +1,57 @@
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_e01f58307ff0bb 571-572,856-873,2489-2506,2534-2536
+apps/web/src/lib/group-requests.test.ts
+  s_c56e31c87cddde::t_d88bd66788bd74 206-217
+packages/auth/src/server.consent.test.ts
+  s_c56e31c87cddde::t_955776f851d09b 1-95
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_47946aee2a59ea 773-815
+packages/db/src/auth.consent.test.ts
+  s_c56e31c87cddde::t_1df44e3630fcc9 19,262-396
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_704317b0f98cd7 1768-1839,1947
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_38a3b4d48dd11e 3196-3211,3214-3244,3372,3374-3390
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_f451f2cf177c7c 1695-1696,1724,1751-1752,1755-1760,1762,1777-1847
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_d8aa900d2fcf8c 4-11,171-178,186,255-260,691-695,699,758-764,784-796,2316-2334,2450-2531,2534-2538,2541-2655,2703-2747
+packages/db/src/schema/auth.ts
+  s_c56e31c87cddde::t_df26cd232636a9 464-466
+packages/drive/src/api.ts
+  s_c56e31c87cddde::t_da6db0730b799d 96-97
+packages/drive/src/protocol.ts
+  s_c56e31c87cddde::t_63bf44fc122a16 70-71
+packages/drive/src/server.capabilities.test.ts
+  s_c56e31c87cddde::t_1fe477470ffc7f 1-32
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_c0fd33c4f12adb 22,85-86,420-424,2396,2409
+packages/groups/src/api.ts
+  s_c56e31c87cddde::t_0357663e9434b7 73-79,87
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_443954630d1bc2 26-27
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_737a3cdad96158 2,15,30,681-682,685,1565,1629-1998
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_f2da8337a250b5 28,629-634,717-722,1238-1247,1249-1255,1265-1268,1281,1351-1356,1359-1364,1367,1372-1376,1382,1398,1869-1912,1931-1936,1945-1953
+packages/groups/test/kit.ts
+  s_c56e31c87cddde::t_b5702e1efd06ed 242
+packages/logging/src/privacy.ts
+  s_c56e31c87cddde::t_8aec0a57b1f1fb 112,204-207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d7df7297965010b21bd789807e1beb176cda142a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
