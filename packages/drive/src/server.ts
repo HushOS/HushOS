@@ -2338,7 +2338,8 @@ export async function noteReport(operatorUserId: string, reportId: string, note:
 
 type RotationWorkRow = rotationsRepository.RotationWorkNode;
 
-function rotationWorkView(row: RotationWorkRow) {
+/* A node as the rotation work route serves it; a group area's root route serves its root the same way. */
+export function rotationWorkView(row: RotationWorkRow) {
     return {
         ...nodeView(row),
         depth: row.depth,

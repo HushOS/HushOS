@@ -159,6 +159,139 @@ export type RotationWorkNode = NodeRow & {
 };
 
 /*
+ * Each node with everything sealed under its key, as the rotation re-seals it:
+ * its ready versions, its live shares with the grantee's identity, and its live
+ * links, leaving out any share or link whose granter has left the group (the
+ * rotation revokes those as unsealed). Rows in `page` order.
+ */
+async function workNodes(tx: Tx, page: SubtreeRow[]): Promise<RotationWorkNode[]> {
+    const ids = page.map((row) => row.id);
+    const nodes = await selectNodes(tx, ids);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const versions = ids.length
+        ? await tx
+              .select({
+                  id: fileVersions.id,
+                  nodeId: fileVersions.nodeId,
+                  objectId: fileVersions.objectId,
+                  contentKeyEnvelope: fileVersions.contentKeyEnvelope,
+                  contentSuite: driveObjects.contentSuite,
+                  plaintextSize: driveObjects.plaintextSize,
+                  signerId: fileVersions.signerId,
+                  signature: fileVersions.signature,
+              })
+              .from(fileVersions)
+              .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
+              .where(and(inArray(fileVersions.nodeId, ids), eq(fileVersions.status, 'ready')))
+        : [];
+    const shares = ids.length
+        ? await tx
+              .select({
+                  id: driveShares.id,
+                  nodeId: driveShares.nodeId,
+                  granteeUserId: driveShares.granteeUserId,
+                  granteePublicKey: accountIdentities.encryptionPublicKey,
+                  granteeSigningPublicKey: accountIdentities.signingPublicKey,
+                  granteeMlDsaPublicKey: accountIdentities.mlDsaPublicKey,
+                  granteeKemPublicKey: accountIdentities.kemPublicKey,
+                  granteeKeysSignature: accountIdentities.keysSignature,
+                  granteeKeyVersion: accountIdentities.keyVersion,
+                  granteeIdentityVersion: accountIdentities.version,
+              })
+              .from(driveShares)
+              .innerJoin(accountIdentities, eq(accountIdentities.userId, driveShares.granteeUserId))
+              .where(
+                  and(
+                      inArray(driveShares.nodeId, ids),
+                      isNull(driveShares.revokedAt),
+                      // A departed member's share is not handed on: unsealed, rotateNodeIn revokes it.
+                      grantedByMember(driveShares.granterUserId, driveShares.workspaceId),
+                  ),
+              )
+        : [];
+    const links = ids.length
+        ? await tx
+              .select({
+                  id: driveLinks.id,
+                  nodeId: driveLinks.nodeId,
+                  hasPassword: driveLinks.hasPassword,
+                  secretEnvelope: driveLinks.secretEnvelope,
+              })
+              .from(driveLinks)
+              .where(
+                  and(
+                      inArray(driveLinks.nodeId, ids),
+                      isNull(driveLinks.revokedAt),
+                      grantedByMember(driveLinks.granterUserId, driveLinks.workspaceId),
+                  ),
+              )
+        : [];
+    return page.flatMap<RotationWorkNode>((row) => {
+        const node = byId.get(row.id);
+        if (!node) return [];
+        return [
+            {
+                ...node,
+                depth: row.depth,
+                versions: versions
+                    .filter((v) => v.nodeId === row.id && v.objectId && v.contentKeyEnvelope)
+                    .map((v) => ({
+                        id: v.id,
+                        objectId: v.objectId!,
+                        contentKeyEnvelope: v.contentKeyEnvelope!,
+                        contentSuite: v.contentSuite,
+                        plaintextSize: v.plaintextSize,
+                        signer: signerOf(v.signerId),
+                        signature: v.signature,
+                    })),
+                shares: shares
+                    .filter((s) => s.nodeId === row.id)
+                    .map((s) => ({
+                        id: s.id,
+                        granteeUserId: s.granteeUserId,
+                        granteePublicKey: s.granteePublicKey,
+                        granteeSigningPublicKey: s.granteeSigningPublicKey,
+                        granteeMlDsaPublicKey: s.granteeMlDsaPublicKey,
+                        granteeKemPublicKey: s.granteeKemPublicKey,
+                        granteeKeysSignature: s.granteeKeysSignature,
+                        granteeKeyVersion: s.granteeKeyVersion,
+                        granteeIdentityVersion: s.granteeIdentityVersion,
+                    })),
+                links: links
+                    .filter((l) => l.nodeId === row.id)
+                    .map((l) => ({
+                        id: l.id,
+                        hasPassword: l.hasPassword,
+                        secretEnvelope: l.secretEnvelope,
+                    })),
+            },
+        ];
+    });
+}
+
+/*
+ * A workspace's top-level root as a rotation re-seals it, whether or not a
+ * rotation runs: what a group area's roster rotation (route 24, or a family
+ * removal) re-keys in its own transaction, read before any Drive rotation
+ * exists to list it. Null when the workspace has no root.
+ */
+export async function rootWorkIn(tx: Tx, workspaceId: string) {
+    const [root] = await tx
+        .select({ id: driveNodes.id })
+        .from(driveNodes)
+        .where(
+            and(
+                eq(driveNodes.workspaceId, workspaceId),
+                isNull(driveNodes.parentId),
+                isNull(driveNodes.purgedAt),
+            ),
+        );
+    if (!root) return null;
+    const [node] = await workNodes(tx, [{ id: root.id, depth: 0 }]);
+    return node ?? null;
+}
+
+/*
  * The nodes the rotation still has to visit: the root while its own epoch is
  * below the target, anything else while its own epoch or the parent epoch it
  * is wrapped under is. Breadth first, so a batch's parents come before its
@@ -191,114 +324,9 @@ export async function listRotationWork(input: {
             limit ${limit + 1}
         `);
         const page = result.rows.slice(0, limit);
-        const ids = page.map((row) => row.id);
-        const nodes = await selectNodes(tx, ids);
-        const byId = new Map(nodes.map((node) => [node.id, node]));
-        const versions = ids.length
-            ? await tx
-                  .select({
-                      id: fileVersions.id,
-                      nodeId: fileVersions.nodeId,
-                      objectId: fileVersions.objectId,
-                      contentKeyEnvelope: fileVersions.contentKeyEnvelope,
-                      contentSuite: driveObjects.contentSuite,
-                      plaintextSize: driveObjects.plaintextSize,
-                      signerId: fileVersions.signerId,
-                      signature: fileVersions.signature,
-                  })
-                  .from(fileVersions)
-                  .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
-                  .where(and(inArray(fileVersions.nodeId, ids), eq(fileVersions.status, 'ready')))
-            : [];
-        const shares = ids.length
-            ? await tx
-                  .select({
-                      id: driveShares.id,
-                      nodeId: driveShares.nodeId,
-                      granteeUserId: driveShares.granteeUserId,
-                      granteePublicKey: accountIdentities.encryptionPublicKey,
-                      granteeSigningPublicKey: accountIdentities.signingPublicKey,
-                      granteeMlDsaPublicKey: accountIdentities.mlDsaPublicKey,
-                      granteeKemPublicKey: accountIdentities.kemPublicKey,
-                      granteeKeysSignature: accountIdentities.keysSignature,
-                      granteeKeyVersion: accountIdentities.keyVersion,
-                      granteeIdentityVersion: accountIdentities.version,
-                  })
-                  .from(driveShares)
-                  .innerJoin(
-                      accountIdentities,
-                      eq(accountIdentities.userId, driveShares.granteeUserId),
-                  )
-                  .where(
-                      and(
-                          inArray(driveShares.nodeId, ids),
-                          isNull(driveShares.revokedAt),
-                          // A departed member's share is not handed on: unsealed, it is revoked below.
-                          grantedByMember(driveShares.granterUserId, driveShares.workspaceId),
-                      ),
-                  )
-            : [];
-        const links = ids.length
-            ? await tx
-                  .select({
-                      id: driveLinks.id,
-                      nodeId: driveLinks.nodeId,
-                      hasPassword: driveLinks.hasPassword,
-                      secretEnvelope: driveLinks.secretEnvelope,
-                  })
-                  .from(driveLinks)
-                  .where(
-                      and(
-                          inArray(driveLinks.nodeId, ids),
-                          isNull(driveLinks.revokedAt),
-                          grantedByMember(driveLinks.granterUserId, driveLinks.workspaceId),
-                      ),
-                  )
-            : [];
-        const out: RotationWorkNode[] = page.flatMap((row) => {
-            const node = byId.get(row.id);
-            if (!node) return [];
-            return [
-                {
-                    ...node,
-                    depth: row.depth,
-                    versions: versions
-                        .filter((v) => v.nodeId === row.id && v.objectId && v.contentKeyEnvelope)
-                        .map((v) => ({
-                            id: v.id,
-                            objectId: v.objectId!,
-                            contentKeyEnvelope: v.contentKeyEnvelope!,
-                            contentSuite: v.contentSuite,
-                            plaintextSize: v.plaintextSize,
-                            signer: signerOf(v.signerId),
-                            signature: v.signature,
-                        })),
-                    shares: shares
-                        .filter((s) => s.nodeId === row.id)
-                        .map((s) => ({
-                            id: s.id,
-                            granteeUserId: s.granteeUserId,
-                            granteePublicKey: s.granteePublicKey,
-                            granteeSigningPublicKey: s.granteeSigningPublicKey,
-                            granteeMlDsaPublicKey: s.granteeMlDsaPublicKey,
-                            granteeKemPublicKey: s.granteeKemPublicKey,
-                            granteeKeysSignature: s.granteeKeysSignature,
-                            granteeKeyVersion: s.granteeKeyVersion,
-                            granteeIdentityVersion: s.granteeIdentityVersion,
-                        })),
-                    links: links
-                        .filter((l) => l.nodeId === row.id)
-                        .map((l) => ({
-                            id: l.id,
-                            hasPassword: l.hasPassword,
-                            secretEnvelope: l.secretEnvelope,
-                        })),
-                },
-            ];
-        });
         const last = page.at(-1);
         return {
-            nodes: out,
+            nodes: await workNodes(tx, page),
             nextCursor:
                 result.rows.length > limit && last ? { depth: last.depth, id: last.id } : null,
         };

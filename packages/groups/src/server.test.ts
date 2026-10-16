@@ -14,13 +14,16 @@ import { db } from '../../db/src/client';
 import {
     accountIdentityHistory,
     areaGrants,
+    driveLinks,
     driveNodes,
     driveRotations,
+    driveShares,
     groupChainCaches,
     groupHolds,
     groupMemberships,
     groupRosters,
     users,
+    workspaceKeys,
     workspaces,
 } from '../../db/src/schema';
 import { closeDatabase, resetDatabase } from '../../db/test/helpers';
@@ -1994,5 +1997,316 @@ describe("repairing the root's previous envelope (route 28)", () => {
                 .from(driveRotations)
                 .where(eq(driveRotations.workspaceId, fam.areaId)),
         ).toEqual([]);
+    });
+});
+
+describe('the root a roster rotation re-keys (route 29)', () => {
+    /* The area root with a live share and link from the organizer, and one of each revoked. */
+    async function sharedRoot(fam: Family) {
+        const [root] = await db
+            .select()
+            .from(driveNodes)
+            .where(and(eq(driveNodes.workspaceId, fam.areaId), isNull(driveNodes.parentId)));
+        const share = async (to: Member) => {
+            const result = await driveRepository.createShare({
+                workspaceId: fam.areaId,
+                nodeId: root!.id,
+                granterUserId: fam.organizer.userId,
+                granteeUserId: to.userId,
+                role: 'viewer',
+                keyEpoch: root!.keyEpoch,
+                shareEnvelope: randomBytes(driveRepository.SHARE_ENVELOPE_BYTES),
+            });
+            if (result.status !== 'ok') throw new Error(result.status);
+            return result.share.id;
+        };
+        const link = async (hasPassword: boolean) => {
+            const result = await driveRepository.createLink({
+                id: randomUUID(),
+                workspaceId: fam.areaId,
+                nodeId: root!.id,
+                granterUserId: fam.organizer.userId,
+                tokenHash: randomBytes(32),
+                keyEpoch: root!.keyEpoch,
+                linkEnvelope: randomBytes(72),
+                linkSalt: randomBytes(16),
+                secretEnvelope: randomBytes(104),
+                hasPassword,
+                expiresAt: null,
+            });
+            if (result.status !== 'ok') throw new Error(result.status);
+            return result.link.id;
+        };
+        const outsider = await member();
+        const former = await member();
+        const liveShare = await share(outsider);
+        const revokedShare = await share(former);
+        const liveLink = await link(true);
+        const revokedLink = await link(false);
+        await driveRepository.revokeShare(fam.areaId, revokedShare);
+        await driveRepository.revokeLink(fam.areaId, revokedLink);
+        // As it stands now: each grant sealed on it moved its change sequence.
+        const [now] = await db.select().from(driveNodes).where(eq(driveNodes.id, root!.id));
+        return { root: now!, outsider, liveShare, revokedShare, liveLink, revokedLink };
+    }
+
+    /* A rotation of the root as a client builds it from what route 29 served: every share and link re-sealed. */
+    function fromServed(
+        rotation: Awaited<ReturnType<typeof rotateDefaultArea>>['rotation'],
+        served: Awaited<ReturnType<typeof groups.areaRoot>>,
+    ) {
+        return {
+            ...rotation,
+            root: {
+                ...rotation.root,
+                id: served.id,
+                changeSeq: served.changeSeq!,
+                rotated: {
+                    ...rotation.root.rotated!,
+                    shares: served.shares.map((share) => ({
+                        id: share.id,
+                        shareEnvelope: b64(randomBytes(driveRepository.SHARE_ENVELOPE_BYTES)),
+                    })),
+                    links: served.links.map((link) => ({
+                        id: link.id,
+                        linkEnvelope: b64(randomBytes(72)),
+                        secretEnvelope: b64(randomBytes(104)),
+                    })),
+                },
+            },
+        };
+    }
+
+    test('only an active members holder reads it, held or not; others are refused, strangers told nothing', async () => {
+        const { fam, holder } = await withHolder();
+        const plain = await member();
+        await admitted(fam, plain);
+        const waiting = await member();
+        await accepted(fam, waiting);
+        const { root, outsider, liveShare, liveLink } = await sharedRoot(fam);
+        const read = (who: Member, areaId = fam.areaId) =>
+            groups.areaRoot(who.userId, fam.groupId, areaId);
+        const served = await read(holder);
+        expect(served).toMatchObject({
+            id: root.id,
+            kind: 'folder',
+            parentId: null,
+            // The area key version the root is wrapped under: what the rotation replaces.
+            parentKeyEpoch: 1,
+            keyEpoch: root.keyEpoch,
+            keyEnvelope: b64(root.keyEnvelope!),
+            metadataVersion: root.metadataVersion,
+            metadataEnvelope: b64(root.metadataEnvelope!),
+            metadataSigner: { id: fam.organizer.userId },
+            // The precondition route 24 checks: the node's own, not the workspace's.
+            changeSeq: root.changeSeq,
+            prevKeyEnvelope: null,
+            // A folder carries no file versions.
+            versions: [],
+            shares: [
+                {
+                    id: liveShare,
+                    granteeUserId: outsider.userId,
+                    grantee: {
+                        keyVersion: 1,
+                        identityVersion: 2,
+                        encryptionPublicKey: outsider.who.served.encryptionPublicKey,
+                        signingPublicKey: outsider.who.served.signingPublicKey,
+                        kemPublicKey: outsider.who.served.kemPublicKey,
+                    },
+                },
+            ],
+            links: [{ id: liveLink, hasPassword: true, secretEnvelope: expect.any(String) }],
+        });
+        // A member without `members`, and someone accepted but not admitted: refused, never told they are out.
+        for (const who of [plain, waiting])
+            expect(await refusal(read(who))).toMatchObject({ code: 'forbidden', status: 403 });
+        const stranger = await member();
+        expect(await refusal(read(stranger))).toMatchObject({ code: 'not-member', status: 404 });
+        // Another group's area, read through this group, or no area at all.
+        const other = await family();
+        for (const areaId of [other.areaId, randomUUID()])
+            expect(await refusal(read(fam.organizer, areaId))).toMatchObject({
+                code: 'invalid',
+                data: { reason: 'area' },
+            });
+        // A hold stops Drive writes, not a roster's rotation: the held holder still reads what it re-keys.
+        const second = await member();
+        await admitted(fam, second, ['members']);
+        await groups.hold(fam.organizer.userId, fam.groupId, second.userId);
+        expect(await read(second)).toEqual(await read(fam.organizer));
+        // Gone from the group, a former holder is a stranger again.
+        await groupsRepository.leaveGroup(fam.groupId, holder.userId);
+        expect(await refusal(read(holder))).toMatchObject({ code: 'not-member', status: 404 });
+    });
+
+    test('a holder reads it only while holding the area’s current key, from a granter still in the group or their own wrap', async () => {
+        const { fam, holder } = await withHolder();
+        const read = () => groups.areaRoot(holder.userId, fam.groupId, fam.areaId);
+        const noKey = { code: 'forbidden', status: 403 };
+        const rootId = fam.body.area.root.id;
+        const myGrants = and(
+            eq(areaGrants.workspaceId, fam.areaId),
+            eq(areaGrants.granteeUserId, holder.userId),
+        );
+        const myWrap = and(
+            eq(workspaceKeys.workspaceId, fam.areaId),
+            eq(workspaceKeys.userId, holder.userId),
+        );
+        await groups.putSelfGrant(holder.userId, fam.groupId, fam.areaId, {
+            grant: selfGrant(fam.areaId),
+        });
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam, [holder]);
+        await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+            ...rotated.call,
+            rotation,
+            grants,
+        });
+        // A grant of version 2 from the organizer, and their own wrap of version 1.
+        expect(await read()).toMatchObject({ id: rootId, parentKeyEpoch: 2 });
+        // The granter gone from the group, their grant no longer counts.
+        const organizerState = (state: 'active' | 'left') =>
+            db
+                .update(groupMemberships)
+                .set({ state, leftAt: state === 'left' ? new Date() : null })
+                .where(
+                    and(
+                        eq(groupMemberships.groupId, fam.groupId),
+                        eq(groupMemberships.userId, fam.organizer.userId),
+                    ),
+                );
+        await organizerState('left');
+        expect(await refusal(read())).toMatchObject(noKey);
+        await organizerState('active');
+        expect(await read()).toMatchObject({ id: rootId });
+        // Without the version 2 grant, keys of version 1 (a grant and their own wrap) are not enough.
+        await db.delete(areaGrants).where(and(myGrants, eq(areaGrants.workspaceKeyVersion, 2)));
+        expect(await refusal(read())).toMatchObject(noKey);
+        // Their own wrap of version 2 alone is.
+        await db.update(workspaceKeys).set({ workspaceKeyVersion: 2 }).where(myWrap);
+        expect(await read()).toMatchObject({ id: rootId });
+        await db.delete(workspaceKeys).where(myWrap);
+        expect(await refusal(read())).toMatchObject(noKey);
+    });
+
+    test('revoked grants are left out, and a rotation built from what it serves lands and keeps exactly those', async () => {
+        const fam = await family();
+        const { root, liveShare, revokedShare, liveLink, revokedLink } = await sharedRoot(fam);
+        const served = await groups.areaRoot(fam.organizer.userId, fam.groupId, fam.areaId);
+        expect(served.shares.map((share) => share.id)).toEqual([liveShare]);
+        expect(served.links.map((link) => link.id)).toEqual([liveLink]);
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        expect(
+            await groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: fromServed(rotation, served),
+                grants,
+            }),
+        ).toMatchObject({ version: 2 });
+        // What was served is re-sealed at the target; what was revoked stays revoked, at its old epoch.
+        const shares = await db
+            .select()
+            .from(driveShares)
+            .where(inArray(driveShares.id, [liveShare, revokedShare]));
+        expect(shares.find((share) => share.id === liveShare)).toMatchObject({
+            revokedAt: null,
+            keyEpoch: rotation.targetEpoch,
+        });
+        expect(shares.find((share) => share.id === revokedShare)).toMatchObject({
+            revokedAt: expect.any(Date),
+            keyEpoch: root.keyEpoch,
+        });
+        const links = await db
+            .select()
+            .from(driveLinks)
+            .where(inArray(driveLinks.id, [liveLink, revokedLink]));
+        expect(links.find((link) => link.id === liveLink)).toMatchObject({
+            revokedAt: null,
+            keyEpoch: rotation.targetEpoch,
+        });
+        expect(links.find((link) => link.id === revokedLink)).toMatchObject({
+            revokedAt: expect.any(Date),
+            keyEpoch: root.keyEpoch,
+        });
+        // Read again, it is the root the roster left: under the new area key, mid-walk.
+        expect(await groups.areaRoot(fam.organizer.userId, fam.groupId, fam.areaId)).toMatchObject({
+            id: root.id,
+            parentKeyEpoch: 2,
+            keyEpoch: rotation.targetEpoch,
+            keyEnvelope: rotation.root.keyEnvelope,
+            prevKeyEnvelope: rotation.previousRootKeyEnvelope,
+            changeSeq: expect.any(Number),
+            shares: [{ id: liveShare }],
+            links: [{ id: liveLink }],
+        });
+    });
+
+    test('a share or link sealed on the root after the read makes route 24 root-moved, and the grant stays live', async () => {
+        const fam = await family();
+        const { root, liveShare, liveLink } = await sharedRoot(fam);
+        const read = () => groups.areaRoot(fam.organizer.userId, fam.groupId, fam.areaId);
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        const send = async (served: Awaited<ReturnType<typeof read>>) =>
+            groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: fromServed(rotation, served),
+                grants,
+            });
+        const live = async (id: string) => {
+            const [share] = await db.select().from(driveShares).where(eq(driveShares.id, id));
+            const [link] = await db.select().from(driveLinks).where(eq(driveLinks.id, id));
+            const row = share ?? link;
+            return { revokedAt: row!.revokedAt, keyEpoch: row!.keyEpoch };
+        };
+        const unchanged = async () => {
+            const [area] = await db.select().from(workspaces).where(eq(workspaces.id, fam.areaId));
+            expect(area!.workspaceKeyVersion).toBe(1);
+        };
+        // A share made after the read.
+        const before = await read();
+        const late = await member();
+        const shared = await driveRepository.createShare({
+            workspaceId: fam.areaId,
+            nodeId: root.id,
+            granterUserId: fam.organizer.userId,
+            granteeUserId: late.userId,
+            role: 'viewer',
+            keyEpoch: root.keyEpoch,
+            shareEnvelope: randomBytes(driveRepository.SHARE_ENVELOPE_BYTES),
+        });
+        if (shared.status !== 'ok') throw new Error(shared.status);
+        expect(await refusal(send(before))).toMatchObject({ code: 'root-moved', status: 409 });
+        expect(await live(shared.share.id)).toEqual({ revokedAt: null, keyEpoch: root.keyEpoch });
+        await unchanged();
+        // A link made after the next read.
+        const again = await read();
+        const linked = await driveRepository.createLink({
+            id: randomUUID(),
+            workspaceId: fam.areaId,
+            nodeId: root.id,
+            granterUserId: fam.organizer.userId,
+            tokenHash: randomBytes(32),
+            keyEpoch: root.keyEpoch,
+            linkEnvelope: randomBytes(72),
+            linkSalt: randomBytes(16),
+            secretEnvelope: null,
+            hasPassword: false,
+            expiresAt: null,
+        });
+        if (linked.status !== 'ok') throw new Error(linked.status);
+        expect(await refusal(send(again))).toMatchObject({ code: 'root-moved', status: 409 });
+        expect(await live(linked.link.id)).toEqual({ revokedAt: null, keyEpoch: root.keyEpoch });
+        await unchanged();
+        // Read once more, the same roster lands, and every grant on the root is re-sealed.
+        const fresh = await read();
+        expect(fresh.shares.map((share) => share.id).sort()).toEqual(
+            [liveShare, shared.share.id].sort(),
+        );
+        expect(fresh.links.map((link) => link.id).sort()).toEqual(
+            [liveLink, linked.link.id].sort(),
+        );
+        expect(await send(fresh)).toMatchObject({ version: 2 });
+        for (const id of [liveShare, shared.share.id, liveLink, linked.link.id])
+            expect(await live(id)).toEqual({ revokedAt: null, keyEpoch: rotation.targetEpoch });
     });
 });

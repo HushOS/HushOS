@@ -236,6 +236,16 @@ describe('rate limits', () => {
         }
         expect((await handle(request('GET', `groups/${GROUP}/identities`))).status).toBe(429);
     });
+
+    test('the area root shares the read budget, and other reads stay outside it', async () => {
+        const { handle } = setup();
+        const root = `groups/${GROUP}/areas/${USER}/root`;
+        for (let i = 0; i < 300; i += 1)
+            expect((await handle(request('GET', root))).status).toBe(200);
+        expect((await handle(request('GET', root))).status).toBe(429);
+        expect((await handle(request('GET', `groups/${GROUP}/rosters`))).status).toBe(429);
+        expect((await handle(request('GET', `groups/${GROUP}`))).status).toBe(200);
+    });
 });
 
 describe('answers', () => {

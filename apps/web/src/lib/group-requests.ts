@@ -111,7 +111,7 @@ export function createGroupRequestHandler(deps: GroupRequestDeps) {
                 return refuse(401, { message: 'Sign in to open your groups.', code: 'signed-out' });
             const bucket = mutation
                 ? { name: `groups:write:user:${user.id}`, count: 120 }
-                : /\/(rosters|identities)$/.test(pathname)
+                : /\/(rosters|identities)$|\/areas\/[^/]+\/root$/.test(pathname)
                   ? { name: `groups:read:user:${user.id}`, count: 300 }
                   : null;
             if (bucket && !(await deps.consumeRateLimit(bucket.name, bucket.count, 60_000)))
