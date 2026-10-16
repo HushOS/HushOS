@@ -44,6 +44,19 @@ struct SignInView: View {
                             .padding(.horizontal, Alpine.Space.s1)
                     }
 
+                    // Removed from the account on another device: say that, not "signed out".
+                    if model.removedNotice {
+                        Text(UIDevice.current.userInterfaceIdiom == .pad
+                             ? "This iPad was removed from your account. Sign in again to use it."
+                             : "This iPhone was removed from your account. Sign in again to use it.")
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
+                            .background(Alpine.tint, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .highContrastEdge(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .accessibilityAddTraits(.isStaticText)
+                    }
+
                     if !formError.isEmpty {
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: "exclamationmark.circle").font(.body.weight(.semibold))

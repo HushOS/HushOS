@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public struct SessionUser: Codable, Sendable, Equatable {
     public let id: String
@@ -122,9 +125,12 @@ public enum Auth {
         guard let finish = try opaqueFinishLogin(password: password, state: start.state, loginResponse: loginResponse) else {
             throw AuthError.wrongPassword
         }
-        let finished = try await post(origin, "/api/auth/login/finish", [
-            "attemptToken": attemptToken, "finishLoginRequest": finish.request,
-        ])
+        var finishBody: [String: Any] = ["attemptToken": attemptToken, "finishLoginRequest": finish.request]
+        // The device key's proof, only for the account it was made for: the same device comes back.
+        if let proof = deviceProof(identity: SharedKeychain.deviceIdentity, email: email, attemptToken: attemptToken) {
+            finishBody["device"] = proof
+        }
+        let finished = try await post(origin, "/api/auth/login/finish", finishBody)
         guard let userJson = finished.body["user"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account.") }
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
@@ -133,6 +139,10 @@ public enum Auth {
         AccountStore.shared.claim(AccountOwner(userId: user.id, origin: origin))
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
+        // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
+        if let device = SessionDevice(json: finished.body["device"] as? [String: Any]) {
+            try? await registerDevice(if: device, userId: user.id, email: user.email.isEmpty ? email : user.email)
+        }
 
         let envelope = AccountKeyEnvelope(
             envelopeVersion: UInt32((envelopeJson["envelopeVersion"] as? NSNumber)?.intValue ?? 0),
@@ -157,9 +167,52 @@ public enum Auth {
         return user
     }
 
-    /* Who the stored session belongs to, or nil when it is gone. */
-    public static func currentUser() async throws -> SessionUser? {
-        guard let session = SharedKeychain.session, let url = URL(string: session.origin + "/api/auth/session") else { return nil }
+    /*
+     * The device key's proof for `attemptToken`, when `identity` was made for the email being
+     * signed in with; nil otherwise, so a phone shared by two people never tells the server that
+     * one person's device is signing in as the other.
+     */
+    static func deviceProof(identity: SharedKeychain.DeviceIdentity?, email: String, attemptToken: String) -> [String: String]? {
+        guard let identity, identity.emailHash == deviceEmailHash(email: email),
+              let seed = try? base64urlDecode(value: identity.seed),
+              let signature = try? deviceSessionSign(seed: seed, userId: identity.userId, deviceId: identity.deviceId, attemptToken: attemptToken)
+        else { return nil }
+        return ["id": identity.deviceId, "signature": signature]
+    }
+
+    /* "iPhone" or "iPad": the kind of device, never the name its owner gave it. */
+    static func deviceName() async -> String {
+        #if canImport(UIKit)
+        return await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone" }
+        #else
+        return "iPhone"
+        #endif
+    }
+
+    /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */
+    public static func registerDevice(if device: SessionDevice, userId: String, email: String) async throws {
+        guard !device.registered else { return }
+        let key = try deviceSigningCreate()
+        let registered = try await Devices.register(kind: "ios", name: await deviceName(), signingPublicKey: base64urlEncode(bytes: key.publicKey))
+        try SharedKeychain.write(SharedKeychain.deviceIdentityAccount, SharedKeychain.DeviceIdentity(
+            userId: userId, emailHash: deviceEmailHash(email: email), deviceId: registered.id, seed: base64urlEncode(bytes: key.seed)
+        ))
+    }
+
+    /* What the server says about the stored session: whose it is and its device, gone, or gone because its device was removed. */
+    public enum SessionCheck: Sendable, Equatable {
+        case signedIn(SessionUser, SessionDevice?)
+        case ended
+        case removed
+    }
+
+    public static func checkSession() async throws -> SessionCheck {
+        guard let session = SharedKeychain.session else { return .ended }
+        return try await checkSession(session)
+    }
+
+    public static func checkSession(_ session: SharedKeychain.Session) async throws -> SessionCheck {
+        guard let url = URL(string: session.origin + "/api/auth/session") else { return .ended }
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
         let cookieName = session.origin.hasPrefix("https:") ? "__Host-hushos-session" : "hushos-session"
@@ -167,10 +220,15 @@ public enum Auth {
         request.setValue(session.origin, forHTTPHeaderField: "Origin")
         request.setValue(DriveAPI.clientHeader, forHTTPHeaderField: "HushOS-Client")
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
-        struct Body: Decodable { let user: SessionUser? }
-        return try JSONDecoder().decode(Body.self, from: data).user
+        let (data, response) = try await URLSession(configuration: testTransport ?? .ephemeral).data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return .ended }
+        return try SessionCheck(body: data)
+    }
+
+    /* Who the stored session belongs to, or nil when it is gone. */
+    public static func currentUser() async throws -> SessionUser? {
+        if case let .signedIn(user, _) = try await checkSession() { return user }
+        return nil
     }
 
     /* Ends the session on the server (best effort) and forgets it here; AccountStore.wipe removes the rest. */
@@ -180,5 +238,7 @@ public enum Auth {
             _ = try? await post(session.origin, "/api/auth/logout", [:], cookie: "\(cookieName)=\(session.token)")
         }
         SharedKeychain.delete(SharedKeychain.sessionAccount)
+        // Signing out removes this device on the server; its key goes too, so the next sign-in is a new device.
+        SharedKeychain.delete(SharedKeychain.deviceIdentityAccount)
     }
 }

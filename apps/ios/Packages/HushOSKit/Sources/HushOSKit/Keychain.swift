@@ -14,6 +14,8 @@ public enum SharedKeychain {
     public static let sessionAccount = "session"
     public static let deviceAccount = "device"
     public static let configAccount = "config"
+    /* The device key (docs/devices-design.md): survives sign-in, lock and a session ending; goes on sign-out. */
+    public static let deviceIdentityAccount = "device-identity"
 
     public struct Session: Codable, Sendable, Equatable {
         public let origin: String
@@ -36,6 +38,25 @@ public enum SharedKeychain {
         }
         public func open() throws -> (bundle: RememberedDevice, key: Data) {
             (try rememberedDeviceFromJson(json: bundle), try base64urlDecode(value: deviceKey))
+        }
+    }
+
+    /*
+     * This installation's device key: the seed the core made, the device row it belongs to,
+     * the account, and the digest of the email it was made for (never the address). Kept as
+     * the other items are (after first unlock, this device only), so a restored backup is a
+     * new device. The Files extensions share it: the app and its extensions are one device.
+     */
+    public struct DeviceIdentity: Codable, Sendable, Equatable {
+        public let userId: String
+        public let emailHash: String
+        public let deviceId: String
+        public let seed: String
+        public init(userId: String, emailHash: String, deviceId: String, seed: String) {
+            self.userId = userId
+            self.emailHash = emailHash
+            self.deviceId = deviceId
+            self.seed = seed
         }
     }
 
@@ -82,4 +103,5 @@ public enum SharedKeychain {
     public static var session: Session? { read(sessionAccount, as: Session.self) }
     public static var device: Device? { read(deviceAccount, as: Device.self) }
     public static var config: Config? { read(configAccount, as: Config.self) }
+    public static var deviceIdentity: DeviceIdentity? { read(deviceIdentityAccount, as: DeviceIdentity.self) }
 }

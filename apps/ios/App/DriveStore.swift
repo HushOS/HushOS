@@ -307,7 +307,16 @@ final class DriveStore {
     func sync() async {
         if let rotation { await rotation.value }
         // Nil: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
-        guard let touched = try? await vault.sync() else { return }
+        let touched: Set<String>?
+        do {
+            touched = try await vault.sync()
+        } catch {
+            // A session that ended is the one failure the feed reports: the app checks why at once
+            // (this phone may have been removed) and the polling stops.
+            if endsSession(error) { self.error = Self.sessionEnded }
+            return
+        }
+        guard let touched else { return }
         // The feed answered: whatever the last request said, the server is reachable now.
         offline = false
         // Reachable again after whom to trust failed to load: try once more, so "Couldn't check" clears by itself.
@@ -1081,7 +1090,8 @@ final class DriveStore {
         // Coming to the front: kept folders are brought up to date at once, not at the next tick.
         await syncKeptNow()
         var tick = 0
-        while !Task.isCancelled {
+        // A dead session gets no more requests: every one would be another 401.
+        while !Task.isCancelled && error != Self.sessionEnded {
             await sync()
             // A share's kept folders aren't in this drive's feed: they are listed again every half minute.
             tick += 1
