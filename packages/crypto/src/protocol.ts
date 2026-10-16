@@ -29,3 +29,28 @@ export function accountKeyContext(userId: string, keyVersion: number, credential
 export const PASSWORD_WRAPPING_CONTEXT = 'hushos/account-key/password-wrap/v1';
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
+
+/*
+ * The crypto worker's family operations (session-groups.ts, which checks this
+ * list against its own requests at compile time). Their failures leave the
+ * session as it was (packages/auth/src/ordinary-failure.ts).
+ */
+export const GROUP_OPERATIONS = [
+    'groupCreate',
+    'groupWords',
+    'groupAccept',
+    'groupOpenSeal',
+    'groupOpenArea',
+    'groupStage',
+    'groupRestage',
+    'groupDrop',
+    'groupGrants',
+    'groupReseal',
+    'groupVerify',
+    'groupJoinCode',
+    'groupTrustAs',
+    'identityConsent',
+    'groupForget',
+    'groupStoreSeal',
+    'groupStoreOpen',
+] as const;

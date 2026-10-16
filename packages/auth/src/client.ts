@@ -11,6 +11,7 @@ export { pinVerified, settingsRolledBack } from '@hushos/crypto/pins';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
+import { ordinaryFailure } from './ordinary-failure';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
 import {
@@ -132,8 +133,8 @@ export function createAuthClient(
             return await activeTransport.request(operation, input, options);
         } catch (error) {
             // A failed account operation leaves nothing to trust and the worker has
-            // already reset itself, so lock here too. A Drive operation that fails is an
-            // ordinary error for its caller; the transport reports its own death
+            // already reset itself, so lock here too. A Drive or family operation that fails
+            // is an ordinary error for its caller (ordinary-failure.ts); the transport reports its own death
             // through onLock, which is the only Drive failure that should lock. While a
             // sign-in or security change runs, it owns the worker and locks on its own
             // failures: a background read refused by the locked worker (settings, an
@@ -142,7 +143,7 @@ export function createAuthClient(
             const kept = (error as { kept?: unknown } | null)?.kept === true;
             if (
                 !kept &&
-                !String(operation).startsWith('drive') &&
+                !ordinaryFailure(String(operation)) &&
                 !busy &&
                 transport === activeTransport
             )
@@ -572,6 +573,8 @@ export function createAuthClient(
         succeedIdentity: (input: Parameters<AuthApi['succeedIdentity']>[0]) =>
             api.succeedIdentity(input),
         contactSuccession: (userId: string, from: number) => api.contactSuccession(userId, from),
+        backfillSuccessionConsent: (input: Parameters<AuthApi['backfillSuccessionConsent']>[0]) =>
+            api.backfillSuccessionConsent(input),
         upgradeIdentity: (identity: IdentityEnvelope) => api.upgradeIdentity({ identity }),
         lookupContact: (email: string) => api.lookupContact(email),
         settings: () => api.settings(),

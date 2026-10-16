@@ -6,11 +6,19 @@ import { forgetReturn } from '@/lib/return-to';
  * the account here: unfinished uploads are stopped, their journal (file names
  * and chunk digests) emptied and their stashed bytes (decrypted copies)
  * deleted; the mirrored tree (ciphertext, but its shape, sizes and times) is
- * dropped; and a saved return to a link (its key in the fragment) goes. Drive
+ * dropped; families' sealed records and family folders' mirrors are deleted;
+ * and a saved return to a link (its key in the fragment) goes. Drive
  * loads on demand, so a page that never opened it does not pull it in here.
  */
 export async function forgetDevice() {
-    await clearDevice().catch(() => {});
+    try {
+        await clearDevice();
+        return true;
+    } catch (error) {
+        // Signing out goes on regardless; what stayed is said, never silently kept.
+        console.error('Some of what HushOS kept on this device could not be cleared.', error);
+        return false;
+    }
 }
 
 /*
@@ -22,6 +30,9 @@ export async function clearDevice() {
     await Promise.all([
         import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
         import('@/lib/drive').then(({ driveClient }) => driveClient.forgetMirror()),
+        // Families: the sealed chain records, outbox and joins, and every family folder's
+        // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
+        import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
     ]);
 }
 

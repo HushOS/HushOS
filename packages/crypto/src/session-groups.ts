@@ -75,6 +75,7 @@ import { checkId, newId } from './ids';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
 import { ML_DSA_PUBLIC_KEY_BYTES } from './pq';
+import { GROUP_OPERATIONS } from './protocol';
 import type { GranteeSecrets } from './sealing';
 import type { DriveSignedNode, DriveSigners, RotateNodeInput, RotatedNode } from './session';
 import {
@@ -370,9 +371,12 @@ export type GroupRequests = {
      * settingsSeal; refused when it has opened none), and this device's sealed
      * record (its cache and device pin). With no
      * mark at all only two callers may vouch for the first keys: `joining`
-     * (the join flow, after the words check; refused when any mark exists) and
-     * `creating` (the creator's outbox entry, whose seed must derive the served
-     * first keys). A refusal throws, and the group then reads unavailable.
+     * (the join flow, after the words check) and `creating` (the creator's
+     * outbox entry, whose seed must derive the served first keys; refused when
+     * any mark exists). Where marks exist, `joining` vouches for nothing: the
+     * marks decide, and its join mark is one more. A refusal throws, and the
+     * group then reads unavailable. Staged calls whose roster the accepted
+     * chain holds are dropped and named in `dropped`.
      */
     groupAccept: {
         userId: string;
@@ -469,7 +473,10 @@ export type GroupStaged = {
     joinCode: { rosterVersion: number; code: string[] } | null;
     /* Members whose served identity no succession chain reaches from their entry. */
     needsCheck: string[];
+    /* Workspace documents that did not open and were replaced by an empty one of their kind. */
+    replaced: ReplacedDocument[];
 };
+export type ReplacedDocument = { workspaceId: string; kind: string };
 export type GroupResults = {
     groupCreate: {
         outboxId: string;
@@ -486,8 +493,16 @@ export type GroupResults = {
               record: string | null;
               /* The pin after this acceptance, for the settings document; null with `record`. */
               pin: GroupPin | null;
+              /* Outbox ids of this device's staged calls the served chain holds: they landed. */
+              dropped: string[];
           }
-        | { status: 'fork'; fork: RosterFork };
+        | { status: 'fork'; fork: RosterFork }
+        /*
+         * This device's record did not open (sealed under an earlier account
+         * root, after a master-key rotation): nothing was accepted. The caller
+         * deletes it and accepts again without it, against the settings pin.
+         */
+        | { status: 'record-unreadable' };
     groupOpenSeal: { groupKeyVersion: number };
     groupOpenArea: {
         version: number;
@@ -504,7 +519,12 @@ export type GroupResults = {
         pinArea: { workspaceId: string; version: number };
     };
     groupStage: GroupStaged | { outboxId: null; needsCheck: string[] };
-    groupRestage: { outboxId: string; body: RosterCallBody; stagedEnvelope: string };
+    groupRestage: {
+        outboxId: string;
+        body: RosterCallBody;
+        stagedEnvelope: string;
+        replaced: ReplacedDocument[];
+    };
     groupDrop: { dropped: boolean };
     groupGrants: { grants: GrantWire[] };
     groupReseal: { seals: SealWire[] };
@@ -521,28 +541,15 @@ export type GroupResults = {
     identityConsent: { consent: string };
     groupForget: { forgotten: boolean };
     groupStoreSeal: { envelope: string };
-    groupStoreOpen: { value: unknown };
+    /* `unreadable`: sealed under another account root (a master-key rotation) or not this group's. */
+    groupStoreOpen: { value: unknown } | { unreadable: true };
 };
 
-const GROUP_OPERATIONS: readonly (keyof GroupRequests)[] = [
-    'groupCreate',
-    'groupWords',
-    'groupAccept',
-    'groupOpenSeal',
-    'groupOpenArea',
-    'groupStage',
-    'groupRestage',
-    'groupDrop',
-    'groupGrants',
-    'groupReseal',
-    'groupVerify',
-    'groupJoinCode',
-    'groupTrustAs',
-    'identityConsent',
-    'groupForget',
-    'groupStoreSeal',
-    'groupStoreOpen',
-];
+/* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
+type Unlisted = Exclude<keyof GroupRequests, (typeof GROUP_OPERATIONS)[number]>;
+type Unknown = Exclude<(typeof GROUP_OPERATIONS)[number], keyof GroupRequests>;
+const LISTED: [Unlisted, Unknown] extends [never, never] ? true : never = true;
+void LISTED;
 export type GroupMessage = {
     [K in keyof GroupRequests]: { id: number; operation: K; input: GroupRequests[K] };
 }[keyof GroupRequests];
@@ -603,8 +610,11 @@ export type GroupHost = {
  * "hushos/group/device-store/v1"), each record bound to the account, the
  * group and the store it is kept in by its associated data
  * ["hushos/group/device-store",1,userId,groupId,store]. Membership is the
- * social graph, so none of it sits on disk in the clear; a master-key rotation
- * makes it unreadable, and the device then verifies from version 1 again.
+ * social graph, so none of it sits on disk in the clear. A master-key rotation
+ * makes it unreadable: groupAccept answers `record-unreadable` and
+ * groupStoreOpen `unreadable`, and the data layer deletes those records and
+ * verifies from version 1 against the settings pin alone (a family with no pin
+ * either is then unchecked on this device).
  * `chains` (the cache and the device pin) and `staged` (a roster call's
  * secrets) are opened only here; `outbox` and `joins` are the data layer's.
  */
@@ -932,6 +942,46 @@ async function mlDsaKeysOf(identities: ServedKeys[]) {
 }
 function folderMetadata(name: string): NodeMetadata {
     return { name, mime: null, size: null, modified: null };
+}
+
+/*
+ * The empty document of each kind a rotation may have to stand in for one it
+ * cannot open (docs/groups-server.md 8): the kinds shipped clients write
+ * (DOCUMENT_KINDS in @hushos/drive/protocol), each as its reader takes "none"
+ * (emptyRegistry in @hushos/drive/tags).
+ */
+const EMPTY_DOCUMENTS: Record<string, () => unknown> = {
+    tags: () => ({ version: 2, tags: [], items: {} }),
+};
+
+/*
+ * A workspace document as a rotation carries it on: opened under the key
+ * being replaced, or, when it does not open there (bytes a member wrote that
+ * are no document of its kind), an empty document of its kind. Nobody could
+ * read the junk before either, and aborting would let one member's bytes
+ * block every removal of the folder. A kind with no empty form is refused.
+ */
+async function openOrReplace(
+    document: RotatedDocumentWire,
+    key: Uint8Array,
+    workspaceId: string,
+): Promise<{ value: unknown; replaced: boolean }> {
+    try {
+        return {
+            value: await openDocument(decode(document.envelope), key, {
+                workspaceId,
+                kind: document.kind,
+                version: document.version,
+            }),
+            replaced: false,
+        };
+    } catch (error) {
+        const empty = Object.hasOwn(EMPTY_DOCUMENTS, document.kind)
+            ? EMPTY_DOCUMENTS[document.kind]
+            : undefined;
+        if (!(error instanceof CryptoError) || !empty) throw error;
+        return { value: empty(), replaced: true };
+    }
 }
 
 const NO_CHAIN = 'Check the family’s member list first.';
@@ -1353,6 +1403,8 @@ export function createGroupSession(host: GroupHost) {
         rootKey: Uint8Array,
         judge: RecordJudge,
         selfGrant: WorkspaceKeyEnvelope,
+        /* Where documents that did not open, and went on empty, are reported. */
+        replaced: ReplacedDocument[],
     ): Promise<RotationWire> {
         const { workspaceId, targetEpoch, root } = rotation;
         const toVersion = fromVersion + 1;
@@ -1371,11 +1423,8 @@ export function createGroupSession(host: GroupHost) {
             if (kinds.has(document.kind))
                 throw new CryptoError('A folder’s document is sealed again only once.');
             kinds.add(document.kind);
-            const value = await openDocument(decode(document.envelope), fromKey, {
-                workspaceId,
-                kind: document.kind,
-                version: document.version,
-            });
+            const { value, replaced: empty } = await openOrReplace(document, fromKey, workspaceId);
+            if (empty) replaced.push({ workspaceId, kind: document.kind });
             documents.push({
                 kind: document.kind,
                 version: document.version,
@@ -1668,19 +1717,21 @@ export function createGroupSession(host: GroupHost) {
         try {
             if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
             if (input.record) {
-                const value = (await openDeviceRecord(
-                    root,
-                    userId,
-                    groupId,
-                    'chains',
-                    input.record,
-                )) as {
-                    v?: number;
-                    cache?: GroupChainCache;
-                    pin?: GroupPin;
-                };
-                if (value?.v !== 1)
-                    throw new CryptoError('This saved family record is not one this device wrote.');
+                let value: { v?: number; cache?: GroupChainCache; pin?: GroupPin } | null;
+                try {
+                    value = (await openDeviceRecord(
+                        root,
+                        userId,
+                        groupId,
+                        'chains',
+                        input.record,
+                    )) as typeof value;
+                } catch (error) {
+                    // Sealed under an earlier account root: the caller starts over without it.
+                    if (error instanceof CryptoError) return { status: 'record-unreadable' };
+                    throw error;
+                }
+                if (value?.v !== 1) return { status: 'record-unreadable' };
                 record = { cache: value.cache ?? null, pin: value.pin ?? null };
             }
             if (!settingsPins || settingsPins.userId !== userId)
@@ -1699,32 +1750,13 @@ export function createGroupSession(host: GroupHost) {
                 forked.has(groupId);
             if (input.joining && input.creating)
                 throw new CryptoError('A family is either joined or created, not both.');
-            // A device holding marks never needs to vouch for the first keys again (F1).
-            if ((input.joining || input.creating) && marks)
+            // Creation vouches for the first keys only where nothing marks the family (F1).
+            if (input.creating && marks)
                 throw new CryptoError('This device has already checked this family.');
-            // A roster this device staged is committed only through groupDrop and a re-sync, never
-            // by passing its own bytes back as served (the staged-chain rule, F13).
-            const served = new Set(
-                await Promise.all(
-                    input.served.rosters.map(async (roster) => {
-                        try {
-                            return await rosterDigest(decode(roster.statement));
-                        } catch {
-                            return '';
-                        }
-                    }),
-                ),
-            );
-            for (const entry of staged.values())
-                if (
-                    entry.groupId === groupId &&
-                    entry.chain &&
-                    served.has(entry.chain.rosterDigest)
-                )
-                    throw new CryptoError(
-                        'Drop the staged change before checking the family again.',
-                    );
-            if (input.joining) firstKeysChecked = true;
+            // Joining vouches for them only where nothing does either. With marks (a rejoin after
+            // a not-member wipe, which keeps the settings pin) the marks decide the first keys and
+            // the history, and the join mark only adds to them.
+            if (input.joining && !marks) firstKeysChecked = true;
             if (input.creating) {
                 const { secrets } = await openStaged(
                     root,
@@ -1750,6 +1782,18 @@ export function createGroupSession(host: GroupHost) {
         }
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        // Served digests: a roster this device staged that the server now serves landed.
+        const served = new Set(
+            await Promise.all(
+                input.served.rosters.map(async (roster) => {
+                    try {
+                        return await rosterDigest(decode(roster.statement));
+                    } catch {
+                        return '';
+                    }
+                }),
+            ),
+        );
         let chain;
         try {
             chain = await acceptRosters({
@@ -1776,7 +1820,26 @@ export function createGroupSession(host: GroupHost) {
         // A newcomer without a join mark yet has checked the words, nothing more: a view, no mark,
         // and no chain kept, so nothing seals, opens, stages or trusts through it.
         if (input.joining && !input.joining.joinMark)
-            return { status: 'accepted', view: viewOf(chain), record: null, pin: null };
+            return {
+                status: 'accepted',
+                view: viewOf(chain),
+                record: null,
+                pin: null,
+                dropped: [],
+            };
+        // Staged calls whose roster the server served and this acceptance took: they landed (another
+        // tab sent them, or a resend this tab never heard back from), and go with their secrets.
+        // Only after acceptance held, so junk served beside them, or under them, drops nothing.
+        const dropped: string[] = [];
+        for (const [outboxId, entry] of staged)
+            if (
+                entry.groupId === groupId &&
+                entry.chain &&
+                served.has(entry.chain.rosterDigest) &&
+                chain.rosterDigests.includes(entry.chain.rosterDigest)
+            )
+                dropped.push(outboxId);
+        for (const outboxId of dropped) dropStaged(outboxId);
         commit(chain);
         const pin = await pinAfter(pins, chain, input.checkedAt);
         const unlocked = host.unlocked();
@@ -1790,6 +1853,7 @@ export function createGroupSession(host: GroupHost) {
                     pin,
                 }),
                 pin,
+                dropped,
             };
         } finally {
             unlocked.root.fill(0);
@@ -2234,6 +2298,7 @@ export function createGroupSession(host: GroupHost) {
                           }
                         : null,
                 needsCheck,
+                replaced: parts.replaced,
             };
         } finally {
             signer?.zero();
@@ -2332,6 +2397,7 @@ export function createGroupSession(host: GroupHost) {
         // Rotations, judged as the staged roster judges writers (a removal's: the removed as `left`).
         const personal = personalOf(input.writers);
         const rotations: RotationWire[] = [];
+        const replaced: ReplacedDocument[] = [];
         for (const rotation of input.rotations) {
             const workspaceId = rotation.workspaceId;
             const key = secrets.areaKeys.get(workspaceId)!;
@@ -2353,6 +2419,7 @@ export function createGroupSession(host: GroupHost) {
                         ),
                     ),
                     await selfGrantOf(chain.groupId, workspaceId, key, version),
+                    replaced,
                 ),
             );
         }
@@ -2375,7 +2442,7 @@ export function createGroupSession(host: GroupHost) {
             };
         }
         if (grants.length > 0) body.grants = grants;
-        return { body };
+        return { body, replaced };
     }
     async function restage(
         input: GroupRequests['groupRestage'],
@@ -2412,6 +2479,7 @@ export function createGroupSession(host: GroupHost) {
                     throw new CryptoError('This saved change does not match its member list.');
             }
             let body = input.body;
+            const replaced: ReplacedDocument[] = [];
             if (input.rebuild) {
                 const personal = personalOf(input.rebuild.writers);
                 const rebuilt = new Map<string, RotationWire>();
@@ -2444,6 +2512,7 @@ export function createGroupSession(host: GroupHost) {
                                 ),
                             ),
                             existing.selfGrant,
+                            replaced,
                         ),
                     );
                 }
@@ -2457,7 +2526,12 @@ export function createGroupSession(host: GroupHost) {
             dropStaged(record.outboxId);
             staged.set(record.outboxId, { groupId, op: record.op, chain: stagedChain, secrets });
             kept = true;
-            return { outboxId: record.outboxId, body, stagedEnvelope: input.stagedEnvelope };
+            return {
+                outboxId: record.outboxId,
+                body,
+                stagedEnvelope: input.stagedEnvelope,
+                replaced,
+            };
         } finally {
             if (!kept) zeroSecrets(secrets);
         }
@@ -2669,15 +2743,21 @@ export function createGroupSession(host: GroupHost) {
         const { userId, root } = host.unlocked();
         try {
             if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
-            return {
-                value: await openDeviceRecord(
-                    root,
-                    userId,
-                    input.groupId,
-                    input.store,
-                    input.envelope,
-                ),
-            };
+            try {
+                return {
+                    value: await openDeviceRecord(
+                        root,
+                        userId,
+                        input.groupId,
+                        input.store,
+                        input.envelope,
+                    ),
+                };
+            } catch (error) {
+                // Sealed under an earlier account root, or not this group's or store's: never readable here.
+                if (error instanceof CryptoError) return { unreadable: true as const };
+                throw error;
+            }
         } finally {
             root.fill(0);
         }

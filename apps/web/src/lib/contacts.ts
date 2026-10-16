@@ -19,6 +19,7 @@ import {
 } from '@hushos/drive/trust';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
+import { backfillConsent } from '@/lib/consent-backfill';
 import { onStaleIdentity } from '@/lib/drive-api';
 import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
@@ -59,10 +60,12 @@ export const EMPTY: LoadedSettings['settings'] = { version: 2, contacts: {} };
 
 let opened: { userId: string; promise: Promise<OwnIdentity> } | undefined;
 let settingsKeyOpened: { userId: string; promise: Promise<void> } | undefined;
+let consentBackfilled: { userId: string; promise: Promise<{ stored: number }> } | undefined;
 authClient.store.subscribe((state, previous) => {
     if (state.unlockedUserId !== previous.unlockedUserId) {
         opened = undefined;
         settingsKeyOpened = undefined;
+        consentBackfilled = undefined;
     }
 });
 
@@ -137,15 +140,52 @@ export async function succeedIdentity(queryClient: QueryClient, userId: string) 
     // Opened afresh, and signed over the envelope opened: the worker signs only for the identity
     // it holds. Another device replacing it meanwhile is refused by the server as stale.
     const { envelope: identity } = await openIdentity(userId, true);
-    const { identity: next, signature } = await authClient.rpc('identitySucceed', {
-        userId,
-        identity,
-    });
-    await authClient.succeedIdentity({ identity: next, signature });
+    const {
+        identity: next,
+        signature,
+        consent,
+    } = await authClient.rpc('identitySucceed', { userId, identity });
+    // The successor's consent goes with the link (docs/groups-server.md 5): group verdicts ask it
+    // of links a member's entry walks, and without it this link needs the backfill pass later.
+    await authClient.succeedIdentity({ identity: next, signature, consent });
     const opened = await openIdentity(userId, true);
     // The twelve words are over the keys: new keys, new words.
     void queryClient.invalidateQueries({ queryKey: contactKeys.own(userId) });
     return opened;
+}
+
+/*
+ * Once per unlock, beside the shares upgrade: consent for this account's own
+ * earlier successions that landed without it (lib/consent-backfill.ts). The
+ * identity is opened first, with its history, since the worker signs consent
+ * only for two identities it opened one after the other.
+ */
+export function backfillOwnConsent(userId: string) {
+    if (consentBackfilled?.userId !== userId) {
+        const promise = (async () => {
+            requireUnlocked(userId);
+            await openIdentity(userId);
+            return backfillConsent({
+                links: async () => (await authClient.contactSuccession(userId, 1)).links,
+                identities: async () => {
+                    const [{ identity }, { identities: history }] = await Promise.all([
+                        authClient.identity(),
+                        authClient.identityHistory(),
+                    ]);
+                    return { identity, history };
+                },
+                consent: async (old, next) =>
+                    (await authClient.rpc('identityConsent', { userId, old, next })).consent,
+                upload: (oldKeyVersion, consent) =>
+                    authClient.backfillSuccessionConsent({ oldKeyVersion, consent }),
+            });
+        })().catch((error: unknown) => {
+            if (consentBackfilled?.promise === promise) consentBackfilled = undefined;
+            throw error;
+        });
+        consentBackfilled = { userId, promise };
+    }
+    return consentBackfilled.promise;
 }
 
 export const contactKeys = {
@@ -260,6 +300,49 @@ export const ownFingerprintQueryOptions = (userId: string) =>
         staleTime: Infinity,
         retry: 1,
     });
+
+/*
+ * The settings as stored, opened in the worker: settingsOpen is also where the
+ * worker takes the group pins it passes to acceptance as marks, so a family
+ * sync reads them through here before it accepts anything (lib/groups/pins.ts).
+ */
+export function readSettingsForWrite(userId: string) {
+    return readSettings(userId, true);
+}
+
+/*
+ * One compare-and-set save of `settings` over the stored `version`: false when
+ * another device saved in between, for callers that must re-derive what they
+ * save from the newer document (a family pin is re-accepted, never merged blind).
+ */
+export async function compareAndSetSettings(
+    userId: string,
+    version: number,
+    settings: LoadedSettings['settings'],
+) {
+    const { envelope } = await authClient.rpc('settingsSeal', {
+        userId,
+        settingsVersion: version + 1,
+        settings,
+    });
+    try {
+        const saved = await authClient.saveSettings({
+            expectedVersion: version,
+            version: 2,
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+        });
+        rememberSettingsSeen(userId, saved.settingsVersion);
+        boundQueryClient?.setQueryData(contactKeys.settings(userId), {
+            settings,
+            version: saved.settingsVersion,
+        });
+        return true;
+    } catch (error) {
+        if (/another device/.test(String((error as Error).message))) return false;
+        throw error;
+    }
+}
 
 /*
  * Compare-and-set save: re-read, apply the change, seal under the next version,

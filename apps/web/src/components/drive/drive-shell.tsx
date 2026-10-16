@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
-import { bindContactsToQueries } from '@/lib/contacts';
+import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, driveOpenQueryOptions } from '@/lib/drive';
 import { useChangeFeed } from '@/lib/feed';
 import { preloadViewers } from '@/lib/preload';
@@ -77,9 +77,12 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         // keys of their own they replaced, are sealed again. Nothing here follows a contact's
         // served keys: only the person's own Check again does.
         void driveClient.upgradeShares().catch(() => {});
+        // Consent for this account's own earlier key replacements that went up without it:
+        // families check it on the links they follow (docs/groups-server.md 5).
+        void backfillOwnConsent(user.id).catch(() => {});
         // Every viewer and grammar, at idle: what is fetched no longer says what was opened.
         preloadViewers();
-    }, [workspaceId, queryClient]);
+    }, [workspaceId, queryClient, user.id]);
     return null;
 }
 

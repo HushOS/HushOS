@@ -37,6 +37,7 @@ export const authApi: AuthApi = {
     identity: () => unwrap(api().identity.get()),
     identityHistory: () => unwrap(api().identity.history.get()),
     succeedIdentity: (input) => unwrap(api().identity.succession.post(input)),
+    backfillSuccessionConsent: (input) => unwrap(api().identity.succession.consent.post(input)),
     contactSuccession: (userId, from) =>
         unwrap(api().contacts({ userId }).succession.get({ query: { from } })),
     saveSettingsKey: (input) => unwrap(api()['settings-key'].put(input)),
