@@ -55,10 +55,15 @@ data class AlpineColors(
 ) {
     /* The search bar and other quiet fills: ink at 6% over the surface, as the board draws them. */
     val fill: Color get() = ink.copy(alpha = 0.06f).compositeOver(surface)
-    /* Menus and the tonal cards (paste bar, access banner): a little of the tint over the surface. */
-    val menu: Color get() = tint.copy(alpha = 0.22f).compositeOver(surface)
+    /*
+     * Menus and dialogs: in the light, a little of the tint over the surface; in the dark, a
+     * lift of ink instead, so the black stays neutral and blue means only the brand and
+     * selection. The tonal cards (paste bar, access banner) keep the tint in both.
+     */
+    private val neutralDark: Boolean get() = dark && !high
+    val menu: Color get() = if (neutralDark) ink.copy(alpha = 0.08f).compositeOver(surface) else tint.copy(alpha = 0.22f).compositeOver(surface)
     val card: Color get() = tint.copy(alpha = if (high) 1f else 0.45f).compositeOver(surface)
-    val dialog: Color get() = tint.copy(alpha = 0.35f).compositeOver(surface)
+    val dialog: Color get() = if (neutralDark) ink.copy(alpha = 0.11f).compositeOver(surface) else tint.copy(alpha = 0.35f).compositeOver(surface)
     /*
      * Lines between rows. High contrast keeps its strong `rule` for control edges, but a
      * list ruled at that strength reads as a grid; rows get one step above normal instead.
