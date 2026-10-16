@@ -1,0 +1,23 @@
+docs/groups-design.md
+  s_3d879d08b0b9a0::t_2d1e8922139678 118-123,137-138,265,272
+docs/groups-invariants.md
+  s_3d879d08b0b9a0::t_8329f5ab3fa47c 8,46,103,108-109,112,199,201,203-204,206-207,210-212,276,287,290
+docs/groups-threat-model.md
+  s_3d879d08b0b9a0::t_2e553504c583ce 39-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44502cfb9c20aa7b7ac6f2f8b7f61b41c706d3a6",
+  "prompts": {},
+  "sessions": {
+    "s_3d879d08b0b9a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a64487ba989613111",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
