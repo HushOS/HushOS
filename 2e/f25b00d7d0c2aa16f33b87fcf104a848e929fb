@@ -1,0 +1,21 @@
+apps/web/src/lib/drive.ts
+  s_a965107c48ca30::t_c440465c3647fc 185-186
+apps/web/src/lib/format.ts
+  s_a965107c48ca30::t_5a3a6d2e5cfdaf 3-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ef25b00d7d0c2aa16f33b87fcf104a848e929fb",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
