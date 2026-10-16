@@ -53,6 +53,31 @@ function grantContext(
         ]),
     );
 }
+/*
+ * A group area's self-grant is bound to its group under a context of its own,
+ * so the personal workspace path (openWorkspaceKey) can never open one: a
+ * server serving a family folder's self-grant as the personal workspace's
+ * grant gets a refusal, never a workspace the group's version checks skip.
+ */
+function areaSelfGrantContext(
+    userId: string,
+    groupId: string,
+    workspaceId: string,
+    keyVersion: number,
+    workspaceKeyVersion: number,
+) {
+    return new TextEncoder().encode(
+        JSON.stringify([
+            'hushos/group/area-self-grant',
+            1,
+            userId.toLowerCase(),
+            groupId.toLowerCase(),
+            workspaceId.toLowerCase(),
+            keyVersion,
+            workspaceKeyVersion,
+        ]),
+    );
+}
 function checkEnvelope(envelope: WorkspaceKeyEnvelope) {
     if (
         envelope.version !== 1 ||
@@ -71,6 +96,7 @@ async function wrapWorkspaceKey(
     workspaceId: string,
     keyVersion: number,
     workspaceKeyVersion: number,
+    context = grantContext(userId, workspaceId, keyVersion, workspaceKeyVersion),
 ): Promise<WorkspaceKeyEnvelope> {
     const salt = crypto.getRandomValues(new Uint8Array(32));
     const nonce = crypto.getRandomValues(new Uint8Array(24));
@@ -83,14 +109,7 @@ async function wrapWorkspaceKey(
             workspaceKeyVersion,
             wrappingSalt: encode(salt),
             wrappingNonce: encode(nonce),
-            encryptedKey: encode(
-                await encryptKey(
-                    workspaceKey,
-                    wrap,
-                    nonce,
-                    grantContext(userId, workspaceId, keyVersion, workspaceKeyVersion),
-                ),
-            ),
+            encryptedKey: encode(await encryptKey(workspaceKey, wrap, nonce, context)),
         };
     } finally {
         wrap.fill(0);
@@ -110,6 +129,68 @@ export async function createWorkspaceGrant(
         return await wrapWorkspaceKey(workspaceKey, root, userId, workspaceId, keyVersion, 1);
     } finally {
         workspaceKey.fill(0);
+    }
+}
+
+/*
+ * A group area's self-grant (docs/envelope-migrations.md 5): the area key,
+ * opened from its area grant or made for a roster call, wrapped under the
+ * member's own root in the same envelope shape as a personal grant, but bound
+ * to its group under its own context (areaSelfGrantContext). The caller keeps
+ * and zeroes the key.
+ */
+export async function grantAreaKey(
+    workspaceKey: Uint8Array,
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    workspaceId: string,
+    keyVersion: number,
+    workspaceKeyVersion: number,
+): Promise<WorkspaceKeyEnvelope> {
+    if (!WORKSPACE_ID_PATTERN.test(workspaceId) || !WORKSPACE_ID_PATTERN.test(groupId))
+        throw new CryptoError('Invalid workspace id.');
+    if (workspaceKey.length !== 32) throw new CryptoError('Invalid workspace key.');
+    return wrapWorkspaceKey(
+        Uint8Array.from(workspaceKey),
+        root,
+        userId,
+        workspaceId,
+        keyVersion,
+        workspaceKeyVersion,
+        areaSelfGrantContext(userId, groupId, workspaceId, keyVersion, workspaceKeyVersion),
+    );
+}
+
+/* A group area's self-grant, opened only as one of `groupId`'s. The caller owns the key and zeroes it. */
+export async function openAreaSelfGrant(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    envelope: WorkspaceKeyEnvelope,
+) {
+    checkEnvelope(envelope);
+    const wrap = await grantWrappingKey(root, decode(envelope.wrappingSalt, 32));
+    try {
+        const key = await decryptKey(
+            decode(envelope.encryptedKey, 48),
+            wrap,
+            decode(envelope.wrappingNonce, 24),
+            areaSelfGrantContext(
+                userId,
+                groupId,
+                envelope.workspaceId,
+                envelope.keyVersion,
+                envelope.workspaceKeyVersion,
+            ),
+        );
+        if (key.length !== 32) {
+            key.fill(0);
+            throw new CryptoError('Invalid workspace key.');
+        }
+        return key;
+    } finally {
+        wrap.fill(0);
     }
 }
 

@@ -199,6 +199,24 @@ export function nodeKeyContext(ctx: NodeKeyContext) {
         epoch(ctx.keyEpoch, 'key epoch'),
     ]);
 }
+/*
+ * A group area root's previous key wrapped under the new area key by a roster
+ * rotation (option A, docs/groups-server.md 8): the same fields as a node key
+ * envelope under a label of its own, so it opens only through the previous
+ * envelope path and can never pass as the root's current key, which a removed
+ * member holds.
+ */
+export function previousRootKeyContext(ctx: NodeKeyContext) {
+    return context([
+        'hushos/drive/previous-root-key',
+        DRIVE_ENVELOPE_SUITE,
+        id(ctx.workspaceId, 'workspace id'),
+        id(ctx.nodeId, 'node id'),
+        id(ctx.parentId, 'parent id'),
+        epoch(ctx.parentKeyEpoch, 'parent key epoch'),
+        epoch(ctx.keyEpoch, 'key epoch'),
+    ]);
+}
 export function metadataContext(ctx: MetadataContext) {
     return context([
         'hushos/drive/node-meta',
@@ -246,6 +264,30 @@ export async function openNodeKey(
 ) {
     const { nonce, body } = split(envelope, KEY_BYTES + CHUNK_TAG_BYTES);
     const key = await decryptKey(body, parentKey, nonce, nodeKeyContext(ctx));
+    if (key.length !== KEY_BYTES) {
+        key.fill(0);
+        throw new CryptoError('Invalid node key.');
+    }
+    return key;
+}
+
+/* A group area root's previous key under the new area key (previousRootKeyContext). 72 bytes. */
+export async function wrapPreviousRootKey(
+    rootKey: Uint8Array,
+    areaKey: Uint8Array,
+    ctx: NodeKeyContext,
+) {
+    if (rootKey.length !== KEY_BYTES) throw new CryptoError('Invalid node key.');
+    if (ctx.parentId !== ctx.workspaceId) throw new CryptoError('Invalid node key.');
+    return seal(rootKey, areaKey, previousRootKeyContext(ctx));
+}
+export async function openPreviousRootKey(
+    envelope: Uint8Array,
+    areaKey: Uint8Array,
+    ctx: NodeKeyContext,
+) {
+    const { nonce, body } = split(envelope, KEY_BYTES + CHUNK_TAG_BYTES);
+    const key = await decryptKey(body, areaKey, nonce, previousRootKeyContext(ctx));
     if (key.length !== KEY_BYTES) {
         key.fill(0);
         throw new CryptoError('Invalid node key.');

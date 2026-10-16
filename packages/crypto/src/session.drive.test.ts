@@ -1711,7 +1711,7 @@ describe('workspace documents in the session', () => {
         })) as { envelope: string };
         await expect(
             call('driveOpenDocument', { workspaceId: WS, kind: 'tags', version: 1, envelope }),
-        ).resolves.toEqual({ document });
+        ).resolves.toEqual({ document, workspaceKeyVersion: 1 });
         await expect(
             call('driveOpenDocument', { workspaceId: WS, kind: 'tags', version: 2, envelope }),
         ).rejects.toThrow('could not be opened');
