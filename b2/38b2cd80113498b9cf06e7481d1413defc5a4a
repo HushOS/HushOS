@@ -1,0 +1,23 @@
+e2e/devices.spec.ts
+  s_c56e31c87cddde::t_a20345020f1de3 2,38
+e2e/helpers.ts
+  s_c56e31c87cddde::t_5fae19198abdde 215-228,272
+e2e/reports.spec.ts
+  s_c56e31c87cddde::t_549be8735413be 235-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b238b2cd80113498b9cf06e7481d1413defc5a4a",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
