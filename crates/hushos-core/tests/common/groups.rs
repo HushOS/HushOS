@@ -2000,6 +2000,50 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             },
             accepted(3),
         ));
+        // Version 1 keys the server made, under the honest code: the same roster bytes with their
+        // signers' signatures, group-signed again by the server's key. The roster statements name
+        // no group key, so only the code holds the first keys: with the join roster under key 1
+        // the code names key 1, and the chain's is the server's, the warning.
+        let made = pattern(64, 150);
+        let made_key = group_public_key(made.clone()).unwrap();
+        let remade = |at: &SignedGroupStatement| SignedGroupStatement {
+            signature: group_sign(made.clone(), at.statement.clone()).unwrap(),
+            ..at.clone()
+        };
+        cases.push((
+            "join-mark-made-up-first-keys",
+            CaseInput {
+                first_keys: made_key.clone(),
+                rosters: h.rosters.iter().map(remade).collect(),
+                join_mark: Some(JoinMark {
+                    roster_version: 2,
+                    code: join_code(roster_digest(h.rosters[1].statement.clone()), h.key(1), 1).unwrap(),
+                }),
+                ..from_one(&h)
+            },
+            fork("roster", 2),
+        ));
+        // After a succession the code names key 2: the server's key 1 reaches it only through a
+        // succession from its key, which a holder must sign. Without one it is refused. (A holder
+        // who signs one can serve such a history: see the threat model.)
+        let mut forged = group_succession_parse(after.successions[0].statement.clone()).unwrap();
+        forged.old_ed25519_public_key = made_key.ed25519_public_key.clone();
+        forged.old_ml_dsa_public_key = made_key.ml_dsa_public_key.clone();
+        cases.push((
+            "join-mark-made-up-first-keys-succession",
+            CaseInput {
+                first_keys: made_key,
+                rosters: vec![remade(&after.rosters[0]), remade(&after.rosters[1]), after.rosters[2].clone()],
+                successions: vec![signed_by(group_succession_statement(forged).unwrap(), made.clone(), None)],
+                join_mark: Some(JoinMark {
+                    roster_version: 3,
+                    code: join_code(roster_digest(after.rosters[2].statement.clone()), after.key(2), 2)
+                        .unwrap(),
+                }),
+                ..from_one(&after)
+            },
+            refused.clone(),
+        ));
     }
     // r8: key 1, then key 2, then a succession from 2 back to key 1, roster 3 signed under it.
     {
