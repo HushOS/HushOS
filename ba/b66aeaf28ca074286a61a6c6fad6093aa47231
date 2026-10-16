@@ -1,0 +1,132 @@
+apps/web/src/lib/groups/writers.test.ts
+  s_c56e31c87cddde::t_774dc9f7bd27c8 1-184
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/route.tsx
+  s_c56e31c87cddde::t_226d55d00b2127 1-163
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_c56e31c87cddde::t_9f224c6d57ac8e 1-131
+apps/web/src/content/security.mdx
+  s_c56e31c87cddde::t_2c82a39901c6dc 490-491
+apps/web/src/components/drive/area-notice.tsx
+  s_c56e31c87cddde::t_a4ee96e20f16c0 1-56
+apps/web/src/lib/spaces.ts
+  s_c56e31c87cddde::t_73cb40c392276c 1-299
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/trash.tsx
+  s_c56e31c87cddde::t_8c21a7bcaa13b8 1-222
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/f.$folderId.tsx
+  s_c56e31c87cddde::t_8aca0670ed4309 1-119
+packages/drive/src/mirror.ts
+  s_c56e31c87cddde::t_80f341d32b9b34 44-49
+apps/web/src/components/families/new-folder-dialog.tsx
+  s_c56e31c87cddde::t_114b10091f43a1 1-131
+apps/web/src/lib/space-registry.ts
+  s_c56e31c87cddde::t_c7437eb729a755 1-78
+apps/web/src/lib/groups/writers.ts
+  s_c56e31c87cddde::t_a6817a96d173bd 1-75
+  s_c56e31c87cddde::t_8b75426cb08cf6 76-78
+DESIGN.md
+  s_c56e31c87cddde::t_829d47a1eb65e2 315,396
+apps/web/src/components/app-sidebar.tsx
+  s_c56e31c87cddde::t_cc3b7c3d643593 256-257,266-267,272-279,281-283
+apps/web/src/components/drive/check-contact.test.tsx
+  s_c56e31c87cddde::t_fa0835abbbdcb8 1-92
+apps/web/src/components/drive/check-contact.tsx
+  s_c56e31c87cddde::t_f25db152e874a7 17,104-106,108-113,209
+apps/web/src/components/drive/create-folder-dialog.tsx
+  s_c56e31c87cddde::t_754bf20f1d6f3f 16,72-74,98
+apps/web/src/components/drive/details-panel.tsx
+  s_c56e31c87cddde::t_ddb3c3bea15adf 14,20-21,202,320-326,341-344,346-352,405-409,425-451
+apps/web/src/components/drive/drive-shell.tsx
+  s_c56e31c87cddde::t_1d5e3ddadecaa4 13-21,50-52,71,75-76,98-114
+apps/web/src/components/drive/family-area.tsx
+  s_c56e31c87cddde::t_9c958a2655f926 1-57
+apps/web/src/components/drive/folder-view.tsx
+  s_c56e31c87cddde::t_d08fbb118d8f13 11-12,66,68,74,121-129,163,168,184-193,206-211,214,249,300,304,308,314-317,319-327,340,347,381,406,437-442,446-447,484-486,488-489,492-494,501,518-522,527,530,535,541-546,548-549,567,600,626-631,633-634,636,807-811,813,819-824,867-868,905,920,970,975,1010,1098,1124,1201,1236,1266,1270-1272,1288-1290,1292,1323,1331,1339,1372,1374,1447-1448,1456-1457,1472-1487,1504,1527
+apps/web/src/components/drive/move-dialog.tsx
+  s_c56e31c87cddde::t_de2d25db68e41b 17,19,23,72-73,91-93,109
+apps/web/src/components/drive/node-actions.tsx
+  s_c56e31c87cddde::t_02263b511a808d 92-95,106,119,144,148,151-152,155,157-159,162,164,189-198,290-293,295,315-324,340-347,368-373
+apps/web/src/components/drive/preview.tsx
+  s_c56e31c87cddde::t_23abe1ae3fc5af 69-70,256-265
+apps/web/src/components/drive/rename-dialog.tsx
+  s_c56e31c87cddde::t_eab6924dec17ab 15,76
+apps/web/src/components/drive/share-dialog.tsx
+  s_c56e31c87cddde::t_ebbba8097371ea 59-60,124,251-258,455,457,465-469,546-553
+apps/web/src/components/drive/trust-as-family.tsx
+  s_c56e31c87cddde::t_1030afebad5474 1-79
+apps/web/src/components/drive/unverified-mark.tsx
+  s_c56e31c87cddde::t_3b7d5642e25b80 10-11,24,39-41,44,53-59,61-64,70-88,144,217-221,263-265,273-280
+apps/web/src/components/drive/versions-dialog.tsx
+  s_c56e31c87cddde::t_5faa9e7c81fc61 3,33,57,73,78-79,84-86,95,99,109,122,145,242-255,276-288,317
+apps/web/src/lib/contacts.ts
+  s_c56e31c87cddde::t_dee668c5ee8754 789,798-813
+apps/web/src/lib/downloads.ts
+  s_c56e31c87cddde::t_d5892f8a6b2cf8 7,21-23,49
+apps/web/src/lib/drive.ts
+  s_c56e31c87cddde::t_a480538a4f66b5 5,24,54-76,96-101,104-105,150,187-189,197,295-302
+apps/web/src/lib/evidence-packet.ts
+  s_c56e31c87cddde::t_400b0708f24e83 7,65
+apps/web/src/lib/families-keys.test.ts
+  s_c56e31c87cddde::t_e12393e684fee3 1-16
+apps/web/src/lib/families-keys.ts
+  s_c56e31c87cddde::t_251cdbb2beb669 1-23
+apps/web/src/lib/families.ts
+  s_c56e31c87cddde::t_658fa23d269bf0 3,6,100-132,137-138,141-148,151-162,172,185-191
+apps/web/src/lib/family-pin.test.ts
+  s_c56e31c87cddde::t_f792f56fa816e5 1-107
+apps/web/src/lib/family-pin.ts
+  s_c56e31c87cddde::t_7cfe02a60028bc 1-92
+apps/web/src/lib/groups/sync.test.ts
+  s_c56e31c87cddde::t_cdca26bebe6ea1 1,3,133-141,256-324
+apps/web/src/lib/groups/sync.ts
+  s_c56e31c87cddde::t_4310394bf05064 2-8,32,34-44,46-89,262-269,295,313-319,325
+apps/web/src/lib/integrity-lines.test.ts
+  s_c56e31c87cddde::t_51d2235eaccf9b 1,8-9,123-284
+apps/web/src/lib/integrity-lines.ts
+  s_c56e31c87cddde::t_0714ca7c778037 14-18,20-44,48-61,94,96-118,132-143,203-206,208-269
+apps/web/src/lib/sealed-copy.ts
+  s_c56e31c87cddde::t_cb0808ca2578e9 4,106
+apps/web/src/lib/space-registry.test.ts
+  s_c56e31c87cddde::t_8b989f149fd2ff 1-80
+apps/web/src/lib/transfers.ts
+  s_c56e31c87cddde::t_11651e94a912b5 11,33-35,46,65-66
+apps/web/src/lib/trust-as.ts
+  s_c56e31c87cddde::t_5e5ea9a2015e38 1-85
+apps/web/src/lib/uploads.ts
+  s_c56e31c87cddde::t_98111b48284568 4-10,30-33,42-44,65-67,71,133-136
+apps/web/src/routeTree.gen.ts
+  s_c56e31c87cddde::t_fe552d3b666857 67,77-79,372-377,432-449,502,514,516-517,577,579-580,636,648,650-651,706,718,720-721,781,783-784,839,851,853-854,1277-1283,1347-1367,1424-1444,1454,1473-1474
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/index.tsx
+  s_c56e31c87cddde::t_e245f3b3353278 22,56-57,139-145
+apps/web/src/routes/_authenticated/app/_drive/people.tsx
+  s_c56e31c87cddde::t_dce4e68d135cc7 58,263-264
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_5b91ac139f5ab3 2,17-22,61-99,372-507
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_f86639ca4c65b6 54,1680-1726
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_dcad2bf81892fa 2730-2736,2954-2958
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_886e1549565bab 43-48,177-187,189-203,370-372,375,377-381,384-392,404-422,438-450,775-778,1022,1030,1034-1035,1844-1845
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_a0728ab6a0d8f0 7-12,97-98,320-321,378-427
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_ba2e95229d6757 131-140,603-608,615-627
+packages/drive/src/trust.ts
+  s_c56e31c87cddde::t_f33c249ea3e72c 1,16-24,37,76-81,249-259,264,269-272,301-308
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bab66aeaf28ca074286a61a6c6fad6093aa47231",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
