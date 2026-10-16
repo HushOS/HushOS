@@ -19,8 +19,18 @@ import {
     verifyIdentityKeys,
     upgradeIdentity,
     openIdentityMlDsaKey,
+    publicIdentity,
     type IdentityEnvelope,
 } from './identity';
+import {
+    createGroupSession,
+    isGroupMessage,
+    type GroupRequests,
+    type GroupResults,
+    type GroupRotationTrust,
+    type RecordJudge,
+} from './session-groups';
+import type { ServedIdentity } from './group-trust';
 import {
     createSettingsKey,
     openSettings,
@@ -89,6 +99,7 @@ import {
     LEGACY_CONTENT_SUITE,
     openMetadata,
     openNodeKey,
+    openPreviousRootKey,
     openVersion,
     sealMetadata,
     sealVersion,
@@ -112,7 +123,7 @@ import {
     type AccountKeyEnvelope,
 } from './protocol';
 
-export type CryptoRequests = {
+type BaseRequests = {
     securityStart: { password: string; newPassword?: string; action: SecurityAction };
     securityFinish: SecurityChallenge;
     initialize: {
@@ -352,12 +363,40 @@ export type CryptoRequests = {
          */
         signers: DriveSigners;
         nodes: RotateNodeInput[];
+        /*
+         * In a group's area: each record is checked as the group's roster
+         * says (groupVerify), over the staged chain of the roster call named
+         * (a removal's own rotation, judged as the roster marking someone
+         * `left` does) or else the committed one, and a former member's or a
+         * key conflict's record is re-sealed, never re-signed as ordinary.
+         * `signers` still gives the personal keys for writers the roster does
+         * not speak for.
+         */
+        group?: GroupRotationTrust | null;
     };
-    /* Drive: opens the workspace key from the member's grant and keeps it in the worker. */
+    /*
+     * Drive: opens the workspace key from the member's grant and keeps it in
+     * the worker. Never a group's area: those open through groupOpenArea,
+     * which checks their version against the group's member list.
+     */
     driveOpenWorkspace: { userId: string; grant: WorkspaceKeyEnvelope };
-    /* A workspace document (the tag registry) sealed under the open workspace key, bound to the version it becomes. */
+    /*
+     * A workspace document (the tag registry) sealed under the workspace key
+     * the workspace is written under (a group area's latest version on its
+     * member list), bound to the version it becomes. Open says which key
+     * version opened it: a personal workspace's tries every version held,
+     * newest first; a group area's only its write version, since a roster
+     * rotation carries the area's documents sealed again (groupStage).
+     */
     driveSealDocument: { workspaceId: string; kind: string; version: number; document: unknown };
     driveOpenDocument: { workspaceId: string; kind: string; version: number; envelope: string };
+    /*
+     * After the server answers a rotation batch: the nodes it applied (ok or
+     * already) take the keys driveRotateNodes made as their own, the old ones
+     * kept as previous for their unrotated children; drop forgets the rest.
+     */
+    driveRotateCommit: { workspaceId: string; nodeIds: string[] };
+    driveRotateDrop: { workspaceId: string; nodeIds: string[] };
     /*
      * Creates nodes in order: a fresh key each, wrapped under the parent's key, and
      * the metadata sealed under the new key. A parent is the workspace id (the root),
@@ -536,6 +575,7 @@ export type CryptoRequests = {
         version: (DriveVersionEnvelope & { contentNonce: string }) | null;
     };
 };
+export type CryptoRequests = BaseRequests & GroupRequests;
 export type DriveNodeInput = {
     id: string;
     /* Signed with the metadata: a folder's name cannot be passed off as a file's. */
@@ -660,7 +700,7 @@ export type DriveOpenedNode =
 export type DriveOpenedVersion =
     | ({ id: string; error?: undefined } & DriveContentInfo)
     | { id: string; error: string };
-export type CryptoResults = {
+type BaseResults = {
     securityStart: { startLoginRequest: string; registrationRequest: string };
     securityFinish: SecurityUpdate;
     initialize: {
@@ -727,7 +767,9 @@ export type CryptoResults = {
     driveRotateNodes: { nodes: RotatedNode[] };
     driveOpenWorkspace: { workspaceId: string; workspaceKeyVersion: number };
     driveSealDocument: { envelope: string };
-    driveOpenDocument: { document: unknown };
+    driveOpenDocument: { document: unknown; workspaceKeyVersion: number };
+    driveRotateCommit: { committed: number };
+    driveRotateDrop: { dropped: number };
     driveCreateNodes: {
         nodes: {
             id: string;
@@ -776,6 +818,7 @@ export type CryptoResults = {
         content: ({ key: string; nonce: string } & DriveContentInfo) | null;
     };
 };
+export type CryptoResults = BaseResults & GroupResults;
 export type DownloadChunkResult =
     | { ok: true; plaintext: Uint8Array; index: number }
     | { ok: false; status: number; retryable: boolean; message: string };
@@ -796,6 +839,8 @@ export type SessionHooks = {
 };
 /* A personal workspace chosen by the client: its id and the creator's grant. */
 export type WorkspaceSetup = { id: string; grant: WorkspaceKeyEnvelope };
+const KEYS_CHANGED = 'This folder’s keys changed. Reload to continue.';
+const AREA_ROOT = 'A family folder’s top level changes only with the family’s member list.';
 type Message = {
     [K in keyof CryptoRequests]: { id: number; operation: K; input: CryptoRequests[K] };
 }[keyof CryptoRequests];
@@ -815,8 +860,43 @@ export function createCryptoSession() {
     let reauthState = '';
     let accountKey: Uint8Array<ArrayBuffer> | undefined;
     let unlockedUserId: string | null = null;
-    // Drive keys, opened on demand and kept for the session; every one dies with a lock.
-    const workspaceKeys = new Map<string, { key: Uint8Array<ArrayBuffer>; version: number }>();
+    /*
+     * Drive keys, opened on demand and kept for the session; every one dies
+     * with a lock. Each workspace keeps every key version this session opened:
+     * after a group area's rotation, documents not yet re-sealed and anything a
+     * walk has not reached are under an earlier one. Any held version opens;
+     * only the version the workspace is written under (`writeKeyFor`) wraps.
+     */
+    const workspaceKeys = new Map<
+        string,
+        { current: number; keys: Map<number, Uint8Array<ArrayBuffer>> }
+    >();
+    function holdWorkspaceKey(workspaceId: string, version: number, key: Uint8Array<ArrayBuffer>) {
+        const entry = workspaceKeys.get(workspaceId) ?? { current: version, keys: new Map() };
+        entry.keys.get(version)?.fill(0);
+        entry.keys.set(version, key);
+        entry.current = Math.max(entry.current, version);
+        workspaceKeys.set(workspaceId, entry);
+    }
+    /* A workspace's keys and every node key under it, zeroed: a group area the person no longer reads. */
+    function dropWorkspace(workspaceId: string) {
+        const entry = workspaceKeys.get(workspaceId);
+        for (const key of entry?.keys.values() ?? []) key.fill(0);
+        workspaceKeys.delete(workspaceId);
+        for (const pool of [ownNodeKeys, guestNodeKeys, ownPrevNodeKeys, guestPrevNodeKeys])
+            for (const [at, held] of pool)
+                if (at.startsWith(`${workspaceId}/`)) {
+                    held.key.fill(0);
+                    pool.delete(at);
+                }
+        for (const at of rootOpenedUnder.keys())
+            if (at.startsWith(`${workspaceId}/`)) rootOpenedUnder.delete(at);
+        for (const [at, pending] of pendingNodeKeys)
+            if (at.startsWith(`${workspaceId}/`)) {
+                zeroPending(pending);
+                pendingNodeKeys.delete(at);
+            }
+    }
     /*
      * Node keys by workspace and node, in two pools: the account's own
      * workspaces (whose grants this worker opened) and everything reached
@@ -831,6 +911,26 @@ export function createCryptoSession() {
     /* Previous node keys while a rotation runs: what children not yet rotated are still wrapped under. */
     const ownPrevNodeKeys: NodeKeys = new Map();
     const guestPrevNodeKeys: NodeKeys = new Map();
+    /*
+     * Keys a rotation batch made and the server has not confirmed: the fresh
+     * key children are wrapped under in the same walk, and the key it
+     * replaces. They become the node's keys only on driveRotateCommit, so a
+     * refused batch never leaves the device holding a key the server never
+     * stored as current, nor the replaced key passing as a mere previous one.
+     */
+    type PendingKey = {
+        fresh: Uint8Array<ArrayBuffer>;
+        epoch: number;
+        old: Uint8Array<ArrayBuffer>;
+        oldEpoch: number;
+    };
+    const pendingNodeKeys = new Map<string, PendingKey>();
+    /* The area key version each cached group area root key was opened under (driveOpenNodes). */
+    const rootOpenedUnder = new Map<string, number>();
+    function zeroPending(pending: PendingKey) {
+        pending.fresh.fill(0);
+        pending.old.fill(0);
+    }
     const slot = (workspaceId: string, nodeId: string) => `${workspaceId}/${nodeId}`;
     function nodeKeysOf(workspaceId: string) {
         return workspaceKeys.has(workspaceId) ? ownNodeKeys : guestNodeKeys;
@@ -867,14 +967,40 @@ export function createCryptoSession() {
               keysSignature: string | null;
           }
         | undefined;
-    /* Earlier identities of the account, oldest first: what shares sealed before a succession open with. */
+    /*
+     * Earlier identities of the account, oldest first: what shares sealed
+     * before a succession open with. `served` is a version 2 identity's
+     * public keys (null for version 1), proven the account's own when it was
+     * opened: what a group roster's entry for this account may name.
+     */
     let identityHistory: {
         keyVersion: number;
         key: Uint8Array<ArrayBuffer>;
         publicKey: string;
         signingPublicKey: string;
         kem: { publicKey: string; secretKey: Uint8Array<ArrayBuffer> } | null;
+        served: ServedIdentity | null;
     }[] = [];
+    /*
+     * An earlier identity's public keys as one of this account's own, for a
+     * roster entry to be checked against: only a version 2 identity whose
+     * ML-DSA key opens under the root and whose keys statement holds; else
+     * none, and no entry naming it is taken as this account's.
+     */
+    async function ownServed(
+        root: Uint8Array<ArrayBuffer>,
+        userId: string,
+        envelope: IdentityEnvelope,
+    ): Promise<ServedIdentity | null> {
+        if (envelope.version !== 2) return null;
+        try {
+            (await openIdentityMlDsaKey(root, userId, envelope))?.secretKey.fill(0);
+            const served = publicIdentity(envelope);
+            return (await verifyIdentityKeys(userId, served)) ? served : null;
+        } catch {
+            return null;
+        }
+    }
     function forgetIdentity() {
         identityKey?.key.fill(0);
         identityKey?.signingKey.fill(0);
@@ -1127,30 +1253,129 @@ export function createCryptoSession() {
     function forgetDriveKeys() {
         forgetIdentity();
         forgetSettingsKey();
-        for (const entry of workspaceKeys.values()) entry.key.fill(0);
+        groups.forget();
+        for (const entry of workspaceKeys.values())
+            for (const key of entry.keys.values()) key.fill(0);
         for (const pool of [ownNodeKeys, guestNodeKeys, ownPrevNodeKeys, guestPrevNodeKeys]) {
             for (const entry of pool.values()) entry.key.fill(0);
             pool.clear();
         }
+        for (const pending of pendingNodeKeys.values()) zeroPending(pending);
+        pendingNodeKeys.clear();
+        rootOpenedUnder.clear();
         for (const objectId of uploads.keys()) forgetUpload(objectId);
         for (const objectId of downloads.keys()) closeDownload(objectId);
         workspaceKeys.clear();
     }
-    /* The key a node is wrapped under: the workspace key for the root, else its parent's. */
+    /*
+     * The key a node is wrapped under, to open it: the workspace key at that
+     * version for the root (any version held), else its parent's key or, while
+     * a rotation runs, its parent's previous key, or the parent's key a
+     * rotation batch made and the server has not confirmed yet.
+     */
     function parentKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
         if (parentId === workspaceId) {
             const workspace = workspaceKeys.get(workspaceId);
             if (!workspace) throw new CryptoError('Open Drive again to continue.');
-            if (workspace.version !== parentKeyEpoch)
+            const key = workspace.keys.get(parentKeyEpoch);
+            if (!key)
                 throw new CryptoError('This folder was wrapped under an older workspace key.');
-            return workspace.key;
+            return key;
         }
+        const pending = pendingNodeKeys.get(slot(workspaceId, parentId));
+        if (pending?.epoch === parentKeyEpoch) return pending.fresh;
+        if (pending?.oldEpoch === parentKeyEpoch) return pending.old;
         const parent = nodeKey(workspaceId, parentId);
         if (!parent) throw new CryptoError('Open the containing folder first.');
         if (parent.epoch === parentKeyEpoch) return parent.key;
         const previous = prevNodeKeysOf(workspaceId).get(slot(workspaceId, parentId));
         if (previous && previous.epoch === parentKeyEpoch) return previous.key;
         throw new CryptoError('This item was wrapped under an older folder key.');
+    }
+    /*
+     * The workspace key version new things are wrapped under: a group area's
+     * latest on its accepted member list (areaWriteVersion, refused while the
+     * area cannot be written), else the newest this session opened.
+     */
+    function writeVersionOf(workspaceId: string) {
+        const workspace = workspaceKeys.get(workspaceId);
+        if (!workspace) throw new CryptoError('Open Drive again to continue.');
+        const version = groups.writeVersion(workspaceId) ?? workspace.current;
+        const key = workspace.keys.get(version);
+        if (!key) throw new CryptoError(KEYS_CHANGED);
+        return { version, key };
+    }
+    /*
+     * A workspace document. A group area's documents open only under its write
+     * version: they travel with every roster rotation (sealed again in the
+     * call), so one under an older area key is one nobody re-sealed, which a
+     * removed member could have written with the server's help (they are not
+     * signed). A personal workspace's open under any key version held, newest
+     * first. Either way the caller learns the version.
+     */
+    async function openDocumentUnderAny(
+        workspaceId: string,
+        kind: string,
+        version: number,
+        envelope: string,
+    ) {
+        const workspace = workspaceKeys.get(workspaceId);
+        if (!workspace) throw new CryptoError('Open Drive first.');
+        const area = groups.readVersion(workspaceId);
+        const versions = area === null ? [...workspace.keys.keys()].sort((a, b) => b - a) : [area];
+        let failure: unknown = new CryptoError(
+            area === null
+                ? 'This document could not be opened.'
+                : 'This document is not sealed under the folder’s current key.',
+        );
+        for (const keyVersion of versions) {
+            const key = workspace.keys.get(keyVersion);
+            if (!key) continue;
+            try {
+                const document = await openDocument(decode(envelope), key, {
+                    workspaceId,
+                    kind,
+                    version,
+                });
+                return { document, workspaceKeyVersion: keyVersion };
+            } catch (error) {
+                if (area === null) failure = error;
+            }
+        }
+        throw failure;
+    }
+    /*
+     * The key a new or re-wrapped node goes under. For the root, only the
+     * workspace key at the version the workspace is written under, never an
+     * older one held for reading (a group area's rule F9: a withheld rotation
+     * must not keep anyone writing under a key a removed member holds). In a
+     * group area, never a parent's previous key either: that is the key the
+     * rotation is taking away.
+     */
+    function wrapKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
+        if (parentId === workspaceId) {
+            // A family folder has one root, made and re-keyed only with its roster (groupCreate,
+            // groupStage): nothing in Drive wraps a key directly under its area key.
+            if (groups.isArea(workspaceId)) throw new CryptoError(AREA_ROOT);
+            const { version, key } = writeVersionOf(workspaceId);
+            if (version !== parentKeyEpoch) throw new CryptoError(KEYS_CHANGED);
+            return key;
+        }
+        if (!groups.isArea(workspaceId)) return parentKeyFor(workspaceId, parentId, parentKeyEpoch);
+        const pending = pendingNodeKeys.get(slot(workspaceId, parentId));
+        if (pending?.epoch === parentKeyEpoch) return pending.fresh;
+        const parent = nodeKey(workspaceId, parentId);
+        if (!parent) throw new CryptoError('Open the containing folder first.');
+        if (parent.epoch === parentKeyEpoch && pending?.oldEpoch !== parentKeyEpoch)
+            return parent.key;
+        throw new CryptoError(KEYS_CHANGED);
+    }
+    /*
+     * Writes into a group area only while the worker found it writable: its
+     * latest key held, the server and the area root at that version (F9).
+     */
+    function requireWritable(workspaceId: string) {
+        groups.requireWritable(workspaceId);
     }
     function rememberNodeKey(
         workspaceId: string,
@@ -1161,6 +1386,8 @@ export function createCryptoSession() {
         const pool = nodeKeysOf(workspaceId);
         pool.get(slot(workspaceId, nodeId))?.key.fill(0);
         pool.set(slot(workspaceId, nodeId), { key, epoch });
+        // Whatever opened it before, this key was not opened from a root row here.
+        rootOpenedUnder.delete(slot(workspaceId, nodeId));
     }
     function rememberPrevNodeKey(
         workspaceId: string,
@@ -1172,240 +1399,332 @@ export function createCryptoSession() {
         pool.get(slot(workspaceId, nodeId))?.key.fill(0);
         pool.set(slot(workspaceId, nodeId), { key, epoch });
     }
-    async function rotateOne(
-        workspaceId: string,
-        targetEpoch: number,
-        granterUserId: string | null,
-        node: RotateNodeInput,
-        trusted: Map<string, TrustedSigner>,
-    ): Promise<RotatedNode> {
-        const nodeId = node.id;
-        // The key as it is: cached from a listing, or opened now under the parent
-        // key its envelope was wrapped under (a previous one, when the parent rotated first).
-        const cached = nodeKey(workspaceId, nodeId);
-        const old =
-            cached && cached.epoch === node.keyEpoch
-                ? cached.key.slice()
-                : ((await openNodeKey(
-                      decode(node.keyEnvelope, 72),
-                      parentKeyFor(workspaceId, node.parentId, node.wrappedParentKeyEpoch),
-                      {
-                          workspaceId,
-                          nodeId,
-                          parentId: node.parentId,
-                          parentKeyEpoch: node.wrappedParentKeyEpoch,
-                          keyEpoch: node.keyEpoch,
-                      },
-                  )) as Uint8Array<ArrayBuffer>);
-        // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
-        if (node.keyEpoch >= targetEpoch) {
-            const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
-            const keyEnvelope = await wrapNodeKey(old, parentKey, {
+    /* How a rotation re-signs each record, from the record as served: personal trust, or a group's. */
+    function personalJudge(trusted: Map<string, TrustedSigner>): RecordJudge {
+        return async (record) =>
+            resealForm(
+                await checkRecord(trusted, record.statements, record.signer, record.signature),
+            );
+    }
+    /*
+     * A node's key as it is now, the caller's to zero: cached from a listing,
+     * or opened under the parent key its envelope was wrapped under (a
+     * previous one, when the parent rotated first).
+     */
+    async function currentKeyOf(workspaceId: string, node: RotateNodeInput) {
+        const cached = nodeKey(workspaceId, node.id);
+        if (cached && cached.epoch === node.keyEpoch) return cached.key.slice();
+        return (await openNodeKey(
+            decode(node.keyEnvelope, 72),
+            parentKeyFor(workspaceId, node.parentId, node.wrappedParentKeyEpoch),
+            {
                 workspaceId,
-                nodeId,
+                nodeId: node.id,
                 parentId: node.parentId,
-                parentKeyEpoch: node.parentKeyEpoch,
+                parentKeyEpoch: node.wrappedParentKeyEpoch,
                 keyEpoch: node.keyEpoch,
-            });
-            if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch);
-            else old.fill(0);
-            return {
-                id: nodeId,
-                keyEnvelope: encode(keyEnvelope),
-                metadataEnvelope: node.metadataEnvelope,
-                metadataSignature: null,
-                versions: [],
-                shares: [],
-                links: [],
-                rewrap: true,
-            };
-        }
+            },
+        )) as Uint8Array<ArrayBuffer>;
+    }
+    /*
+     * One node re-keyed from `old` to `fresh` at `targetEpoch`, wrapped under
+     * `parentKey` at the node's parentKeyEpoch: metadata, every version's
+     * content key, every share and every link sealed again under the fresh key,
+     * each record re-signed as `judge` says it may be. Nothing is cached and
+     * neither key is zeroed: the caller owns both.
+     */
+    async function rekeyNode(input: {
+        workspaceId: string;
+        targetEpoch: number;
+        granterUserId: string | null;
+        node: RotateNodeInput;
+        judge: RecordJudge;
+        old: Uint8Array;
+        fresh: Uint8Array;
+        parentKey: Uint8Array;
+    }) {
+        const { workspaceId, targetEpoch, granterUserId, node, judge, old, fresh, parentKey } =
+            input;
+        const nodeId = node.id;
         // Everything re-sealed below is signed by the account running the rotation,
         // as it was checked first: what did not verify is signed re-sealed.
         if (!identityKey) throw new CryptoError('Open your identity first.');
-        const metadataForm = resealForm(
-            await checkRecord(
-                trusted,
-                async () =>
-                    metadataStatements(
-                        {
-                            workspaceId,
-                            nodeId,
-                            kind: node.kind,
-                            metadataVersion: node.metadataVersion,
-                        },
-                        decode(node.metadataEnvelope),
-                    ),
-                node.metadataSigner,
-                node.metadataSignature,
-            ),
-        );
+        const metadataForm = await judge({
+            statements: async () =>
+                metadataStatements(
+                    { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
+                    decode(node.metadataEnvelope),
+                ),
+            signer: node.metadataSigner,
+            signature: node.metadataSignature,
+        });
         const versionForms = new Map<string, SignatureForm>();
         for (const version of node.versions)
             versionForms.set(
                 version.id,
-                resealForm(
-                    await checkRecord(
-                        trusted,
-                        async () =>
-                            versionStatements(
-                                {
-                                    workspaceId,
-                                    nodeId,
-                                    versionId: version.id,
-                                    objectId: version.objectId,
-                                    contentSuite: version.contentSuite,
-                                },
-                                decode(version.contentKeyEnvelope),
-                            ),
-                        version.signer,
-                        version.signature,
-                    ),
-                ),
-            );
-        const fresh = generateKey();
-        try {
-            const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
-            const keyEnvelope = await wrapNodeKey(fresh, parentKey, {
-                workspaceId,
-                nodeId,
-                parentId: node.parentId,
-                parentKeyEpoch: node.parentKeyEpoch,
-                keyEpoch: targetEpoch,
-            });
-            const metadata = await openMetadata(decode(node.metadataEnvelope), old, {
-                workspaceId,
-                nodeId,
-                metadataVersion: node.metadataVersion,
-            });
-            const metadataEnvelope = await sealMetadata(metadata, fresh, {
-                workspaceId,
-                nodeId,
-                metadataVersion: node.metadataVersion,
-            });
-            const metadataSignature = await signMetadata(
-                { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
-                metadataEnvelope,
-                metadataForm,
-            );
-            const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
-            for (const version of node.versions) {
-                // The same record, sealed under the fresh key in the object's own suite.
-                const opened = await openVersionUnder(old, workspaceId, nodeId, version);
-                try {
-                    const envelope = await sealVersion(
-                        {
-                            contentKey: opened.contentKey,
-                            plaintextSize: opened.plaintextSize,
-                            thumbnailBytes: opened.thumbnailBytes,
-                        },
-                        fresh,
-                        {
-                            workspaceId,
-                            nodeId,
-                            versionId: version.id,
-                            objectId: version.objectId,
-                            suite: opened.suite,
-                        },
-                    );
-                    versions.push({
-                        id: version.id,
-                        contentKeyEnvelope: encode(envelope),
-                        signature: await signVersion(
+                await judge({
+                    statements: async () =>
+                        versionStatements(
                             {
                                 workspaceId,
                                 nodeId,
                                 versionId: version.id,
                                 objectId: version.objectId,
-                                contentSuite: opened.suite,
+                                contentSuite: version.contentSuite,
                             },
-                            envelope,
-                            versionForms.get(version.id) ?? 'resealed',
+                            decode(version.contentKeyEnvelope),
                         ),
-                    });
-                } finally {
-                    opened.contentKey.fill(0);
-                }
-            }
-            const shares = [];
-            for (const share of node.shares) {
-                if (!granterUserId || identityKey.userId !== granterUserId)
-                    throw new CryptoError('Open your identity first.');
-                shares.push({
-                    id: share.id,
-                    shareEnvelope: encode(
-                        await sealShareKey(
-                            fresh,
-                            {
-                                encryptionPublicKey: decode(share.granteePublicKey, 32),
-                                kemPublicKey: share.granteeKemPublicKey
-                                    ? decode(share.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
-                                    : null,
-                            },
-                            hybridKeys(),
-                            {
-                                workspaceId,
-                                nodeId,
-                                keyEpoch: targetEpoch,
-                                granteeUserId: share.granteeUserId,
-                                granterUserId,
-                            },
-                        ),
+                    signer: version.signer,
+                    signature: version.signature,
+                }),
+            );
+        const keyEnvelope = await wrapNodeKey(fresh, parentKey, {
+            workspaceId,
+            nodeId,
+            parentId: node.parentId,
+            parentKeyEpoch: node.parentKeyEpoch,
+            keyEpoch: targetEpoch,
+        });
+        const metadata = await openMetadata(decode(node.metadataEnvelope), old, {
+            workspaceId,
+            nodeId,
+            metadataVersion: node.metadataVersion,
+        });
+        const metadataEnvelope = await sealMetadata(metadata, fresh, {
+            workspaceId,
+            nodeId,
+            metadataVersion: node.metadataVersion,
+        });
+        const metadataSignature = await signMetadata(
+            { workspaceId, nodeId, kind: node.kind, metadataVersion: node.metadataVersion },
+            metadataEnvelope,
+            metadataForm,
+        );
+        const versions: { id: string; contentKeyEnvelope: string; signature: string }[] = [];
+        for (const version of node.versions) {
+            // The same record, sealed under the fresh key in the object's own suite.
+            const opened = await openVersionUnder(old, workspaceId, nodeId, version);
+            try {
+                const envelope = await sealVersion(
+                    {
+                        contentKey: opened.contentKey,
+                        plaintextSize: opened.plaintextSize,
+                        thumbnailBytes: opened.thumbnailBytes,
+                    },
+                    fresh,
+                    {
+                        workspaceId,
+                        nodeId,
+                        versionId: version.id,
+                        objectId: version.objectId,
+                        suite: opened.suite,
+                    },
+                );
+                versions.push({
+                    id: version.id,
+                    contentKeyEnvelope: encode(envelope),
+                    signature: await signVersion(
+                        {
+                            workspaceId,
+                            nodeId,
+                            versionId: version.id,
+                            objectId: version.objectId,
+                            contentSuite: opened.suite,
+                        },
+                        envelope,
+                        versionForms.get(version.id) ?? 'resealed',
                     ),
                 });
+            } finally {
+                opened.contentKey.fill(0);
             }
-            const links: Extract<RotatedNode, { links: unknown }>['links'] = [];
-            for (const link of node.links) {
-                if (!link.secretEnvelope) {
+        }
+        const shares = [];
+        for (const share of node.shares) {
+            if (!granterUserId || identityKey.userId !== granterUserId)
+                throw new CryptoError('Open your identity first.');
+            shares.push({
+                id: share.id,
+                shareEnvelope: encode(
+                    await sealShareKey(
+                        fresh,
+                        {
+                            encryptionPublicKey: decode(share.granteePublicKey, 32),
+                            kemPublicKey: share.granteeKemPublicKey
+                                ? decode(share.granteeKemPublicKey, KEM_PUBLIC_KEY_BYTES)
+                                : null,
+                        },
+                        hybridKeys(),
+                        {
+                            workspaceId,
+                            nodeId,
+                            keyEpoch: targetEpoch,
+                            granteeUserId: share.granteeUserId,
+                            granterUserId,
+                        },
+                    ),
+                ),
+            });
+        }
+        const links: Extract<RotatedNode, { links: unknown }>['links'] = [];
+        for (const link of node.links) {
+            if (!link.secretEnvelope) {
+                links.push({ id: link.id, unsealable: true });
+                continue;
+            }
+            const oldCtx = { workspaceId, nodeId, keyEpoch: node.keyEpoch, linkId: link.id };
+            const newCtx = { workspaceId, nodeId, keyEpoch: targetEpoch, linkId: link.id };
+            const { secret, token, fromPassword } = await openLinkSecret(
+                decode(link.secretEnvelope),
+                old,
+                oldCtx,
+            );
+            try {
+                // A password link sealed before the password key was kept cannot be re-sealed without the password.
+                if (link.hasPassword && !fromPassword) {
                     links.push({ id: link.id, unsealable: true });
                     continue;
                 }
-                const oldCtx = { workspaceId, nodeId, keyEpoch: node.keyEpoch, linkId: link.id };
-                const newCtx = { workspaceId, nodeId, keyEpoch: targetEpoch, linkId: link.id };
-                const { secret, token, fromPassword } = await openLinkSecret(
-                    decode(link.secretEnvelope),
-                    old,
-                    oldCtx,
-                );
-                try {
-                    // A password link sealed before the password key was kept cannot be re-sealed without the password.
-                    if (link.hasPassword && !fromPassword) {
-                        links.push({ id: link.id, unsealable: true });
-                        continue;
-                    }
-                    const stretched = fromPassword ?? new Uint8Array(32);
-                    links.push({
-                        id: link.id,
-                        linkEnvelope: encode(
-                            await sealLinkKeyWith(fresh, secret, stretched, newCtx),
-                        ),
-                        secretEnvelope: encode(
-                            await sealLinkSecret(secret, token, stretched, fresh, newCtx),
-                        ),
-                    });
-                } finally {
-                    secret.fill(0);
-                    fromPassword?.fill(0);
-                }
+                const stretched = fromPassword ?? new Uint8Array(32);
+                links.push({
+                    id: link.id,
+                    linkEnvelope: encode(await sealLinkKeyWith(fresh, secret, stretched, newCtx)),
+                    secretEnvelope: encode(
+                        await sealLinkSecret(secret, token, stretched, fresh, newCtx),
+                    ),
+                });
+            } finally {
+                secret.fill(0);
+                fromPassword?.fill(0);
             }
-            // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
-            rememberPrevNodeKey(workspaceId, nodeId, old, node.keyEpoch);
-            rememberNodeKey(workspaceId, nodeId, fresh, targetEpoch);
-            return {
-                id: nodeId,
-                keyEnvelope: encode(keyEnvelope),
-                metadataEnvelope: encode(metadataEnvelope),
-                metadataSignature,
-                versions,
-                shares,
-                links,
-            };
+        }
+        return {
+            id: nodeId,
+            keyEnvelope: encode(keyEnvelope),
+            metadataEnvelope: encode(metadataEnvelope),
+            metadataSignature,
+            versions,
+            shares,
+            links,
+        };
+    }
+    async function rotateOne(
+        workspaceId: string,
+        targetEpoch: number,
+        granterUserId: string | null,
+        node: RotateNodeInput,
+        judge: RecordJudge,
+    ): Promise<RotatedNode> {
+        const nodeId = node.id;
+        // A family folder's root is re-keyed only by its roster rotation (groupStage), never by a
+        // Drive walk: a walk would open whatever root envelope it is served under an older area
+        // key and wrap that key, or cache it, as the root's current one.
+        if (node.parentId === workspaceId && groups.isArea(workspaceId))
+            throw new CryptoError(AREA_ROOT);
+        const cached = nodeKey(workspaceId, nodeId);
+        const old = await currentKeyOf(workspaceId, node);
+        // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
+        if (node.keyEpoch >= targetEpoch) {
+            try {
+                const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
+                const keyEnvelope = await wrapNodeKey(old, parentKey, {
+                    workspaceId,
+                    nodeId,
+                    parentId: node.parentId,
+                    parentKeyEpoch: node.parentKeyEpoch,
+                    keyEpoch: node.keyEpoch,
+                });
+                if (!cached) rememberNodeKey(workspaceId, nodeId, old, node.keyEpoch);
+                else old.fill(0);
+                return {
+                    id: nodeId,
+                    keyEnvelope: encode(keyEnvelope),
+                    metadataEnvelope: node.metadataEnvelope,
+                    metadataSignature: null,
+                    versions: [],
+                    shares: [],
+                    links: [],
+                    rewrap: true,
+                };
+            } catch (error) {
+                old.fill(0);
+                throw error;
+            }
+        }
+        const fresh = generateKey();
+        try {
+            const rotated = await rekeyNode({
+                workspaceId,
+                targetEpoch,
+                granterUserId,
+                node,
+                judge,
+                old,
+                fresh,
+                parentKey: wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch),
+            });
+            // Pending until the server confirms the batch (driveRotateCommit): children in this walk
+            // wrap under the fresh key meanwhile, and nothing else takes it as the node's.
+            const at = slot(workspaceId, nodeId);
+            const before = pendingNodeKeys.get(at);
+            if (before) zeroPending(before);
+            pendingNodeKeys.set(at, { fresh, epoch: targetEpoch, old, oldEpoch: node.keyEpoch });
+            return rotated;
         } catch (error) {
             fresh.fill(0);
             old.fill(0);
             throw error;
         }
     }
+    const groups = createGroupSession({
+        unlocked() {
+            if (!accountKey || !unlockedUserId) throw new CryptoError('Unlock your account first.');
+            return {
+                userId: unlockedUserId,
+                root: accountKey.slice(),
+                keyVersion: accountKeyVersion,
+            };
+        },
+        identity() {
+            if (!identityKey) throw new CryptoError('Open your identity first.');
+            if (!identityKey.mlDsa || !identityKey.kem || identityKey.identityVersion !== 2)
+                throw new CryptoError('Your keys need upgrading first. Unlock again and retry.');
+            return {
+                userId: identityKey.userId,
+                served: {
+                    keyVersion: identityKey.keyVersion,
+                    encryptionPublicKey: identityKey.publicKey,
+                    signingPublicKey: identityKey.signingPublicKey,
+                    mlDsaPublicKey: identityKey.mlDsa.publicKey,
+                    kemPublicKey: identityKey.kem.publicKey,
+                    keysSignature: identityKey.keysSignature ?? '',
+                },
+                history: identityHistory.flatMap((earlier) =>
+                    earlier.served ? [earlier.served] : [],
+                ),
+            };
+        },
+        hybridKeys,
+        granteeSecrets(keyVersion) {
+            const [identity] = granteeIdentities(keyVersion);
+            return { privateKey: identity!.privateKey, kemSecretKey: identity!.kemSecretKey };
+        },
+        ownSigner() {
+            if (!identityKey) throw new CryptoError('Open your identity first.');
+            return {
+                current: decode(identityKey.signingPublicKey, 32),
+                retired: identityHistory.map((earlier) => decode(earlier.signingPublicKey, 32)),
+            };
+        },
+        personalSigners: trustSet,
+        workspaceKey(workspaceId, version) {
+            return workspaceKeys.get(workspaceId)?.keys.get(version);
+        },
+        holdWorkspaceKey,
+        dropWorkspace,
+        currentKeyOf,
+        rekeyNode,
+    });
 
     function clearState() {
         security.reset();
@@ -1419,6 +1738,8 @@ export function createCryptoSession() {
         accountKey?.fill(0);
         accountKey = undefined;
         unlockedUserId = null;
+        // Group state goes with the Drive keys (forgetDriveKeys: a lock, another account), never
+        // with a password change or a restore of the same account, which keep personal keys too.
     }
     function reset() {
         generation++;
@@ -1439,6 +1760,7 @@ export function createCryptoSession() {
     ): Promise<CryptoResults[keyof CryptoResults]> {
         await ready;
         checkGeneration(expected);
+        if (isGroupMessage(message)) return groups.handle(message);
         switch (message.operation) {
             case 'securityStart':
                 clearState();
@@ -1756,6 +2078,7 @@ export function createCryptoSession() {
                             publicKey: previous.encryptionPublicKey,
                             signingPublicKey: previous.signingPublicKey,
                             kem: previousKem,
+                            served: await ownServed(root, userId, previous),
                         });
                     }
                     forgetIdentity();
@@ -1846,24 +2169,29 @@ export function createCryptoSession() {
             case 'settingsOpen': {
                 const { userId, envelope } = message.input;
                 const ownSettingsKey = settingsKey?.userId === userId ? settingsKey.key : null;
-                return { settings: await openSettings(ownSettingsKey, userId, envelope) };
+                const settings = await openSettings(ownSettingsKey, userId, envelope);
+                // The group pins acceptance takes as marks: only from settings this worker opened.
+                groups.useSettings(userId, settings);
+                return { settings };
             }
             case 'settingsSeal': {
                 const { userId, settingsVersion, settings } = message.input;
                 if (!settingsKey || settingsKey.userId !== userId)
                     throw new CryptoError('Open your settings key first.');
-                return {
-                    envelope: await sealSettings(
-                        settingsKey.key,
-                        userId,
-                        settingsVersion,
-                        settings,
-                    ),
-                };
+                const envelope = await sealSettings(
+                    settingsKey.key,
+                    userId,
+                    settingsVersion,
+                    settings,
+                );
+                // Not taken as this worker's settings marks: the server has not accepted it yet.
+                // Group pins come only from settingsOpen of what the server serves.
+                return { envelope };
             }
             case 'driveSealShare': {
                 const { workspaceId, nodeId, keyEpoch, granterUserId, granteeUserId } =
                     message.input;
+                requireWritable(workspaceId);
                 if (!identityKey || identityKey.userId !== granterUserId)
                     throw new CryptoError('Open your identity first.');
                 const node = nodeKey(workspaceId, nodeId);
@@ -1929,6 +2257,7 @@ export function createCryptoSession() {
             }
             case 'driveSealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
+                requireWritable(workspaceId);
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
@@ -2047,6 +2376,7 @@ export function createCryptoSession() {
             }
             case 'driveResealLink': {
                 const { workspaceId, nodeId, keyEpoch, linkId, password } = message.input;
+                requireWritable(workspaceId);
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (node.epoch !== keyEpoch)
@@ -2103,14 +2433,23 @@ export function createCryptoSession() {
             }
             case 'driveRotateNodes': {
                 const { workspaceId, targetEpoch, granterUserId } = message.input;
+                requireWritable(workspaceId);
                 // Every record is checked before it is signed again: without the trust
                 // set the whole batch stops, rather than re-sealing everything in it.
                 const trusted = trustSet(message.input.signers);
+                // A group's area is always judged as its roster says (plan finding 6): never personally.
+                if (groups.isArea(workspaceId) && !message.input.group)
+                    throw new CryptoError(
+                        'A family folder is rotated only with the family’s trust.',
+                    );
+                const judge = message.input.group
+                    ? await groups.rotationJudge(workspaceId, message.input.group, trusted)
+                    : personalJudge(trusted);
                 const out: RotatedNode[] = [];
                 for (const node of message.input.nodes) {
                     try {
                         out.push(
-                            await rotateOne(workspaceId, targetEpoch, granterUserId, node, trusted),
+                            await rotateOne(workspaceId, targetEpoch, granterUserId, node, judge),
                         );
                     } catch (error) {
                         out.push({
@@ -2128,17 +2467,23 @@ export function createCryptoSession() {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to open Drive.');
                 const { grant } = message.input;
+                // A group's area served as a personal workspace would skip its version checks.
+                if (groups.isArea(grant.workspaceId))
+                    throw new CryptoError('This was refused: it is a family folder.');
                 const cached = workspaceKeys.get(grant.workspaceId);
-                if (cached && cached.version === grant.workspaceKeyVersion)
-                    return { workspaceId: grant.workspaceId, workspaceKeyVersion: cached.version };
+                if (cached?.keys.has(grant.workspaceKeyVersion))
+                    return {
+                        workspaceId: grant.workspaceId,
+                        workspaceKeyVersion: grant.workspaceKeyVersion,
+                    };
                 const root = accountKey.slice();
                 try {
                     const key = await openWorkspaceKey(root, unlockedUserId, grant);
-                    cached?.key.fill(0);
-                    workspaceKeys.set(grant.workspaceId, {
-                        key: key as Uint8Array<ArrayBuffer>,
-                        version: grant.workspaceKeyVersion,
-                    });
+                    holdWorkspaceKey(
+                        grant.workspaceId,
+                        grant.workspaceKeyVersion,
+                        key as Uint8Array<ArrayBuffer>,
+                    );
                     return {
                         workspaceId: grant.workspaceId,
                         workspaceKeyVersion: grant.workspaceKeyVersion,
@@ -2149,9 +2494,8 @@ export function createCryptoSession() {
             }
             case 'driveSealDocument': {
                 const { workspaceId, kind, version, document } = message.input;
-                const workspace = workspaceKeys.get(workspaceId);
-                if (!workspace) throw new CryptoError('Open Drive first.');
-                const envelope = await sealDocument(document, workspace.key, {
+                if (!workspaceKeys.has(workspaceId)) throw new CryptoError('Open Drive first.');
+                const envelope = await sealDocument(document, writeVersionOf(workspaceId).key, {
                     workspaceId,
                     kind,
                     version,
@@ -2160,24 +2504,39 @@ export function createCryptoSession() {
             }
             case 'driveOpenDocument': {
                 const { workspaceId, kind, version, envelope } = message.input;
-                const workspace = workspaceKeys.get(workspaceId);
-                if (!workspace) throw new CryptoError('Open Drive first.');
-                const document = await openDocument(decode(envelope), workspace.key, {
-                    workspaceId,
-                    kind,
-                    version,
-                });
-                return { document };
+                return openDocumentUnderAny(workspaceId, kind, version, envelope);
+            }
+            case 'driveRotateCommit':
+            case 'driveRotateDrop': {
+                const { workspaceId, nodeIds } = message.input;
+                let count = 0;
+                for (const nodeId of nodeIds) {
+                    const at = slot(workspaceId, nodeId);
+                    const pending = pendingNodeKeys.get(at);
+                    if (!pending) continue;
+                    pendingNodeKeys.delete(at);
+                    count++;
+                    if (message.operation === 'driveRotateDrop') {
+                        zeroPending(pending);
+                        continue;
+                    }
+                    rememberPrevNodeKey(workspaceId, nodeId, pending.old, pending.oldEpoch);
+                    rememberNodeKey(workspaceId, nodeId, pending.fresh, pending.epoch);
+                }
+                return message.operation === 'driveRotateDrop'
+                    ? { dropped: count }
+                    : { committed: count };
             }
             case 'driveCreateNodes': {
                 const { workspaceId } = message.input;
+                requireWritable(workspaceId);
                 const out: CryptoResults['driveCreateNodes']['nodes'] = [];
                 const created: { id: string; key: Uint8Array<ArrayBuffer>; epoch: number }[] = [];
                 // Every node is signed by its writer: refuse before minting anything.
                 if (!identityKey) throw new CryptoError('Open your identity first.');
                 try {
                     for (const node of message.input.nodes) {
-                        const parentKey = parentKeyFor(
+                        const parentKey = wrapKeyFor(
                             workspaceId,
                             node.parentId,
                             node.parentKeyEpoch,
@@ -2229,7 +2588,17 @@ export function createCryptoSession() {
                 for (const node of message.input.nodes) {
                     try {
                         const cached = nodeKey(workspaceId, node.id);
-                        let key = cached && cached.epoch === node.keyEpoch ? cached.key : undefined;
+                        const at = slot(workspaceId, node.id);
+                        // A group area's root is taken from the cache only under the area key
+                        // version it was opened under: a row that names another is opened again.
+                        const areaRoot =
+                            node.parentId === workspaceId && groups.isArea(workspaceId);
+                        let key =
+                            cached &&
+                            cached.epoch === node.keyEpoch &&
+                            (!areaRoot || rootOpenedUnder.get(at) === node.parentKeyEpoch)
+                                ? cached.key
+                                : undefined;
                         if (!key) {
                             const parentKey = parentKeyFor(
                                 workspaceId,
@@ -2244,7 +2613,12 @@ export function createCryptoSession() {
                                 keyEpoch: node.keyEpoch,
                             })) as Uint8Array<ArrayBuffer>;
                             rememberNodeKey(workspaceId, node.id, key, node.keyEpoch);
+                            if (areaRoot) rootOpenedUnder.set(at, node.parentKeyEpoch);
                         }
+                        // A group area's root decides whether the area may be written: only one
+                        // whose envelope opened under the area's write version (a withheld root
+                        // rotation's does not, nor does option A's previous-root envelope).
+                        if (areaRoot) groups.rootSeen(workspaceId, node.parentKeyEpoch);
                         // Mid-rotation: the same key under the previous parent key opens
                         // children the rotation has not reached; failure to open it is
                         // not failure to open the node.
@@ -2255,17 +2629,25 @@ export function createCryptoSession() {
                                     node.parentId,
                                     node.prevParentKeyEpoch,
                                 );
-                                const previous = (await openNodeKey(
-                                    decode(node.prevKeyEnvelope, 72),
-                                    previousParent,
-                                    {
-                                        workspaceId,
-                                        nodeId: node.id,
-                                        parentId: node.parentId,
-                                        parentKeyEpoch: node.prevParentKeyEpoch,
-                                        keyEpoch: node.prevKeyEpoch,
-                                    },
-                                )) as Uint8Array<ArrayBuffer>;
+                                const ctx = {
+                                    workspaceId,
+                                    nodeId: node.id,
+                                    parentId: node.parentId,
+                                    parentKeyEpoch: node.prevParentKeyEpoch,
+                                    keyEpoch: node.prevKeyEpoch,
+                                };
+                                const envelope = decode(node.prevKeyEnvelope, 72);
+                                // An area root's previous key under the new area key is option A's,
+                                // under its own label; one a Drive batch kept is a plain node key.
+                                const previous = (
+                                    areaRoot
+                                        ? await openPreviousRootKey(
+                                              envelope,
+                                              previousParent,
+                                              ctx,
+                                          ).catch(() => openNodeKey(envelope, previousParent, ctx))
+                                        : await openNodeKey(envelope, previousParent, ctx)
+                                ) as Uint8Array<ArrayBuffer>;
                                 rememberPrevNodeKey(
                                     workspaceId,
                                     node.id,
@@ -2314,6 +2696,7 @@ export function createCryptoSession() {
             }
             case 'driveSealMetadata': {
                 const { workspaceId, nodeId, kind, metadataVersion } = message.input;
+                requireWritable(workspaceId);
                 const entry = nodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
@@ -2378,13 +2761,14 @@ export function createCryptoSession() {
             }
             case 'driveRewrapNode': {
                 const { workspaceId, nodeId, parentId, parentKeyEpoch, keyEpoch } = message.input;
+                requireWritable(workspaceId);
                 const entry = nodeKey(workspaceId, nodeId);
                 if (!entry) throw new CryptoError('Open the containing folder first.');
                 if (entry.epoch !== keyEpoch)
                     throw new CryptoError(
                         'This item changed since it was opened. Refresh and retry.',
                     );
-                const parentKey = parentKeyFor(workspaceId, parentId, parentKeyEpoch);
+                const parentKey = wrapKeyFor(workspaceId, parentId, parentKeyEpoch);
                 const keyEnvelope = await wrapNodeKey(entry.key, parentKey, {
                     workspaceId,
                     nodeId,
@@ -2396,6 +2780,7 @@ export function createCryptoSession() {
             }
             case 'driveUploadPrepare': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
+                requireWritable(workspaceId);
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
@@ -2522,6 +2907,7 @@ export function createCryptoSession() {
             }
             case 'driveUploadRewrap': {
                 const { workspaceId, objectId, nodeId, versionId } = message.input;
+                requireWritable(workspaceId);
                 const upload = uploads.get(objectId);
                 if (!upload) throw new CryptoError('This upload is not open here.');
                 const node = nodeKey(workspaceId, nodeId);
@@ -2547,6 +2933,7 @@ export function createCryptoSession() {
             }
             case 'driveCopyFile': {
                 const { workspaceId, source, node, versionId } = message.input;
+                requireWritable(workspaceId);
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');
                 if (!identityKey) throw new CryptoError('Open your identity first.');
@@ -2590,7 +2977,7 @@ export function createCryptoSession() {
                     ),
                     false,
                 );
-                const parentKey = parentKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
+                const parentKey = wrapKeyFor(workspaceId, node.parentId, node.parentKeyEpoch);
                 const opened = await openVersionUnder(
                     sourceKey.key,
                     workspaceId,
@@ -2663,6 +3050,7 @@ export function createCryptoSession() {
             }
             case 'driveUploadReopen': {
                 const { workspaceId, nodeId, versionId, objectId, plaintextSize } = message.input;
+                requireWritable(workspaceId);
                 const node = nodeKey(workspaceId, nodeId);
                 if (!node) throw new CryptoError('Open the containing folder first.');
                 if (message.input.contentSuite !== CONTENT_SUITE)

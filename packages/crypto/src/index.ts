@@ -22,6 +22,20 @@ export {
     type UploadPartProgress,
     type UploadPartResult,
 } from './session';
+export type {
+    AreaRootRotationInput,
+    AreaRotationInput,
+    CreateGroupBody,
+    DeviceStore,
+    GroupRotationTrust,
+    GroupStageOp,
+    GroupStaged,
+    GroupView,
+    GroupWriter,
+    RosterCallBody,
+    RotationWire,
+    ServedChain,
+} from './session-groups';
 export type { RememberedAccount } from './device';
 export type { SecurityAction, SecurityChallenge, SecurityUpdate } from './security';
 export type { WorkspaceKeyEnvelope } from './workspace';

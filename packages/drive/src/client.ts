@@ -1462,9 +1462,25 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 });
             }
             let applied = 0;
-            if (batch.length) {
-                const { results } = await api.rotateNodes(ws, rootId, batch);
-                applied = results.filter((r) => r.status === 'ok' || r.status === 'already').length;
+            // The keys the worker made become the nodes' own only for what the server applied.
+            const kept = new Set<string>();
+            try {
+                if (batch.length) {
+                    const { results } = await api.rotateNodes(ws, rootId, batch);
+                    for (const r of results)
+                        if (r.status === 'ok' || r.status === 'already') kept.add(r.id);
+                    applied = kept.size;
+                }
+            } finally {
+                const ids = work.nodes.map((n) => n.id);
+                await rpc('driveRotateCommit', {
+                    workspaceId: ws,
+                    nodeIds: ids.filter((id) => kept.has(id)),
+                });
+                await rpc('driveRotateDrop', {
+                    workspaceId: ws,
+                    nodeIds: ids.filter((id) => !kept.has(id)),
+                });
             }
             done += applied;
             onProgress?.(done);

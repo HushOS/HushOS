@@ -71,6 +71,7 @@ function harness(
     const verified: { signers: unknown; nodes: unknown[] }[] = [];
     const opened: { granterSigningPublicKey: string | null }[] = [];
     const rotatedWith: unknown[] = [];
+    const settled: { commit: string[]; drop: string[] } = { commit: [], drop: [] };
     const sealedMetadata: { nodeId: string; signAs: unknown }[] = [];
     let workCalls = 0;
     const api = {
@@ -130,7 +131,9 @@ function harness(
         }),
         rotateNodes: async (_ws: string, _root: string, nodes: unknown[]) => {
             wired.push(...nodes);
-            return { results: [{ status: 'ok' }] };
+            return {
+                results: (nodes as { id: string }[]).map((n) => ({ id: n.id, status: 'ok' })),
+            };
         },
         sharedWithMe: async () => ({
             shares: [
@@ -215,6 +218,14 @@ function harness(
                     })),
                 };
             }
+            case 'driveRotateCommit':
+            case 'driveRotateDrop': {
+                const ids = input.nodeIds as string[];
+                settled[operation === 'driveRotateCommit' ? 'commit' : 'drop'].push(...ids);
+                return operation === 'driveRotateCommit'
+                    ? { committed: ids.length }
+                    : { dropped: ids.length };
+            }
             default:
                 throw new Error(`unexpected ${operation}`);
         }
@@ -231,6 +242,7 @@ function harness(
         resealed,
         rotated,
         rotatedWith,
+        settled,
         wired,
         verified,
         opened,
@@ -368,6 +380,8 @@ describe('signatures', () => {
         expect(h.wired).toMatchObject([{ id: A, rotated: { metadataSignature: 'msig' } }]);
         // The worker got the trust set to check each record against before re-signing it.
         expect(h.rotatedWith).toEqual([signers]);
+        // The keys it made become the node's own only once the server applied the batch.
+        expect(h.settled).toEqual({ commit: [A], drop: [] });
     });
 
     test('a rotation that cannot load the trust set stops before anything is re-sealed', async () => {
