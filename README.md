@@ -1,4 +1,22 @@
-# HushOS
+<p align="center">
+    <a href="https://hushos.com"><img src=".github/assets/readme-banner.svg" alt="HushOS, spelled in dots" width="100%"></a>
+</p>
+
+<h3 align="center">Nobody else can look inside.</h3>
+
+<p align="center">
+    An open-source drive where everything is locked on your device before it leaves.<br>
+    Run it at <a href="https://hushos.com">hushos.com</a>, or on a server you control.
+</p>
+
+<p align="center">
+    <a href="https://hushos.com/security">How it protects your files</a> ·
+    <a href="docs/self-hosting.md">Host it yourself</a> ·
+    <a href="https://hushos.com/blog">Notes from the build</a> ·
+    <a href="LICENSE">AGPL-3.0</a>
+</p>
+
+---
 
 Private storage for your files, personal or work, that is simple to use. HushOS is an open-source, self-hostable, end-to-end encrypted productivity suite; version 1 is Drive. Files are encrypted on the person's device, the service holds only ciphertext and the shape of the tree, and the whole thing runs at [hushos.com](https://hushos.com) or on a server you control.
 
