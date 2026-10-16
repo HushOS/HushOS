@@ -1,0 +1,39 @@
+apps/web/src/lib/api.server.ts
+  s_dfc8fc6b30a2e3::t_e33f15a316d392 2507-2517
+apps/web/src/lib/group-log-routes.test.ts
+  s_dfc8fc6b30a2e3::t_7d313f96811390 36-40
+apps/web/src/lib/group-requests.test.ts
+  s_dfc8fc6b30a2e3::t_bfac35a3d25dcd 239-248
+apps/web/src/lib/group-requests.ts
+  s_dfc8fc6b30a2e3::t_8a78d305400ecc 114
+docs/groups-server.md
+  s_dfc8fc6b30a2e3::t_8e8b893507f680 100,105,169
+packages/db/src/groups.ts
+  s_dfc8fc6b30a2e3::t_b544ca38419c8e 14-20,2538-2594
+packages/db/src/rotations.ts
+  s_dfc8fc6b30a2e3::t_510e9ad43b3d47 161-293,329
+packages/drive/src/server.ts
+  s_dfc8fc6b30a2e3::t_d4d5f3793a59db 2341-2342
+packages/groups/src/server.test.ts
+  s_dfc8fc6b30a2e3::t_5f3ff9a89c5f9e 17,20,26,2002-2312
+packages/groups/src/server.ts
+  s_dfc8fc6b30a2e3::t_f7f3da9ab55640 28-33,1918-1944
+packages/logging/src/privacy.ts
+  s_dfc8fc6b30a2e3::t_fbd1e43836558a 209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc774bb88d860aa5ac41483f6852e633e65e9502",
+  "prompts": {},
+  "sessions": {
+    "s_dfc8fc6b30a2e3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a69b2d17a22b844a7",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
