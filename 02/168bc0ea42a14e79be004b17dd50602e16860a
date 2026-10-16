@@ -1,0 +1,27 @@
+apps/web/src/components/access-cell.tsx
+  s_a965107c48ca30::t_b40878b57ad3fc 1-73
+apps/web/src/components/drive/access.tsx
+  s_a965107c48ca30::t_ef527e73977a94 5,142-143
+apps/web/src/components/drive/file-mark.tsx
+  s_a965107c48ca30::t_f535e58187ac9f 3
+apps/web/src/components/drive/share-dialog.tsx
+  s_a965107c48ca30::t_33d4b1b8918bad 778
+apps/web/src/components/folder-mark.tsx
+  s_a965107c48ca30::t_44fad3995eec6f 1-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02168bc0ea42a14e79be004b17dd50602e16860a",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

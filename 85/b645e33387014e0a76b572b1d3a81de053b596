@@ -1,0 +1,109 @@
+apps/web/src/components/scramble.tsx
+  s_a965107c48ca30::t_7e518535bbe497 1-98
+  s_a965107c48ca30::t_4a0358c8f65aef 99-100
+apps/web/src/components/dither-kit/LICENSE
+  s_a965107c48ca30::t_d99f0b67d70bb1 1-27
+apps/web/src/components/cover.tsx
+  s_a965107c48ca30::t_bfc5abd79fd49e 1-149
+  s_a965107c48ca30::t_746412282bf5b4 150-250
+apps/web/src/components/lock-story.tsx
+  s_a965107c48ca30::t_07ef7c424e3922 1-195
+  s_a965107c48ca30::t_8017b1f25bb079 196-213
+apps/web/src/components/house.tsx
+  s_a965107c48ca30::t_4695b8d1ad0035 1-88
+  s_a965107c48ca30::t_f91195ae9b6edc 89-93
+apps/web/src/components/security-demos.tsx
+  s_a965107c48ca30::t_6ea8d67ccf5e2d 1-219
+  s_a965107c48ca30::t_a3353c3b4f4f13 220-226
+apps/web/src/routes/blog/index.tsx
+  s_a965107c48ca30::t_389d00621c2317 2,4-7,26-170,172,176-180,182-183,185-188,191-195,200-203
+  s_a965107c48ca30::t_aa8cb92155e41b 204-215
+apps/web/src/identities.css
+  s_a965107c48ca30::t_35f2b64b897a90 1-317,319,321-322,324-325,331,335,341,345
+  s_a965107c48ca30::t_1b7449390618a8 318,320,323,326-330,332-334,336-340,342-344,346-360
+apps/web/src/routes/index.tsx
+  s_a965107c48ca30::t_b23f795a7f3d51 236,238-240
+  s_a965107c48ca30::t_5ce174882c1aeb 6-9,11,101,103-117,120,125,130,189,192-233,235,241-243,281,283-294,307-308,315,412
+DESIGN.md
+  s_a965107c48ca30::t_6afd67a5ddf9c0 361,370,378-387
+apps/web/package.json
+  s_a965107c48ca30::t_a048d0148bc40b 28
+apps/web/src/components/auth-layout.tsx
+  s_a965107c48ca30::t_2789ad555ea16a 11,25,35-36,40,42-52,54-93
+apps/web/src/components/dither-kit/avatar.tsx
+  s_a965107c48ca30::t_f45267c4560712 1-219
+apps/web/src/components/dither-kit/gradient.tsx
+  s_a965107c48ca30::t_f8f22afff8ab33 1-167
+apps/web/src/components/dither-kit/lib.ts
+  s_a965107c48ca30::t_a7f05b5dac4f71 1-6
+apps/web/src/components/dither-kit/palette.ts
+  s_a965107c48ca30::t_271399d62a6f49 1-45
+apps/web/src/components/dither-kit/pixel.ts
+  s_a965107c48ca30::t_c8a4efa037489c 1-116
+apps/web/src/components/email-step.tsx
+  s_a965107c48ca30::t_a848e6d24d54ab 120,259
+apps/web/src/components/legal-layout.tsx
+  s_a965107c48ca30::t_cf6013571b5a03 6,22-23,31-34,39-40,50,72,102-103,109-112,122-123
+apps/web/src/components/mdx.tsx
+  s_a965107c48ca30::t_96fe103ca9ffdf 134,137-138,141
+apps/web/src/components/recovery-phrase.tsx
+  s_a965107c48ca30::t_a75621fdc59768 174,308,364-368
+apps/web/src/components/security-page.tsx
+  s_a965107c48ca30::t_e0314c4623126a 4,6,9,27-28,50,148-228,244,247
+apps/web/src/components/site.tsx
+  s_a965107c48ca30::t_18956c403f85ea 16-40
+apps/web/src/content/about.mdx
+  s_a965107c48ca30::t_fef64e1e005562 7,92-93
+apps/web/src/content/blog/how-hushos-1-0-was-built.mdx
+  s_a965107c48ca30::t_af5947f96d5304 7-8
+apps/web/src/content/blog/hushos-1-0.mdx
+  s_a965107c48ca30::t_7157fff1b22c32 6-7
+apps/web/src/content/blog/post-quantum-sharing.mdx
+  s_a965107c48ca30::t_4171c2345296b4 7-8
+apps/web/src/content/blog/why-your-password-never-leaves-your-device.mdx
+  s_a965107c48ca30::t_881189f30e9af7 7-8
+apps/web/src/content/security.mdx
+  s_a965107c48ca30::t_bbb505cad9c6b1 10,231-232,372-373,460-461
+apps/web/src/lib/content.ts
+  s_a965107c48ca30::t_d98fc596dd178e 8-10,13-14
+apps/web/src/routes/about/route.tsx
+  s_a965107c48ca30::t_be8d8f55165ce9 2,22-34
+apps/web/src/routes/account-deleted/route.tsx
+  s_a965107c48ca30::t_69485423600f6e 11
+apps/web/src/routes/blog/$slug.tsx
+  s_a965107c48ca30::t_a0e5d286b9c77d 2,4-6,60-84,91-96,100-104,106
+apps/web/src/routes/go/$slug.tsx
+  s_a965107c48ca30::t_1b7fa3f942ff01 6,139,383
+apps/web/src/routes/pricing/route.tsx
+  s_a965107c48ca30::t_16b256f4971adc 2-12,287,544
+apps/web/src/routes/r/$code.tsx
+  s_a965107c48ca30::t_062f7d75525635 3,40,143
+apps/web/src/routes/recover/complete.tsx
+  s_a965107c48ca30::t_506502fee7b8cb 103
+apps/web/src/routes/register/complete.tsx
+  s_a965107c48ca30::t_066558b3577268 124
+apps/web/src/routes/teams/route.tsx
+  s_a965107c48ca30::t_d4c5fbfda47b8a 5-14,92,195
+apps/web/src/routes/vs/$slug.tsx
+  s_a965107c48ca30::t_5729c3f6e135a5 3,48,147
+apps/web/src/styles.css
+  s_a965107c48ca30::t_66a6f6d447496a 6
+bun.lock
+  s_a965107c48ca30::t_c28545b785aad1 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85b645e33387014e0a76b572b1d3a81de053b596",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

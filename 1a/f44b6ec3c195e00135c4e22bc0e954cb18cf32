@@ -1,0 +1,23 @@
+packages/crypto/package.json
+  s_a965107c48ca30::t_22ff47e8ee6cb6 15
+packages/crypto/src/drive.ts
+  s_a965107c48ca30::t_792cc01c738313 3,496-497
+packages/crypto/src/padding.ts
+  s_a965107c48ca30::t_1545915427e1fb 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1af44b6ec3c195e00135c4e22bc0e954cb18cf32",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

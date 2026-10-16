@@ -1,0 +1,21 @@
+DESIGN.md
+  s_a965107c48ca30::t_0dc918ab08fa60 347
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Theme.kt
+  s_a965107c48ca30::t_4a9d82bba752b0 58-64,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "576a53b13c4274440da0b513684b9097a54eaede",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

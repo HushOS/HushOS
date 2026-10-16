@@ -1,0 +1,27 @@
+apps/web/src/components/fit-planner.tsx
+  s_a965107c48ca30::t_f84d59ac4a8ff9 2-4,10-11,14-15,17,21,45-53,69,75-78,84,90-99,108,110-115,128-129,157-160,162-172,181-182,188-189,192,194-196
+  s_a965107c48ca30::t_15336aa4f8276e 1,5-9,12-13,16,18-20,22-44,54-68,70-74,79-83,85-89,100-107,109,116-127,130-156,161,173-180,183-187,190-191,193,197-203
+  s_a965107c48ca30::t_b12e6adcf40ef8 204-237
+apps/web/src/components/security-demos.tsx
+  s_a965107c48ca30::t_079b39ff4bb8e4 141
+apps/web/src/identities.css
+  s_a965107c48ca30::t_c8f77d951d2a3e 152-156,169-172
+apps/web/src/routes/pricing/route.tsx
+  s_a965107c48ca30::t_1ecd93955a3f0b 1,532-544
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e54d4a76fb344329be6c6ac097806209209626e1",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
