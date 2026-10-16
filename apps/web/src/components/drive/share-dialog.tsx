@@ -775,7 +775,7 @@ function LinkCard({
     return (
         <li data-link={link.id} className="flex flex-col gap-3 px-3 py-2.5">
             <div className="flex items-center gap-3">
-                {/* Amber marks "anyone with the link"; it stays on the icon, not the whole row. */}
+                {/* The blue link icon marks "anyone with the link"; the colour stays on the icon, not the whole row. */}
                 <Link2Icon
                     className="size-[18px] shrink-0 text-primary"
                     strokeWidth={2.2}
