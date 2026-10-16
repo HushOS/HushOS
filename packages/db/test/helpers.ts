@@ -34,7 +34,10 @@ export async function createTestAccount(input: { email?: string; quotaBytes?: bi
         .values({ name: 'Test', email, normalizedEmail: email, emailVerifiedAt: new Date() })
         .returning({ id: users.id });
     if (!user) throw new Error('Could not create the test user.');
-    const [workspace] = await db.insert(workspaces).values({}).returning({ id: workspaces.id });
+    const [workspace] = await db
+        .insert(workspaces)
+        .values({ ownerKind: 'personal' })
+        .returning({ id: workspaces.id });
     if (!workspace) throw new Error('Could not create the test workspace.');
     await db.insert(personalWorkspaces).values({ userId: user.id, workspaceId: workspace.id });
     await db.insert(workspaceStorage).values({
@@ -134,4 +137,44 @@ export async function createTestIdentity(
     const signer = { ...key, userId };
     testSigners.set(userId, signer);
     return signer;
+}
+
+/*
+ * Stores an identity whose public halves are real: the keys and keys
+ * statement a client made (the group testkit's `person(n, version, { userId })`
+ * makes them for a stored account), so the crypto core's checks hold over what
+ * the server serves. The private halves are random bytes of the right length;
+ * nothing here opens them.
+ */
+export async function storeTestIdentity(
+    userId: string,
+    served: {
+        keyVersion: number;
+        encryptionPublicKey: string;
+        signingPublicKey: string;
+        mlDsaPublicKey: string;
+        kemPublicKey: string;
+        keysSignature: string;
+    },
+) {
+    const b = (value: string) => Buffer.from(value, 'base64url');
+    await db.insert(accountIdentities).values({
+        userId,
+        version: 2,
+        keyVersion: served.keyVersion,
+        wrappingSalt: randomBytes(32),
+        encryptionPublicKey: b(served.encryptionPublicKey),
+        encryptionPrivateKeyNonce: randomBytes(24),
+        encryptedEncryptionPrivateKey: randomBytes(48),
+        signingPublicKey: b(served.signingPublicKey),
+        signingSeedNonce: randomBytes(24),
+        encryptedSigningSeed: randomBytes(48),
+        kemPublicKey: b(served.kemPublicKey),
+        kemSeedNonce: randomBytes(24),
+        encryptedKemSeed: randomBytes(80),
+        mlDsaPublicKey: b(served.mlDsaPublicKey),
+        mlDsaSeedNonce: randomBytes(24),
+        encryptedMlDsaSeed: randomBytes(48),
+        keysSignature: b(served.keysSignature),
+    });
 }

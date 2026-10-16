@@ -456,9 +456,22 @@ export const accountIdentityHistory = pgTable(
         newMlDsaPublicKey: bytea('new_ml_dsa_public_key'),
         // 64 bytes (Ed25519, version 1 statements) or 3373 (hybrid, version 2).
         successionSignature: bytea('succession_signature').notNull(),
+        /*
+         * The successor's consent (docs/identity-pq-design.md, "Successor consent"):
+         * the old identity's hybrid signature over the consent statement as "old",
+         * then the new identity's as "new", 6746 bytes. Checked on upload; null on
+         * links made before it, or by a client that does not send it yet. Set with
+         * the link and never rewritten: a master-key rotation re-wraps the private
+         * keys of this row and leaves it alone.
+         */
+        successionConsent: bytea('succession_consent'),
     },
     (table) => [
         primaryKey({ columns: [table.userId, table.keyVersion] }),
+        check(
+            'account_identity_history_consent_valid',
+            sql`${table.successionConsent} is null or (${table.version} = 2 and octet_length(${table.successionConsent}) = 6746)`,
+        ),
         check(
             'account_identity_history_versions_valid',
             sql`${table.version} in (1, 2) and ${table.keyVersion} > 0 and ${table.replacedByKeyVersion} > ${table.keyVersion}`,

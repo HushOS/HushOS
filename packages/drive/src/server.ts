@@ -423,7 +423,7 @@ export async function allocateEpochs(userId: string, workspaceId: string, count:
     await requireEpochs(userId, workspaceId);
     if (!Number.isInteger(count) || count < 1 || count > 10_000)
         throw new DriveError('invalid', 'Invalid epoch count.');
-    const range = await driveRepository.allocateKeyEpochs(workspaceId, count);
+    const range = await driveRepository.allocateKeyEpochs(workspaceId, count, userId);
     if (!range) throw notFound();
     return range;
 }
@@ -579,6 +579,7 @@ export async function moveNode(
     const result = await driveRepository.moveNode({
         workspaceId,
         nodeId,
+        writer: userId,
         parentId: input.parentId,
         parentKeyEpoch: input.parentKeyEpoch,
         keyEnvelope: keyEnvelope(input.keyEnvelope),
@@ -607,7 +608,7 @@ export async function moveNode(
 
 export async function trashNode(userId: string, workspaceId: string, nodeId: string) {
     await requireAccess(userId, workspaceId, nodeId, 'editor');
-    const result = await driveRepository.trashNode({ workspaceId, nodeId });
+    const result = await driveRepository.trashNode({ workspaceId, nodeId, writer: userId });
     if (result.status === 'not-found') throw notFound();
     if (result.status === 'root')
         throw new DriveError('invalid', 'The top folder cannot be moved to the trash.', 409);
@@ -625,6 +626,7 @@ export async function restoreNode(
     const result = await driveRepository.restoreNode({
         workspaceId,
         nodeId,
+        writer: userId,
         toRoot: toRoot
             ? {
                   parentKeyEpoch: toRoot.parentKeyEpoch,
@@ -661,7 +663,7 @@ export async function restoreNode(
 /* Delete forever: purges one trashed node now; its descendants follow in the worker's fan-out. */
 export async function purgeNode(userId: string, workspaceId: string, nodeId: string) {
     await requireMember(userId, workspaceId);
-    const result = await driveRepository.purgeNode({ workspaceId, nodeId });
+    const result = await driveRepository.purgeNode({ workspaceId, nodeId, writer: userId });
     switch (result.status) {
         case 'not-found':
             throw notFound();
@@ -785,7 +787,7 @@ export async function listVersions(userId: string, workspaceId: string, nodeId: 
 
 export async function restoreVersion(userId: string, workspaceId: string, versionId: string) {
     await requireVersionAccess(userId, workspaceId, versionId, 'editor');
-    const result = await driveRepository.restoreVersion(workspaceId, versionId);
+    const result = await driveRepository.restoreVersion(workspaceId, versionId, userId);
     switch (result.status) {
         case 'ok':
             return { node: nodeView(result.node) };
@@ -802,7 +804,7 @@ export async function restoreVersion(userId: string, workspaceId: string, versio
 
 export async function discardVersion(userId: string, workspaceId: string, versionId: string) {
     await requireVersionAccess(userId, workspaceId, versionId, 'editor');
-    const result = await driveRepository.discardVersion(workspaceId, versionId);
+    const result = await driveRepository.discardVersion(workspaceId, versionId, userId);
     switch (result.status) {
         case 'ok':
             return { discarded: true };
@@ -999,6 +1001,7 @@ export async function putWorkspaceDocument(
         kind: documentKind(kind),
         version: input.version,
         envelope: documentEnvelope(input.envelope),
+        writer: userId,
     });
     if (result.status === 'stale')
         throw stale({ document: result.document ? documentView(result.document) : null });
@@ -1016,7 +1019,7 @@ export async function discardSupersededVersions(userId: string, workspaceId: str
 /* Empties the trash a batch of roots at a time; the client calls until nothing remains. */
 export async function emptyTrash(userId: string, workspaceId: string) {
     await requireMember(userId, workspaceId);
-    return driveRepository.emptyTrash(workspaceId, 100);
+    return driveRepository.emptyTrash(workspaceId, 100, userId);
 }
 
 export async function listTrash(userId: string, workspaceId: string, after?: string) {
@@ -1290,7 +1293,7 @@ export async function completeUpload(
     parts: { partNumber: number; etag: string }[],
 ) {
     await requireUploadAccess(userId, workspaceId, uploadId);
-    const started = await driveRepository.startCompleting(workspaceId, uploadId);
+    const started = await driveRepository.startCompleting(workspaceId, uploadId, userId);
     switch (started.status) {
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
@@ -1320,6 +1323,7 @@ export async function completeUpload(
         workspaceId,
         uploadId,
         stored ? BigInt(stored.size) : null,
+        userId,
     );
     switch (finished.status) {
         case 'published':
@@ -1399,6 +1403,7 @@ export async function attachUpload(
                   contentKeyEnvelope: versionEnvelope(input.contentKeyEnvelope),
                   versionSignature: signature(input.versionSignature),
               },
+        userId,
     );
     switch (result.status) {
         case 'published':
@@ -2363,6 +2368,9 @@ const noRotation = () => new DriveError('not-found', 'No rotation is running her
 
 export async function startRotation(userId: string, workspaceId: string, nodeId: string) {
     await requireMember(userId, workspaceId);
+    // A group's area keys move through its rosters: only a `members` holder starts a rotation there.
+    if (!(await driveRepository.mayStartRotation(userId, workspaceId)))
+        throw forbidden('Only someone who manages the group can rotate keys in its folders.');
     const result = await rotationsRepository.startRotation({
         workspaceId,
         nodeId,
@@ -2371,6 +2379,9 @@ export async function startRotation(userId: string, workspaceId: string, nodeId:
     switch (result.status) {
         case 'not-found':
             throw notFound();
+        // Only a caller-drawn target (a group area's rotation) can be stale; none is passed here.
+        case 'stale':
+            throw stale();
         case 'active':
             if (result.rotation.nodeId === nodeId)
                 return {
@@ -2430,25 +2441,65 @@ export async function rotationWork(
     };
 }
 
+/* A node of a rotation batch as a client sends it. */
+export type RotatedNodeWire = {
+    id: string;
+    changeSeq: number;
+    parentKeyEpoch: number;
+    keyEnvelope: string;
+    rotated: {
+        metadataEnvelope: string;
+        /* The rotating account's signature over the node's unchanged metadata version. */
+        metadataSignature: string;
+        versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+        shares: { id: string; shareEnvelope: string }[];
+        links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
+        unsealableLinks: string[];
+    } | null;
+};
+
+/* A rotated node decoded: what a rotation batch, and a group area's rotation of its root, take. */
+export function rotatedNodeInput(node: RotatedNodeWire): rotationsRepository.RotatedNodeInput {
+    return {
+        id: node.id,
+        changeSeq: node.changeSeq,
+        parentKeyEpoch: node.parentKeyEpoch,
+        keyEnvelope: keyEnvelope(node.keyEnvelope),
+        rotated: node.rotated
+            ? {
+                  metadataEnvelope: metadataEnvelope(node.rotated.metadataEnvelope),
+                  metadataSignature: signature(node.rotated.metadataSignature),
+                  versions: node.rotated.versions.map((v) => ({
+                      id: v.id,
+                      // Resealed in the object's own suite: 72 bytes for suite 1, 84 for 2 and 3.
+                      contentKeyEnvelope: anyVersionEnvelope(v.contentKeyEnvelope),
+                      signature: signature(v.signature),
+                  })),
+                  shares: node.rotated.shares.map((share) => ({
+                      id: share.id,
+                      shareEnvelope: shareEnvelope(share.shareEnvelope),
+                  })),
+                  links: node.rotated.links.map((link) => ({
+                      id: link.id,
+                      linkEnvelope: decodeEnvelope(link.linkEnvelope, 72),
+                      secretEnvelope: linkSecretEnvelope(link.secretEnvelope),
+                  })),
+                  unsealableLinks: node.rotated.unsealableLinks,
+              }
+            : null,
+    };
+}
+
+/* A new node's envelopes decoded: what a root takes, a group area's included. */
+export function nodeEnvelopesInput(input: NodeEnvelopesInput) {
+    return envelopes(input);
+}
+
 export async function rotateNodes(
     userId: string,
     workspaceId: string,
     nodeId: string,
-    nodes: {
-        id: string;
-        changeSeq: number;
-        parentKeyEpoch: number;
-        keyEnvelope: string;
-        rotated: {
-            metadataEnvelope: string;
-            /* The rotating account's signature over the node's unchanged metadata version. */
-            metadataSignature: string;
-            versions: { id: string; contentKeyEnvelope: string; signature: string }[];
-            shares: { id: string; shareEnvelope: string }[];
-            links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
-            unsealableLinks: string[];
-        } | null;
-    }[],
+    nodes: RotatedNodeWire[],
 ) {
     await requireMember(userId, workspaceId);
     const rotation = await rotationsRepository.getRotation(workspaceId, nodeId);
@@ -2458,34 +2509,7 @@ export async function rotateNodes(
         rootId: nodeId,
         targetEpoch: rotation.targetEpoch,
         userId,
-        nodes: nodes.map((node) => ({
-            id: node.id,
-            changeSeq: node.changeSeq,
-            parentKeyEpoch: node.parentKeyEpoch,
-            keyEnvelope: keyEnvelope(node.keyEnvelope),
-            rotated: node.rotated
-                ? {
-                      metadataEnvelope: metadataEnvelope(node.rotated.metadataEnvelope),
-                      metadataSignature: signature(node.rotated.metadataSignature),
-                      versions: node.rotated.versions.map((v) => ({
-                          id: v.id,
-                          // Resealed in the object's own suite: 72 bytes for suite 1, 84 for 2 and 3.
-                          contentKeyEnvelope: anyVersionEnvelope(v.contentKeyEnvelope),
-                          signature: signature(v.signature),
-                      })),
-                      shares: node.rotated.shares.map((share) => ({
-                          id: share.id,
-                          shareEnvelope: shareEnvelope(share.shareEnvelope),
-                      })),
-                      links: node.rotated.links.map((link) => ({
-                          id: link.id,
-                          linkEnvelope: decodeEnvelope(link.linkEnvelope, 72),
-                          secretEnvelope: linkSecretEnvelope(link.secretEnvelope),
-                      })),
-                      unsealableLinks: node.rotated.unsealableLinks,
-                  }
-                : null,
-        })),
+        nodes: nodes.map(rotatedNodeInput),
     });
     // Each node is its own transaction: the ones before a refused one stand, and say so.
     if (results.some((result) => result.status === 'bad-signature'))

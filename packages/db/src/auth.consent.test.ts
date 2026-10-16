@@ -1,0 +1,371 @@
+import { readFileSync } from 'node:fs';
+// The group core's own builder, test-only: the server never imports the client's.
+import {
+    successionConsentStatement as coreConsentStatement,
+    type SuccessionStatement as CoreLink,
+} from '../../crypto/src/signatures';
+import { verifySuccessionConsent as coreConsentHolds } from '../../crypto/src/identity';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { bytes, freshV2, registered, seedOf, signedIn } from '../test/accounts';
+import {
+    closeDatabase,
+    hybridSignerFromSeed,
+    resetDatabase,
+    type HybridSigner,
+} from '../test/helpers';
+import * as auth from './auth';
+import { db } from './client';
+import { accountIdentities } from './schema';
+import {
+    successionConsentHolds,
+    successionConsentStatement,
+    successionStatement,
+    type SuccessionStatementInput,
+} from './signatures';
+
+/*
+ * The successor's consent (F8, docs/groups-server.md 5): two hybrid
+ * signatures over the consent statement, the old identity's as "old" and the
+ * new identity's as "new". The group core asks it of links from a member's
+ * first keys, so a consent the server stores that does not hold would be served
+ * as though it did; one it drops would leave a member's earlier keys
+ * unretired. Optional on upload in 1b, checked whenever sent.
+ */
+
+beforeEach(resetDatabase);
+afterAll(closeDatabase);
+
+/* A registered account whose version 2 identity signs for real, at key version 1, signed in. */
+async function account(label: string) {
+    const { user, workspaceId } = await registered(`${label}@hushos.test`);
+    const signer = hybridSignerFromSeed(seedOf(`old:${label}`));
+    await db
+        .update(accountIdentities)
+        .set(freshV2(user.id, signer, 1))
+        .where(eq(accountIdentities.userId, user.id));
+    return { user, workspaceId, signer, sessionTokenHash: await signedIn(user.id) };
+}
+
+/* The next identity, the link it makes, the old keys' version 2 signature and a consent that holds. */
+async function successor(userId: string, signer: HybridSigner, label: string) {
+    const current = (await auth.getIdentity(userId))!;
+    const next = hybridSignerFromSeed(seedOf(`new:${label}`));
+    const identity = freshV2(userId, next, current.keyVersion + 1);
+    const link: SuccessionStatementInput = {
+        userId,
+        oldKeyVersion: current.keyVersion,
+        newKeyVersion: identity.keyVersion,
+        oldEncryptionPublicKey: current.encryptionPublicKey,
+        oldSigningPublicKey: current.signingPublicKey,
+        oldMlDsaPublicKey: current.mlDsaPublicKey!,
+        newEncryptionPublicKey: identity.encryptionPublicKey,
+        newSigningPublicKey: identity.signingPublicKey,
+        newMlDsaPublicKey: identity.mlDsaPublicKey,
+        newKemPublicKey: identity.kemPublicKey,
+    };
+    const oldHalf = signer.sign(successionConsentStatement(link, 'old'));
+    const newHalf = next.sign(successionConsentStatement(link, 'new'));
+    return {
+        identity,
+        next,
+        link,
+        oldHalf,
+        newHalf,
+        signature: signer.sign(successionStatement(link)),
+        consent: Buffer.concat([oldHalf, newHalf]),
+    };
+}
+
+const flip = (value: Buffer, at: number) => {
+    const copy = Buffer.from(value);
+    copy[at] = copy[at]! ^ 0x01;
+    return copy;
+};
+
+describe('successor consent on an identity succession', () => {
+    test('is stored when both halves hold, and served with the link and in the history', async () => {
+        const { user, signer, sessionTokenHash } = await account('consent-ok');
+        const made = await successor(user.id, signer, 'consent-ok');
+        expect(made.consent).toHaveLength(6746);
+        expect(
+            await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity: made.identity,
+                signature: made.signature,
+                consent: made.consent,
+            }),
+        ).toEqual({ status: 'ok', keyVersion: 2 });
+        const [link] = (await auth.successionChain(user.id, 1))!;
+        expect(link!.consent!.equals(made.consent)).toBe(true);
+        expect(link!.signature.equals(made.signature)).toBe(true);
+        const [history] = await auth.listIdentityHistory(user.id);
+        expect(history!.successionConsent!.equals(made.consent)).toBe(true);
+    });
+
+    test('is optional in 1b: a link without it is taken and served with none', async () => {
+        const { user, signer, sessionTokenHash } = await account('consent-none');
+        const made = await successor(user.id, signer, 'consent-none');
+        expect(
+            await auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity: made.identity,
+                signature: made.signature,
+            }),
+        ).toEqual({ status: 'ok', keyVersion: 2 });
+        const [link] = (await auth.successionChain(user.id, 1))!;
+        expect(link!.consent).toBeNull();
+    });
+
+    test('is refused, and nothing is stored, unless each half holds under its own keys in its own role', async () => {
+        const { user, signer, sessionTokenHash } = await account('consent-bad');
+        const made = await successor(user.id, signer, 'consent-bad');
+        const attempt = (consent: Buffer) =>
+            auth.succeedIdentity({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                identity: made.identity,
+                signature: made.signature,
+                consent,
+            });
+        // Another successor's consent: a genuine pair, for a link to other new keys.
+        const elsewhere = await successor(user.id, signer, 'consent-bad-elsewhere');
+        // The same keys consenting to the same link for another account.
+        const otherAccount = { ...made.link, userId: '22222222-2222-4222-8222-222222222222' };
+        const otherAccountConsent = Buffer.concat([
+            signer.sign(successionConsentStatement(otherAccount, 'old')),
+            made.next.sign(successionConsentStatement(otherAccount, 'new')),
+        ]);
+        const refused: [string, Buffer][] = [
+            ['a byte flipped in the old half (Ed25519)', flip(made.consent, 10)],
+            ['a byte flipped in the old half (ML-DSA)', flip(made.consent, 1000)],
+            ['a byte flipped in the new half (Ed25519)', flip(made.consent, 3373 + 10)],
+            ['a byte flipped in the new half (ML-DSA)', flip(made.consent, 3373 + 1000)],
+            ['the halves swapped', Buffer.concat([made.newHalf, made.oldHalf])],
+            // The planter's case: the old keys alone, in both roles, are not the successor.
+            [
+                'the old keys in both roles',
+                Buffer.concat([
+                    made.oldHalf,
+                    signer.sign(successionConsentStatement(made.link, 'new')),
+                ]),
+            ],
+            [
+                'the new keys in both roles',
+                Buffer.concat([
+                    made.next.sign(successionConsentStatement(made.link, 'old')),
+                    made.newHalf,
+                ]),
+            ],
+            ['the version 2 signature, doubled', Buffer.concat([made.signature, made.signature])],
+            [
+                'the version 2 signature beside the new half',
+                Buffer.concat([made.signature, made.newHalf]),
+            ],
+            ["another link's consent", elsewhere.consent],
+            ["another account's consent", otherAccountConsent],
+            ['one byte short', made.consent.subarray(0, 6745)],
+        ];
+        for (const [, consent] of refused)
+            expect(await attempt(consent)).toEqual({ status: 'bad-signature' });
+        expect((await auth.getIdentity(user.id))!.keyVersion).toBe(1);
+        expect(await auth.listIdentityHistory(user.id)).toEqual([]);
+        // The genuine consent still lands afterwards.
+        expect(await attempt(made.consent)).toEqual({ status: 'ok', keyVersion: 2 });
+    });
+
+    test('a master-key rotation re-wraps the history row and leaves its consent byte for byte', async () => {
+        const { user, workspaceId, signer, sessionTokenHash } = await account('consent-rewrap');
+        const made = await successor(user.id, signer, 'consent-rewrap');
+        await auth.succeedIdentity({
+            userId: user.id,
+            credentialVersion: 1,
+            sessionTokenHash,
+            identity: made.identity,
+            signature: made.signature,
+            consent: made.consent,
+        });
+        const current = (await auth.getIdentity(user.id))!;
+        const [old] = await auth.listIdentityHistory(user.id);
+        const rewrap = (row: typeof current | NonNullable<typeof old>) => ({
+            version: row.version,
+            keyVersion: row.keyVersion,
+            wrappingSalt: bytes(32),
+            encryptionPublicKey: row.encryptionPublicKey,
+            encryptionPrivateKeyNonce: bytes(24),
+            encryptedEncryptionPrivateKey: bytes(48),
+            signingPublicKey: row.signingPublicKey,
+            signingSeedNonce: bytes(24),
+            encryptedSigningSeed: bytes(48),
+            kemPublicKey: row.kemPublicKey,
+            kemSeedNonce: bytes(24),
+            encryptedKemSeed: bytes(80),
+            kemSignature: row.kemSignature,
+            mlDsaPublicKey: row.mlDsaPublicKey,
+            mlDsaSeedNonce: bytes(24),
+            encryptedMlDsaSeed: bytes(48),
+            keysSignature: row.keysSignature,
+        });
+        const history = rewrap(old!);
+        expect(
+            await auth.changeAccountSecurity({
+                userId: user.id,
+                action: 'master-key',
+                sessionTokenHash,
+                credentialVersion: 1,
+                registrationRecord: 'record-2',
+                envelope: {
+                    keyVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                },
+                recovery: {
+                    keyVersion: 2,
+                    recoveryVersion: 2,
+                    wrappingSalt: bytes(32),
+                    wrappingNonce: bytes(24),
+                    encryptedKey: bytes(48),
+                    backupNonce: bytes(24),
+                    encryptedRecoveryKey: bytes(48),
+                    publicKey: bytes(32),
+                },
+                identity: rewrap(current),
+                identityHistory: [history],
+                workspaces: [
+                    {
+                        id: workspaceId,
+                        grant: {
+                            keyVersion: 2,
+                            workspaceKeyVersion: 1,
+                            wrappingSalt: bytes(32),
+                            wrappingNonce: bytes(24),
+                            encryptedKey: bytes(48),
+                        },
+                    },
+                ],
+            }),
+        ).toBe(true);
+        const [after] = await auth.listIdentityHistory(user.id);
+        // The rotation did run on this row: its wrapped seed is the new one.
+        expect(after!.encryptedMlDsaSeed!.equals(history.encryptedMlDsaSeed)).toBe(true);
+        expect(after!.successionConsent!.equals(made.consent)).toBe(true);
+        expect(after!.successionSignature.equals(made.signature)).toBe(true);
+    });
+});
+
+/*
+ * The server builds the consent statement itself (signatures.ts never imports
+ * the client's), so the two must agree byte for byte or every consent a client
+ * makes is refused. Pinned against the group core's own fixtures: every link
+ * with consent in crates/hushos-core/fixtures/web-groups.json (which both
+ * twins verify), the statements the core's successionConsentStatement builds
+ * for each, and the consent the core made over them.
+ */
+describe('the consent statement', () => {
+    type Link = Record<string, string | number | null>;
+    const fixtures = JSON.parse(
+        readFileSync(
+            new URL('../../../crates/hushos-core/fixtures/web-groups.json', import.meta.url),
+            'utf8',
+        ),
+    ) as { cases: { input?: { record?: { writerUserId?: string; links?: Link[] } } }[] };
+    const consented = fixtures.cases.flatMap((entry) =>
+        (entry.input?.record?.links ?? [])
+            .filter((link) => typeof link.consent === 'string')
+            .map((link) => ({ userId: entry.input!.record!.writerUserId!, link })),
+    );
+    const inputOf = (userId: string, link: Link): SuccessionStatementInput => {
+        const b = (field: string) => Buffer.from(link[field] as string, 'base64url');
+        return {
+            userId,
+            oldKeyVersion: link.oldKeyVersion as number,
+            newKeyVersion: link.newKeyVersion as number,
+            oldEncryptionPublicKey: b('oldEncryptionPublicKey'),
+            oldSigningPublicKey: b('oldSigningPublicKey'),
+            oldMlDsaPublicKey: b('oldMlDsaPublicKey'),
+            newEncryptionPublicKey: b('newEncryptionPublicKey'),
+            newSigningPublicKey: b('newSigningPublicKey'),
+            newMlDsaPublicKey: b('newMlDsaPublicKey'),
+            newKemPublicKey: b('newKemPublicKey'),
+        };
+    };
+
+    test('is the bytes the group core builds, in both roles, for every consented link in its fixtures', async () => {
+        // Fewer than this and the fixtures no longer carry what this pins.
+        expect(consented.length).toBeGreaterThan(10);
+        let built = 0;
+        for (const { userId, link } of consented) {
+            const fields = {
+                userId,
+                ...(Object.fromEntries(
+                    Object.entries(link).filter(
+                        ([key]) => key !== 'signature' && key !== 'consent',
+                    ),
+                ) as Omit<CoreLink, 'userId'>),
+            };
+            for (const role of ['old', 'new'] as const) {
+                // Some fixture links carry keys the core itself refuses to build over: skipped.
+                const core = await coreConsentStatement(fields, role).catch(() => null);
+                if (!core) continue;
+                built++;
+                expect(successionConsentStatement(inputOf(userId, link), role)).toEqual(
+                    Buffer.from(core),
+                );
+            }
+        }
+        expect(built).toBeGreaterThan(10);
+    });
+
+    test("the server's check agrees with the core's on every consented link, forged ones included", async () => {
+        let held = 0;
+        for (const { userId, link } of consented) {
+            const core = await coreConsentHolds(userId, link as never);
+            let server = false;
+            try {
+                server = successionConsentHolds(
+                    inputOf(userId, link),
+                    Buffer.from(link.consent as string, 'base64url'),
+                );
+            } catch {
+                server = false;
+            }
+            expect(server).toBe(core);
+            if (core) held++;
+        }
+        // Both answers occur (the fixtures carry forged consents too): agreement on both sides.
+        expect(held).toBeGreaterThan(0);
+        expect(held).toBeLessThan(consented.length);
+        const genuine = consented.find(({ userId, link }) => {
+            try {
+                return successionConsentHolds(
+                    inputOf(userId, link),
+                    Buffer.from(link.consent as string, 'base64url'),
+                );
+            } catch {
+                return false;
+            }
+        })!;
+        const consent = Buffer.from(genuine.link.consent as string, 'base64url');
+        expect(
+            successionConsentHolds(
+                inputOf('00000009-abcd-4abc-8abc-abcdefabcdef', genuine.link),
+                consent,
+            ),
+        ).toBe(false);
+        expect(
+            successionConsentHolds(
+                { ...inputOf(genuine.userId, genuine.link), newKeyVersion: 99 },
+                consent,
+            ),
+        ).toBe(false);
+        expect(
+            successionConsentHolds(inputOf(genuine.userId, genuine.link), flip(consent, 6745)),
+        ).toBe(false);
+    });
+});

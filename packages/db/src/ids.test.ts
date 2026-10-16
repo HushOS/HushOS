@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { madeFor, scopedId, type IdKind } from './ids';
+import { madeFor, scopedId, type GroupIdKind, type IdKind } from './ids';
 
 /*
  * The server derives every client-made id again from its seed and the
@@ -24,6 +24,45 @@ describe('scoped ids', () => {
             expect(scopedId(kind, WS, COUNTING)).toBe(id);
             expect(scopedId(kind, WS.toUpperCase(), COUNTING)).toBe(id);
         }
+    });
+
+    test("give the group core's known answers for groups (scoped to their creator) and areas (to their group)", () => {
+        // From the group crypto core's shared fixtures (web-groups.json, "ids"), which both
+        // twins derive; a server that drifted would refuse every group and area it is sent.
+        const expected: [GroupIdKind, string, string, string][] = [
+            [
+                'group',
+                '00000001-abcd-4abc-8abc-abcdefabcdef',
+                'GDxghKjM8BQ4XICkyOwQNA',
+                '3bac3135-fa25-8e3b-93e8-c06d036a8396',
+            ],
+            [
+                'group',
+                '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a',
+                'H0Nni6_T9xtAZIis0PQYPA',
+                'c6f18e72-6010-809e-812b-bacacdbc8a41',
+            ],
+            [
+                'workspace',
+                '00000001-abcd-4abc-8abc-abcdefabcdef',
+                'Jkpukrfb_yNIbJC02f0hRQ',
+                '9a9a33c0-b7b0-854a-8b40-45d1b1fdbaa9',
+            ],
+            [
+                'workspace',
+                '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a',
+                'LVF1mr7iBytQdJi94QUqTg',
+                'f9309cef-c4c9-81c6-ad48-7097df6a0b21',
+            ],
+        ];
+        for (const [kind, scope, seed, id] of expected) {
+            expect(scopedId(kind, scope, seed)).toBe(id);
+            expect(madeFor(kind, scope, id, seed)).toBe(true);
+        }
+        // A group id is not an area id, and an area made for one group is not another's.
+        const [, scope, seed, id] = expected[2]!;
+        expect(madeFor('group', scope, id, seed)).toBe(false);
+        expect(madeFor('workspace', '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a', id, seed)).toBe(false);
     });
 
     test('an id is made for one kind and one workspace only', () => {

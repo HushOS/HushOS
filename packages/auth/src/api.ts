@@ -127,6 +127,8 @@ export interface AuthApi {
     succeedIdentity(input: {
         identity: IdentityEnvelope;
         signature: string;
+        /* The successor's consent (6746 bytes, base64url); optional until the 1c release. */
+        consent?: string;
     }): Promise<{ keyVersion: number }>;
     /* A contact's successions from key version `from` to the current one, in order. */
     contactSuccession(userId: string, from: number): Promise<{ links: SuccessionLink[] }>;

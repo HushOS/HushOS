@@ -16,6 +16,8 @@ import {
 } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
+import { departAllForDeletion } from './groups';
+import { pgCode } from './readiness';
 import { keyedHash } from './hash-key';
 import {
     personalWorkspaces,
@@ -27,6 +29,7 @@ import {
 import {
     deviceSessionStatement,
     keysStatement,
+    successionConsentHolds,
     successionStatement,
     verifyHybrid,
     verifySignature,
@@ -161,7 +164,7 @@ export async function registerAccount(input: {
         // The client chose the workspace id because its grant is bound to it.
         const [workspace] = await tx
             .insert(workspaces)
-            .values({ id: input.workspace.id })
+            .values({ id: input.workspace.id, ownerKind: 'personal' })
             .onConflictDoNothing()
             .returning({ id: workspaces.id });
         if (!workspace) throw new Error('Could not create workspace.');
@@ -810,6 +813,24 @@ export async function consumeRateLimit(bucket: Buffer, limit: number, windowMs: 
 }
 
 /*
+ * Whether a bucket still has room for one more use, without taking it: for a
+ * budget charged only when the thing it bounds actually happens (a group's
+ * stored rosters), so refused or replayed calls cost nothing.
+ */
+export async function rateLimitHasRoom(bucket: Buffer, limit: number) {
+    const [row] = await db
+        .select({ count: authRateLimits.count })
+        .from(authRateLimits)
+        .where(
+            and(
+                eq(authRateLimits.keyHash, keyedHash(bucket)),
+                gt(authRateLimits.expiresAt, new Date()),
+            ),
+        );
+    return !row || row.count < limit;
+}
+
+/*
  * Takes one use back off a bucket, for a count of things that should have finished and
  * did (a password proof started, then completed). The row goes at zero.
  */
@@ -1056,48 +1077,79 @@ export async function getStorageAllowance(userId: string) {
     };
 }
 
+/*
+ * Deletes the account and everything hanging off it. Before the account row
+ * is locked (the group row comes first in every lock order), the person
+ * departs every group they are in as leaving would: their access to the
+ * groups' areas ends and holders are told to mark them left. The only
+ * `billing` holder, or the last `members` holder of a group with others
+ * active, cannot be deleted until they hand over (`group-holder`), and
+ * nothing is changed.
+ */
 export async function deleteAccount(input: {
     userId: string;
     credentialVersion: number;
     sessionTokenHash: Buffer;
-}) {
-    return db.transaction(async (tx) => {
-        const [user] = await tx
-            .select(userFieldsWithEmailKey)
-            .from(users)
-            .where(eq(users.id, input.userId))
-            .for('update');
-        if (!user) return false;
-        const [session] = await tx
-            .select({ id: sessions.id })
-            .from(sessions)
-            .innerJoin(
-                opaqueCredentials,
-                and(
-                    eq(opaqueCredentials.userId, sessions.userId),
-                    eq(opaqueCredentials.version, sessions.credentialVersion),
-                ),
-            )
-            .where(
-                and(
-                    eq(sessions.userId, user.id),
-                    eq(sessions.tokenHash, input.sessionTokenHash),
-                    eq(sessions.credentialVersion, input.credentialVersion),
-                    gt(sessions.expiresAt, new Date()),
-                ),
-            );
-        if (!session) return false;
-        const [personal] = await tx
-            .select()
-            .from(personalWorkspaces)
-            .where(eq(personalWorkspaces.userId, user.id));
-        if (personal) await tx.delete(workspaces).where(eq(workspaces.id, personal.workspaceId));
-        await tx
-            .delete(accountEnrollments)
-            .where(eq(accountEnrollments.normalizedEmail, user.normalizedEmail));
-        await tx.delete(users).where(eq(users.id, user.id));
-        return true;
-    });
+}): Promise<boolean | 'group-holder' | 'unavailable'> {
+    class Holder extends Error {}
+    // Thrown, never returned, so the departures above roll back with it.
+    class Refused extends Error {}
+    try {
+        return await db.transaction(async (tx) => {
+            if (!(await sessionIsCurrent(tx, input))) return false;
+            if ((await departAllForDeletion(tx, input.userId)).status !== 'ok') throw new Holder();
+            if (!(await deleteAccountRow(tx, input))) throw new Refused();
+            return true;
+        });
+    } catch (error) {
+        if (error instanceof Holder) return 'group-holder';
+        if (error instanceof Refused) return false;
+        // It locks groups, areas and the account: a deadlock with a group write is retried.
+        const code = pgCode(error);
+        if (code === '40P01' || code === '40001') return 'unavailable';
+        throw error;
+    }
+}
+
+async function deleteAccountRow(
+    tx: Tx,
+    input: { userId: string; credentialVersion: number; sessionTokenHash: Buffer },
+) {
+    const [user] = await tx
+        .select(userFieldsWithEmailKey)
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .for('update');
+    if (!user) return false;
+    const [session] = await tx
+        .select({ id: sessions.id })
+        .from(sessions)
+        .innerJoin(
+            opaqueCredentials,
+            and(
+                eq(opaqueCredentials.userId, sessions.userId),
+                eq(opaqueCredentials.version, sessions.credentialVersion),
+            ),
+        )
+        .where(
+            and(
+                eq(sessions.userId, user.id),
+                eq(sessions.tokenHash, input.sessionTokenHash),
+                eq(sessions.credentialVersion, input.credentialVersion),
+                gt(sessions.expiresAt, new Date()),
+            ),
+        );
+    if (!session) return false;
+    const [personal] = await tx
+        .select()
+        .from(personalWorkspaces)
+        .where(eq(personalWorkspaces.userId, user.id));
+    if (personal) await tx.delete(workspaces).where(eq(workspaces.id, personal.workspaceId));
+    await tx
+        .delete(accountEnrollments)
+        .where(eq(accountEnrollments.normalizedEmail, user.normalizedEmail));
+    await tx.delete(users).where(eq(users.id, user.id));
+    return true;
 }
 
 export async function getAccountSetup(userId: string) {
@@ -1213,7 +1265,10 @@ export async function initializeAccount(input: {
         if (!workspaceId) {
             const [workspace] = await tx
                 .insert(workspaces)
-                .values(input.workspace ? { id: input.workspace.id } : {})
+                .values({
+                    ...(input.workspace ? { id: input.workspace.id } : {}),
+                    ownerKind: 'personal',
+                })
                 .onConflictDoNothing()
                 .returning({ id: workspaces.id });
             if (!workspace) throw new Error('Could not create workspace.');
@@ -1632,6 +1687,11 @@ export async function succeedIdentity(input: {
     /* The new identity, its keys statement already checked. */
     identity: IdentityV2;
     signature: Buffer;
+    /*
+     * The successor's consent, both halves (6746 bytes). Optional until every
+     * client sends it (docs/groups-server.md 5); one that is sent must hold.
+     */
+    consent?: Buffer | null;
 }): Promise<SuccessionResult> {
     return db.transaction(async (tx) => {
         const [user] = await tx
@@ -1659,7 +1719,7 @@ export async function succeedIdentity(input: {
             (current.kemPublicKey && input.identity.kemPublicKey.equals(current.kemPublicKey))
         )
             return { status: 'unchanged' };
-        const statement = successionStatement({
+        const link = {
             userId: user.id,
             oldKeyVersion: current.keyVersion,
             newKeyVersion: input.identity.keyVersion,
@@ -1670,17 +1730,20 @@ export async function succeedIdentity(input: {
             newSigningPublicKey: input.identity.signingPublicKey,
             newMlDsaPublicKey: input.identity.mlDsaPublicKey,
             newKemPublicKey: input.identity.kemPublicKey,
-        });
+        };
         if (
             !verifyHybrid(
                 {
                     signingPublicKey: current.signingPublicKey,
                     mlDsaPublicKey: current.mlDsaPublicKey,
                 },
-                statement,
+                successionStatement(link),
                 input.signature,
             )
         )
+            return { status: 'bad-signature' };
+        // Consent, when sent, must hold in both halves: the current keys as "old", the new as "new".
+        if (input.consent != null && !successionConsentHolds(link, input.consent))
             return { status: 'bad-signature' };
         const { userId: _userId, ...old } = current;
         await tx.insert(accountIdentityHistory).values({
@@ -1692,6 +1755,7 @@ export async function succeedIdentity(input: {
             newKemPublicKey: input.identity.kemPublicKey,
             newMlDsaPublicKey: input.identity.mlDsaPublicKey,
             successionSignature: input.signature,
+            successionConsent: input.consent ?? null,
         });
         await tx
             .update(accountIdentities)
@@ -1807,6 +1871,7 @@ export async function successionChain(userId: string, from: number) {
             newMlDsaPublicKey: accountIdentityHistory.newMlDsaPublicKey,
             newKemPublicKey: accountIdentityHistory.newKemPublicKey,
             signature: accountIdentityHistory.successionSignature,
+            consent: accountIdentityHistory.successionConsent,
         })
         .from(accountIdentityHistory)
         .where(
