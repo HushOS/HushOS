@@ -760,8 +760,11 @@ function LinkCard({
     async function saveQr() {
         if (!qr || saving) return;
         setSaving(true);
-        const image = await shareQrImage(qr).catch(() => null);
-        setSaving(false);
+        // Async, so a canvas the browser cannot draw (no roundRect) rejects instead of throwing,
+        // and the button is free again whatever happened.
+        const image = await shareQrImage(qr)
+            .catch(() => null)
+            .finally(() => setSaving(false));
         if (!image) {
             cue('error');
             toast.add({
@@ -860,8 +863,9 @@ function LinkCard({
                     <QrCode value={qr} kind="share" title={`Link to ${node.name}`} />
                     <p id={qrNote} className="text-center text-[13px] text-muted-foreground">
                         Whoever scans it can open “{node.name}”
-                        {link.hasPassword ? ' with the password' : ''}. A downloaded copy of the
-                        code works the same way until you turn the link off.
+                        {link.hasPassword ? ' with the password' : ''}. A downloaded copy works the
+                        same way until you turn the link off or it ends, and photo apps may back it
+                        up like any other picture.
                     </p>
                     <Button
                         variant="outline"

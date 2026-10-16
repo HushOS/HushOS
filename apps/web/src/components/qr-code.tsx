@@ -101,14 +101,14 @@ const MARGIN = 3;
  * mark, and a white margin so it scans on any background. Resolves to null
  * where the browser cannot make the image.
  */
-export function shareQrImage(value: string): Promise<Blob | null> {
+export async function shareQrImage(value: string): Promise<Blob | null> {
     const { n, box, from, kept } = layout(value);
     const side = n + MARGIN * 2;
     const unit = Math.ceil(1200 / side);
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = side * unit;
     const context = canvas.getContext('2d');
-    if (!context) return Promise.resolve(null);
+    if (!context) return null;
     context.fillStyle = '#ffffff';
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#000000';
