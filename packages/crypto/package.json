@@ -12,6 +12,7 @@
         "./recovery": "./src/recovery.ts",
         "./identity": "./src/identity.ts",
         "./drive": "./src/drive.ts",
+        "./padding": "./src/padding.ts",
         "./contacts": "./src/contacts.ts",
         "./fingerprint": "./src/fingerprint.ts",
         "./links": "./src/links.ts",
