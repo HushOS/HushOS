@@ -62,7 +62,6 @@
         "mediabunny": "^1.56.2",
         "motion": "^13.2.0",
         "pdfjs-dist": "6.3.289",
-        "qrcode.react": "4.2.0",
         "react": "19.2.8",
         "react-dom": "19.2.8",
         "rehype-sanitize": "6.0.0",
@@ -76,6 +75,7 @@
         "takumi-js": "2.13.7",
         "typebox": "1.3.28",
         "unified": "11.0.5",
+        "uqr": "0.1.3",
         "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
         "zod": "4.5.4",
         "zustand": "5.0.15"
