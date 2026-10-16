@@ -52,9 +52,9 @@ test('someone who joins through the link gives both sides the bonus', async ({ b
     await expect(
         joiner.getByRole('heading', { name: 'Ines Inviter invited you to HushOS.' }),
     ).toBeVisible();
-    // The control is a link that presents as a button; its href carries the code.
+    // The control is a real link styled as a button; its href carries the code.
     const href = await joiner
-        .getByRole('button', { name: /Create your account/ })
+        .getByRole('link', { name: /Create your account/ })
         .getAttribute('href');
     expect(href).toBe(`/register?ref=${code}`);
     await joiner.goto(href!, { waitUntil: 'networkidle' });
@@ -101,6 +101,6 @@ test('an invite link that resolves to nobody says so and still offers sign-up', 
     await expect(
         visitor.getByRole('heading', { name: 'This invite link is not valid any more.' }),
     ).toBeVisible();
-    await expect(visitor.getByRole('button', { name: /Create your account/ })).toBeVisible();
+    await expect(visitor.getByRole('link', { name: /Create your account/ })).toBeVisible();
     await visitor.context().close();
 });
