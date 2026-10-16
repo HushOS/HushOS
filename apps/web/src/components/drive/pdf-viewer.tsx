@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Notice, Opening } from '@/components/drive/viewer-parts';
 import { Button } from '@/components/ui/button';
 import { PasswordInput } from '@/components/password-input';
+import { pdfAssetOptions, pdfAssetsReady } from '@/lib/pdf-assets';
 import { PREVIEW_LIMITS, readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import '@/components/drive/pdf-viewer.css';
 
@@ -32,14 +33,16 @@ export function loadPdfjs() {
 }
 
 /*
- * pdf.js and its parsing worker's script, fetched ahead of the first PDF (see
- * lib/preload.ts). The worker itself starts only with a document; its script
- * is fetched here so that start does not ask the server for anything new.
+ * pdf.js, its parsing worker's script and what that worker fetches by name,
+ * fetched ahead of the first PDF (see lib/preload.ts). The worker itself starts
+ * only with a document; its script is fetched here so that start does not ask
+ * the server for anything new.
  */
 export async function preloadPdf() {
     await loadPdfjs();
     const { default: workerUrl } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
     await fetch(workerUrl, { cache: 'force-cache' }).then((response) => response.arrayBuffer());
+    await pdfAssetsReady();
 }
 
 const MAX_RENDER_SCALE = 2;
@@ -73,6 +76,9 @@ export function PdfViewer({
         let loading: PDFDocumentLoadingTask | null = null;
         void (async () => {
             try {
+                // All of pdf.js's assets before it reads, so what it fetches cannot describe
+                // the file; fetched while the file is read and decrypted.
+                const assetsReady = pdfAssetsReady();
                 const pdfjs = await loadPdfjs();
                 let data = source instanceof Uint8Array ? source : null;
                 if (
@@ -103,10 +109,14 @@ export function PdfViewer({
                             .catch(() => this.abort());
                     }
                 }
+                await assetsReady;
+                if (!active) return;
+                const assets = pdfAssetOptions(window.location.origin);
                 // pdf.js moves the buffer to its worker, so the remembered copy stays here.
                 const task = data
-                    ? pdfjs.getDocument({ data: data.slice() })
+                    ? pdfjs.getDocument({ ...assets, data: data.slice() })
                     : pdfjs.getDocument({
+                          ...assets,
                           range: new ReaderTransport((source as FileReader).size, null),
                           rangeChunkSize: 256 * 1024,
                           disableAutoFetch: true,
@@ -124,8 +134,11 @@ export function PdfViewer({
                 if (!active) return;
                 setFirstPage({ width: viewport.width, height: viewport.height });
                 setDocument(loaded);
-            } catch {
-                if (active) setBroken(true);
+            } catch (error) {
+                if (!active) return;
+                // What pdf.js said, for whoever opens the console; never the file's name or bytes.
+                console.error('The PDF could not be opened.', error);
+                setBroken(true);
             }
         })();
         return () => {
@@ -320,7 +333,14 @@ function PdfPage({
                 viewport,
             });
             textTask = text;
-            await Promise.all([render.promise, text.render()]).catch(() => {});
+            await Promise.all([render.promise, text.render()]).catch((error: unknown) => {
+                // Scrolling away or resizing cancels a render; anything else is worth seeing.
+                const cancelled =
+                    error instanceof pdfjs.RenderingCancelledException ||
+                    error instanceof pdfjs.AbortException;
+                if (active && !cancelled)
+                    console.error(`Page ${number} of the PDF could not be drawn.`, error);
+            });
         })();
         return () => {
             active = false;

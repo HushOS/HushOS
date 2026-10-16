@@ -174,9 +174,12 @@ export async function renderThumbnail(file: File, mime: string | null): Promise<
         case 'video':
             return limited(async () => (await renderInWorker('video', file)) ?? fromVideo(file));
         case 'pdf':
-            return file.size <= 64 * 1024 * 1024
-                ? limited(() => renderInWorker('pdf', file))
-                : null;
+            if (file.size > 64 * 1024 * 1024) return null;
+            return limited(async () => {
+                // The worker's pdf.js fetches from the same cache; see lib/pdf-assets.ts.
+                await import('@/lib/pdf-assets').then((assets) => assets.pdfAssetsReady());
+                return renderInWorker('pdf', file);
+            });
         default:
             return null;
     }

@@ -8,6 +8,7 @@
  */
 
 import type * as Pdfjs from 'pdfjs-dist';
+import { pdfAssetOptions } from '@/lib/pdf-assets';
 
 type Job = {
     id: number;
@@ -70,8 +71,10 @@ async function fromPdf(job: Job) {
     const pdfjs = await loadPdfjs();
     const task = pdfjs.getDocument({
         data: new Uint8Array(await job.file.arrayBuffer()),
-        // Nothing here may reach the network: fonts not embedded fall back to the
-        // worker's own, and no external resources are ever requested.
+        // Only this origin's own decoders, fonts and CMaps, fetched into the cache
+        // ahead of the first PDF (lib/pdf-assets.ts); nothing the PDF names is requested.
+        ...pdfAssetOptions(self.location.origin),
+        useWorkerFetch: true,
         disableFontFace: false,
     });
     try {
