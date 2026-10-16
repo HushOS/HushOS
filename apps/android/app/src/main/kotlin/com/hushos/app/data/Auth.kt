@@ -4,7 +4,10 @@ import android.content.Context
 import com.hushos.core.AccountKeyEnvelope
 import com.hushos.core.accountSeal
 import com.hushos.core.accountUnlock
+import com.hushos.core.deviceEmailHash
 import com.hushos.core.deviceRemember
+import com.hushos.core.deviceSessionSign
+import com.hushos.core.deviceSigningCreate
 import com.hushos.core.opaqueFinishLogin
 import com.hushos.core.opaqueFinishRegistration
 import com.hushos.core.opaqueStartLogin
@@ -23,6 +26,67 @@ data class SessionUser(val id: String, val name: String, val email: String, val 
 
 /* `status` is the HTTP status when the server refused, 0 otherwise: 409 on settings means another device saved first. */
 class AuthFailure(message: String, val status: Int = 0) : Exception(message)
+
+/* The session's device: which one, and whether it has described itself yet. */
+data class SessionDevice(val id: String, val registered: Boolean) {
+    companion object {
+        fun from(json: JSONObject?): SessionDevice? = json?.optString("id")?.ifEmpty { null }?.let { SessionDevice(it, json.optBoolean("registered")) }
+    }
+}
+
+/* What the server says about the stored session: whose it is and its device, gone, or gone because its device was removed. */
+sealed class SessionCheck {
+    data class SignedIn(val user: SessionUser, val device: SessionDevice?) : SessionCheck()
+    data object Ended : SessionCheck()
+    data object Removed : SessionCheck()
+
+    companion object {
+        fun from(body: JSONObject): SessionCheck {
+            val user = body.optJSONObject("user")?.let(SessionUser::from)
+            return when {
+                user != null -> SignedIn(user, SessionDevice.from(body.optJSONObject("device")))
+                body.optBoolean("removed") -> Removed
+                else -> Ended
+            }
+        }
+    }
+}
+
+/* One of the account's devices, as the list shows it. Kind and name are null for a device that never described itself. */
+data class AccountDevice(
+    val id: String, val kind: String?, val name: String?, val approvedBy: String?,
+    val createdAt: String, val lastSeenAt: String, val current: Boolean, val signedIn: Boolean,
+) {
+    /* What the list calls it: its name, else what it is, else an unknown device. */
+    val label: String get() = name?.ifEmpty { null } ?: when (kind) {
+        "android" -> "Android phone"
+        "ios" -> "iPhone"
+        "web" -> "A web browser"
+        else -> "Unknown device"
+    }
+
+    /* How it got in, in the words the web uses. */
+    val approval: String? get() = when (approvedBy) {
+        "enrolment" -> "Where you created your account"
+        "password" -> "Signed in with your password"
+        "existing" -> "Already signed in when HushOS began listing devices"
+        "device" -> "Approved by another of your devices"
+        "phrase" -> "Approved with your recovery phrase"
+        "email-wait" -> "Approved after the email wait"
+        "guardian" -> "Approved by a guardian"
+        else -> null
+    }
+
+    companion object {
+        fun from(json: JSONObject): AccountDevice {
+            fun JSONObject.text(key: String): String? = if (!has(key) || isNull(key)) null else optString(key).ifEmpty { null }
+            return AccountDevice(
+                json.getString("id"), json.text("kind"), json.text("name"), json.text("approvedBy"),
+                json.getString("createdAt"), json.getString("lastSeenAt"), json.optBoolean("current"), json.optBoolean("signedIn"),
+            )
+        }
+    }
+}
 
 data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long)
 data class BillingSummary(val enabled: Boolean, val planName: String?, val periodEnd: String?, val cancelAtPeriodEnd: Boolean)
@@ -132,7 +196,10 @@ object Auth {
         val attemptToken = started.optString("attemptToken").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val loginResponse = started.optString("loginResponse").ifEmpty { throw AuthFailure("HushOS didn’t answer as expected. Try again in a moment.") }
         val finish = opaqueFinishLogin(password, start.state, loginResponse) ?: throw AuthFailure(MISMATCH)
-        val finished = post(origin, "/api/auth/login/finish", JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request))
+        val finishBody = JSONObject().put("attemptToken", attemptToken).put("finishLoginRequest", finish.request)
+        // The device key's proof, only for the account it was made for: the same device comes back.
+        deviceProof(Shared.deviceIdentity(context), email, attemptToken)?.let { finishBody.put("device", it) }
+        val finished = post(origin, "/api/auth/login/finish", finishBody)
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
@@ -140,6 +207,10 @@ object Auth {
         AccountStore.of(context).claim(user.id)
         Shared.writeOrigin(context, origin)
         Shared.writeSession(context, Shared.Session(origin, token, user.id, user.email))
+        // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
+        SessionDevice.from(finished.body.optJSONObject("device"))?.let { device ->
+            runCatching { registerDevice(context, device, user.id, user.email.ifEmpty { email }) }
+        }
         val envelope = AccountKeyEnvelope(
             envelopeJson.getInt("envelopeVersion").toUInt(), envelopeJson.getLong("keyVersion").toULong(), envelopeJson.getLong("credentialVersion").toULong(),
             envelopeJson.getString("wrappingSalt"), envelopeJson.getString("wrappingNonce"), envelopeJson.getString("encryptedKey"),
@@ -152,9 +223,71 @@ object Auth {
         return user
     }
 
-    /* Who the stored session belongs to, null when it is gone; throws when HushOS is unreachable. */
-    fun currentUser(context: Context): SessionUser? {
-        val session = Shared.session(context) ?: return null
+    /*
+     * The device key's proof for `attemptToken`, when `identity` was made for the email being signed
+     * in with; null otherwise, so a phone shared by two people never tells the server that one
+     * person's device is signing in as the other.
+     */
+    internal fun deviceProof(identity: Shared.DeviceIdentity?, email: String, attemptToken: String): JSONObject? {
+        if (identity == null || identity.emailHash != deviceEmailHash(email)) return null
+        val signature = runCatching { deviceSessionSign(identity.seed, identity.userId, identity.deviceId, attemptToken) }.getOrNull() ?: return null
+        return JSONObject().put("id", identity.deviceId).put("signature", signature)
+    }
+
+    /* "Android phone" or "Android tablet": the kind of device, never its model. The person can rename it. */
+    fun deviceName(context: Context): String =
+        if (context.resources.configuration.smallestScreenWidthDp >= 600) "Android tablet" else "Android phone"
+
+    /* Registers the session's device with a new key when it has not described itself yet, and keeps the key. */
+    fun registerDevice(context: Context, device: SessionDevice, userId: String, email: String) {
+        if (device.registered) return
+        val key = deviceSigningCreate()
+        val registered = call(context, "/api/auth/devices", JSONObject().put("kind", "android").put("name", deviceName(context))
+            .put("signingPublicKey", com.hushos.core.base64urlEncode(key.publicKey))).getJSONObject("device")
+        Shared.writeDeviceIdentity(context, Shared.DeviceIdentity(userId, deviceEmailHash(email), registered.getString("id"), key.seed))
+    }
+
+    /* The account's devices, this one first. */
+    fun devices(context: Context): List<AccountDevice> {
+        val list = call(context, "/api/auth/devices").optJSONArray("devices") ?: return emptyList()
+        return (0 until list.length()).map { AccountDevice.from(list.getJSONObject(it)) }
+    }
+
+    /* PUT, not PATCH: HttpURLConnection refuses PATCH. */
+    fun renameDevice(context: Context, id: String, name: String): AccountDevice =
+        AccountDevice.from(call(context, "/api/auth/devices/$id", JSONObject().put("name", name), "PUT").getJSONObject("device"))
+
+    /*
+     * Removing devices proves the password again (OPAQUE in the core, bound to this session), so a
+     * session alone cannot sign the other devices out and have them clear what they kept.
+     */
+    private fun passwordProof(context: Context, password: String): JSONObject {
+        val login = opaqueStartLogin(password)
+        val started = call(context, "/api/auth/devices/reauth", JSONObject().put("startLoginRequest", login.request))
+        val finish = opaqueFinishLogin(password, login.state, started.getString("loginResponse"))
+            ?: throw AuthFailure("That password isn’t right. Check it and try again.")
+        return JSONObject().put("attemptToken", started.getString("attemptToken")).put("finishLoginRequest", finish.request)
+    }
+
+    /* Signs another device out at once; the server refuses this phone (sign out instead). */
+    fun removeDevice(context: Context, id: String, password: String) {
+        call(context, "/api/auth/devices/$id", passwordProof(context, password), "DELETE")
+    }
+
+    fun removeOtherDevices(context: Context, password: String): Int =
+        call(context, "/api/auth/devices/others", passwordProof(context, password), "DELETE").optInt("removed")
+
+    /*
+     * Whether a late "removed" answer about `ended` may still clear the phone: only while nobody has
+     * signed in since (no session stored) and what the phone holds is still that account's. The check
+     * runs in the background after sign-in is on screen; whoever signed in meanwhile keeps their data.
+     */
+    fun mayForgetRemoved(ended: Shared.Session, current: Shared.Session?, owner: String?): Boolean =
+        current == null && owner != null && owner.equals(ended.userId, ignoreCase = true)
+
+    /* What the server says about `session` (the stored one by default); throws when HushOS is unreachable. */
+    fun sessionCheck(context: Context, session: Shared.Session? = Shared.session(context)): SessionCheck {
+        session ?: return SessionCheck.Ended
         val connection = URL(session.origin + "/api/auth/session").openConnection() as HttpURLConnection
         val cookieName = if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session"
         connection.setRequestProperty("Cookie", "$cookieName=${session.token}")
@@ -162,10 +295,12 @@ object Auth {
         connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
         connection.connectTimeout = 20_000
         connection.readTimeout = 20_000
-        if (connection.responseCode != 200) return null
-        val body = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-        return body.optJSONObject("user")?.let(SessionUser::from)
+        if (connection.responseCode != 200) return SessionCheck.Ended
+        return SessionCheck.from(JSONObject(connection.inputStream.bufferedReader().use { it.readText() }))
     }
+
+    /* Who the stored session belongs to, null when it is gone; throws when HushOS is unreachable. */
+    fun currentUser(context: Context): SessionUser? = (sessionCheck(context) as? SessionCheck.SignedIn)?.user
 
     private fun cookie(session: Shared.Session) =
         (if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
@@ -446,6 +581,19 @@ object Auth {
         }
         Shared.clearSession(context)
         Shared.clearDevice(context)
+        // Signing out removes this device on the server; its key goes too, so the next sign-in is a new device.
+        Shared.clearDeviceIdentity(context)
+        AccountStore.of(context).wipe()
+    }
+
+    /*
+     * The server says this phone was removed from the account: everything of the account on the phone
+     * goes, as on sign-out, without asking the server for anything more. Housekeeping, not a guarantee.
+     */
+    fun forgetRemoved(context: Context) {
+        Shared.clearSession(context)
+        Shared.clearDevice(context)
+        Shared.clearDeviceIdentity(context)
         AccountStore.of(context).wipe()
     }
 }

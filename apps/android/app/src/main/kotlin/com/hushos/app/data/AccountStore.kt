@@ -63,6 +63,8 @@ class AccountStore(private val files: File, private val cache: File, private val
             // The folder last added to (Save to HushOS and the shortcuts start there).
             Places.forget(context)
             Mirror.shared(context).clear()
+            // The device key belongs to this account's device row; another account makes its own.
+            Shared.clearDeviceIdentity(context)
             // Recent searches, one store per account.
             File(context.applicationInfo.dataDir, "shared_prefs").listFiles()
                 ?.filter { it.name.startsWith("search-") && it.name.endsWith(".xml") }

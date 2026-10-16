@@ -800,10 +800,21 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 }
             }
         }
+        // The phone may have been wiped while this came down (signed out, or removed from the account):
+        // a copy finished after that is not this phone's to keep any more, so it goes at once.
+        if (!stillThisAccount()) {
+            File(Offline.root(context), item.id).deleteRecursively()
+            throw NotAuthenticated()
+        }
         // Older versions of the same file go; only the current one is kept.
         destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
         Offline.remember(context, item, via)
     }
+
+    /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
+    private fun stillThisAccount(): Boolean =
+        Shared.session(context)?.token == api.session.token &&
+            AccountStore.of(context).owner()?.equals(api.session.userId, ignoreCase = true) == true
 
     /* Brings the named kept files up to their current version (replaced elsewhere: fetched again; trashed: forgotten); returns the ids that failed. */
     /*

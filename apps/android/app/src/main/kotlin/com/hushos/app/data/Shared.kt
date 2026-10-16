@@ -23,10 +23,20 @@ object Shared {
     private const val SESSION = "session"
     private const val DEVICE = "device"
     private const val CONFIG = "config"
+    private const val DEVICE_IDENTITY = "device-identity"
 
     /* `email`: for the Files app's root, which names the account; empty for a session saved before it was kept. */
     data class Session(val origin: String, val token: String, val userId: String, val email: String = "")
     data class Device(val bundle: RememberedDevice, val deviceKey: ByteArray)
+
+    /*
+     * This installation's device key (docs/devices-design.md): the seed the core made, the device
+     * row it belongs to, the account, and the digest of the email it was made for (never the
+     * address). Under the same Keystore master key as the session; not hardware Ed25519, which
+     * needs API 33 against the app's minSdk 29. Kept apart from the remembered unlock: it outlives
+     * a session ending and goes on sign-out.
+     */
+    data class DeviceIdentity(val userId: String, val emailHash: String, val deviceId: String, val seed: ByteArray)
 
     @Volatile private var opened: SharedPreferences? = null
 
@@ -77,6 +87,20 @@ object Shared {
 
     fun clearDevice(context: Context) {
         prefs(context).edit().remove(DEVICE).apply()
+    }
+
+    fun deviceIdentity(context: Context): DeviceIdentity? = read(context, DEVICE_IDENTITY)?.let {
+        runCatching { DeviceIdentity(it.getString("userId"), it.getString("emailHash"), it.getString("deviceId"), base64urlDecode(it.getString("seed"))) }.getOrNull()
+    }
+
+    fun writeDeviceIdentity(context: Context, identity: DeviceIdentity) = write(
+        context, DEVICE_IDENTITY,
+        JSONObject().put("userId", identity.userId).put("emailHash", identity.emailHash).put("deviceId", identity.deviceId)
+            .put("seed", base64urlEncode(identity.seed)),
+    )
+
+    fun clearDeviceIdentity(context: Context) {
+        runCatching { prefs(context).edit().remove(DEVICE_IDENTITY).apply() }
     }
 
     fun origin(context: Context): String? = read(context, CONFIG)?.optString("origin")?.takeIf { it.isNotEmpty() }

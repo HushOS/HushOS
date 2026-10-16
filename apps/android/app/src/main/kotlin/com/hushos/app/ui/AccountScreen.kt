@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Password
@@ -99,7 +100,7 @@ private fun shortDate(iso: String?): String? = iso?.let {
     }.getOrNull()
 }
 
-private enum class Page { MAIN, PLAN, PASSWORD, PHRASE, ADVANCED, RESET, REPLACE, TRASH }
+private enum class Page { MAIN, PLAN, PASSWORD, PHRASE, DEVICES, ADVANCED, RESET, REPLACE, TRASH }
 
 /*
  * Account, a tab of its own (the user's choice over the board's avatar): who is
@@ -124,6 +125,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
         Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
         Page.PASSWORD -> { PasswordScreen(model) { page = Page.MAIN }; return }
         Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
+        Page.DEVICES -> { DevicesScreen(model) { page = Page.MAIN }; return }
         Page.ADVANCED -> { AdvancedScreen(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }) { page = Page.MAIN }; return }
         Page.RESET -> { ResetKeysScreen(model) { page = Page.ADVANCED }; return }
         Page.REPLACE -> { ReplaceKeysScreen(model, state) { page = Page.ADVANCED }; return }
@@ -152,6 +154,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
             Subheader("Sign-in and recovery")
             AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
             AccountRow("Recovery phrase", "Gets you back in if you forget your password", Icons.Outlined.Key) { page = Page.PHRASE }
+            AccountRow("Devices", "Where you’re signed in", Icons.Outlined.Devices) { page = Page.DEVICES }
             // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
             AccountRow("People you share with", "Check it’s them before you share anything sensitive", Icons.Outlined.Group) { showingPeople = true }
             AccountRow("Your twelve words", "Read these to someone checking it’s you", Icons.Outlined.Badge) { model.openOwnWords() }
@@ -197,7 +200,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
     if (signingOut) AlertDialog(
         onDismissRequest = { signingOut = false },
         title = { Text("Sign out of HushOS?") },
-        text = { Text(if (keptHere) "Files kept on this phone are removed. You’ll need your email and password to sign back in on this phone." else "You’ll need your email and password to sign back in on this phone.") },
+        text = { Text(if (keptHere) "Files kept on this phone are removed. This phone leaves your list of devices, and you’ll need your email and password to sign back in on it." else "This phone leaves your list of devices, and you’ll need your email and password to sign back in on it.") },
         confirmButton = { TextButton(onClick = { signingOut = false; model.signOut() }) { Text("Sign out", color = alpine.danger) } },
         dismissButton = { TextButton(onClick = { signingOut = false }) { Text("Cancel") } },
     )
