@@ -2,9 +2,11 @@ import { groupLogAction } from '@hushos/logging';
 import {
     CREATE_BODY_BYTES,
     GRANTS_BODY_BYTES,
+    MAX_ROSTER_BODIES_IN_FLIGHT,
     SEALS_BODY_BYTES,
     SMALL_BODY_BYTES,
     rosterBodyLimit,
+    type RosterDocuments,
 } from '@hushos/groups/protocol';
 
 /*
@@ -16,7 +18,8 @@ import {
  * stream under its cap before anything parses it. A roster route's cap
  * follows the group's head roster and is worked out only for a `members`
  * holder of that group, so nobody can make the server buffer megabytes for a
- * group they cannot write to.
+ * group they cannot write to, and one account has at most two roster bodies
+ * in flight at once (per server process).
  */
 
 export type GroupRequestDeps = {
@@ -46,20 +49,23 @@ const HEADERS = {
     'Referrer-Policy': 'no-referrer',
 };
 
-/* A group route's body cap, or 'roster' for the routes whose cap follows the group's head. */
-export function groupBodyCap(method: string, path: string): number | 'roster' {
+/*
+ * A group route's body cap, or for the roster routes, whose cap follows the
+ * group's head, which of the group's areas' documents the request may re-seal.
+ */
+export function groupBodyCap(method: string, path: string): number | { roster: RosterDocuments } {
     const tail = path.replace(/^\/api\//, '');
     if (method === 'POST' && tail === 'groups') return CREATE_BODY_BYTES;
     if (/^groups\/[^/]+\/(key-seals|key-successions)$/.test(tail)) return SEALS_BODY_BYTES;
     if (/^groups\/[^/]+\/areas\/[^/]+\/grants$/.test(tail)) return GRANTS_BODY_BYTES;
-    if (
-        (method === 'POST' &&
-            /^groups\/[^/]+\/(rosters|areas|members\/[^/]+\/(admit|remove)|areas\/[^/]+\/rotations)$/.test(
-                tail,
-            )) ||
-        (method === 'PATCH' && /^groups\/[^/]+\/members\/[^/]+$/.test(tail))
-    )
-        return 'roster';
+    if (method === 'POST' && /^groups\/[^/]+\/(rosters|members\/[^/]+\/remove)$/.test(tail))
+        return { roster: 'all' };
+    if (method === 'PATCH' && /^groups\/[^/]+\/members\/[^/]+$/.test(tail))
+        return { roster: 'all' };
+    if (method === 'POST' && /^groups\/[^/]+\/areas\/[^/]+\/rotations$/.test(tail))
+        return { roster: 'one' };
+    if (method === 'POST' && /^groups\/[^/]+\/(areas|members\/[^/]+\/admit)$/.test(tail))
+        return { roster: 'none' };
     return SMALL_BODY_BYTES;
 }
 
@@ -89,7 +95,10 @@ async function readCapped(request: Request, limit: number) {
 }
 
 export function createGroupRequestHandler(deps: GroupRequestDeps) {
+    // Roster bodies each account is reading or handling now: the largest bodies, held whole.
+    const rosterBodies = new Map<string, number>();
     return async function handleGroupRequest(request: Request): Promise<Response> {
+        let release: (() => void) | undefined;
         const pathname = new URL(request.url).pathname.replace(/\/+$/, '');
         deps.log.set({ group: { action: groupLogAction(pathname) } });
         const refuse = async (status: number, body: { message: string; code: string }) => {
@@ -122,7 +131,7 @@ export function createGroupRequestHandler(deps: GroupRequestDeps) {
             if (mutation) {
                 const cap = groupBodyCap(request.method, pathname);
                 let limit: number;
-                if (cap === 'roster') {
+                if (typeof cap === 'object') {
                     const groupId = pathname.split('/')[3] ?? '';
                     const context: Awaited<ReturnType<GroupRequestDeps['rosterContext']>> =
                         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -141,7 +150,20 @@ export function createGroupRequestHandler(deps: GroupRequestDeps) {
                             message: 'Only someone who manages the group can do that.',
                             code: 'forbidden',
                         });
-                    limit = rosterBodyLimit(context.headStatementBytes, context.areas);
+                    const inFlight = rosterBodies.get(user.id) ?? 0;
+                    if (inFlight >= MAX_ROSTER_BODIES_IN_FLIGHT)
+                        return refuse(429, {
+                            message:
+                                'Too many changes to groups at once. Please try again shortly.',
+                            code: 'rate-limited',
+                        });
+                    rosterBodies.set(user.id, inFlight + 1);
+                    release = () => {
+                        const left = (rosterBodies.get(user.id) ?? 1) - 1;
+                        if (left > 0) rosterBodies.set(user.id, left);
+                        else rosterBodies.delete(user.id);
+                    };
+                    limit = rosterBodyLimit(context.headStatementBytes, context.areas, cap.roster);
                 } else limit = cap;
                 const body = await readCapped(request, limit);
                 if (!body)
@@ -178,6 +200,8 @@ export function createGroupRequestHandler(deps: GroupRequestDeps) {
                 message: 'Groups are temporarily unavailable. Please try again.',
                 code: 'unavailable',
             });
+        } finally {
+            release?.();
         }
     };
 }

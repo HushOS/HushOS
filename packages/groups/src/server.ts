@@ -28,9 +28,11 @@ import { authRepository, groupsRepository, madeFor } from '@hushos/db';
 import {
     nodeEnvelopesInput,
     nodeView,
+    rotatedDocumentInput,
     rotatedNodeInput,
     rotationWorkView,
 } from '@hushos/drive/server';
+import { WORKSPACE_DOCUMENT_BYTES, WORKSPACE_DOCUMENT_KINDS } from '@hushos/drive/protocol';
 import { sendGroupInvitation } from '@hushos/emails/server';
 import { appEnv } from '@hushos/env/app';
 import { groupsEnv } from '@hushos/env/groups';
@@ -621,6 +623,11 @@ function checkAreaRows(
         throw invalid('area-rows');
 }
 
+function requireArray<T>(value: readonly T[], reason: string) {
+    if (!Array.isArray(value)) throw invalid(reason);
+    return value;
+}
+
 function rotationInputs(rotations: readonly RotationWire[]): groupsRepository.RotationInput[] {
     if (rotations.length > MAX_ROTATIONS_PER_CALL) throw invalid('too-many-rotations');
     return rotations.map((rotation) => {
@@ -638,8 +645,30 @@ function rotationInputs(rotations: readonly RotationWire[]): groupsRepository.Ro
                 'rotation-root-previous',
             ),
             selfGrant: selfGrantInput(rotation.selfGrant, rotation.workspaceId),
+            documents: rotationDocuments(rotation.documents),
         };
     });
+}
+
+/*
+ * A rotation's re-sealed documents, each checked as a document write checks it,
+ * and all of them within what a workspace may hold (Drive's limits): re-sealing
+ * at a larger padding must not carry an area past them, or the next rotation
+ * would no longer fit a roster body. Which ones, against the area, the
+ * repository checks under its lock.
+ */
+function rotationDocuments(documents: RotationWire['documents']) {
+    const decoded = requireArray(documents, 'rotation-documents').map((document) => {
+        try {
+            return rotatedDocumentInput(document);
+        } catch {
+            throw invalid('rotation-documents');
+        }
+    });
+    const bytes = decoded.reduce((sum, document) => sum + document.envelope.length, 0);
+    if (decoded.length > WORKSPACE_DOCUMENT_KINDS || bytes > WORKSPACE_DOCUMENT_BYTES)
+        throw invalid('rotation-documents');
+    return decoded;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -724,6 +753,13 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
                 'root-mid-rotation',
                 'A shared folder is in the middle of a key change this server cannot account for. Contact the server’s operator.',
                 409,
+            );
+        case 'document-stale':
+            throw new GroupError(
+                'document-stale',
+                'A shared folder’s settings changed while the keys were being replaced. Try again.',
+                409,
+                { workspaceId: result.workspaceId, kind: result.kind, stale: result.stale },
             );
         case 'rotating':
             throw new GroupError(

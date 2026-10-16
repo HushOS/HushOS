@@ -32,6 +32,7 @@ import {
     groupRosters,
     groups as groupsTable,
     users,
+    workspaceDocuments,
     workspaceKeys,
     workspaces,
     type GroupRole,
@@ -143,6 +144,8 @@ const selfGrant = () => ({
 });
 
 const ORGANIZER: GroupRole[] = ['billing', 'guardian', 'members'];
+/* Drive's workspace document limits (@hushos/drive/protocol). */
+const DOCUMENT_LIMITS = { kinds: 8, bytes: 2 * 1048616 };
 
 /*
  * Every member needs an identity: a grant or seal may not name a key version
@@ -1606,6 +1609,7 @@ describe('departures', () => {
         );
         await expect(
             drive.putWorkspaceDocument({
+                limits: DOCUMENT_LIMITS,
                 workspaceId: group.areaId,
                 kind: 'tags',
                 version: 0,
@@ -1723,6 +1727,7 @@ describe('departures', () => {
                 },
                 previousRootKeyEnvelope: rootT1UnderV2,
                 selfGrant: { ...selfGrant(), workspaceKeyVersion: 2 },
+                documents: [],
             };
         };
         const call = {
@@ -1762,6 +1767,230 @@ describe('departures', () => {
         expect(rootAfter.prevKeyEnvelope!.equals(rootT1UnderV2)).toBe(true);
         expect(childAfter).toMatchObject({ keyEpoch: t1, parentKeyEpoch: t1 });
         expect(childAfter.keyEnvelope!.equals(childUnderT1)).toBe(true);
+    });
+
+    /*
+     * The creator's rotation of the area from version 1, re-keying the root as it is now, with
+     * `documents` re-sealed (any bytes: the server never opens them).
+     */
+    async function rotationNow(
+        group: Family,
+        rootId: string,
+        creatorId: string,
+        documents: groups.RotationDocumentInput[],
+    ): Promise<groups.RotationInput> {
+        const [current] = await db.select().from(driveNodes).where(eq(driveNodes.id, rootId));
+        const metadataEnvelope = randomBytes(100);
+        return {
+            workspaceId: group.areaId,
+            fromVersion: 1,
+            toVersion: 2,
+            targetEpoch: (await drive.allocateKeyEpochs(group.areaId, 1))!.from,
+            root: {
+                id: rootId,
+                changeSeq: current!.changeSeq!,
+                parentKeyEpoch: 2,
+                keyEnvelope: randomBytes(72),
+                rotated: {
+                    metadataEnvelope,
+                    metadataSignature: signerFor(creatorId).sign(
+                        metadataStatement({
+                            workspaceId: group.areaId,
+                            nodeId: rootId,
+                            kind: 'folder',
+                            metadataVersion: current!.metadataVersion,
+                            metadataEnvelope,
+                        }),
+                    ),
+                    versions: [],
+                    shares: [],
+                    links: [],
+                    unsealableLinks: [],
+                },
+            },
+            previousRootKeyEnvelope: randomBytes(72),
+            selfGrant: { ...selfGrant(), workspaceKeyVersion: 2 },
+            documents,
+        };
+    }
+    const documentRows = (workspaceId: string) =>
+        db
+            .select()
+            .from(workspaceDocuments)
+            .where(eq(workspaceDocuments.workspaceId, workspaceId))
+            .orderBy(workspaceDocuments.kind);
+    async function writeDocument(workspaceId: string, kind: string, version: number) {
+        const written = await drive.putWorkspaceDocument({
+            limits: DOCUMENT_LIMITS,
+            workspaceId,
+            kind,
+            version,
+            envelope: randomBytes(64),
+        });
+        if (written.status !== 'ok') throw new Error(written.status);
+        return written.document;
+    }
+    /* A rotation roster on route 24's policy. */
+    const rotationCall = (group: Family, head: Head, uploader: string) => ({
+        groupId: group.groupId,
+        uploaderUserId: uploader,
+        expectedRevision: head.revision,
+        route: { kind: 'rotation' as const },
+        roster: roster(head, uploader, 'rotate'),
+        cache: {},
+    });
+
+    test("a rotation stores the area's documents at the next version in the roster's transaction, as a document write would", async () => {
+        const { creator, group, head } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        await writeDocument(group.areaId, 'tags', 0);
+        const tagsRead = await writeDocument(group.areaId, 'tags', 1);
+        const pinsRead = await writeDocument(group.areaId, 'pins', 0);
+        const resealed = { tags: randomBytes(64), pins: randomBytes(64) };
+        await okHead(
+            await groups.appendChain({
+                ...rotationCall(group, head, creator.userId),
+                rotations: [
+                    await rotationNow(group, root.id, creator.userId, [
+                        { kind: 'tags', version: 2, envelope: resealed.tags },
+                        { kind: 'pins', version: 1, envelope: resealed.pins },
+                    ]),
+                ],
+            }),
+        );
+        const [pins, tags] = await documentRows(group.areaId);
+        expect(tags).toMatchObject({ version: 3, envelopeSuite: 1 });
+        expect(pins).toMatchObject({ version: 2, envelopeSuite: 1 });
+        expect(tags!.envelope.equals(resealed.tags)).toBe(true);
+        expect(pins!.envelope.equals(resealed.pins)).toBe(true);
+        // Moved as a write moves it: what a reader compares to know it changed.
+        expect(tags!.updatedAt.getTime()).toBeGreaterThan(tagsRead.updatedAt.getTime());
+        expect(pins!.updatedAt.getTime()).toBeGreaterThan(pinsRead.updatedAt.getTime());
+        expect((await areaRow(group.areaId)).workspaceKeyVersion).toBe(2);
+        // The next ordinary write names the version the rotation made.
+        expect(
+            (
+                await drive.putWorkspaceDocument({
+                    limits: DOCUMENT_LIMITS,
+                    workspaceId: group.areaId,
+                    kind: 'tags',
+                    version: 2,
+                    envelope: randomBytes(64),
+                })
+            ).status,
+        ).toBe('stale');
+        expect((await writeDocument(group.areaId, 'tags', 3)).version).toBe(4);
+    });
+
+    test('an area with no documents rotates with an empty list', async () => {
+        const { creator, group, head } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        await okHead(
+            await groups.appendChain({
+                ...rotationCall(group, head, creator.userId),
+                rotations: [await rotationNow(group, root.id, creator.userId, [])],
+            }),
+        );
+        expect(await documentRows(group.areaId)).toEqual([]);
+        expect((await areaRow(group.areaId)).workspaceKeyVersion).toBe(2);
+    });
+
+    test('a kind the area does not hold, or one named twice, is invalid; one left out or at another version is stale; each leaves nothing behind', async () => {
+        const { creator, group, head } = await threeMembers();
+        const root = await areaRoot(group, creator.userId);
+        await writeDocument(group.areaId, 'tags', 0);
+        const rootBefore = (
+            await db.select().from(driveNodes).where(eq(driveNodes.id, root.id))
+        )[0]!;
+        const call = rotationCall(group, head, creator.userId);
+        const attempt = async (documents: groups.RotationDocumentInput[]) =>
+            groups.appendChain({
+                ...call,
+                rotations: [await rotationNow(group, root.id, creator.userId, documents)],
+            });
+        const tags = (version: number) => ({ kind: 'tags', version, envelope: randomBytes(64) });
+        const invalidDocuments = { status: 'invalid', reason: 'rotation-documents' };
+        expect(
+            await attempt([tags(1), { kind: 'pins', version: 1, envelope: randomBytes(64) }]),
+        ).toEqual(invalidDocuments);
+        expect(await attempt([tags(1), tags(1)])).toEqual(invalidDocuments);
+        // Left out: a kind created after the rotator read the area, or one its client does not know.
+        const staleTags = { workspaceId: group.areaId, kind: 'tags' };
+        const stale = { status: 'document-stale', ...staleTags, stale: [staleTags] };
+        expect(await attempt([])).toEqual(stale);
+        // A member rewrites it after the rotator read version 1.
+        await writeDocument(group.areaId, 'tags', 1);
+        expect(await attempt([tags(1)])).toEqual(stale);
+        expect(await attempt([tags(3)])).toEqual(stale);
+        // Every stale document in one answer: another kind created since, and the tags.
+        await writeDocument(group.areaId, 'pins', 0);
+        expect(await attempt([tags(1)])).toEqual({
+            ...stale,
+            stale: [{ workspaceId: group.areaId, kind: 'pins' }, staleTags],
+            kind: 'pins',
+        });
+        // Nothing of any refused call stayed: roster, area key, self-grant, root, Drive run, document.
+        expect(await rostersAt(group.groupId, call.roster.version)).toEqual([]);
+        expect(await areaRow(group.areaId)).toMatchObject({ workspaceKeyVersion: 1 });
+        const [ownGrant] = await db
+            .select()
+            .from(workspaceKeys)
+            .where(
+                and(
+                    eq(workspaceKeys.workspaceId, group.areaId),
+                    eq(workspaceKeys.userId, creator.userId),
+                ),
+            );
+        expect(ownGrant!.workspaceKeyVersion).toBe(1);
+        const rootAfter = (
+            await db.select().from(driveNodes).where(eq(driveNodes.id, root.id))
+        )[0]!;
+        expect(rootAfter).toMatchObject({
+            keyEpoch: rootBefore.keyEpoch,
+            changeSeq: rootBefore.changeSeq,
+            prevKeyEnvelope: null,
+        });
+        expect(await drive.activeRotation(db, group.areaId)).toBeNull();
+        expect((await documentRows(group.areaId)).map((row) => [row.kind, row.version])).toEqual([
+            ['pins', 1],
+            ['tags', 2],
+        ]);
+        // The same roster with the versions now stored lands.
+        const resealed = tags(2);
+        await okHead(
+            await attempt([resealed, { kind: 'pins', version: 1, envelope: randomBytes(64) }]),
+        );
+        const [pins, stored] = await documentRows(group.areaId);
+        expect(pins!.version).toBe(2);
+        expect(stored!.version).toBe(3);
+        expect(stored!.envelope.equals(resealed.envelope)).toBe(true);
+    });
+
+    test('a held member cannot write a workspace document in the area; the holder still can', async () => {
+        const { creator, group, stayer } = await threeMembers();
+        expect(
+            await groups.placeHold({
+                groupId: group.groupId,
+                holderUserId: creator.userId,
+                userId: stayer.userId,
+                minutes: 15,
+            }),
+        ).toMatchObject({ status: 'placed' });
+        const write = (writer: string) =>
+            drive.putWorkspaceDocument({
+                limits: DOCUMENT_LIMITS,
+                workspaceId: group.areaId,
+                kind: 'tags',
+                version: 0,
+                envelope: randomBytes(64),
+                writer,
+            });
+        await expect(write(stayer.userId)).rejects.toMatchObject({
+            name: 'AccessEndedError',
+            reason: 'held',
+        });
+        expect(await documentRows(group.areaId)).toEqual([]);
+        expect((await write(creator.userId)).status).toBe('ok');
     });
 
     test('in a group area only an active members holder may start a Drive rotation', async () => {

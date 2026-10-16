@@ -27,12 +27,18 @@ import {
     type Person,
 } from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
-import { accountIdentities, accountIdentityHistory, driveNodes } from '../../db/src/schema';
+import {
+    accountIdentities,
+    accountIdentityHistory,
+    driveNodes,
+    workspaceDocuments,
+} from '../../db/src/schema';
 import { metadataStatement } from '../../db/src/signatures';
 import { createTestAccount, storeTestIdentity } from '../../db/test/helpers';
 import type {
     GrantWire,
     RosterCall,
+    RotationDocumentWire,
     RotationWire,
     SealWire,
     SelfGrantWire,
@@ -203,6 +209,18 @@ export async function rootWire(workspaceId: string, by: Person) {
 }
 
 /* A rotation of an area from `fromVersion`: a target epoch drawn first, the root re-keyed under it. */
+/* A sealed workspace document's bytes as a client pads them: one 1 KiB step of plaintext. */
+export const documentEnvelope = () => b64(randomBytes(24 + 1024 + 16));
+
+/* Every workspace document the area holds, sealed again at the version stored, as a rotator would. */
+export async function resealedDocuments(workspaceId: string): Promise<RotationDocumentWire[]> {
+    const stored = await db
+        .select({ kind: workspaceDocuments.kind, version: workspaceDocuments.version })
+        .from(workspaceDocuments)
+        .where(eq(workspaceDocuments.workspaceId, workspaceId));
+    return stored.map((row) => ({ ...row, envelope: documentEnvelope() }));
+}
+
 export async function rotationWire(
     workspaceId: string,
     by: Person,
@@ -241,6 +259,7 @@ export async function rotationWire(
         },
         previousRootKeyEnvelope: b64(randomBytes(72)),
         selfGrant: selfGrant(workspaceId, fromVersion + 1),
+        documents: await resealedDocuments(workspaceId),
     };
 }
 

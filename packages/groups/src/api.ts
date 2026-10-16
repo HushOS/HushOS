@@ -77,6 +77,12 @@ export type AreaWire = {
  * the root's key epoch before the rotation }`. The server stores it as the
  * root's previous envelope, so anyone holding only the new area key still opens
  * the children the Drive walk has not re-keyed yet (docs/groups-server.md 8).
+ *
+ * `documents` are the area's workspace documents sealed again under the new
+ * area key: exactly one per document the area holds, `version` the one the
+ * rotator read (the precondition of a document write) and `envelope` sealed
+ * for `version + 1`. Empty for an area with none. They land with the roster;
+ * nothing re-seals them afterwards.
  */
 export type RotationWire = {
     workspaceId: string;
@@ -86,7 +92,10 @@ export type RotationWire = {
     root: RotatedNodeWire;
     previousRootKeyEnvelope: string;
     selfGrant: SelfGrantWire;
+    documents: RotationDocumentWire[];
 };
+
+export type RotationDocumentWire = { kind: string; version: number; envelope: string };
 
 export type CreateGroupBody = {
     id: string;
