@@ -1,0 +1,43 @@
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_23b01adf0c9d5d 574-585
+apps/web/src/lib/group-requests.test.ts
+  s_c56e31c87cddde::t_70e07239011949 2-4,155,167-248
+apps/web/src/lib/group-requests.ts
+  s_c56e31c87cddde::t_bf5ea34a054e48 5,9,21-22,52-56,61-68,98-99,101,134,153-166,203-204
+docs/drive-design.md
+  s_c56e31c87cddde::t_1784c8b4460645 152-153
+docs/groups-server.md
+  s_c56e31c87cddde::t_f523ec8d2adb81 100,107,117-151,157-163,223,232,250-251,256,260-261
+docs/self-hosting.md
+  s_c56e31c87cddde::t_bf663a9ea6feba 613-618
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_53062901f35f9c 35,147-148,1612,1730,1772-1995
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_dfc5e2a393047f 39,186-191,201,204-206,262-272,825-903,1342
+packages/groups/src/api.ts
+  s_c56e31c87cddde::t_1ebc54c685ff27 80-85,95,98-99
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_5d217aeffad3aa 1-3,30,65-84,87-95,97-102,104,106-112
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_6c540907a0f74c 3,5-9,31,41,50,62-72,2332-2646
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_0cba593ae944dc 31,35,626-630,648,653-673,757-763
+packages/groups/test/kit.ts
+  s_c56e31c87cddde::t_cb32cc49271985 30-35,41,212-223,262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4ce1373f7d9f8e6ee20ef5ca09666380eea19b2",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
