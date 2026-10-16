@@ -1098,7 +1098,9 @@ function groupName(name: string) {
 function canonicalJson(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
     if (value !== null && typeof value === 'object')
+        // An undefined value is left out, as JSON.stringify leaves it out: absent, not null.
         return `{${Object.keys(value)
+            .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
             .sort()
             .map(
                 (key) =>

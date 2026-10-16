@@ -225,6 +225,22 @@ describe('a resent creation (F7)', () => {
         expect(await rosterCount(fam.groupId)).toBe(1);
     });
 
+    test('the same call with its keys in another order, or an undefined field, is still a replay', async () => {
+        const fam = await family();
+        await succeedIdentity(fam.organizer);
+        const reversed = <T extends object>(value: T) =>
+            Object.fromEntries(Object.entries(value).reverse()) as T;
+        const reordered = {
+            ...fam.body,
+            area: { ...fam.body.area, root: reversed(fam.body.area.root) },
+        };
+        expect(Object.keys(reordered.area.root)).not.toEqual(Object.keys(fam.body.area.root));
+        expect((await groups.createGroup(fam.organizer.userId, reordered)).replayed).toBe(true);
+        const withUndefined = { ...fam.body, area: { ...fam.body.area, extra: undefined } };
+        expect((await groups.createGroup(fam.organizer.userId, withUndefined)).replayed).toBe(true);
+        expect(await rosterCount(fam.groupId)).toBe(1);
+    });
+
     test('a different first roster for a stored id is refused and changes nothing', async () => {
         const fam = await family();
         const stored = (await groupsRepository.getRoster(fam.groupId, 1))!.digest;
