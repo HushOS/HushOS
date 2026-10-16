@@ -1,0 +1,21 @@
+.github/assets/readme-banner.svg
+  s_a965107c48ca30::t_163feee3405256 1-538
+README.md
+  s_a965107c48ca30::t_5e8e7051e276eb 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8bcd7308269c1ebd72a991cc35594d42f99a9834",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
