@@ -1,0 +1,29 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_c56e31c87cddde::t_586bf5e83d870d 111-116,137-138,152-153,262-263
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsTest.kt
+  s_c56e31c87cddde::t_f7cb2415367bf4 40-56
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_c56e31c87cddde::t_5091b1de1cb5a5 53-59
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c56e31c87cddde::t_ba510c3e329fb9 126-127
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_c56e31c87cddde::t_d4e6999fb4643e 132-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_c56e31c87cddde::t_f9e1077d7dc719 50-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dceee09c398eaad6c2f163a02467eaae9c650003",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
