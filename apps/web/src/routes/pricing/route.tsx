@@ -1,3 +1,4 @@
+import { FitPlanner } from '@/components/fit-planner';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import {
     container,
@@ -528,6 +529,19 @@ function PricingPage() {
                         </div>
                     )}
                 </section>
+                {audience === 'personal' && (
+                    <div className={container}>
+                        <FitPlanner
+                            plans={[
+                                { name: 'Free', quotaBytes: Number(catalogue.freeQuotaBytes) },
+                                ...tiers.map((tier) => ({
+                                    name: tier.name,
+                                    quotaBytes: Number(tier.quotaBytes),
+                                })),
+                            ]}
+                        />
+                    </div>
+                )}
                 <section aria-labelledby="pricing-faq" className="mt-20 border-t border-rule">
                     <div
                         className={cn(

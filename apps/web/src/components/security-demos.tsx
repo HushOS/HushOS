@@ -138,7 +138,7 @@ export function PaddingDemo() {
                 value={step}
                 onChange={(event) => setStep(Number(event.target.value))}
                 aria-valuetext={formatBytes(size)}
-                className="fits-range mt-3 w-full"
+                className="fits-range mt-3 w-full pointer-coarse:h-11"
             />
             {/* The result is read out as the slider moves; the label alone is not re-read. */}
             <dl
