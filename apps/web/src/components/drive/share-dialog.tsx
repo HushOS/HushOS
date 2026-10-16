@@ -10,6 +10,7 @@ import {
     KeyRoundIcon,
     Link2Icon,
     Link2OffIcon,
+    DownloadIcon,
     QrCodeIcon,
     UserPlusIcon,
     XIcon,
@@ -19,7 +20,8 @@ import { CheckContact } from '@/components/drive/check-contact';
 import { useDrive } from '@/components/drive/drive-shell';
 import { describeLink, LinkOptionsDialog } from '@/components/drive/link-row';
 import { PersonAvatar } from '@/components/person-avatar';
-import { QrCode } from '@/components/qr-code';
+import { QrCode, shareQrImage } from '@/components/qr-code';
+import { safeFileName, saveBlob } from '@/lib/save-file';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -692,6 +694,8 @@ function LinkCard({
     const [busy, setBusy] = useState(false);
     const [copied, setCopied] = useState(false);
     const [qr, setQr] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
+    const qrNote = useId();
     const [options, setOptions] = useState(false);
     const [confirmOff, setConfirmOff] = useState(false);
 
@@ -747,6 +751,31 @@ function LinkCard({
         } finally {
             setBusy(false);
         }
+    }
+    /*
+     * The code as a PNG, to print or put on a slide. The image is the link, key and
+     * all, so the note beside the button says so; the file is named after the item,
+     * on the person's own device. (The phones show the code but offer no file.)
+     */
+    async function saveQr() {
+        if (!qr || saving) return;
+        setSaving(true);
+        // Async, so a canvas the browser cannot draw (no roundRect) rejects instead of throwing,
+        // and the button is free again whatever happened.
+        const image = await shareQrImage(qr)
+            .catch(() => null)
+            .finally(() => setSaving(false));
+        if (!image) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t download the QR code',
+                description: 'Try again, or use Copy link instead.',
+            });
+            return;
+        }
+        saveBlob(image, `${safeFileName(node.name)} QR code.png`);
+        cue('success', { volume: 0.4 });
     }
     async function turnOff() {
         setBusy(true);
@@ -832,10 +861,21 @@ function LinkCard({
             {qr && (
                 <div className="flex flex-col items-center gap-2 rounded-xl bg-muted p-4">
                     <QrCode value={qr} kind="share" title={`Link to ${node.name}`} />
-                    <p className="text-[13px] text-muted-foreground">
+                    <p id={qrNote} className="text-center text-[13px] text-muted-foreground">
                         Whoever scans it can open “{node.name}”
-                        {link.hasPassword ? ' with the password' : ''}.
+                        {link.hasPassword ? ' with the password' : ''}. A downloaded copy works the
+                        same way until you turn the link off or it ends, and photo apps may back it
+                        up like any other picture.
                     </p>
+                    <Button
+                        variant="outline"
+                        disabled={saving}
+                        aria-describedby={qrNote}
+                        onClick={() => void saveQr()}
+                    >
+                        <DownloadIcon aria-hidden="true" />
+                        Download QR code
+                    </Button>
                 </div>
             )}
             <LinkOptionsDialog
