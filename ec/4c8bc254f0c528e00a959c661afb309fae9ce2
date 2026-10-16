@@ -1,0 +1,27 @@
+apps/web/src/components/app-sidebar.tsx
+  s_c56e31c87cddde::t_7e71bfadfbbae2 43
+apps/web/src/lib/families-shell.ts
+  s_c56e31c87cddde::t_34dc7271cf3443 1-50
+apps/web/src/lib/families.ts
+  s_c56e31c87cddde::t_59993dcbb61ba2 8,30-36
+apps/web/src/routes/_authenticated/app/_drive/families/route.tsx
+  s_c56e31c87cddde::t_87d94b6334f549 6
+apps/web/src/routes/join/route.tsx
+  s_c56e31c87cddde::t_b92ba489e37b83 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec4c8bc254f0c528e00a959c661afb309fae9ce2",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
