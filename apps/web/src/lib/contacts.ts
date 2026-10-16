@@ -26,7 +26,11 @@ import {
     identitySeen,
     identityVersionSeen,
     rememberIdentitySeen,
+    rememberSettingsDocumentSeen,
     rememberSettingsSeen,
+    settingsDocumentRolledBack,
+    settingsDocumentSeen,
+    settingsNoneTrusted,
     settingsSeen,
 } from '@/lib/rollback-marks';
 
@@ -55,6 +59,13 @@ export type LoadedSettings = {
         resealOwnShares?: boolean;
     };
     version: number;
+    /*
+     * Settings are stored (the sequence is above 0) but none opened here: a
+     * version 1 document, or settings the server withheld from a device that
+     * has never opened any. The worker was told nothing, so families cannot
+     * use them as a mark (readSettingsForFamilies says so).
+     */
+    unopened?: true;
 };
 export const EMPTY: LoadedSettings['settings'] = { version: 2, contacts: {} };
 
@@ -241,22 +252,44 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
     // and a failure here must fail the trust set rather than leave it half loaded.
     await openIdentity(userId);
     requireUnlocked(userId);
-    const { settings: envelope, settingsKey, settingsVersion } = await authClient.settings();
+    const { settings: served, settingsKey, settingsVersion } = await authClient.settings();
     await settingsKeyReady(userId, settingsKey, create);
     // The stored sequence, whatever is stored: a device that has seen a later one refuses it,
     // document or none. A document served at another sequence than the server says is stored
     // is refused too.
-    if (settingsRolledBack(settingsVersion, settingsSeen(userId))) throw new Error(ROLLED_BACK);
-    if (envelope && envelope.settingsVersion !== settingsVersion) throw new Error(ROLLED_BACK);
+    const seen = settingsSeen(userId);
+    if (settingsRolledBack(settingsVersion, seen)) throw new Error(ROLLED_BACK);
+    if (served && served.settingsVersion !== settingsVersion) throw new Error(ROLLED_BACK);
+    // Once this device has opened a version 2 document, none (or version 1) is an older copy,
+    // whatever sequence it comes at: it would drop the pins it held, family marks among them.
+    const documentSeen = settingsDocumentSeen(userId);
+    const servedVersion = served ? (served.version as number) : null;
+    if (
+        settingsDocumentRolledBack(
+            servedVersion === null ? 'none' : servedVersion === 2 ? 2 : 1,
+            documentSeen,
+        )
+    )
+        throw new Error(ROLLED_BACK);
+    // A version 1 document opens nowhere: it reads as none, under the same rules.
+    const envelope = servedVersion === 2 ? served : null;
     rememberSettingsSeen(userId, settingsVersion);
     // None stored (sequence 0), or a version 1 document the server serves as none at its
     // sequence: empty settings, and the next save names that sequence and is sealed at the
     // one after, which replaces a version 1 row.
-    if (!envelope) return { settings: EMPTY, version: settingsVersion };
+    if (!envelope) {
+        // The worker hears "no settings" (no family pins to take as marks) only from a brand-new
+        // account on a device that has seen nothing; otherwise family acceptance stays refused
+        // until settings that open are read ("Open your settings first").
+        if (settingsNoneTrusted(settingsVersion, seen, documentSeen)) {
+            await authClient.rpc('settingsOpen', { userId, envelope: null });
+            return { settings: EMPTY, version: settingsVersion };
+        }
+        return { settings: EMPTY, version: settingsVersion, unopened: true };
+    }
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
-    // Version 1 (sealed under a key off the identity, which a stolen identity key opened)
-    // no longer opens: it reads as no settings, saved over as above.
-    if (!settings) return { settings: EMPTY, version: settingsVersion };
+    if (!settings) return { settings: EMPTY, version: settingsVersion, unopened: true };
+    rememberSettingsDocumentSeen(userId);
     return { settings: settings as LoadedSettings['settings'], version: settingsVersion };
 }
 
@@ -311,6 +344,26 @@ export function readSettingsForWrite(userId: string) {
 }
 
 /*
+ * Said when families need settings this device could not open: an account
+ * whose only settings are a version 1 document (sealed the old way, opened by
+ * no client), or settings the server withheld from a device that has never
+ * opened any (a fresh browser, a private window). Either way they can't serve
+ * as a mark, and nothing saves over them on its own: a save from this device
+ * could only be built on nothing, and would wipe pins every device relies on
+ * if the server were hiding them. Adding a contact saves settings the person
+ * chose to, and from then on they open here.
+ */
+export const FAMILY_SETTINGS_NEEDED =
+    'Add someone in People you share with first. That sets up where HushOS keeps your family checks on this account.';
+
+/* The settings as families read them (lib/groups/client.ts): refused, plainly, when none opened. */
+export async function readSettingsForFamilies(userId: string) {
+    const loaded = await readSettings(userId, true);
+    if (loaded.unopened) throw new Error(FAMILY_SETTINGS_NEEDED);
+    return loaded;
+}
+
+/*
  * One compare-and-set save of `settings` over the stored `version`: false when
  * another device saved in between, for callers that must re-derive what they
  * save from the newer document (a family pin is re-accepted, never merged blind).
@@ -333,6 +386,7 @@ export async function compareAndSetSettings(
             ciphertext: envelope.ciphertext,
         });
         rememberSettingsSeen(userId, saved.settingsVersion);
+        rememberSettingsDocumentSeen(userId);
         boundQueryClient?.setQueryData(contactKeys.settings(userId), {
             settings,
             version: saved.settingsVersion,
@@ -369,6 +423,7 @@ export async function saveSettings(
                 ciphertext: envelope.ciphertext,
             });
             rememberSettingsSeen(userId, saved.settingsVersion);
+            rememberSettingsDocumentSeen(userId);
             queryClient?.setQueryData(contactKeys.settings(userId), {
                 settings: next,
                 version: saved.settingsVersion,

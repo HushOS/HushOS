@@ -1,5 +1,5 @@
 import { authClient } from '@/lib/auth-client';
-import { compareAndSetSettings, readSettingsForWrite } from '@/lib/contacts';
+import { compareAndSetSettings, readSettingsForFamilies } from '@/lib/contacts';
 import { groupsApi } from './api';
 import { groupWriteLock, type GroupContext, type RotationSource } from './context';
 import {
@@ -44,7 +44,7 @@ export function groupContext(userId: string): GroupContext {
         },
         store: deviceStore(),
         settings: {
-            read: () => readSettingsForWrite(userId),
+            read: () => readSettingsForFamilies(userId),
             write: (version, settings) => compareAndSetSettings(userId, version, settings),
         },
         lock: groupWriteLock,

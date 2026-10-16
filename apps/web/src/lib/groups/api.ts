@@ -128,7 +128,7 @@ export function createGroupsApi(client = () => apiClient()) {
         invitations: (groupId: string) => answer(groups(groupId).invitations.get()),
         /* 13 */
         revokeInvitation: (groupId: string, invitationId: string) =>
-            answer(groups(groupId).invitations({ invitationId }).delete()),
+            answer(groups(groupId).invitations({ invitationId }).delete({})),
         /* 14 */
         openInvitation: (token: string) => answer(client().invitations.open.post({ token })),
         /* 15 */

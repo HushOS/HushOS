@@ -1371,12 +1371,25 @@ export async function getGroup(userId: string, groupId: string) {
     return {
         group: groupView(group),
         head: headView(found.head),
-        members: members.map((member) => ({
-            userId: member.userId,
-            name: member.name,
-            state: member.state,
-            roles: member.roles,
-        })),
+        // Names are the server's word (rosters carry none): the address goes beside them (D10),
+        // for active members only. Someone who only accepted (they proved an inbox, nothing else)
+        // sees who manages the family, whom they compare words with; a member who doesn't manage
+        // it sees who is in it or waiting, never who left or was turned down.
+        members: members
+            .filter((member) =>
+                found.membership.state !== 'active'
+                    ? member.state === 'active' && member.roles.includes('members')
+                    : found.membership.roles.includes('members') ||
+                      member.state === 'active' ||
+                      member.state === 'accepted',
+            )
+            .map((member) => ({
+                userId: member.userId,
+                name: member.name,
+                email: member.state === 'active' ? member.email : null,
+                state: member.state,
+                roles: member.roles,
+            })),
         seats,
         ...(due ? { due } : {}),
     };
@@ -1695,7 +1708,10 @@ export async function openInvitation(userId: string, token: string, address: str
         groupId: found.group.id,
         kind: found.group.kind,
         name: found.group.name,
-        inviter: found.inviter?.id ? { id: found.inviter.id, name: found.inviter.name } : null,
+        // The inviter's address is in the invitation email already; names are the server's word.
+        inviter: found.inviter?.id
+            ? { id: found.inviter.id, name: found.inviter.name, email: found.inviter.email }
+            : null,
         roles: found.invitation.roles,
         expiresAt: found.invitation.expiresAt.toISOString(),
     };

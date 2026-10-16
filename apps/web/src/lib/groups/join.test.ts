@@ -4,7 +4,7 @@ import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
 import type { GroupsApi } from './api';
 import type { GroupContext } from './context';
-import { enterJoinCode, familyWords, finishJoin, wordsMatch } from './join';
+import { enterJoinCode, familyWords, finishJoin, joinProgress, wordsMatch } from './join';
 import { createMemoryGroupStore, type GroupStore } from './store';
 import { syncGroup, wipeGroup } from './sync';
 import { account, bytes, pinOf } from './worker-testkit';
@@ -83,6 +83,8 @@ async function invitedFamily() {
     });
 
     let state: 'accepted' | 'active' = 'accepted';
+    // The first keys route 5 serves: another family's (or a server's own) once switched.
+    let firstKeys = created.body.groupKey;
     let admitted: CryptoResults['groupStage'] | null = null;
     const signed: CryptoResults['groupStage'][] = [];
     const bobGrant = () => {
@@ -97,7 +99,7 @@ async function invitedFamily() {
                 .slice(after)
                 .map((roster, at) => ({ version: after + at + 1, ...roster })),
             successions: [],
-            firstKeys: created.body.groupKey,
+            firstKeys,
             signerKeys: { ...signerKeys },
             head: {
                 version: rosters.length,
@@ -197,6 +199,11 @@ async function invitedFamily() {
             rosters.push(admitted.body.roster);
             state = 'active';
         },
+        /* Route 5 serves other first keys from now on. */
+        serveFirstKeys: (keys: typeof firstKeys) => {
+            firstKeys = keys;
+        },
+        firstKeys: created.body.groupKey,
         /* The server starts serving another admission Alice signed at the same version: a fork. */
         serveInstead: (index: number) => {
             admitted = signed[index]!;
@@ -241,6 +248,38 @@ describe('joining a family', () => {
             areas: { [f.area.workspaceId]: 1 },
         });
         expect(await store.join(BOB, f.groupId)).toBeNull();
+    });
+
+    test('first keys that change after the words check undo it: the record and the code go, and the words are compared again', async () => {
+        const f = await invitedFamily();
+        const { ctx, store } = await f.bobDevice();
+        const { firstKeys } = await familyWords(ctx, f.groupId);
+        await wordsMatch(ctx, f.groupId, firstKeys);
+        await enterJoinCode(ctx, f.groupId, await f.admit());
+        expect(await joinProgress(ctx, f.groupId)).toMatchObject({
+            status: 'checked',
+            joinMark: { rosterVersion: 2 },
+        });
+        // Another family's keys (or the server's own) from now on.
+        f.serveFirstKeys({ ...f.firstKeys, ed25519PublicKey: 'A'.repeat(43) });
+        expect(await joinProgress(ctx, f.groupId)).toEqual({ status: 'keys-changed' });
+        expect(await store.join(BOB, f.groupId)).toBeNull();
+        expect(await finishJoin(ctx, f.groupId)).toEqual({ status: 'waiting' });
+        expect(await joinProgress(ctx, f.groupId)).toEqual({ status: 'none' });
+    });
+
+    test('a words check that does not verify keeps no record, so a reload asks for the words again', async () => {
+        const f = await invitedFamily();
+        const { ctx, store } = await f.bobDevice();
+        // The person compared words over keys that sign none of the served member lists.
+        const other = { ...f.firstKeys, ed25519PublicKey: 'A'.repeat(43) };
+        f.serveFirstKeys(other);
+        await expect(wordsMatch(ctx, f.groupId, other)).rejects.toThrow();
+        expect(await store.join(BOB, f.groupId)).toBeNull();
+        expect(await joinProgress(ctx, f.groupId)).toEqual({ status: 'none' });
+        await expect(
+            enterJoinCode(ctx, f.groupId, { rosterVersion: 2, code: Array(12).fill('abandon') }),
+        ).rejects.toThrow(/Compare the family’s words first/);
     });
 
     test('a mistyped join code keeps no mark, and can be typed again', async () => {

@@ -2363,7 +2363,11 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .delete(
                 '/groups/:id/invitations/:invitationId',
-                { params: t.Object({ id: uuidSchema, invitationId: uuidSchema }) },
+                // A JSON body ({}), as every mutation here: the request guard refuses one without.
+                {
+                    params: t.Object({ id: uuidSchema, invitationId: uuidSchema }),
+                    body: t.Object({}),
+                },
                 async ({ request, sessionToken, params }) =>
                     groups.revokeInvitation(
                         (await groupUser(request, sessionToken)).id,

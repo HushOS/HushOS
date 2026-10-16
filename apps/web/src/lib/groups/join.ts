@@ -109,6 +109,34 @@ async function checkedBefore(ctx: GroupContext, groupId: string) {
     return pin || row ? { checkedAt: pin?.checkedAt ?? null } : null;
 }
 
+/*
+ * Where this device's join stands, for the screen to resume at after a
+ * reload: nothing recorded, the words compared, or the join code typed too.
+ * It vouches for nothing (finishJoin re-checks), but it does compare the
+ * first keys the words were compared over with the ones route 5 serves now:
+ * when they differ, the check no longer holds (another family, or the server
+ * showing this device something else), so the record and any typed code are
+ * deleted and the person is told, rather than left waiting on a code that
+ * can never match.
+ */
+export async function joinProgress(
+    ctx: GroupContext,
+    groupId: string,
+): Promise<
+    | { status: 'none' }
+    | { status: 'keys-changed' }
+    | { status: 'checked'; joinMark: JoinMark | null }
+> {
+    const record = await readJoin(ctx, groupId);
+    if (!record) return { status: 'none' };
+    const { served } = await fetchServed(ctx, groupId, 0);
+    if ((await keysDigest(served.firstKeys)) !== record.firstKeysDigest) {
+        await ctx.store.deleteJoin(ctx.userId, groupId);
+        return { status: 'keys-changed' };
+    }
+    return { status: 'checked', joinMark: record.joinMark };
+}
+
 /* Step 1: the family's twelve words, over the first keys the server serves now. */
 export async function familyWords(ctx: GroupContext, groupId: string) {
     const { served, head } = await fetchServed(ctx, groupId, 0);
@@ -136,24 +164,30 @@ export async function wordsMatch(ctx: GroupContext, groupId: string, firstKeys: 
     const before = await readJoin(ctx, groupId);
     const digest = await keysDigest(firstKeys);
     const checked = await checkedBefore(ctx, groupId);
-    await writeJoin(ctx, {
-        v: 1,
-        groupId,
-        firstKeysDigest: digest,
-        checkedAt:
-            checked?.checkedAt ??
-            (before?.firstKeysDigest === digest ? before.checkedAt : ctx.now().toISOString()),
-        // A code typed against other keys says nothing about these.
-        joinMark: before?.firstKeysDigest === digest ? before.joinMark : null,
-    });
     const { served, head } = await fetchServed(ctx, groupId, 0);
     if ((await keysDigest(served.firstKeys)) !== digest)
         throw new Error('The family’s keys changed since you compared the words. Compare again.');
+    // Kept only once the check held: a reload never skips past a check that failed or forked.
+    const record = () =>
+        writeJoin(ctx, {
+            v: 1,
+            groupId,
+            firstKeysDigest: digest,
+            checkedAt:
+                checked?.checkedAt ??
+                (before?.firstKeysDigest === digest ? before.checkedAt : ctx.now().toISOString()),
+            // A code typed against other keys says nothing about these.
+            joinMark: before?.firstKeysDigest === digest ? before.joinMark : null,
+        });
     // Checked before: "You've checked this family before. Enter the join code." Nothing to verify
     // here: the marks decide, when the code is in (finishJoin).
-    if (checked) return { status: 'already-checked' as const, nextRosterVersion: head.version + 1 };
+    if (checked) {
+        await record();
+        return { status: 'already-checked' as const, nextRosterVersion: head.version + 1 };
+    }
     const result = await acceptJoining(ctx, groupId, served, ctx.now().toISOString(), null);
     if (result.status === 'fork') return { status: 'fork' as const, fork: result.fork };
+    await record();
     return {
         status: 'checked' as const,
         view: result.view,

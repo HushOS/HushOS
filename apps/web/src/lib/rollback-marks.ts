@@ -51,6 +51,41 @@ export function settingsSeen(userId: string) {
 export function rememberSettingsSeen(userId: string, version: number) {
     raiseMark(`${SEEN_PREFIX}:${userId}`, version);
 }
+/*
+ * The settings document mark: whether this device has opened or saved a
+ * version 2 document for the account. The sequence mark alone does not catch
+ * a server that answers "none" (or a version 1 document, which reads as none)
+ * at a sequence above the one seen: that would drop every pin the document
+ * held, family pins among them, and with them the marks that keep a family
+ * from being joined again onto another history (decision D7). Once a version
+ * 2 document has been seen here, anything else is an older copy.
+ */
+const DOCUMENT_SEEN_PREFIX = 'hushos.settings-document-seen';
+export function settingsDocumentSeen(userId: string) {
+    return readMark(`${DOCUMENT_SEEN_PREFIX}:${userId}`) >= 2;
+}
+export function rememberSettingsDocumentSeen(userId: string) {
+    raiseMark(`${DOCUMENT_SEEN_PREFIX}:${userId}`, 2);
+}
+/* Whether settings served as `served` ('none', or a document's version) are older than this device has seen. */
+export function settingsDocumentRolledBack(served: 'none' | 1 | 2, documentSeen: boolean) {
+    return documentSeen && served !== 2;
+}
+/*
+ * Whether "the account has no settings" may be taken as a reading (and the
+ * worker told so, which lets a family be joined with no settings pin as a
+ * mark): only when nothing is stored and this device has never seen a sequence
+ * or a document. A brand-new device of an account that has settings cannot
+ * tell a server withholding them from a new account; that is inherent, as for
+ * the sequence mark, and the residual is documented in docs/groups-invariants.md (I5).
+ */
+export function settingsNoneTrusted(
+    storedSequence: number,
+    seenSequence: number,
+    documentSeen: boolean,
+) {
+    return storedSequence === 0 && seenSequence === 0 && !documentSeen;
+}
 export function identitySeen(userId: string) {
     return readMark(`${IDENTITY_SEEN_PREFIX}:${userId}`);
 }

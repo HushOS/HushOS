@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as AboutRouteRouteImport } from './routes/about/route'
 import { Route as AccountDeletedRouteRouteImport } from './routes/account-deleted/route'
 import { Route as DesignDotmdRouteImport } from './routes/design[.]md'
+import { Route as JoinRouteRouteImport } from './routes/join/route'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LoginRouteRouteImport } from './routes/login/route'
 import { Route as OgDotjpgRouteImport } from './routes/og[.]jpg'
@@ -52,6 +53,7 @@ import { Route as AuthenticatedAppRecoveryKeyRouteImport } from './routes/_authe
 import { Route as AuthenticatedSetupRecoveryKeyRouteImport } from './routes/_authenticated/setup/recovery-key'
 import { Route as AuthenticatedAppDriveIndexRouteImport } from './routes/_authenticated/app/_drive/index'
 import { Route as AuthenticatedAppDriveContactsRouteImport } from './routes/_authenticated/app/_drive/contacts'
+import { Route as AuthenticatedAppDriveFamiliesRouteRouteImport } from './routes/_authenticated/app/_drive/families/route'
 import { Route as AuthenticatedAppDrivePeopleRouteImport } from './routes/_authenticated/app/_drive/people'
 import { Route as AuthenticatedAppDriveReferralsRouteImport } from './routes/_authenticated/app/_drive/referrals'
 import { Route as AuthenticatedAppDriveSearchRouteImport } from './routes/_authenticated/app/_drive/search'
@@ -61,6 +63,7 @@ import { Route as AuthenticatedAppAdminIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedAppAdminWorkspacesRouteImport } from './routes/_authenticated/app/admin/workspaces'
 import { Route as AuthenticatedAppDriveAdminAffiliatesRouteImport } from './routes/_authenticated/app/_drive/admin.affiliates'
 import { Route as AuthenticatedAppDriveDriveIndexRouteImport } from './routes/_authenticated/app/_drive/drive/index'
+import { Route as AuthenticatedAppDriveFamiliesIndexRouteImport } from './routes/_authenticated/app/_drive/families/index'
 import { Route as AuthenticatedAppDriveTagsIndexRouteImport } from './routes/_authenticated/app/_drive/tags.index'
 import { Route as AuthenticatedAppDriveTagsTagIdRouteImport } from './routes/_authenticated/app/_drive/tags.$tagId'
 import { Route as AuthenticatedAppAdminAccountsIndexRouteImport } from './routes/_authenticated/app/admin/accounts/index'
@@ -68,6 +71,8 @@ import { Route as AuthenticatedAppAdminAccountsAccountIdRouteImport } from './ro
 import { Route as AuthenticatedAppAdminReportsIndexRouteImport } from './routes/_authenticated/app/admin/reports/index'
 import { Route as AuthenticatedAppDriveAdminReportsReportIdRouteImport } from './routes/_authenticated/app/_drive/admin.reports.$reportId'
 import { Route as AuthenticatedAppDriveDriveFFolderIdRouteImport } from './routes/_authenticated/app/_drive/drive/f.$folderId'
+import { Route as AuthenticatedAppDriveFamiliesGroupIdIndexRouteImport } from './routes/_authenticated/app/_drive/families/$groupId/index'
+import { Route as AuthenticatedAppDriveFamiliesGroupIdJoinRouteImport } from './routes/_authenticated/app/_drive/families/$groupId/join'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -91,6 +96,11 @@ const AccountDeletedRouteRoute = AccountDeletedRouteRouteImport.update({
 const DesignDotmdRoute = DesignDotmdRouteImport.update({
   id: '/design.md',
   path: '/design.md',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const JoinRouteRoute = JoinRouteRouteImport.update({
+  id: '/join',
+  path: '/join',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
@@ -289,6 +299,12 @@ const AuthenticatedAppDriveContactsRoute =
     path: '/contacts',
     getParentRoute: () => AuthenticatedAppDriveRoute,
   } as any)
+const AuthenticatedAppDriveFamiliesRouteRoute =
+  AuthenticatedAppDriveFamiliesRouteRouteImport.update({
+    id: '/families',
+    path: '/families',
+    getParentRoute: () => AuthenticatedAppDriveRoute,
+  } as any)
 const AuthenticatedAppDrivePeopleRoute =
   AuthenticatedAppDrivePeopleRouteImport.update({
     id: '/people',
@@ -343,6 +359,12 @@ const AuthenticatedAppDriveDriveIndexRoute =
     path: '/drive/',
     getParentRoute: () => AuthenticatedAppDriveRoute,
   } as any)
+const AuthenticatedAppDriveFamiliesIndexRoute =
+  AuthenticatedAppDriveFamiliesIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedAppDriveFamiliesRouteRoute,
+  } as any)
 const AuthenticatedAppDriveTagsIndexRoute =
   AuthenticatedAppDriveTagsIndexRouteImport.update({
     id: '/tags/',
@@ -385,11 +407,24 @@ const AuthenticatedAppDriveDriveFFolderIdRoute =
     path: '/drive/f/$folderId',
     getParentRoute: () => AuthenticatedAppDriveRoute,
   } as any)
+const AuthenticatedAppDriveFamiliesGroupIdIndexRoute =
+  AuthenticatedAppDriveFamiliesGroupIdIndexRouteImport.update({
+    id: '/$groupId/',
+    path: '/$groupId/',
+    getParentRoute: () => AuthenticatedAppDriveFamiliesRouteRoute,
+  } as any)
+const AuthenticatedAppDriveFamiliesGroupIdJoinRoute =
+  AuthenticatedAppDriveFamiliesGroupIdJoinRouteImport.update({
+    id: '/$groupId/join',
+    path: '/$groupId/join',
+    getParentRoute: () => AuthenticatedAppDriveFamiliesRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
@@ -426,6 +461,7 @@ export interface FileRoutesByFullPath {
   '/app/billing': typeof AuthenticatedAppBillingRoute
   '/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
+  '/app/families': typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
   '/app/contacts': typeof AuthenticatedAppDriveContactsRoute
   '/app/people': typeof AuthenticatedAppDrivePeopleRoute
   '/app/referrals': typeof AuthenticatedAppDriveReferralsRoute
@@ -439,16 +475,20 @@ export interface FileRoutesByFullPath {
   '/app/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
   '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
+  '/app/families/': typeof AuthenticatedAppDriveFamiliesIndexRoute
   '/app/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
   '/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
   '/app/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/app/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
+  '/app/families/$groupId/join': typeof AuthenticatedAppDriveFamiliesGroupIdJoinRoute
+  '/app/families/$groupId/': typeof AuthenticatedAppDriveFamiliesGroupIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
@@ -495,17 +535,21 @@ export interface FileRoutesByTo {
   '/app/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
   '/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/app/drive': typeof AuthenticatedAppDriveDriveIndexRoute
+  '/app/families': typeof AuthenticatedAppDriveFamiliesIndexRoute
   '/app/tags': typeof AuthenticatedAppDriveTagsIndexRoute
   '/app/admin/accounts': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/app/admin/reports': typeof AuthenticatedAppAdminReportsIndexRoute
   '/app/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/app/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
+  '/app/families/$groupId/join': typeof AuthenticatedAppDriveFamiliesGroupIdJoinRoute
+  '/app/families/$groupId': typeof AuthenticatedAppDriveFamiliesGroupIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRouteRoute
   '/account-deleted': typeof AccountDeletedRouteRoute
+  '/join': typeof JoinRouteRoute
   '/login': typeof LoginRouteRoute
   '/pricing': typeof PricingRouteRoute
   '/privacy': typeof PrivacyRouteRoute
@@ -544,6 +588,7 @@ export interface FileRoutesById {
   '/_authenticated/app/billing': typeof AuthenticatedAppBillingRoute
   '/_authenticated/app/recovery-key': typeof AuthenticatedAppRecoveryKeyRoute
   '/_authenticated/setup/recovery-key': typeof AuthenticatedSetupRecoveryKeyRoute
+  '/_authenticated/app/_drive/families': typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
   '/_authenticated/app/_drive/contacts': typeof AuthenticatedAppDriveContactsRoute
   '/_authenticated/app/_drive/people': typeof AuthenticatedAppDrivePeopleRoute
   '/_authenticated/app/_drive/referrals': typeof AuthenticatedAppDriveReferralsRoute
@@ -557,11 +602,14 @@ export interface FileRoutesById {
   '/_authenticated/app/_drive/tags/$tagId': typeof AuthenticatedAppDriveTagsTagIdRoute
   '/_authenticated/app/admin/accounts/$accountId': typeof AuthenticatedAppAdminAccountsAccountIdRoute
   '/_authenticated/app/_drive/drive/': typeof AuthenticatedAppDriveDriveIndexRoute
+  '/_authenticated/app/_drive/families/': typeof AuthenticatedAppDriveFamiliesIndexRoute
   '/_authenticated/app/_drive/tags/': typeof AuthenticatedAppDriveTagsIndexRoute
   '/_authenticated/app/admin/accounts/': typeof AuthenticatedAppAdminAccountsIndexRoute
   '/_authenticated/app/admin/reports/': typeof AuthenticatedAppAdminReportsIndexRoute
   '/_authenticated/app/_drive/admin/reports/$reportId': typeof AuthenticatedAppDriveAdminReportsReportIdRoute
   '/_authenticated/app/_drive/drive/f/$folderId': typeof AuthenticatedAppDriveDriveFFolderIdRoute
+  '/_authenticated/app/_drive/families/$groupId/join': typeof AuthenticatedAppDriveFamiliesGroupIdJoinRoute
+  '/_authenticated/app/_drive/families/$groupId/': typeof AuthenticatedAppDriveFamiliesGroupIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -569,6 +617,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/join'
     | '/login'
     | '/pricing'
     | '/privacy'
@@ -605,6 +654,7 @@ export interface FileRouteTypes {
     | '/app/billing'
     | '/app/recovery-key'
     | '/setup/recovery-key'
+    | '/app/families'
     | '/app/contacts'
     | '/app/people'
     | '/app/referrals'
@@ -618,16 +668,20 @@ export interface FileRouteTypes {
     | '/app/tags/$tagId'
     | '/app/admin/accounts/$accountId'
     | '/app/drive/'
+    | '/app/families/'
     | '/app/tags/'
     | '/app/admin/accounts/'
     | '/app/admin/reports/'
     | '/app/admin/reports/$reportId'
     | '/app/drive/f/$folderId'
+    | '/app/families/$groupId/join'
+    | '/app/families/$groupId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/join'
     | '/login'
     | '/pricing'
     | '/privacy'
@@ -674,16 +728,20 @@ export interface FileRouteTypes {
     | '/app/tags/$tagId'
     | '/app/admin/accounts/$accountId'
     | '/app/drive'
+    | '/app/families'
     | '/app/tags'
     | '/app/admin/accounts'
     | '/app/admin/reports'
     | '/app/admin/reports/$reportId'
     | '/app/drive/f/$folderId'
+    | '/app/families/$groupId/join'
+    | '/app/families/$groupId'
   id:
     | '__root__'
     | '/'
     | '/about'
     | '/account-deleted'
+    | '/join'
     | '/login'
     | '/pricing'
     | '/privacy'
@@ -722,6 +780,7 @@ export interface FileRouteTypes {
     | '/_authenticated/app/billing'
     | '/_authenticated/app/recovery-key'
     | '/_authenticated/setup/recovery-key'
+    | '/_authenticated/app/_drive/families'
     | '/_authenticated/app/_drive/contacts'
     | '/_authenticated/app/_drive/people'
     | '/_authenticated/app/_drive/referrals'
@@ -735,17 +794,21 @@ export interface FileRouteTypes {
     | '/_authenticated/app/_drive/tags/$tagId'
     | '/_authenticated/app/admin/accounts/$accountId'
     | '/_authenticated/app/_drive/drive/'
+    | '/_authenticated/app/_drive/families/'
     | '/_authenticated/app/_drive/tags/'
     | '/_authenticated/app/admin/accounts/'
     | '/_authenticated/app/admin/reports/'
     | '/_authenticated/app/_drive/admin/reports/$reportId'
     | '/_authenticated/app/_drive/drive/f/$folderId'
+    | '/_authenticated/app/_drive/families/$groupId/join'
+    | '/_authenticated/app/_drive/families/$groupId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRouteRoute: typeof AboutRouteRoute
   AccountDeletedRouteRoute: typeof AccountDeletedRouteRoute
+  JoinRouteRoute: typeof JoinRouteRoute
   LoginRouteRoute: typeof LoginRouteRoute
   PricingRouteRoute: typeof PricingRouteRoute
   PrivacyRouteRoute: typeof PrivacyRouteRoute
@@ -809,6 +872,13 @@ declare module '@tanstack/react-router' {
       path: '/design.md'
       fullPath: '/design.md'
       preLoaderRoute: typeof DesignDotmdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/join': {
+      id: '/join'
+      path: '/join'
+      fullPath: '/join'
+      preLoaderRoute: typeof JoinRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/llms.txt': {
@@ -1077,6 +1147,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppDriveContactsRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
     }
+    '/_authenticated/app/_drive/families': {
+      id: '/_authenticated/app/_drive/families'
+      path: '/families'
+      fullPath: '/app/families'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamiliesRouteRouteImport
+      parentRoute: typeof AuthenticatedAppDriveRoute
+    }
     '/_authenticated/app/_drive/people': {
       id: '/_authenticated/app/_drive/people'
       path: '/people'
@@ -1140,6 +1217,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppDriveDriveIndexRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
     }
+    '/_authenticated/app/_drive/families/': {
+      id: '/_authenticated/app/_drive/families/'
+      path: '/'
+      fullPath: '/app/families/'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamiliesIndexRouteImport
+      parentRoute: typeof AuthenticatedAppDriveFamiliesRouteRoute
+    }
     '/_authenticated/app/_drive/tags/': {
       id: '/_authenticated/app/_drive/tags/'
       path: '/tags'
@@ -1189,6 +1273,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAppDriveDriveFFolderIdRouteImport
       parentRoute: typeof AuthenticatedAppDriveRoute
     }
+    '/_authenticated/app/_drive/families/$groupId/': {
+      id: '/_authenticated/app/_drive/families/$groupId/'
+      path: '/$groupId'
+      fullPath: '/app/families/$groupId/'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamiliesGroupIdIndexRouteImport
+      parentRoute: typeof AuthenticatedAppDriveFamiliesRouteRoute
+    }
+    '/_authenticated/app/_drive/families/$groupId/join': {
+      id: '/_authenticated/app/_drive/families/$groupId/join'
+      path: '/$groupId/join'
+      fullPath: '/app/families/$groupId/join'
+      preLoaderRoute: typeof AuthenticatedAppDriveFamiliesGroupIdJoinRouteImport
+      parentRoute: typeof AuthenticatedAppDriveFamiliesRouteRoute
+    }
   }
 }
 
@@ -1224,7 +1322,29 @@ const RegisterRouteRouteWithChildren = RegisterRouteRoute._addFileChildren(
   RegisterRouteRouteChildren,
 )
 
+interface AuthenticatedAppDriveFamiliesRouteRouteChildren {
+  AuthenticatedAppDriveFamiliesIndexRoute: typeof AuthenticatedAppDriveFamiliesIndexRoute
+  AuthenticatedAppDriveFamiliesGroupIdJoinRoute: typeof AuthenticatedAppDriveFamiliesGroupIdJoinRoute
+  AuthenticatedAppDriveFamiliesGroupIdIndexRoute: typeof AuthenticatedAppDriveFamiliesGroupIdIndexRoute
+}
+
+const AuthenticatedAppDriveFamiliesRouteRouteChildren: AuthenticatedAppDriveFamiliesRouteRouteChildren =
+  {
+    AuthenticatedAppDriveFamiliesIndexRoute:
+      AuthenticatedAppDriveFamiliesIndexRoute,
+    AuthenticatedAppDriveFamiliesGroupIdJoinRoute:
+      AuthenticatedAppDriveFamiliesGroupIdJoinRoute,
+    AuthenticatedAppDriveFamiliesGroupIdIndexRoute:
+      AuthenticatedAppDriveFamiliesGroupIdIndexRoute,
+  }
+
+const AuthenticatedAppDriveFamiliesRouteRouteWithChildren =
+  AuthenticatedAppDriveFamiliesRouteRoute._addFileChildren(
+    AuthenticatedAppDriveFamiliesRouteRouteChildren,
+  )
+
 interface AuthenticatedAppDriveRouteChildren {
+  AuthenticatedAppDriveFamiliesRouteRoute: typeof AuthenticatedAppDriveFamiliesRouteRouteWithChildren
   AuthenticatedAppDriveContactsRoute: typeof AuthenticatedAppDriveContactsRoute
   AuthenticatedAppDrivePeopleRoute: typeof AuthenticatedAppDrivePeopleRoute
   AuthenticatedAppDriveReferralsRoute: typeof AuthenticatedAppDriveReferralsRoute
@@ -1241,6 +1361,8 @@ interface AuthenticatedAppDriveRouteChildren {
 }
 
 const AuthenticatedAppDriveRouteChildren: AuthenticatedAppDriveRouteChildren = {
+  AuthenticatedAppDriveFamiliesRouteRoute:
+    AuthenticatedAppDriveFamiliesRouteRouteWithChildren,
   AuthenticatedAppDriveContactsRoute: AuthenticatedAppDriveContactsRoute,
   AuthenticatedAppDrivePeopleRoute: AuthenticatedAppDrivePeopleRoute,
   AuthenticatedAppDriveReferralsRoute: AuthenticatedAppDriveReferralsRoute,
@@ -1314,6 +1436,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRouteRoute: AboutRouteRoute,
   AccountDeletedRouteRoute: AccountDeletedRouteRoute,
+  JoinRouteRoute: JoinRouteRoute,
   LoginRouteRoute: LoginRouteRoute,
   PricingRouteRoute: PricingRouteRoute,
   PrivacyRouteRoute: PrivacyRouteRoute,
