@@ -1,0 +1,77 @@
+.env.example
+  s_c56e31c87cddde::t_76e922effd5c05 79-86
+.env.production.example
+  s_c56e31c87cddde::t_e9f07633965851 109-116
+apps/web/package.json
+  s_c56e31c87cddde::t_6c7ef00a4e71df 32
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_1a4726fa4935fc 2,28-34,62-64,103-144,147-157,484-598,839-848,1692,2181-2503,2528,2673-2691
+apps/web/src/lib/group-log-routes.test.ts
+  s_c56e31c87cddde::t_cb910c9a997f20 1-39
+apps/web/src/lib/group-requests.test.ts
+  s_c56e31c87cddde::t_c66d4374565267 1-248
+apps/web/src/lib/group-requests.ts
+  s_c56e31c87cddde::t_027ba6caadf10f 1-183
+bun.lock
+  s_c56e31c87cddde::t_a4d51970eaec49 37,234-252,507-508
+compose.yaml
+  s_c56e31c87cddde::t_553463d28a2923 126-130
+packages/emails/scripts/render.tsx
+  s_c56e31c87cddde::t_7583baeaa2821d 2,114-144
+packages/emails/src/rendered/group-invitation.ts
+  s_c56e31c87cddde::t_f3630a27ad3840 1-5
+packages/emails/src/service.ts
+  s_c56e31c87cddde::t_29a022453620cf 5,196-221
+packages/emails/src/templates/group-invitation.tsx
+  s_c56e31c87cddde::t_1b3afcbdb28ce0 1-298
+packages/env/package.json
+  s_c56e31c87cddde::t_d3be744e96d579 14-15
+packages/env/src/groups.ts
+  s_c56e31c87cddde::t_0231d700ad0963 1-58
+packages/env/src/server.ts
+  s_c56e31c87cddde::t_2c9363d5e89ba7 5,11
+packages/groups/package.json
+  s_c56e31c87cddde::t_f4daae1d2138bb 1-31
+packages/groups/src/api.ts
+  s_c56e31c87cddde::t_dba82a804f4531 1-104
+packages/groups/src/protocol.ts
+  s_c56e31c87cddde::t_df2a9f892bc550 1-73
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_e4d2996b16d4bf 1-1624
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_21975df2c45a2d 1-1903
+packages/groups/test/global-setup.ts
+  s_c56e31c87cddde::t_05d3a43a25ab4a 1-3
+packages/groups/test/kit.ts
+  s_c56e31c87cddde::t_a45a2b0ea371a4 1-394
+packages/groups/test/setup.ts
+  s_c56e31c87cddde::t_efd0b8d8045a3f 1-12
+packages/groups/tsconfig.json
+  s_c56e31c87cddde::t_24874b3aeefa94 1-8
+packages/groups/vitest.config.ts
+  s_c56e31c87cddde::t_660ef92706c125 1-13
+packages/logging/src/index.ts
+  s_c56e31c87cddde::t_0e901d267bbf07 8
+packages/logging/src/privacy.test.ts
+  s_c56e31c87cddde::t_1bf60d2484237d 213-251
+packages/logging/src/privacy.ts
+  s_c56e31c87cddde::t_6826a3c3b5a11c 83,176-214,263,272-273,275-290
+turbo.json
+  s_c56e31c87cddde::t_ba9d6cda8ac437 49-53,114-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4c3f983249a4188540d0e0d3fb756cf95876183",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
