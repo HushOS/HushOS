@@ -11,7 +11,8 @@
         "./email": "./src/email.ts",
         "./billing": "./src/billing.ts",
         "./app": "./src/app.ts",
-        "./storage": "./src/storage.ts"
+        "./storage": "./src/storage.ts",
+        "./groups": "./src/groups.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit"

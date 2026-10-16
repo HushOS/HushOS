@@ -2,6 +2,7 @@ import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { groupInvitation } from './rendered/group-invitation';
 import { securityNotice } from './rendered/security-notice';
 import { shareNotice } from './rendered/share-notice';
 import { verifyEmail } from './rendered/verify-email';
@@ -190,5 +191,31 @@ export async function sendSecurityNotice(
         subject: securitySubjects[input.kind],
         html: fillTemplate(template.html, values, true),
         text: fillTemplate(template.text, values, false),
+    });
+}
+
+/*
+ * An invitation into a family group: who sent it, the group's name, and the
+ * one-time link (its token in the fragment). The name is the organiser's own
+ * text: escaped like every value, and never in the subject, which leads with
+ * the inviter.
+ */
+export async function sendGroupInvitation(
+    to: string,
+    input: { inviterName: string; inviterEmail: string; groupName: string; joinUrl: string },
+) {
+    adapter ??= createEmailAdapter();
+    const values = {
+        inviterName: input.inviterName,
+        inviterEmail: input.inviterEmail,
+        groupName: input.groupName,
+        joinUrl: input.joinUrl,
+        logoUrl: new URL('/email/hushos-logo-dark.png', input.joinUrl).href,
+    };
+    await adapter.send({
+        to,
+        subject: `${input.inviterName} invited you to a family group · HushOS`,
+        html: fillTemplate(groupInvitation.html, values, true),
+        text: fillTemplate(groupInvitation.text, values, false),
     });
 }

@@ -210,3 +210,42 @@ describe('a failure on a private page', () => {
         expect(JSON.stringify(event)).not.toContain('maya@example.com');
     });
 });
+
+describe('group routes', () => {
+    const GROUP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+    const PERSON = '00000002-abcd-4abc-8abc-abcdefabcdef';
+
+    test('a group path is logged as its pattern: no group, account or area id survives', () => {
+        const event = redact({
+            path: `/api/groups/${GROUP}/members/${PERSON}/admit`,
+            method: 'POST',
+            group: { action: 'groups/:id/members/:userId/admit', outcome: 'success' },
+        });
+        expect(event.path).toBe('/api/groups/:id/members/:userId/admit');
+        expect(event.group).toEqual({
+            action: 'groups/:id/members/:userId/admit',
+            outcome: 'success',
+        });
+        expect(JSON.stringify(event)).not.toContain(GROUP);
+        expect(JSON.stringify(event)).not.toContain(PERSON);
+    });
+
+    test('anything a handler attaches beyond the allowlist is dropped, and an unknown action is not echoed', () => {
+        const event = redact({
+            path: `/api/groups/${GROUP}/rosters`,
+            group: { action: `groups/${GROUP}/rosters`, outcome: 'stale', members: [PERSON] },
+            stale: { roster: { signerUserId: PERSON } },
+            body: { email: ADDRESS },
+        });
+        expect(event.group).toEqual({ action: 'unknown', outcome: 'unknown' });
+        expect(event.stale).toBeUndefined();
+        expect(event.body).toBeUndefined();
+        expect(JSON.stringify(event)).not.toContain(PERSON);
+        expect(JSON.stringify(event)).not.toContain(ADDRESS);
+    });
+
+    test('an invitation path and a group path nobody listed', () => {
+        expect(redact({ path: '/api/invitations/accept' }).path).toBe('/api/invitations/accept');
+        expect(redact({ path: `/api/groups/${GROUP}/${ADDRESS}` }).path).toBe('/api/unknown');
+    });
+});

@@ -1,4 +1,5 @@
 import '@/lib/server-only';
+import { createHash } from 'node:crypto';
 import { cors } from '@elysia/cors';
 import { db } from '@hushos/db';
 import { EvlogError, parseError, authLogAction, sanitizeFailure } from '@hushos/logging';
@@ -24,6 +25,13 @@ import {
 } from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
+import * as groups from '@hushos/groups/server';
+import {
+    MAX_GRANTS_PER_CALL,
+    MAX_ROTATIONS_PER_CALL,
+    MAX_SEALS_PER_CALL,
+} from '@hushos/groups/protocol';
+import { createGroupRequestHandler } from '@/lib/group-requests';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 import { appEnv } from '@hushos/env/app';
@@ -51,7 +59,9 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
         // and admin answer 501, never 404: their clients read a 404 as "this item is gone" and drop
         // what they hold, and an unknown route there means a client newer than this server.
         if (error instanceof NotFound)
-            return /^\/api\/(drive|admin)\//.test(new URL(request.url).pathname)
+            return /^\/api\/(drive|admin|groups|invitations)(\/|$)/.test(
+                new URL(request.url).pathname,
+            )
                 ? status(501, {
                       message: 'This server does not offer that yet. It may need an update.',
                       code: 'unsupported' as const,
@@ -90,8 +100,61 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
                 message: 'Billing is temporarily unavailable. Please try again.',
             });
         }
+        if (/^\/api\/(groups|invitations)(\/|$)/.test(new URL(request.url).pathname)) {
+            // Access ended between the domain's check and the write (requireStillWriter).
+            // Never `not-member`, the code a client wipes the group on.
+            if (error instanceof driveRepository.AccessEndedError)
+                return error.reason === 'held'
+                    ? status(409, {
+                          message: 'Another manager has paused your changes in this group for now.',
+                          code: 'held' as const,
+                      })
+                    : status(409, {
+                          message: 'The group’s members changed. Reload and try again.',
+                          code: 'members-changed' as const,
+                      });
+            if (error instanceof groups.GroupError)
+                return status(error.status, {
+                    message: error.message,
+                    code: error.code,
+                    data: error.data,
+                });
+            if (error instanceof drive.DriveError)
+                return status(error.status, {
+                    message: error.message,
+                    code: error.code,
+                    data: error.data,
+                });
+            if (error instanceof auth.AuthError)
+                return status(error.status, {
+                    message: error.message,
+                    code: error.status === 401 ? ('signed-out' as const) : ('forbidden' as const),
+                });
+            if (error instanceof ValidationError || error instanceof ParseError)
+                return status(400, {
+                    message: 'Please check your information and try again.',
+                    code: 'invalid' as const,
+                });
+            useLogger().set({ group: { outcome: 'unavailable' }, failure: describeFailure(error) });
+            useLogger().error(new Error('Group request failed.'));
+            return status(503, {
+                message: 'Groups are temporarily unavailable. Please try again.',
+                code: 'unavailable' as const,
+            });
+        }
         if (/^\/api\/(drive|admin)\//.test(new URL(request.url).pathname)) {
             // A signed write from an identity still on version 1: an outdated build (see signedBy).
+            // Access to a group area ended between the domain's check and the write.
+            if (error instanceof driveRepository.AccessEndedError)
+                return error.reason === 'held'
+                    ? status(403, {
+                          message: 'A group manager has paused changes to this folder.',
+                          code: 'forbidden' as const,
+                      })
+                    : status(404, {
+                          message: 'This item no longer exists.',
+                          code: 'not-found' as const,
+                      });
             if (error instanceof driveRepository.OutdatedIdentityError)
                 return status(409, {
                     message: 'Update HushOS to save changes.',
@@ -418,6 +481,121 @@ const workspaceKeySchema = t.Object({
 });
 const workspaceSetupSchema = t.Object({ id: workspaceIdSchema, grant: workspaceKeySchema });
 
+/* A node of a rotation batch, and a group area root's rotation. */
+const rotatedNodeSchema = t.Object({
+    id: uuidSchema,
+    changeSeq: t.Integer({ minimum: 0 }),
+    parentKeyEpoch: epochSchema,
+    keyEnvelope: keyEnvelopeSchema,
+    rotated: t.Nullable(
+        t.Object({
+            metadataEnvelope: metadataEnvelopeSchema,
+            metadataSignature: signatureSchema,
+            versions: t.Array(
+                t.Object({
+                    id: uuidSchema,
+                    contentKeyEnvelope: anyVersionEnvelopeSchema,
+                    signature: signatureSchema,
+                }),
+                { maxItems: 1000 },
+            ),
+            shares: t.Array(t.Object({ id: uuidSchema, shareEnvelope: shareEnvelopeSchema }), {
+                maxItems: 1000,
+            }),
+            links: t.Array(
+                t.Object({
+                    id: uuidSchema,
+                    linkEnvelope: keyEnvelopeSchema,
+                    secretEnvelope: linkSecretSchema,
+                }),
+                { maxItems: 1000 },
+            ),
+            unsealableLinks: t.Array(uuidSchema, { maxItems: 1000 }),
+        }),
+    ),
+});
+
+/*
+ * Groups (docs/groups-server.md 4). Every field has its exact Base64url length;
+ * a statement is at most 4 MiB (5,592,406 characters).
+ */
+const b64Schema = (length: number) =>
+    t.String({ minLength: length, maxLength: length, pattern: '^[A-Za-z0-9_-]+$' });
+const versionSchema = t.Integer({ minimum: 1, maximum: 9007199254740991 });
+const revisionSchema = t.Integer({ minimum: 1, maximum: 9007199254740991 });
+const digestSchema = b64Schema(43);
+const signedStatementSchema = t.Object({
+    statement: t.String({ minLength: 1, maxLength: 5592406, pattern: '^[A-Za-z0-9_-]+$' }),
+    signature: t.Object({ ed25519: b64Schema(86), mlDsa: b64Schema(4412) }),
+    signerSignature: hybridSignatureSchema,
+});
+const groupRoleSchema = t.Union([
+    t.Literal('billing'),
+    t.Literal('guardian'),
+    t.Literal('members'),
+]);
+const sealSchema = t.Object({
+    groupKeyVersion: versionSchema,
+    holderUserId: uuidSchema,
+    holderKeyVersion: versionSchema,
+    rosterVersion: versionSchema,
+    rosterDigest: digestSchema,
+    envelope: b64Schema(6130),
+});
+const grantSchema = t.Object({
+    workspaceId: uuidSchema,
+    workspaceKeyVersion: versionSchema,
+    granteeUserId: uuidSchema,
+    granteeKeyVersion: versionSchema,
+    rosterVersion: versionSchema,
+    rosterDigest: digestSchema,
+    envelope: b64Schema(6087),
+});
+const areaRootSchema = t.Object({
+    id: uuidSchema,
+    idSeed: t.String({ maxLength: 64 }),
+    ...nodeEnvelopesSchema,
+});
+const areaSchema = t.Object({
+    workspaceId: uuidSchema,
+    idSeed: t.String({ maxLength: 64 }),
+    root: areaRootSchema,
+    selfGrant: workspaceKeySchema,
+});
+const rotationSchema = t.Object({
+    workspaceId: uuidSchema,
+    fromVersion: versionSchema,
+    toVersion: versionSchema,
+    targetEpoch: epochSchema,
+    root: rotatedNodeSchema,
+    selfGrant: workspaceKeySchema,
+});
+const rosterCallFields = {
+    expectedRevision: revisionSchema,
+    roster: signedStatementSchema,
+    succession: t.Optional(signedStatementSchema),
+    seals: t.Optional(t.Array(sealSchema, { maxItems: MAX_SEALS_PER_CALL })),
+    grants: t.Optional(t.Array(grantSchema, { maxItems: MAX_GRANTS_PER_CALL })),
+    rotations: t.Optional(t.Array(rotationSchema, { maxItems: MAX_ROTATIONS_PER_CALL })),
+};
+const groupParams = t.Object({ id: uuidSchema });
+const memberParams = t.Object({ id: uuidSchema, userId: uuidSchema });
+const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
+
+/* The routes' own GROUPS_ENABLED check, behind the edge's. */
+function groupsGate() {
+    if (!groups.groupsEnabled())
+        throw new groups.GroupError('unsupported', 'This server does not offer groups yet.', 501);
+}
+
+/* Every group route: a named client and a session (the edge, group-requests.ts, checked both first). */
+async function groupUser(request: Request, sessionToken: string | null) {
+    requireClient(request);
+    const user = await auth.getSessionUser(sessionToken);
+    if (!user) throw new auth.AuthError('Sign in to open your groups.', 401);
+    return user;
+}
+
 /* The second half of the password exchange removing devices asks for (POST /auth/devices/reauth). */
 const deviceRemovalSchema = t.Object({
     attemptToken: tokenSchema,
@@ -658,7 +836,16 @@ export const apiApp = new Elysia({ prefix: '/api' })
     // Identity succession: new keys at the next version, signed by the current identity's hybrid signature.
     .post(
         '/auth/identity/succession',
-        { body: t.Object({ identity: identitySchema, signature: hybridSignatureSchema }) },
+        {
+            body: t.Object({
+                identity: identitySchema,
+                signature: hybridSignatureSchema,
+                // The successor's consent: two hybrid signatures, 6746 bytes.
+                consent: t.Optional(
+                    t.String({ minLength: 8995, maxLength: 8995, pattern: '^[A-Za-z0-9_-]+$' }),
+                ),
+            }),
+        },
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.succeedIdentity(sessionToken, body);
@@ -1502,45 +1689,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
             params: t.Object({ id: uuidSchema }),
             body: t.Object({
                 workspaceId: uuidSchema,
-                nodes: t.Array(
-                    t.Object({
-                        id: uuidSchema,
-                        changeSeq: t.Integer({ minimum: 0 }),
-                        parentKeyEpoch: epochSchema,
-                        keyEnvelope: keyEnvelopeSchema,
-                        rotated: t.Nullable(
-                            t.Object({
-                                metadataEnvelope: metadataEnvelopeSchema,
-                                metadataSignature: signatureSchema,
-                                versions: t.Array(
-                                    t.Object({
-                                        id: uuidSchema,
-                                        contentKeyEnvelope: anyVersionEnvelopeSchema,
-                                        signature: signatureSchema,
-                                    }),
-                                    { maxItems: 1000 },
-                                ),
-                                shares: t.Array(
-                                    t.Object({
-                                        id: uuidSchema,
-                                        shareEnvelope: shareEnvelopeSchema,
-                                    }),
-                                    { maxItems: 1000 },
-                                ),
-                                links: t.Array(
-                                    t.Object({
-                                        id: uuidSchema,
-                                        linkEnvelope: keyEnvelopeSchema,
-                                        secretEnvelope: linkSecretSchema,
-                                    }),
-                                    { maxItems: 1000 },
-                                ),
-                                unsealableLinks: t.Array(uuidSchema, { maxItems: 1000 }),
-                            }),
-                        ),
-                    }),
-                    { minItems: 1, maxItems: 200 },
-                ),
+                nodes: t.Array(rotatedNodeSchema, { minItems: 1, maxItems: 200 }),
             }),
         },
         async ({ request, sessionToken, params, body }) =>
@@ -2029,6 +2178,329 @@ export const apiApp = new Elysia({ prefix: '/api' })
             return auth.listAdminWorkspaces(sessionToken, query);
         },
     )
+    // Groups (docs/groups-server.md 4): served only with GROUPS_ENABLED. The edge
+    // (handleGroupRequest) refuses first; this gate holds if a route is ever
+    // reached some other way, such as a test or a future mount that skips it.
+    .guard({ beforeHandle: groupsGate }, (app) =>
+        app
+            .post(
+                '/groups',
+                {
+                    body: t.Object({
+                        id: uuidSchema,
+                        idSeed: t.String({ maxLength: 64 }),
+                        kind: t.Union([t.Literal('family'), t.Literal('org')]),
+                        name: t.String({ minLength: 1, maxLength: 400 }),
+                        groupKey: t.Object({
+                            ed25519PublicKey: b64Schema(43),
+                            mlDsaPublicKey: b64Schema(2603),
+                        }),
+                        roster: signedStatementSchema,
+                        keySeal: t.Object({ envelope: b64Schema(6130) }),
+                        area: t.Object({
+                            ...areaSchema.properties,
+                            grant: t.Object({ envelope: b64Schema(6087) }),
+                        }),
+                    }),
+                },
+                async ({ request, sessionToken, body, set }) => {
+                    const result = await groups.createGroup(
+                        (await groupUser(request, sessionToken)).id,
+                        body,
+                    );
+                    set.status = result.replayed ? 200 : 201;
+                    return { group: result.group };
+                },
+            )
+            .get('/groups', async ({ request, sessionToken }) =>
+                groups.listGroups((await groupUser(request, sessionToken)).id),
+            )
+            .get(
+                '/groups/:id',
+                { params: groupParams },
+                async ({ request, sessionToken, params }) =>
+                    groups.getGroup((await groupUser(request, sessionToken)).id, params.id),
+            )
+            .patch(
+                '/groups/:id',
+                {
+                    params: groupParams,
+                    body: t.Object({ name: t.String({ minLength: 1, maxLength: 400 }) }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.renameGroup(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    ),
+            )
+            .get(
+                '/groups/:id/rosters',
+                {
+                    params: groupParams,
+                    query: t.Object({
+                        after: t.Optional(t.Numeric({ minimum: 0, maximum: 9007199254740991 })),
+                        limit: t.Optional(t.Numeric({ minimum: 1, maximum: 200 })),
+                    }),
+                },
+                async ({ request, sessionToken, params, query }) =>
+                    groups.getRosters(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        query,
+                    ),
+            )
+            .get(
+                '/groups/:id/identities',
+                { params: groupParams, query: t.Object({ after: t.Optional(uuidSchema) }) },
+                async ({ request, sessionToken, params, query }) =>
+                    groups.getIdentities(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        query.after ?? null,
+                    ),
+            )
+            .post(
+                '/groups/:id/rosters',
+                { params: groupParams, body: t.Object(rosterCallFields) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.postRoster((await groupUser(request, sessionToken)).id, params.id, body),
+            )
+            .get(
+                '/groups/:id/key-seal',
+                { params: groupParams },
+                async ({ request, sessionToken, params }) =>
+                    groups.getKeySeal((await groupUser(request, sessionToken)).id, params.id),
+            )
+            .put(
+                '/groups/:id/key-seals',
+                {
+                    params: groupParams,
+                    body: t.Object({
+                        seals: t.Array(sealSchema, { minItems: 1, maxItems: MAX_SEALS_PER_CALL }),
+                    }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.putKeySeals(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    ),
+            )
+            .post(
+                '/groups/:id/key-successions',
+                {
+                    params: groupParams,
+                    body: t.Object({
+                        expectedRevision: revisionSchema,
+                        succession: signedStatementSchema,
+                        seals: t.Array(sealSchema, { maxItems: MAX_SEALS_PER_CALL }),
+                    }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.postSuccession(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    ),
+            )
+            .post(
+                '/groups/:id/invitations',
+                {
+                    params: groupParams,
+                    body: t.Object({
+                        email: emailSchema,
+                        roles: t.Array(groupRoleSchema, { maxItems: 3 }),
+                    }),
+                },
+                async ({ request, sessionToken, params, body, set }) => {
+                    const result = await groups.invite(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    );
+                    set.status = 201;
+                    return result;
+                },
+            )
+            .get(
+                '/groups/:id/invitations',
+                { params: groupParams },
+                async ({ request, sessionToken, params }) =>
+                    groups.listInvitations((await groupUser(request, sessionToken)).id, params.id),
+            )
+            .delete(
+                '/groups/:id/invitations/:invitationId',
+                { params: t.Object({ id: uuidSchema, invitationId: uuidSchema }) },
+                async ({ request, sessionToken, params }) =>
+                    groups.revokeInvitation(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.invitationId,
+                    ),
+            )
+            .post(
+                '/invitations/open',
+                { body: t.Object({ token: tokenSchema }) },
+                async ({ request, sessionToken, body }) =>
+                    groups.openInvitation(
+                        (await groupUser(request, sessionToken)).id,
+                        body.token,
+                        requestAddress(request),
+                    ),
+            )
+            .post(
+                '/invitations/accept',
+                { body: t.Object({ token: tokenSchema }) },
+                async ({ request, sessionToken, body }) =>
+                    groups.acceptInvitation(
+                        (await groupUser(request, sessionToken)).id,
+                        body.token,
+                        requestAddress(request),
+                    ),
+            )
+            .get(
+                '/groups/:id/pending',
+                { params: groupParams },
+                async ({ request, sessionToken, params }) =>
+                    groups.listPending((await groupUser(request, sessionToken)).id, params.id),
+            )
+            .post(
+                '/groups/:id/members/:userId/admit',
+                {
+                    params: memberParams,
+                    body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.admit(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
+                        body,
+                    ),
+            )
+            .patch(
+                '/groups/:id/members/:userId',
+                {
+                    params: memberParams,
+                    body: t.Object({ ...rosterCallFields, keySeal: t.Optional(sealSchema) }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.patchMember(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
+                        body,
+                    ),
+            )
+            .post(
+                '/groups/:id/members/:userId/remove',
+                { params: memberParams, body: t.Object(rosterCallFields) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.removeMember(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
+                        body,
+                    ),
+            )
+            .post(
+                '/groups/:id/members/:userId/decline',
+                { params: memberParams, body: t.Object({}) },
+                async ({ request, sessionToken, params }) =>
+                    groups.declinePending(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
+                    ),
+            )
+            .post(
+                '/groups/:id/members/:userId/hold',
+                { params: memberParams, body: t.Object({}) },
+                async ({ request, sessionToken, params }) =>
+                    groups.hold(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
+                    ),
+            )
+            .post(
+                '/groups/:id/leave',
+                { params: groupParams, body: t.Object({}) },
+                async ({ request, sessionToken, params }) =>
+                    groups.leave((await groupUser(request, sessionToken)).id, params.id),
+            )
+            .post(
+                '/groups/:id/areas',
+                { params: groupParams, body: t.Object({ ...rosterCallFields, area: areaSchema }) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.createArea((await groupUser(request, sessionToken)).id, params.id, body),
+            )
+            .post(
+                '/groups/:id/areas/:workspaceId/grants',
+                {
+                    params: areaParams,
+                    body: t.Object({
+                        grants: t.Array(grantSchema, {
+                            minItems: 1,
+                            maxItems: MAX_GRANTS_PER_CALL,
+                        }),
+                    }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.postGrants(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                        body,
+                    ),
+            )
+            .put(
+                '/groups/:id/areas/:workspaceId/self-grant',
+                { params: areaParams, body: t.Object({ grant: workspaceKeySchema }) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.putSelfGrant(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                        body,
+                    ),
+            )
+            .post(
+                '/groups/:id/areas/:workspaceId/rotations',
+                {
+                    params: areaParams,
+                    body: t.Object({ ...rosterCallFields, rotation: rotationSchema }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.rotateArea(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                        body,
+                    ),
+            ),
+    )
+    // Every space the account can open: their own, and each group's areas once groups are on.
+    .get('/drive/spaces', async ({ request, sessionToken }) => {
+        const user = await driveUser(request, sessionToken);
+        const personal = await drive.getWorkspace(user.id);
+        return {
+            spaces: [
+                {
+                    space: { kind: 'personal' as const },
+                    areas: [
+                        {
+                            workspaceId: personal.workspaceId,
+                            workspaceKeyVersion: personal.grant?.workspaceKeyVersion ?? 1,
+                            selfGrant: personal.grant,
+                        },
+                    ],
+                },
+                ...(groups.groupsEnabled() ? await groups.spaces(user.id) : []),
+            ],
+        };
+    })
     .get('/health', () => ({ status: 'ok' as const, service: API_SERVICE }))
     .get('/ready', async ({ status, log, set }) => {
         set.headers['Cache-Control'] = 'no-store';
@@ -2053,6 +2525,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     }
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
+    if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
     // Settings carry every pin and the sharing ledger: up to 64 KiB sealed, Base64url, in JSON.
     /*
      * Auth bodies are small, so they are read whole under a cap. A few carry
@@ -2197,3 +2670,22 @@ async function handleBillingWebhook(request: Request): Promise<Response> {
         return Response.json({ message: 'Try again later.' }, { status: 503 });
     }
 }
+
+/* Group requests through their edge (group-requests.ts), with this server's own checks. */
+const handleGroupRequest = (request: Request) =>
+    createGroupRequestHandler({
+        enabled: groups.groupsEnabled,
+        requireClient,
+        guardMutation: guardAuthMutation,
+        sessionUser: (req) => auth.getSessionUser(readSessionToken(req)),
+        consumeRateLimit: (bucket, count, windowMs) =>
+            authRepository.consumeRateLimit(
+                createHash('sha256').update(bucket).digest(),
+                count,
+                windowMs,
+            ),
+        rosterContext: groups.rosterBodyContext,
+        handle: async (req) => apiApp.fetch(req),
+        log: useLogger(),
+        describeFailure,
+    })(request);
