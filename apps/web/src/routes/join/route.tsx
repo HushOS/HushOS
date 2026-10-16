@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { AuthActions, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { Spinner } from '@/components/motion';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { familyKeys } from '@/lib/families';
+import { familyKeys } from '@/lib/families-shell';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { rememberReturn } from '@/lib/return-to';
