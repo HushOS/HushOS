@@ -1,5 +1,8 @@
 import { createEnv } from '@t3-oss/env-core';
 import { z } from 'zod';
+import { GROUP_AREA_LIMIT_MAX } from './group-limits';
+
+export { GROUP_AREA_LIMIT_MAX };
 
 /*
  * Groups (docs/groups-server.md). Off by default through milestone 1b: the
@@ -10,6 +13,7 @@ import { z } from 'zod';
  * group its own seat count, both from here; a group's own seat limit, once
  * billing writes one, wins over the default.
  */
+
 export const groupsEnv = createEnv({
     server: {
         GROUPS_ENABLED: z
@@ -35,8 +39,8 @@ export const groupsEnv = createEnv({
             .regex(/^[0-9]{1,4}$/)
             .default('10')
             .transform(Number)
-            .refine((value) => value >= 1 && value <= 1024, {
-                message: 'GROUP_AREA_LIMIT must be between 1 and 1024.',
+            .refine((value) => value >= 1 && value <= GROUP_AREA_LIMIT_MAX, {
+                message: `GROUP_AREA_LIMIT must be between 1 and ${GROUP_AREA_LIMIT_MAX}: every roster request makes room for each area's workspace documents (about 2.7 MiB an area).`,
             }),
         GROUP_OWNED_LIMIT: z
             .string()
