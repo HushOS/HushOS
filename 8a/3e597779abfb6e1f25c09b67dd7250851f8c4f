@@ -1,0 +1,101 @@
+packages/auth/src/bound-attempt.ts
+  s_c56e31c87cddde::t_f675ec1732e499 1-58
+packages/db/src/signatures.ts
+  s_c56e31c87cddde::t_520da185946e08 148-168
+  s_c56e31c87cddde::t_848577ee3be6d8 147
+apps/web/src/lib/device-name.ts
+  s_c56e31c87cddde::t_3e32424fd0a196 1-66
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_7f530a5a19c320 458,489-490,497,544,580,637,649,653,671,674,689,725,752,776,814-828,848-862,879,886
+  s_c56e31c87cddde::t_644bdc4ec4b451 1-16,28-35,47,52,262-286,293,297,322-368,370-401,406,408,410-415,419-428,439-440,451-457,459,469-470,473-488,491-496,498-503,506-507,510,522-543,545-579,581-636,638-648,650-652,654-670,672-673,675-688,690-724,726-751,753-775,777-785,812-813,881-885,887-904
+e2e/devices.spec.ts
+  s_c56e31c87cddde::t_cf99ecc35b9bcd 1-163
+  s_c56e31c87cddde::t_20d2bcd8fdcfd0 164-180
+packages/db/src/schema/auth.ts
+  s_c56e31c87cddde::t_1811351a55fba9 13,15
+  s_c56e31c87cddde::t_b3a5b9c5005f26 104-184,194-199,207,214-225,229
+  s_c56e31c87cddde::t_f6216eaa06b887 226-228,230,247
+apps/web/src/lib/auth-client.ts
+  s_c56e31c87cddde::t_f9880b15dc7171 2-5,8,17-23
+  s_c56e31c87cddde::t_82d701d23ca6ae 24
+packages/crypto/src/session.reauth.test.ts
+  s_c56e31c87cddde::t_b24fb83c79b579 1-113
+apps/web/src/lib/sign-out.test.ts
+  s_c56e31c87cddde::t_f1df97e34e6ece 1-40
+  s_c56e31c87cddde::t_6767f0b1fc87ec 41-43
+packages/auth/src/bound-attempt.test.ts
+  s_c56e31c87cddde::t_de012a5d9e25df 1-116
+  s_c56e31c87cddde::t_6a6a1f86498980 117-130
+packages/db/src/auth.devices.test.ts
+  s_c56e31c87cddde::t_4a1077a606871f 1-686,693,696-704,707,709-710
+  s_c56e31c87cddde::t_bc3c117b4c269b 687-692,694-695,705-706,708,711-798
+apps/web/src/components/account-devices.tsx
+  s_c56e31c87cddde::t_c51ae75f99e1ed 1-364
+  s_c56e31c87cddde::t_82cf270fec5e9e 365-399
+apps/web/src/components/settings.tsx
+  s_c56e31c87cddde::t_7aa9039f054988 159
+apps/web/src/components/user-menu.tsx
+  s_c56e31c87cddde::t_2cc7b1df23d439 228-229
+apps/web/src/lib/api-client.ts
+  s_c56e31c87cddde::t_d3d5ad643c7418 44-51
+apps/web/src/lib/api.server.ts
+  s_c56e31c87cddde::t_d00e30418be4c3 67,133-149,421-426,520-528,532-533,535-540,542-544,718-792,2179
+apps/web/src/lib/auth-api.ts
+  s_c56e31c87cddde::t_01f0890dfb0dff 16-22
+apps/web/src/lib/sign-out.ts
+  s_c56e31c87cddde::t_42625f260f3f90 13-20,25
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_c56e31c87cddde::t_874e1b4c604766 11,34,106-107
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_c56e31c87cddde::t_86bac94cd438ad 105-107
+apps/web/src/routes/login/route.tsx
+  s_c56e31c87cddde::t_2426312c8f775b 9,71-80,150-152
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_59fc4bf4762fa3 11-19,33-34,175-179,183-209
+packages/auth/src/client.test.ts
+  s_c56e31c87cddde::t_decca0664924e9 1-5,9,24-32,135-340
+packages/auth/src/client.ts
+  s_c56e31c87cddde::t_587a93b7863c82 16-26,28,31-45,50,169-305,311,314-320,408-427,469,554-557,654,671-688,703-704,711-715
+packages/auth/src/device-storage.ts
+  s_c56e31c87cddde::t_4d2b1489f0d22f 104-198
+packages/auth/src/protocol.ts
+  s_c56e31c87cddde::t_68e396a1bdfcb7 9-37
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_208174df13c135 21-26,29,46,149-220,427-431,435-436,452-455,478-481,487,516,523-527,543-548,553-558,561-565,567,573-589,596-606,1161-1165,1168-1412,1746,1871-1872
+packages/auth/src/tokens.ts
+  s_c56e31c87cddde::t_0123cc191610f6 14-20,22,26,30
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_fc1b5229d269a0 143-151,690-692,813-815,1414-1415,1645-1679
+packages/db/drizzle/20261016013230_devices/migration.sql
+  s_c56e31c87cddde::t_b4edc01f10490f 1-54
+packages/db/drizzle/20261016013230_devices/snapshot.json
+  s_c56e31c87cddde::t_9b5b08e40b8c3c 1-9118
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_f6dd74c94588d5 14
+packages/db/src/schema/relations.ts
+  s_c56e31c87cddde::t_0bfe9ef0792ad6 107,121-125
+packages/db/src/signatures.test.ts
+  s_c56e31c87cddde::t_163e593011418d 5,7,367-405
+packages/jobs/src/jobs/cleanup-expired.ts
+  s_c56e31c87cddde::t_eda4e23bf7fd1e 8-10
+packages/logging/src/privacy.test.ts
+  s_c56e31c87cddde::t_8bc2c0b8a6759b 48-57
+packages/logging/src/privacy.ts
+  s_c56e31c87cddde::t_27994b47dff393 94,117-120,176-177,180-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a3e597779abfb6e1f25c09b67dd7250851f8c4f",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
