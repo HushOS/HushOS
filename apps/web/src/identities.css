@@ -57,10 +57,15 @@
         --rule: var(--id-rule);
     }
 
-    /* Below, each identity names its light colours; its dark ones are the tokens' black. */
+    /*
+     * Below, each identity names its light colours; its dark ones are the tokens' black.
+     * They are declared on the page's element and, where :has() is known, on the root
+     * too, so body can paint the page's ground (below); the selector list is forgiving
+     * (:is), so a browser without :has() keeps the identities and loses only that.
+     */
 
     /* Sealed: white and Hush blue, the hero a band of the brand colour. */
-    :root:not(.hc) [data-identity='home'] {
+    :is(:root:not(.hc) [data-identity='home'], :root:not(.hc):has([data-identity='home'])) {
         --id-band: light-dark(#2c428e, #1b2552);
         --id-on-band: light-dark(#ffffff, #eef1fc);
         --id-on-band-muted: light-dark(#c9d3f5, #aab6e6);
@@ -68,7 +73,7 @@
     }
 
     /* Notebook: cool paper, mono for everything small, covers in five inks. */
-    :root:not(.hc) [data-identity='blog'] {
+    :is(:root:not(.hc) [data-identity='blog'], :root:not(.hc):has([data-identity='blog'])) {
         --id-ground: light-dark(#e8e9ed, var(--ground));
         --id-raised: light-dark(#f4f5f7, var(--surface));
         --id-ink: light-dark(#15171c, var(--ink));
@@ -79,7 +84,7 @@
     }
 
     /* Letter: warm paper and brown-black ink, set larger. */
-    :root:not(.hc) [data-identity='about'] {
+    :is(:root:not(.hc) [data-identity='about'], :root:not(.hc):has([data-identity='about'])) {
         --id-ground: light-dark(#f6f1e8, var(--ground));
         --id-raised: light-dark(#fffcf6, var(--surface));
         --id-ink: light-dark(#231e17, var(--ink));
@@ -91,7 +96,7 @@
     }
 
     /* Blueprint: navy lines on pale blue, or pale lines on midnight. */
-    :root:not(.hc) [data-identity='security'] {
+    :is(:root:not(.hc) [data-identity='security'], :root:not(.hc):has([data-identity='security'])) {
         --id-ground: light-dark(#eaeef8, var(--ground));
         --id-raised: light-dark(#f7f9fd, var(--surface));
         --id-ink: light-dark(#0f1b3a, var(--ink));
@@ -102,7 +107,7 @@
     }
 
     /* Bright: a lavender ground. */
-    :root:not(.hc) [data-identity='pricing'] {
+    :is(:root:not(.hc) [data-identity='pricing'], :root:not(.hc):has([data-identity='pricing'])) {
         --id-ground: light-dark(#f1efff, var(--ground));
         --id-raised: light-dark(#ffffff, var(--surface));
         --id-ink: light-dark(#17203a, var(--ink));
@@ -112,7 +117,7 @@
     }
 
     /* Office: sage ground, calm and squared away. */
-    :root:not(.hc) [data-identity='teams'] {
+    :is(:root:not(.hc) [data-identity='teams'], :root:not(.hc):has([data-identity='teams'])) {
         --id-ground: light-dark(#eef3f0, var(--ground));
         --id-raised: light-dark(#ffffff, var(--surface));
         --id-ink: light-dark(#16211c, var(--ink));
@@ -122,7 +127,7 @@
     }
 
     /* Voucher: pale lime, the colour of the offer's ticket. */
-    :root:not(.hc) [data-identity='offer'] {
+    :is(:root:not(.hc) [data-identity='offer'], :root:not(.hc):has([data-identity='offer'])) {
         --id-ground: light-dark(#f4f7e4, var(--ground));
         --id-raised: light-dark(#ffffff, var(--surface));
         --id-ink: light-dark(#1a1f12, var(--ink));
@@ -132,7 +137,7 @@
     }
 
     /* Invitation: warm peach, a card someone sent you. */
-    :root:not(.hc) [data-identity='invite'] {
+    :is(:root:not(.hc) [data-identity='invite'], :root:not(.hc):has([data-identity='invite'])) {
         --id-ground: light-dark(#fbf0ea, var(--ground));
         --id-raised: light-dark(#fffaf7, var(--surface));
         --id-ink: light-dark(#2a1a14, var(--ink));
@@ -142,7 +147,7 @@
     }
 
     /* Scoreboard: cool aqua, two sides of one table. */
-    :root:not(.hc) [data-identity='compare'] {
+    :is(:root:not(.hc) [data-identity='compare'], :root:not(.hc):has([data-identity='compare'])) {
         --id-ground: light-dark(#e9f5f7, var(--ground));
         --id-raised: light-dark(#ffffff, var(--surface));
         --id-ink: light-dark(#10232a, var(--ink));
@@ -439,4 +444,22 @@ h2:hover > .heading-anchor,
 .invite-seat {
     border: 2px dashed color-mix(in oklab, var(--muted-foreground) 70%, transparent);
     color: var(--muted-foreground);
+}
+
+/* ── Browser edges ────────────────────────────────────────────────────── */
+
+/*
+ * Safari takes the colour under its status bar, and behind the overscroll and its
+ * floating toolbar, from body's background, not from theme-color. So on a public
+ * page body paints the page's own ground, the colour of its header: the plain card
+ * in high contrast, the identity's ground otherwise (the base formula for a page
+ * without one, as [data-site] has it above).
+ */
+:root:has([data-site]) body {
+    background-color: var(--card);
+}
+@media not (prefers-contrast: more) {
+    :root:not(.hc):has([data-site]) body {
+        background-color: var(--id-ground, light-dark(var(--surface), var(--ground)));
+    }
 }

@@ -45,6 +45,7 @@ import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import { isAppleTouch, viewportContent } from '@/lib/viewport';
 import { forgetReturn } from '@/lib/return-to';
 import styles from '@/styles.css?url';
+import { ThemeColor } from '@/components/theme-color';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
@@ -98,8 +99,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             { name: 'apple-mobile-web-app-capable', content: 'yes' },
             { name: 'apple-mobile-web-app-title', content: 'HushOS' },
             { name: 'apple-mobile-web-app-status-bar-style', content: 'default' },
-            { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#f3f4f8' },
-            { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#0f1013' },
+            // theme-color is in Document's head: the router keeps one meta per name, and
+            // following the computer takes two, one per scheme.
             { name: 'msapplication-TileColor', content: '#000000' },
             { name: 'msapplication-config', content: '/browserconfig.xml' },
         ],
@@ -225,8 +226,29 @@ function Document({ children, release }: { children: ReactNode; release: string 
         <html lang="en" className={contrast ? `${theme} hc` : theme}>
             <head>
                 <HeadContent />
+                {/*
+                 * The ground of the chosen appearance, or one per scheme when it follows the
+                 * computer's; ThemeColor then keeps them equal to what the page paints.
+                 */}
+                {theme === 'light' || theme === 'dark' ? (
+                    <meta name="theme-color" content={theme === 'dark' ? '#0f1013' : '#f3f4f8'} />
+                ) : (
+                    <>
+                        <meta
+                            name="theme-color"
+                            media="(prefers-color-scheme: light)"
+                            content="#f3f4f8"
+                        />
+                        <meta
+                            name="theme-color"
+                            media="(prefers-color-scheme: dark)"
+                            content="#0f1013"
+                        />
+                    </>
+                )}
             </head>
             <body>
+                <ThemeColor />
                 <MotionProvider>
                     <TooltipProvider delay={0} closeDelay={0}>
                         <Toaster>{children}</Toaster>

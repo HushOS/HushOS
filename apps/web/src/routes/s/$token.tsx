@@ -233,7 +233,8 @@ function NewHere() {
 function LinkHeader() {
     const { hasSession } = useRouteContext({ from: '__root__' });
     return (
-        <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-rule bg-card px-4 sm:px-8">
+        // The page's own ground, as body has it, so the browser's bar above it is one colour with it.
+        <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-rule bg-background px-4 sm:px-8">
             <Brand to="/" className="h-9 px-1" />
             {hasSession ? (
                 <Link to="/app/drive" className={buttonVariants({ variant: 'outline' })}>
