@@ -640,7 +640,7 @@ const succession = {
 const keys = {
     userId,
     identity: publicIdentity(identity),
-    statement: encode(await keysStatement({ userId, ...publicIdentity(identity) })),
+    statement: encode(await keysStatement({ ...publicIdentity(identity), userId })),
 };
 
 // Version 1 identities as accounts held them before the release (one with its ML-KEM key and Ed25519

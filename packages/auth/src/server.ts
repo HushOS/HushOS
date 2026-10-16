@@ -904,7 +904,7 @@ export async function getSettings(sessionToken: string | null) {
  */
 export async function putSettingsKey(sessionToken: string | null, input: SettingsKeyEnvelope) {
     const { user } = await requireSession(sessionToken, 'Sign in to save your settings.');
-    if (!(await authRepository.putSettingsKey({ userId: user.id, ...decodeSettingsKey(input) })))
+    if (!(await authRepository.putSettingsKey({ ...decodeSettingsKey(input), userId: user.id })))
         throw new AuthError(
             'Your settings key was already saved on another device. Reload and try again.',
             409,

@@ -91,6 +91,7 @@ fn link_of(old: &IdentityEnvelope, next: &IdentitySuccession) -> SuccessionLink 
         new_ml_dsa_public_key: n.ml_dsa.as_ref().unwrap().public_key.clone(),
         new_kem_public_key: n.kem.as_ref().unwrap().public_key.clone(),
         signature: next.signature.clone(),
+        consent: None,
     }
 }
 

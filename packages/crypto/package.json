@@ -19,12 +19,16 @@
         "./pins": "./src/pins.ts",
         "./signatures": "./src/signatures.ts",
         "./ids": "./src/ids.ts",
-        "./shares": "./src/shares.ts"
+        "./shares": "./src/shares.ts",
+        "./groups": "./src/groups.ts",
+        "./group-trust": "./src/group-trust.ts",
+        "./group-trust/server": "./src/group-trust-server.ts"
     },
     "scripts": {
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
-        "fixtures:core": "bun scripts/core-fixtures.ts"
+        "fixtures:core": "bun scripts/core-fixtures.ts",
+        "fixtures:groups": "bun scripts/group-fixtures.ts"
     },
     "dependencies": {
         "@noble/post-quantum": "0.7.1",

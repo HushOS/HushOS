@@ -445,6 +445,7 @@ fn link(value: &Value) -> SuccessionLink {
         new_ml_dsa_public_key: s(value, "newMlDsaPublicKey"),
         new_kem_public_key: s(value, "newKemPublicKey"),
         signature: s(value, "signature"),
+        consent: None,
     }
 }
 

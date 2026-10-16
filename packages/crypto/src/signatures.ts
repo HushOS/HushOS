@@ -113,6 +113,12 @@ function count(value: number, what: string) {
     if (!Number.isSafeInteger(value) || value < 1) throw new CryptoError(`Invalid ${what}.`);
     return value;
 }
+/* A content suite, as the Rust core holds it: 1..2^32-1 (a u32 there). */
+function suite(value: number) {
+    if (count(value, 'content suite') > 0xffff_ffff)
+        throw new CryptoError('Invalid content suite.');
+    return value;
+}
 function statement(parts: unknown[]) {
     return new TextEncoder().encode(JSON.stringify(parts));
 }
@@ -155,7 +161,7 @@ async function versionParts(domain: string, ctx: VersionStatement, contentKeyEnv
         text(ctx.nodeId, 'node id'),
         text(ctx.versionId, 'version id'),
         text(ctx.objectId, 'object id'),
-        count(ctx.contentSuite, 'content suite'),
+        suite(ctx.contentSuite),
         await digest(contentKeyEnvelope),
     ];
     if (domain === VERSION_SAVED_DOMAIN) parts.push(SAVED_FROM_LINK);
@@ -312,14 +318,42 @@ function key(value: string, length: number) {
  * Signed with the old identity's hybrid signature. Version 1 is refused.
  */
 export async function successionStatement(link: SuccessionStatement) {
+    return successionAt(2, link);
+}
+
+/*
+ * ["hushos/identity/succession-consent", 1, role, userId, ...the version 2
+ * fields...], role "old" or "new": a succession's consent, its own domain, one
+ * half signed by the old identity's hybrid keys over role "old" and the other
+ * by the new identity's over role "new" (docs/identity-pq-design.md 2). The
+ * domain separates it from the one-sided version 2 statement (and from the
+ * version 3 succession the docs keep for a restart link), and the role keeps
+ * either half from standing for the other. The group core asks it of links
+ * into keys it reached from a member's first keys.
+ */
+export type ConsentRole = 'old' | 'new';
+export async function successionConsentStatement(link: SuccessionStatement, role: ConsentRole) {
+    if (role !== 'old' && role !== 'new') throw new CryptoError('Invalid consent role.');
+    return successionFields('hushos/identity/succession-consent', [1, role], link);
+}
+
+async function successionAt(version: 2, link: SuccessionStatement) {
+    return successionFields('hushos/identity/succession', [version], link);
+}
+
+async function successionFields(
+    domain: string,
+    head: (number | string)[],
+    link: SuccessionStatement,
+) {
     // A succession mints current + 1; a reader asks only that the version rose, since a
     // master-key rotation may have raised it to the root's revision between two links.
     const oldVersion = count(link.oldKeyVersion, 'key version');
     if (!Number.isSafeInteger(link.newKeyVersion) || link.newKeyVersion <= oldVersion)
         throw new CryptoError('Invalid key version.');
     return statement([
-        'hushos/identity/succession',
-        2,
+        domain,
+        ...head,
         text(link.userId, 'user id'),
         oldVersion,
         link.newKeyVersion,

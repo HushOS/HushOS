@@ -119,6 +119,15 @@ fn positive(value: u64, what: &str) -> CoreResult<u64> {
     Ok(value)
 }
 
+/* The web's safe integers, 1..=2^53-1: an identity's key versions, as the web bounds them. */
+pub(crate) const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+fn key_version(value: u64) -> CoreResult<u64> {
+    if !(1..=MAX_SAFE_INTEGER).contains(&value) {
+        return Err(input("Invalid key version."));
+    }
+    Ok(value)
+}
+
 const METADATA_DOMAIN: &str = "hushos/drive/sig/metadata";
 const VERSION_DOMAIN: &str = "hushos/drive/sig/version";
 const METADATA_RESEALED_DOMAIN: &str = "hushos/drive/sig/metadata-resealed";
@@ -127,6 +136,22 @@ const METADATA_SAVED_DOMAIN: &str = "hushos/drive/sig/metadata-saved";
 const VERSION_SAVED_DOMAIN: &str = "hushos/drive/sig/version-saved";
 /* Where a saved copy came from, the saved statements' last element. Only links, in version 1. */
 const SAVED_FROM_LINK: &str = "link";
+
+/* An id as a record statement carries it: lowercased, never empty (the web refuses an empty one). */
+fn id(value: &str, what: &str) -> CoreResult<String> {
+    if value.is_empty() {
+        return Err(input(format!("Invalid {what}.")));
+    }
+    Ok(value.to_lowercase())
+}
+
+/* A count as a record statement carries it: 1..2^53-1, the web's safe integers. */
+fn safe_positive(value: u64, what: &str) -> CoreResult<u64> {
+    if !(1..=MAX_SAFE_INTEGER).contains(&value) {
+        return Err(input(format!("Invalid {what}.")));
+    }
+    Ok(value)
+}
 
 /* Which statement a signature makes over a record. */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,10 +174,10 @@ fn metadata_parts(form: Form, statement: &MetadataStatement, envelope: &[u8]) ->
     let mut parts = vec![
         json!(domain),
         json!(1),
-        json!(statement.workspace_id.to_lowercase()),
-        json!(statement.node_id.to_lowercase()),
+        json!(id(&statement.workspace_id, "workspace id")?),
+        json!(id(&statement.node_id, "node id")?),
         json!(statement.kind.as_str()),
-        json!(positive(statement.metadata_version, "metadata version")?),
+        json!(safe_positive(statement.metadata_version, "metadata version")?),
         json!(digest(envelope)),
     ];
     if form == Form::Saved {
@@ -174,10 +199,10 @@ fn version_parts(form: Form, statement: &VersionStatement, envelope: &[u8]) -> C
     let mut parts = vec![
         json!(domain),
         json!(1),
-        json!(statement.workspace_id.to_lowercase()),
-        json!(statement.node_id.to_lowercase()),
-        json!(statement.version_id.to_lowercase()),
-        json!(statement.object_id.to_lowercase()),
+        json!(id(&statement.workspace_id, "workspace id")?),
+        json!(id(&statement.node_id, "node id")?),
+        json!(id(&statement.version_id, "version id")?),
+        json!(id(&statement.object_id, "object id")?),
         json!(positive(statement.content_suite as u64, "content suite")?),
         json!(digest(envelope)),
     ];
@@ -733,7 +758,7 @@ pub fn keys_statement(
         json!("hushos/identity/keys"),
         json!(1),
         json!(identifier(&user_id, "user id")?),
-        json!(positive(key_version, "key version")?),
+        json!(self::key_version(key_version)?),
         public_key(&encryption_public_key, 32, "encryptionPublicKey")?,
         public_key(&signing_public_key, 32, "signingPublicKey")?,
         public_key(&ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "mlDsaPublicKey")?,
@@ -747,16 +772,59 @@ pub fn keys_statement(
 /// above the old one. Version 1 is refused everywhere.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn succession_statement(user_id: String, link: crate::SuccessionLink) -> CoreResult<Vec<u8>> {
+    succession_at(2, &user_id, &link)
+}
+
+/// Which identity signs a half of a succession's consent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConsentRole {
+    Old,
+    New,
+}
+
+/// `["hushos/identity/succession-consent",1,role,userId,...the version 2
+/// fields...]`, role `"old"` or `"new"`: a succession's consent, its own
+/// domain, one half signed by the old identity's hybrid keys over role "old"
+/// and the other by the new identity's over role "new"
+/// (docs/identity-pq-design.md 2). The domain separates it from the one-sided
+/// version 2 statement (and from the version 3 succession the docs keep for a
+/// restart link), and the role keeps either half from standing for the other.
+/// The group core asks it of links into keys it reached from a member's first
+/// keys.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn succession_consent_statement(
+    user_id: String,
+    link: crate::SuccessionLink,
+    role: ConsentRole,
+) -> CoreResult<Vec<u8>> {
+    let role = match role {
+        ConsentRole::Old => "old",
+        ConsentRole::New => "new",
+    };
+    succession_fields("hushos/identity/succession-consent", &[json!(1), json!(role)], &user_id, &link)
+}
+
+fn succession_at(version: u64, user_id: &str, link: &crate::SuccessionLink) -> CoreResult<Vec<u8>> {
+    succession_fields("hushos/identity/succession", &[json!(version)], user_id, link)
+}
+
+fn succession_fields(
+    domain: &str,
+    head: &[serde_json::Value],
+    user_id: &str,
+    link: &crate::SuccessionLink,
+) -> CoreResult<Vec<u8>> {
     // Minted at old + 1; a reader asks only that it rose (a rotation may lift it in between).
-    let old_version = positive(link.old_key_version, "key version")?;
-    if link.new_key_version <= old_version {
+    let old_version = key_version(link.old_key_version)?;
+    if key_version(link.new_key_version)? <= old_version {
         return Err(input("Invalid key version."));
     }
     let kem = decode("newKemPublicKey", &link.new_kem_public_key, Some(KEM_PUBLIC_KEY_BYTES))?;
-    Ok(context(&[
-        json!("hushos/identity/succession"),
-        json!(2),
-        json!(identifier(&user_id, "user id")?),
+    let mut parts = vec![json!(domain)];
+    parts.extend(head.iter().cloned());
+    parts.extend([
+        json!(identifier(user_id, "user id")?),
         json!(old_version),
         json!(link.new_key_version),
         public_key(&link.old_encryption_public_key, 32, "oldEncryptionPublicKey")?,
@@ -766,7 +834,8 @@ pub fn succession_statement(user_id: String, link: crate::SuccessionLink) -> Cor
         public_key(&link.new_signing_public_key, 32, "newSigningPublicKey")?,
         public_key(&link.new_ml_dsa_public_key, ML_DSA_PUBLIC_KEY_BYTES, "newMlDsaPublicKey")?,
         json!(digest(&kem)),
-    ]))
+    ]);
+    Ok(context(&parts))
 }
 
 #[cfg(test)]
@@ -781,6 +850,38 @@ mod tests {
             kind: NodeKind::Folder,
             metadata_version: 2,
         }
+    }
+
+    #[test]
+    fn codex_r3_record_statement_fields_are_bounded_as_the_web_bounds_them() {
+        let envelope = b"sealed metadata".to_vec();
+        // Empty ids are refused, as the web refuses them.
+        for change in [
+            MetadataStatement { workspace_id: String::new(), ..statement() },
+            MetadataStatement { node_id: String::new(), ..statement() },
+        ] {
+            assert!(metadata_message(&change, &envelope).unwrap_err().to_string().contains("Invalid"));
+        }
+        let version = VersionStatement {
+            workspace_id: "ws".into(),
+            node_id: "n1".into(),
+            version_id: "v1".into(),
+            object_id: "o1".into(),
+            content_suite: u32::MAX,
+        };
+        assert!(version_message(&version, &envelope).is_ok());
+        for change in [
+            VersionStatement { version_id: String::new(), ..version.clone() },
+            VersionStatement { object_id: String::new(), ..version.clone() },
+            VersionStatement { content_suite: 0, ..version.clone() },
+        ] {
+            assert!(version_message(&change, &envelope).is_err());
+        }
+        // A metadata version the web cannot hold exactly (above 2^53 - 1) is refused.
+        let top = MetadataStatement { metadata_version: MAX_SAFE_INTEGER, ..statement() };
+        assert!(metadata_message(&top, &envelope).is_ok());
+        let above = MetadataStatement { metadata_version: MAX_SAFE_INTEGER + 1, ..statement() };
+        assert!(metadata_message(&above, &envelope).is_err());
     }
 
     #[test]
@@ -1120,5 +1221,34 @@ mod tests {
         assert!(version_copy_sign(seed.clone(), Integrity::Unchecked, false, version(), envelope.clone())
             .is_err());
         assert!(metadata_copy_sign(seed, Integrity::Unchecked, false, statement(), envelope).is_err());
+    }
+
+    /* Round 8 (Codex 1): identity key versions stop at 2^53 - 1, as the web's safe integers do. */
+    #[test]
+    fn identity_key_versions_stop_where_the_web_s_safe_integers_do() {
+        let key = |n: u8| crate::bytes::encode(&[n; 32]);
+        let ml_dsa = crate::bytes::encode(&vec![3; crate::pq::ML_DSA_PUBLIC_KEY_BYTES]);
+        let kem = crate::bytes::encode(&vec![4; crate::identity::KEM_PUBLIC_KEY_BYTES]);
+        let user = "11111111-1111-4111-8111-111111111111".to_string();
+        let link = |old: u64, new: u64| crate::SuccessionLink {
+            old_key_version: old,
+            new_key_version: new,
+            old_encryption_public_key: key(1),
+            old_signing_public_key: key(2),
+            old_ml_dsa_public_key: ml_dsa.clone(),
+            new_encryption_public_key: key(5),
+            new_signing_public_key: key(6),
+            new_ml_dsa_public_key: ml_dsa.clone(),
+            new_kem_public_key: kem.clone(),
+            signature: String::new(),
+            consent: None,
+        };
+        assert!(succession_statement(user.clone(), link(1, MAX_SAFE_INTEGER)).is_ok());
+        assert!(succession_statement(user.clone(), link(1, MAX_SAFE_INTEGER + 1)).is_err());
+        assert!(succession_statement(user.clone(), link(1, u64::MAX)).is_err());
+        assert!(succession_statement(user.clone(), link(MAX_SAFE_INTEGER + 1, u64::MAX)).is_err());
+        assert!(keys_statement(user.clone(), MAX_SAFE_INTEGER, key(1), key(2), ml_dsa.clone(), kem.clone())
+            .is_ok());
+        assert!(keys_statement(user, MAX_SAFE_INTEGER + 1, key(1), key(2), ml_dsa, kem).is_err());
     }
 }

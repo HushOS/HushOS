@@ -114,3 +114,20 @@ describe('master-key rotation', () => {
         ).rejects.toThrow();
     });
 });
+
+describe('the account root an identity is wrapped under (Codex round 3)', () => {
+    test('is 32 bytes: any other length is refused, not wrapped where only the web could open it', async () => {
+        for (const length of [0, 16, 31, 33, 64])
+            await expect(createIdentity(new Uint8Array(length), USER), `${length}`).rejects.toThrow(
+                'Invalid account key.',
+            );
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const identity = await createIdentity(root, USER);
+        const longer = new Uint8Array(33);
+        longer.set(root);
+        await expect(openIdentitySigningKey(longer, USER, identity)).rejects.toThrow(
+            'Invalid account key.',
+        );
+        expect(await openIdentitySigningKey(root, USER, identity)).toHaveLength(64);
+    });
+});

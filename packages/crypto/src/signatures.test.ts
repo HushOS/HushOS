@@ -277,6 +277,19 @@ describe('signatures', () => {
             ).toBe(false);
     });
 
+    test('a content suite is one the core can hold (a u32): 2^32 - 1 signs, 2^32 is refused', async () => {
+        const envelope = new Uint8Array(84).fill(5);
+        const ctx = { workspaceId: WS, nodeId: NODE, versionId: VERSION, objectId: OBJECT };
+        await expect(
+            versionStatement({ ...ctx, contentSuite: 0xffff_ffff }, envelope),
+        ).resolves.toBeInstanceOf(Uint8Array);
+        for (const contentSuite of [2 ** 32, 0, 2 ** 53])
+            await expect(
+                versionStatement({ ...ctx, contentSuite }, envelope),
+                `${contentSuite}`,
+            ).rejects.toThrow(CryptoError);
+    });
+
     test("a reader's verdict: verified only under the signer's current key, over the ordinary statement", async () => {
         const earlier = await keyPair();
         const current = await keyPair();

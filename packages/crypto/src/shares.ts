@@ -1,22 +1,20 @@
-import sodium from 'libsodium-wrappers';
 import { CryptoError } from './errors';
-import { decryptKey, encryptKey } from './aead';
-import { hybridKeyWithSalt } from './hybrid';
-import {
-    KEM_CIPHERTEXT_BYTES,
-    KEM_PUBLIC_KEY_BYTES,
-    KEM_SECRET_KEY_BYTES,
-    kemDecapsulate,
-    kemEncapsulate,
-} from './pq';
+import { KEM_CIPHERTEXT_BYTES } from './pq';
 import {
     HYBRID_SIGNATURE_BYTES,
     shareStatement,
-    signHybrid,
-    verifyHybrid,
     type HybridPublicKey,
     type HybridSigningKey,
 } from './signatures';
+import {
+    openHybrid,
+    sealHybrid,
+    type GranteeKeys,
+    type GranteeSecrets,
+    type HybridSealKind,
+} from './sealing';
+
+export type { GranteeKeys, GranteeSecrets };
 
 /*
  * A share is one node's key sealed to one grantee, as the design fixes it.
@@ -47,8 +45,6 @@ export const SHARE_SUITE = 4;
 export type ShareSuite = 4;
 
 const SIGNED_SHARE_KEY_INFO = 'hushos/drive/share-key/v4';
-/* Where the signed bytes end: everything before the signature. */
-const SIGNED_PART = SIGNED_SHARE_ENVELOPE_BYTES - HYBRID_SIGNATURE_BYTES;
 
 export type ShareContext = {
     workspaceId: string;
@@ -58,16 +54,6 @@ export type ShareContext = {
     granterUserId: string;
 };
 
-/* The grantee as the granter sees them, both keys checked against the grantee's pin. */
-export type GranteeKeys = {
-    encryptionPublicKey: Uint8Array;
-    kemPublicKey: Uint8Array | null;
-};
-/* The grantee's own private halves. */
-export type GranteeSecrets = {
-    privateKey: Uint8Array;
-    kemSecretKey: Uint8Array | null;
-};
 /* The suite an envelope was sealed under, from its length: suite 4, or refused. */
 export function shareSuite(envelope: Uint8Array): ShareSuite {
     if (envelope.length === SIGNED_SHARE_ENVELOPE_BYTES) return 4;
@@ -88,31 +74,16 @@ export function shareContext(ctx: ShareContext, suite: ShareSuite = 4) {
     );
 }
 
-/* Raw X25519, refusing a low-order key whose agreement is all zeros. */
-function agree(myPrivateKey: Uint8Array, theirPublicKey: Uint8Array) {
-    if (theirPublicKey.length !== 32 || myPrivateKey.length !== 32)
-        throw new CryptoError('Invalid identity key.');
-    try {
-        return sodium.crypto_scalarmult(myPrivateKey, theirPublicKey) as Uint8Array<ArrayBuffer>;
-    } catch {
-        throw new CryptoError('Invalid identity key.');
-    }
-}
-
-/* salt = SHA-256(kemCiphertext || ephemeralPublicKey || granteePublicKey) */
-async function signedShareKey(
-    dh: Uint8Array,
-    kemSecret: Uint8Array,
-    kemCiphertext: Uint8Array,
-    ephemeralPublicKey: Uint8Array,
-    granteePublicKey: Uint8Array,
-) {
-    const transcript = new Uint8Array(KEM_CIPHERTEXT_BYTES + 64);
-    transcript.set(kemCiphertext);
-    transcript.set(ephemeralPublicKey, KEM_CIPHERTEXT_BYTES);
-    transcript.set(granteePublicKey, KEM_CIPHERTEXT_BYTES + 32);
-    const salt = new Uint8Array(await crypto.subtle.digest('SHA-256', transcript));
-    return hybridKeyWithSalt(dh, kemSecret, salt, SIGNED_SHARE_KEY_INFO);
+/* What a share is sealed as: suite 4's `info`, its context as associated data, its statement. */
+function shareKind(ctx: ShareContext): HybridSealKind {
+    return {
+        info: SIGNED_SHARE_KEY_INFO,
+        associatedData: shareContext(ctx, 4),
+        statement: (sealed) => shareStatement(ctx, sealed),
+        noun: 'share',
+        invalid: 'Invalid share envelope.',
+        unsigned: 'This share is not signed by the person who shared it.',
+    };
 }
 
 /*
@@ -126,45 +97,8 @@ export async function sealShareKey(
     granter: HybridSigningKey,
     ctx: ShareContext,
 ) {
-    await sodium.ready;
     if (nodeKey.length !== 32) throw new CryptoError('Invalid node key.');
-    // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target,
-    // and withholding the KEM key is all it would take.
-    if (!grantee.kemPublicKey)
-        throw new CryptoError('This person has no post-quantum key yet, so nothing was shared.');
-    if (grantee.kemPublicKey.length !== KEM_PUBLIC_KEY_BYTES)
-        throw new CryptoError('Invalid identity key.');
-    const ephemeral = sodium.crypto_box_keypair();
-    let dh: Uint8Array | undefined;
-    try {
-        dh = agree(ephemeral.privateKey, grantee.encryptionPublicKey);
-        const { ciphertext, sharedSecret } = kemEncapsulate(grantee.kemPublicKey);
-        const key = await signedShareKey(
-            dh,
-            sharedSecret,
-            ciphertext,
-            ephemeral.publicKey,
-            grantee.encryptionPublicKey,
-        );
-        sharedSecret.fill(0);
-        try {
-            const nonce = crypto.getRandomValues(new Uint8Array(24));
-            const body = await encryptKey(nodeKey, key, nonce, shareContext(ctx, 4));
-            const envelope = new Uint8Array(SIGNED_SHARE_ENVELOPE_BYTES);
-            envelope.set(ephemeral.publicKey);
-            envelope.set(ciphertext, 32);
-            envelope.set(nonce, 32 + KEM_CIPHERTEXT_BYTES);
-            envelope.set(body, 32 + KEM_CIPHERTEXT_BYTES + 24);
-            const statement = await shareStatement(ctx, envelope.subarray(0, SIGNED_PART));
-            envelope.set(await signHybrid(statement, granter), SIGNED_PART);
-            return envelope;
-        } finally {
-            key.fill(0);
-        }
-    } finally {
-        ephemeral.privateKey.fill(0);
-        dh?.fill(0);
-    }
+    return sealHybrid(nodeKey, grantee, granter, shareKind(ctx));
 }
 
 /*
@@ -180,52 +114,8 @@ export async function openShareKey(
     grantee: GranteeSecrets,
     ctx: ShareContext,
 ) {
-    await sodium.ready;
     shareSuite(envelope);
-    return openSignedShare(envelope, granter, grantee, ctx);
-}
-
-async function openSignedShare(
-    envelope: Uint8Array,
-    granter: HybridPublicKey,
-    grantee: GranteeSecrets,
-    ctx: ShareContext,
-) {
     if (granter.signingPublicKey.length !== 32 || granter.mlDsaPublicKey.length !== 1952)
         throw new CryptoError('This share needs the key of the person who shared it.');
-    const statement = await shareStatement(ctx, envelope.subarray(0, SIGNED_PART));
-    if (!(await verifyHybrid(statement, envelope.subarray(SIGNED_PART), granter)))
-        throw new CryptoError('This share is not signed by the person who shared it.');
-    if (!grantee.kemSecretKey || grantee.kemSecretKey.length !== KEM_SECRET_KEY_BYTES)
-        throw new CryptoError(
-            'This share was sealed to a key this account does not hold yet. Unlock again and retry.',
-        );
-    const ephemeralPublicKey = envelope.subarray(0, 32);
-    const ciphertext = envelope.subarray(32, 32 + KEM_CIPHERTEXT_BYTES);
-    const nonce = envelope.subarray(32 + KEM_CIPHERTEXT_BYTES, 32 + KEM_CIPHERTEXT_BYTES + 24);
-    const body = envelope.subarray(32 + KEM_CIPHERTEXT_BYTES + 24, SIGNED_PART);
-    const dh = agree(grantee.privateKey, ephemeralPublicKey);
-    try {
-        const sharedSecret = kemDecapsulate(ciphertext, grantee.kemSecretKey);
-        const key = await signedShareKey(
-            dh,
-            sharedSecret,
-            ciphertext,
-            ephemeralPublicKey,
-            sodium.crypto_scalarmult_base(grantee.privateKey),
-        );
-        sharedSecret.fill(0);
-        try {
-            return (await decryptKey(
-                body,
-                key,
-                nonce,
-                shareContext(ctx, 4),
-            )) as Uint8Array<ArrayBuffer>;
-        } finally {
-            key.fill(0);
-        }
-    } finally {
-        dh.fill(0);
-    }
+    return openHybrid(envelope, 32, [granter], grantee, shareKind(ctx));
 }

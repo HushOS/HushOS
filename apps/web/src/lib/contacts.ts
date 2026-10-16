@@ -516,6 +516,8 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         // Fields this version does not know are kept; so are the keys a followed succession
         // left behind, unless these words were compared over brand-new keys.
         const kept = { ...before } as Partial<Pin>;
+        // These words were just compared: the pin is the reader's own now, not a group's word.
+        delete kept.trustedVia;
         if (moved) {
             delete kept.previousSigningKeys;
             delete kept.keysReplacedAt;

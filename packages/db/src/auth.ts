@@ -171,16 +171,16 @@ export async function registerAccount(input: {
             .values({ workspaceId: workspace.id, baseQuotaBytes: input.initialQuotaBytes });
         await tx
             .insert(workspaceKeys)
-            .values({ workspaceId: workspace.id, userId: user.id, ...input.workspace.grant });
+            .values({ ...input.workspace.grant, workspaceId: workspace.id, userId: user.id });
         await tx.insert(opaqueCredentials).values({
             userId: user.id,
             registrationRecord: input.registrationRecord,
             profileVersion: input.profileVersion,
             serverSetupId: input.serverSetupId,
         });
-        await tx.insert(accountKeys).values({ userId: user.id, ...input.envelope });
-        await tx.insert(accountRecoveryKeys).values({ userId: user.id, ...input.recovery });
-        await tx.insert(accountIdentities).values({ userId: user.id, ...input.identity });
+        await tx.insert(accountKeys).values({ ...input.envelope, userId: user.id });
+        await tx.insert(accountRecoveryKeys).values({ ...input.recovery, userId: user.id });
+        await tx.insert(accountIdentities).values({ ...input.identity, userId: user.id });
         await tx.delete(accountEnrollments).where(eq(accountEnrollments.id, enrollment.id));
         return { status: 'created' as const, user };
     });
@@ -1198,12 +1198,12 @@ export async function initializeAccount(input: {
         if (input.recovery)
             await tx
                 .insert(accountRecoveryKeys)
-                .values({ userId: user.id, ...input.recovery })
+                .values({ ...input.recovery, userId: user.id })
                 .onConflictDoNothing();
         if (input.identity)
             await tx
                 .insert(accountIdentities)
-                .values({ userId: user.id, ...input.identity })
+                .values({ ...input.identity, userId: user.id })
                 .onConflictDoNothing();
         const [personal] = await tx
             .select({ workspaceId: personalWorkspaces.workspaceId })
@@ -1232,7 +1232,7 @@ export async function initializeAccount(input: {
         )
             await tx
                 .insert(workspaceKeys)
-                .values({ workspaceId, userId: user.id, ...input.workspace.grant })
+                .values({ ...input.workspace.grant, workspaceId, userId: user.id })
                 .onConflictDoNothing();
         return true;
     });

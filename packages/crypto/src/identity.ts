@@ -14,6 +14,7 @@ import {
     HYBRID_SIGNATURE_BYTES,
     keysStatement,
     signHybrid,
+    successionConsentStatement,
     successionStatement,
     verifyHybrid,
     type HybridSigningKey,
@@ -190,6 +191,10 @@ async function identityWrappingKey(
     salt: Uint8Array<ArrayBuffer>,
     purpose: string,
 ) {
+    // The account root is 32 bytes, as the Rust core requires: an identity wrapped under any other
+    // length would open on the web and nowhere else.
+    if (!(root instanceof Uint8Array) || root.length !== 32)
+        throw new CryptoError('Invalid account key.');
     const key = await crypto.subtle.importKey('raw', root, 'HKDF', false, ['deriveBits']);
     return new Uint8Array(
         await crypto.subtle.deriveBits(
@@ -249,7 +254,7 @@ export async function verifyIdentityKeys(
 ) {
     try {
         return await verifyHybrid(
-            await keysStatement({ userId, ...identity }),
+            await keysStatement({ ...identity, userId }),
             decode(identity.keysSignature, HYBRID_SIGNATURE_BYTES),
             {
                 signingPublicKey: decode(identity.signingPublicKey, 32),
@@ -699,7 +704,20 @@ export function publicIdentity(envelope: IdentityEnvelope) {
 }
 
 /* A link of a succession chain as the server serves it: the statement and the old identity's hybrid signature. */
-export type SuccessionLink = Omit<SuccessionStatement, 'userId'> & { signature: string };
+/*
+ * `signature` is the old identity's hybrid signature over the version 2
+ * statement, what personal pins follow. `consent`, on links made from this
+ * release on, is two hybrid signatures over the version 3 statement, the old
+ * identity's then the new identity's (6746 bytes, base64url): the successor's
+ * consent, without which the group core follows no link.
+ */
+export type SuccessionLink = Omit<SuccessionStatement, 'userId'> & {
+    signature: string;
+    consent?: string | null;
+};
+
+/* The size of a link's consent: two hybrid signatures, the old identity's and the new one's. */
+export const SUCCESSION_CONSENT_BYTES = 2 * HYBRID_SIGNATURE_BYTES;
 /*
  * The keys a contact was pinned with, from a version 3 pin: the X25519 and
  * Ed25519 keys and the ML-DSA key's SHA-256 (hex), and the key version the pin
@@ -742,7 +760,7 @@ export async function createSuccessor(
         throw new CryptoError('Identity keys do not match.');
     const identity = await createIdentity(root, userId, current.keyVersion + 1);
     if (identity.version !== 2) throw new CryptoError('Unsupported identity envelope.');
-    const statement = await successionStatement({
+    const fields = {
         userId,
         oldKeyVersion: current.keyVersion,
         newKeyVersion: identity.keyVersion,
@@ -753,8 +771,60 @@ export async function createSuccessor(
         newSigningPublicKey: identity.signingPublicKey,
         newMlDsaPublicKey: identity.mlDsa.publicKey,
         newKemPublicKey: identity.kem.publicKey,
-    });
-    return { identity, signature: encode(await signHybrid(statement, keys)) };
+    };
+    const signature = await signHybrid(await successionStatement(fields), keys);
+    // The successor consents: the old identity signs the consent statement as "old", the new one
+    // as "new".
+    const next = {
+        signingKey: await openIdentitySigningKey(root, userId, identity),
+        mlDsaSecretKey: (await openIdentityMlDsaKey(root, userId, identity))!.secretKey,
+    };
+    try {
+        const consent = new Uint8Array(SUCCESSION_CONSENT_BYTES);
+        consent.set(await signHybrid(await successionConsentStatement(fields, 'old'), keys));
+        consent.set(
+            await signHybrid(await successionConsentStatement(fields, 'new'), next),
+            HYBRID_SIGNATURE_BYTES,
+        );
+        return { identity, signature: encode(signature), consent: encode(consent) };
+    } finally {
+        next.signingKey.fill(0);
+        next.mlDsaSecretKey.fill(0);
+    }
+}
+
+/*
+ * Whether a link carries its successor's consent: the consent statement
+ * signed, both halves each, by the old keys as "old" and by the new keys the
+ * link itself names as "new". What the group core asks of links into keys it
+ * reached from a member's first keys (planted keys can sign a link away from
+ * themselves, never the member's consent to it); everywhere else, and for
+ * personal pins (verifySuccessionChain), the version 2 signature holds.
+ */
+export async function verifySuccessionConsent(userId: string, link: SuccessionLink) {
+    try {
+        if (typeof link.consent !== 'string') return false;
+        const consent = decode(link.consent, SUCCESSION_CONSENT_BYTES);
+        const fields = { ...link, userId };
+        const under = (signing: string, mlDsa: string) => ({
+            signingPublicKey: decode(signing, 32),
+            mlDsaPublicKey: decode(mlDsa, ML_DSA_PUBLIC_KEY_BYTES),
+        });
+        return (
+            (await verifyHybrid(
+                await successionConsentStatement(fields, 'old'),
+                consent.subarray(0, HYBRID_SIGNATURE_BYTES),
+                under(link.oldSigningPublicKey, link.oldMlDsaPublicKey),
+            )) &&
+            (await verifyHybrid(
+                await successionConsentStatement(fields, 'new'),
+                consent.subarray(HYBRID_SIGNATURE_BYTES),
+                under(link.newSigningPublicKey, link.newMlDsaPublicKey),
+            ))
+        );
+    } catch {
+        return false;
+    }
 }
 
 /*
@@ -795,8 +865,12 @@ export async function verifySuccessionLink(
  *   previous link's new keys;
  * - the last link's new X25519, Ed25519, ML-DSA and ML-KEM keys are the served
  *   ones.
- * Any gap, fork or bad signature and the chain does not hold; that is the
- * changed-key warning, never a silent update.
+ * The chain is every link from the first one at the pin to the end of the
+ * list, in the order served: links before it are skipped, but a link after
+ * the chain's end, or the links out of order, and it does not hold. Any gap,
+ * fork or bad signature and the chain does not hold; that is the changed-key
+ * warning, never a silent update. (The group core does not use this verifier:
+ * it walks the verified links as a graph, succession-path.ts.)
  */
 export async function verifySuccessionChain(
     userId: string,

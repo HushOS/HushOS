@@ -129,6 +129,8 @@ extension ContactPin {
         next.keysReplacedAt = ISO8601DateFormatter().string(from: now)
         // What this person shared with them still holds the old keys: every client re-seals it (synced, as the web's pin has it).
         next.resealShares = true
+        // Followed from a pin trusted through a group: still that group's word, as on the web.
+        next.trustedVia = trustedVia
         return .followed(next)
     }
 

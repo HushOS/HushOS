@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { fingerprint } from './fingerprint';
-import { pinVerified, settingsRolledBack } from './pins';
+import { CryptoError } from './errors';
+import { checkGroupPin, pinVerified, settingsRolledBack } from './pins';
 
 /*
  * A pin counts only when it records a version 3 words check over every key it
@@ -101,5 +102,46 @@ describe('settings served back', () => {
         expect(settingsRolledBack(6, 5)).toBe(false);
         expect(settingsRolledBack(null, 0)).toBe(false);
         expect(settingsRolledBack(1, 0)).toBe(false);
+    });
+});
+
+describe('group pins', () => {
+    const GROUP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+    const AREA = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c';
+    const pin = {
+        firstEd25519PublicKey: encode(key(1)),
+        firstMlDsaPublicKeyDigest: encode(key(2)),
+        checkedAt: '2026-10-15T00:00:00.000Z',
+        keyVersion: 2,
+        groupKeyDigest: encode(key(5)),
+        rosterVersion: 5,
+        rosterDigest: encode(key(3)),
+        areas: { [AREA]: 3 },
+    };
+
+    test('a pin outside the canonical encoding is no pin, and nothing beyond its fields is kept', () => {
+        expect(checkGroupPin(GROUP, pin)).toEqual(pin);
+        // Marks the old shape carried are dropped, never trusted.
+        expect(
+            checkGroupPin(GROUP, {
+                ...pin,
+                earlierRosters: [{ rosterVersion: 2 }],
+                droppedHolder: true,
+            }),
+        ).toEqual(pin);
+        for (const broken of [
+            { ...pin, firstMlDsaPublicKeyDigest: hex(key(2)) },
+            { ...pin, groupKeyDigest: hex(key(5)) },
+            { ...pin, rosterDigest: '' },
+            { ...pin, keyVersion: 0 },
+            { ...pin, rosterVersion: 2 ** 53 },
+            { ...pin, checkedAt: '' },
+            { ...pin, areas: { [AREA.toUpperCase()]: 1 } },
+            { ...pin, areas: { [AREA]: 0 } },
+            { ...pin, areas: [] },
+            { ...pin, firstEd25519PublicKey: `${pin.firstEd25519PublicKey}=` },
+        ])
+            expect(() => checkGroupPin(GROUP, broken)).toThrow(CryptoError);
+        expect(() => checkGroupPin(GROUP.toUpperCase(), pin)).toThrow('Invalid group id.');
     });
 });

@@ -83,8 +83,8 @@ An area grant (groups-design 2.6) is sealed to a member's identity: X25519 and M
 - **Unlock opens areas the way it opens the personal workspace:** one HKDF and one AEAD, with no decapsulation per area.
 - **Root changes need no re-grant.** A master-key rotation rewraps the area's self-grant along with the rest, as it does for the personal workspace.
 - **Identity changes need no urgent re-grant.** After the member's identity succession, the area keeps opening through the self-grant. Holders re-grant to the new keys at the next roster fold-in, as groups-design already requires.
-- **The area grant's checks run once.** Only an area grant that passes groups-design's checks (an active granter, this group, at or above the high-water version) is turned into a self-grant. The server accepts a self-grant only for an area the caller is an active member of, at the area's current `workspace_key_version`.
-- **The version check runs on every open.** Each time a device opens a self-grant, it compares the self-grant's `workspaceKeyVersion` with the area's high-water mark (groups-design 2.7) and with the area's served `workspaceKeyVersion`. When either is higher, the device ignores the self-grant, opens the area grant instead, and writes a new self-grant from it; with no area grant at that version, the area is Couldn't check. Otherwise a server could serve a self-grant from before a rotation, and the member would write under a key a removed member holds.
+- **The area grant's checks run once.** Only an area grant that passes groups-design's checks (an active granter, this group, a version the accepted chain lists with that key's commitment) is turned into a self-grant. The server accepts a self-grant only for an area the caller is an active member of, at the area's current `workspace_key_version`.
+- **The version check runs on every open.** Each time a device opens a self-grant, it compares the self-grant's `workspaceKeyVersion` with the area's latest version on the accepted chain (`areaWriteVersion`, groups-design 2.6; the pin's high-water floor was dropped in groups round 10) and with the area's served `workspaceKeyVersion`. When either is higher, the device ignores the self-grant, opens the area grant instead, and writes a new self-grant from it; with no area grant at that version, the area is Couldn't check. Otherwise a server could serve a self-grant from before a rotation, and the member would write under a key a removed member holds.
 - **Leaving.** When a member leaves, the server deletes their self-grants with their area grants. They already held the key; rotation is what takes it away.
 
 `workspace_keys` keeps one row per member per workspace (its primary key), holding the latest version. That is all an area needs, because a rotation gives the area root a new node key with the version bump (groups-design 2.6).
@@ -228,7 +228,7 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
 - **Self-grants:**
     - a self-grant is written only from an area grant that passed its checks;
     - the server refuses one for an area the caller is not active in, or at an old key version;
-    - a served self-grant below the area's high-water mark or served key version is not used, and the device opens the area grant instead;
+    - a served self-grant below the area's latest version on the accepted chain or its served key version is not used, and the device opens the area grant instead;
     - leaving deletes it.
 - **Moves:** every version arrives in order in the target; a failed copy leaves the source untouched; a completed move leaves the source in trash with its shares; the copy's signatures follow the saved-copy rules, version by version, so an unverified earlier version is re-sealed beside a verified current one.
 - **Conversion:**

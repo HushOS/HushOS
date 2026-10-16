@@ -701,7 +701,7 @@ export type CryptoResults = {
         /* The earlier identities opened beside it, oldest first. */
         history: { keyVersion: number; encryptionPublicKey: string; signingPublicKey: string }[];
     };
-    identitySucceed: { identity: IdentityEnvelope; signature: string };
+    identitySucceed: { identity: IdentityEnvelope; signature: string; consent: string };
     identityVerifyChain: { valid: boolean };
     identityUpgrade: { identity: IdentityEnvelope };
     identityVerifyKeys: { valid: boolean };

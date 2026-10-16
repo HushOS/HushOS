@@ -96,27 +96,167 @@ fn agree(my_private: &[u8], their_public: &[u8]) -> CoreResult<Zeroizing<[u8; 32
     Ok(Zeroizing::new(*shared.as_bytes()))
 }
 
-/* HKDF(salt = SHA-256(kemCt || eph || granteePublic), ikm = dh || kemSs, info v4) */
-fn signed_share_key(
+/* HKDF(salt = SHA-256(kemCt || eph || recipientPublic), ikm = dh || kemSs, info of the envelope's kind) */
+fn hybrid_seal_key(
     dh: &[u8],
     kem_secret: &[u8],
     kem_ciphertext: &[u8],
     ephemeral_public: &[u8],
-    grantee_public: &[u8],
+    recipient_public: &[u8],
+    info: &[u8],
 ) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     let salt = Sha256::new()
         .chain_update(kem_ciphertext)
         .chain_update(ephemeral_public)
-        .chain_update(grantee_public)
+        .chain_update(recipient_public)
         .finalize();
     let mut material = Zeroizing::new(Vec::with_capacity(dh.len() + kem_secret.len()));
     material.extend_from_slice(dh);
     material.extend_from_slice(kem_secret);
     let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&salt), &material)
-        .expand(SIGNED_SHARE_KEY_INFO, key.as_mut())
+        .expand(info, key.as_mut())
         .map_err(|_| input("HKDF failed"))?;
     Ok(key)
+}
+
+/*
+ * The suite 4 construction with the payload, HKDF `info`, associated data and
+ * signed statement of the caller's choosing: what a share and the group seals
+ * (docs/groups-design.md 2.3, 2.6, 2.9) are made with, as `sealHybrid` in
+ * packages/crypto/shares.ts. The envelope is the ephemeral X25519 public key,
+ * the KEM ciphertext, the nonce, the body and the sealer's hybrid signature
+ * over `statement(everything before it)`. Each kind has its own `info` and
+ * associated data, so an envelope of one kind opens as nothing as another.
+ */
+pub(crate) struct SealKind<'a> {
+    pub(crate) info: &'a [u8],
+    pub(crate) associated_data: Vec<u8>,
+    pub(crate) statement: &'a dyn Fn(&[u8]) -> CoreResult<Vec<u8>>,
+    /* What the envelope is called, and what a reader is told when it is malformed or its signature does not hold. */
+    pub(crate) noun: &'a str,
+    pub(crate) invalid: &'a str,
+    pub(crate) unsigned: &'a str,
+}
+
+/* An envelope's length for a payload of `payload_len` bytes. */
+pub(crate) const fn hybrid_seal_bytes(payload_len: usize) -> usize {
+    32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES + payload_len + TAG_BYTES + HYBRID_SIGNATURE_BYTES
+}
+
+/*
+ * Seals `payload` to the recipient's X25519 and ML-KEM keys under `kind`,
+ * signed with the sealer's hybrid signature (its signing and ML-DSA seeds). The
+ * recipient's keys must be ones the sealer checked.
+ */
+pub(crate) fn seal_hybrid(
+    payload: &[u8],
+    recipient_public_key: &[u8],
+    recipient_kem_public_key: &[u8],
+    sealer: &IdentityKeys,
+    kind: &SealKind,
+) -> CoreResult<Vec<u8>> {
+    if sealer.ml_dsa_seed.len() != ML_DSA_SEED_BYTES {
+        return Err(input("Your keys need upgrading first. Unlock again and retry."));
+    }
+    expect_len("identity public key", recipient_public_key, 32)
+        .map_err(|_| input("Invalid identity key."))?;
+    // Hybrid only: a key sealed to X25519 alone is a harvest-now, decrypt-later target.
+    if recipient_kem_public_key.is_empty() {
+        return Err(input("This person has no post-quantum key yet, so nothing was shared."));
+    }
+    expect_len("kem public key", recipient_kem_public_key, KEM_PUBLIC_KEY_BYTES)
+        .map_err(|_| input("Invalid identity key."))?;
+    let ephemeral = Zeroizing::new(random(32));
+    let ephemeral_public =
+        PublicKey::from(&StaticSecret::from(<[u8; 32]>::try_from(ephemeral.as_slice()).expect("32 bytes")))
+            .to_bytes();
+    let dh = agree(&ephemeral, recipient_public_key)?;
+    let (ciphertext, secret) = kem_encapsulate(recipient_kem_public_key)?;
+    let key = hybrid_seal_key(
+        dh.as_slice(),
+        secret.as_slice(),
+        &ciphertext,
+        &ephemeral_public,
+        recipient_public_key,
+        kind.info,
+    )?;
+    let nonce = random(NONCE_BYTES);
+    let mut out = Vec::with_capacity(hybrid_seal_bytes(payload.len()));
+    out.extend_from_slice(&ephemeral_public);
+    out.extend_from_slice(&ciphertext);
+    out.extend_from_slice(&nonce);
+    out.extend(seal_with_nonce(key.as_slice(), &nonce, payload, &kind.associated_data)?);
+    let signature = sign_hybrid(&sealer.signing_seed, &sealer.ml_dsa_seed, &(kind.statement)(&out)?)?;
+    out.extend_from_slice(&signature);
+    debug_assert_eq!(out.len(), hybrid_seal_bytes(payload.len()));
+    Ok(out)
+}
+
+/*
+ * Opens an envelope sealed to this identity under `kind`: the payload, of
+ * exactly `payload_len` bytes, only once both halves of its signature verify
+ * under `sealer`, keys the reader already trusts; nothing is decapsulated before.
+ */
+pub(crate) fn open_hybrid(
+    envelope: &[u8],
+    payload_len: usize,
+    sealers: &[HybridPublicKey],
+    recipient: &IdentityKeys,
+    kind: &SealKind,
+) -> CoreResult<Vec<u8>> {
+    if envelope.len() != hybrid_seal_bytes(payload_len) {
+        return Err(input(kind.invalid));
+    }
+    let (sealed, signature) = envelope.split_at(envelope.len() - HYBRID_SIGNATURE_BYTES);
+    let statement = (kind.statement)(sealed)?;
+    // Any one of the sealer's keys the caller trusts will do (a member's earlier keys, 2.4).
+    let holds = sealers.iter().any(|sealer| {
+        sealer.signing_public_key.len() == 32
+            && sealer.ml_dsa_public_key.len() == ML_DSA_PUBLIC_KEY_BYTES
+            && verify_hybrid(sealer, &statement, signature)
+    });
+    if !holds {
+        return Err(CoreError::Sealed(kind.unsigned.into()));
+    }
+    if recipient.kem_seed.len() != KEM_SEED_BYTES {
+        return Err(input(format!(
+            "This {} was sealed to a key this account does not hold yet. Unlock again and retry.",
+            kind.noun
+        )));
+    }
+    let ephemeral_public = &sealed[..32];
+    let ciphertext = &sealed[32..32 + KEM_CIPHERTEXT_BYTES];
+    let nonce = &sealed[32 + KEM_CIPHERTEXT_BYTES..32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES];
+    let body = &sealed[32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES..];
+    let dh = agree(&recipient.encryption_private_key, ephemeral_public)?;
+    let secret = kem_decapsulate(&recipient.kem_seed, ciphertext)?;
+    let recipient_public =
+        crate::bytes::decode("identity public key", &recipient.encryption_public_key, Some(32))?;
+    let key = hybrid_seal_key(
+        dh.as_slice(),
+        secret.as_slice(),
+        ciphertext,
+        ephemeral_public,
+        &recipient_public,
+        kind.info,
+    )?;
+    let payload = open_with_nonce(key.as_slice(), nonce, body, &kind.associated_data)?;
+    if payload.len() != payload_len {
+        return Err(CoreError::Sealed(kind.invalid.into()));
+    }
+    Ok(payload)
+}
+
+fn share_kind<'a>(ctx: &ShareContext, statement: &'a dyn Fn(&[u8]) -> CoreResult<Vec<u8>>) -> SealKind<'a> {
+    SealKind {
+        info: SIGNED_SHARE_KEY_INFO,
+        associated_data: share_context(ctx, SUITE),
+        statement,
+        noun: "share",
+        invalid: "Invalid share envelope.",
+        unsigned: "This share is not signed by the person who shared it.",
+    }
 }
 
 /// Seals a node key to a grantee in suite 4, signed with the granter's hybrid
@@ -152,39 +292,14 @@ pub fn share_seal(
     grantee_kem_public_key: Vec<u8>,
 ) -> CoreResult<Vec<u8>> {
     expect_len("node key", &node_key, KEY_BYTES)?;
-    if granter.ml_dsa_seed.len() != ML_DSA_SEED_BYTES {
-        return Err(input("Your keys need upgrading first. Unlock again and retry."));
-    }
-    expect_len("identity public key", &grantee_public_key, 32).map_err(|_| input("Invalid identity key."))?;
-    // Hybrid only: a share sealed to X25519 alone is a harvest-now, decrypt-later target.
-    if grantee_kem_public_key.is_empty() {
-        return Err(input("This person has no post-quantum key yet, so nothing was shared."));
-    }
-    expect_len("kem public key", &grantee_kem_public_key, KEM_PUBLIC_KEY_BYTES)
-        .map_err(|_| input("Invalid identity key."))?;
-    let ephemeral = Zeroizing::new(random(32));
-    let ephemeral_public =
-        PublicKey::from(&StaticSecret::from(<[u8; 32]>::try_from(ephemeral.as_slice()).expect("32 bytes")))
-            .to_bytes();
-    let dh = agree(&ephemeral, &grantee_public_key)?;
-    let (ciphertext, secret) = kem_encapsulate(&grantee_kem_public_key)?;
-    let key = signed_share_key(
-        dh.as_slice(),
-        secret.as_slice(),
-        &ciphertext,
-        &ephemeral_public,
+    let statement = |sealed: &[u8]| share_message(&ctx, sealed);
+    seal_hybrid(
+        &node_key,
         &grantee_public_key,
-    )?;
-    let nonce = random(NONCE_BYTES);
-    let mut out = Vec::with_capacity(SIGNED_SHARE_ENVELOPE_BYTES);
-    out.extend_from_slice(&ephemeral_public);
-    out.extend_from_slice(&ciphertext);
-    out.extend_from_slice(&nonce);
-    out.extend(seal_with_nonce(key.as_slice(), &nonce, &node_key, &share_context(&ctx, SUITE))?);
-    let signature = sign_hybrid(&granter.signing_seed, &granter.ml_dsa_seed, &share_message(&ctx, &out)?)?;
-    out.extend_from_slice(&signature);
-    debug_assert_eq!(out.len(), SIGNED_SHARE_ENVELOPE_BYTES);
-    Ok(out)
+        &grantee_kem_public_key,
+        &granter,
+        &share_kind(&ctx, &statement),
+    )
 }
 
 /// Opens a share sealed to this identity: the node key inside. Only suite 4
@@ -208,29 +323,8 @@ pub fn share_open(
     if granter.signing_public_key.len() != 32 || granter.ml_dsa_public_key.len() != ML_DSA_PUBLIC_KEY_BYTES {
         return Err(input("This share needs the key of the person who shared it."));
     }
-    let (sealed, signature) = envelope.split_at(SIGNED_PART_BYTES);
-    if !verify_hybrid(&granter, &share_message(&ctx, sealed)?, signature) {
-        return Err(CoreError::Sealed("This share is not signed by the person who shared it.".into()));
-    }
-    if grantee.kem_seed.len() != KEM_SEED_BYTES {
-        return Err(input(
-            "This share was sealed to a key this account does not hold yet. Unlock again and retry.",
-        ));
-    }
-    let ephemeral_public = &sealed[..32];
-    let ciphertext = &sealed[32..32 + KEM_CIPHERTEXT_BYTES];
-    let nonce = &sealed[32 + KEM_CIPHERTEXT_BYTES..32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES];
-    let body = &sealed[32 + KEM_CIPHERTEXT_BYTES + NONCE_BYTES..];
-    let dh = agree(&grantee.encryption_private_key, ephemeral_public)?;
-    let secret = kem_decapsulate(&grantee.kem_seed, ciphertext)?;
-    let grantee_public =
-        crate::bytes::decode("identity public key", &grantee.encryption_public_key, Some(32))?;
-    let key =
-        signed_share_key(dh.as_slice(), secret.as_slice(), ciphertext, ephemeral_public, &grantee_public)?;
-    let node_key = open_with_nonce(key.as_slice(), nonce, body, &share_context(&ctx, SUITE))?;
-    expect_len("node key", &node_key, KEY_BYTES)
-        .map_err(|_| CoreError::Sealed("Invalid share envelope.".into()))?;
-    Ok(node_key)
+    let statement = |sealed: &[u8]| share_message(&ctx, sealed);
+    open_hybrid(&envelope, KEY_BYTES, std::slice::from_ref(&granter), &grantee, &share_kind(&ctx, &statement))
 }
 
 #[cfg(test)]
