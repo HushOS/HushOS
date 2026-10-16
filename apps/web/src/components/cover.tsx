@@ -1,6 +1,6 @@
 import { cn } from 'cn';
 import { useId, type CSSProperties } from 'react';
-import type { CoverTone } from '@/lib/content';
+import type { CoverTone, PrintTone } from '@/lib/content';
 
 /*
  * A blog post's cover: one word spelled in dots on a field of faint dots, with
@@ -56,7 +56,7 @@ const font: Record<string, string[]> = {
 };
 
 /* Field and ink per tone. The covers are artwork, so they keep their colours in the dark. */
-export const tones: Record<CoverTone, { field: string; ink: string }> = {
+export const tones: Record<CoverTone | PrintTone, { field: string; ink: string }> = {
     // The page's own quiet fill and muted ink: texture without a colour of its own. Pages only;
     // the social cards are drawn without the page's variables.
     quiet: { field: 'var(--muted)', ink: 'var(--muted-foreground)' },
@@ -67,6 +67,8 @@ export const tones: Record<CoverTone, { field: string; ink: string }> = {
     orange: { field: '#ffa037', ink: '#15171c' },
     mint: { field: '#c6f0d8', ink: '#15171c' },
     graphite: { field: '#22262e', ink: '#e8e9ed' },
+    // Hush blue dots on white, for paper: the printed recovery kit spends little ink on it.
+    paper: { field: '#ffffff', ink: '#2c428e' },
 };
 
 const COLS = 48;
@@ -145,7 +147,7 @@ export function CoverArt({
     className,
 }: {
     word: string;
-    tone?: CoverTone;
+    tone?: CoverTone | PrintTone;
     seed: string;
     cols?: number;
     /* 27 rows by 48 columns draws a 16:9 card; fewer rows draw a banner. */
@@ -227,7 +229,7 @@ export function Cover({
     className,
 }: {
     word: string;
-    tone?: CoverTone;
+    tone?: CoverTone | PrintTone;
     seed: string;
     cols?: number;
     rows?: number;
