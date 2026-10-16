@@ -1,7 +1,7 @@
 ---
 title: How HushOS protects your files
 heading: How HushOS protects your files.
-updated: 2026-10-13
+updated: 2026-10-16
 summary: How HushOS signs you in, makes and keeps your keys, locks your files, shares them, and handles reports, in plain words with the exact terms underneath so you can check each claim against the code.
 lede: What happens to a file from the moment you add it, in plain words. Each step keeps the exact terms underneath for anyone who wants to check them against the code. Where this page and the code disagree, the code is right and this page has a bug.
 ---
@@ -33,6 +33,8 @@ When you sign in, your device proves it knows your password without sending it, 
 
 Once you’re in, your browser holds a session that ends after 7 days unused, or after 30 days at most.
 
+Each session belongs to a device. Your devices, in Account, lists every browser and phone signed in to your account. Removing one asks for your password and signs it out at once. The next time that device checks in, it learns it was removed and clears what it kept for your account; we can’t promise that, because a device kept offline never checks in. When a device we haven’t seen before signs in with your password, we email you.
+
 <Exact open>
 
 <Terms
@@ -56,6 +58,18 @@ OPAQUE produces two secrets. The **session key** is shared with the server; Hush
         ],
         ['Login attempts', 'Random handles, stored hashed, consumed after 5 minutes or one finish'],
         ['Sessions', '7 days idle, 30 days at most, 32-byte token, only its SHA-256 stored'],
+        [
+            'Devices',
+            'Each session belongs to one device. A device keeps its own Ed25519 key and signs back in to its own entry with it; anything else signs in as a new device',
+        ],
+        [
+            'Removing a device',
+            'Needs your password, through a one-use OPAQUE exchange bound to your session; ends its sessions at once. For a week, the device is told it was removed when it checks in',
+        ],
+        [
+            'New-device email',
+            'Sent when a new device signs in with your password; it never names the device',
+        ],
         ['Cookies', 'HttpOnly, SameSite=Lax, Secure with the __Host- prefix under HTTPS'],
         ['Mutations', 'Exact Origin check, JSON only, 16 KiB body limit, per-address rate limits'],
         ['Responses', 'private, no-store and no-referrer'],
@@ -87,7 +101,7 @@ Your account key, also called the master key, is 32 random bytes generated in yo
 
 Every envelope carries associated data that names its purpose, version, and owner. An envelope moved to another account or another version fails to open.
 
-At signup the browser also generates an X25519 key pair for encryption, an Ed25519 key pair for signatures, and an ML-KEM-768 key pair, the post-quantum key exchange NIST standardised as FIPS 203. The private halves are wrapped with keys derived from the account key and bound to their own public keys, so a swapped public key is detected when the envelope is opened. Only public keys and wrapped private material reach the server. The X25519 and ML-KEM keys together are what a share is sealed to, and what a report’s keys are escrowed to.
+At signup the browser also generates your identity: an X25519 key pair for encryption, an ML-KEM-768 key pair (the post-quantum key exchange NIST standardised as FIPS 203), and two signing key pairs, Ed25519 and ML-DSA-65 (the post-quantum signature standardised as FIPS 204). The private halves are wrapped with keys derived from the account key. Your identity signs a statement over all four public keys and your account ID with both signing keys; the server refuses an identity whose statement does not verify, and every device checks it again. Only public keys and wrapped private material reach the server. The X25519 and ML-KEM keys together are what a share is sealed to, and what a report’s key is sealed to.
 
 <Terms
     title="Identity keys"
@@ -97,15 +111,22 @@ At signup the browser also generates an X25519 key pair for encryption, an Ed255
             'Post-quantum',
             'ML-KEM-768 (FIPS 203), expanded from a 64-byte seed wrapped under the account key',
         ],
-        ['Signatures', 'Ed25519, from a 32-byte seed wrapped under the account key'],
         [
-            'Binding',
-            'The Ed25519 key signs the ML-KEM key together with the X25519 key and your account ID',
+            'Signatures',
+            'Ed25519 and ML-DSA-65 (FIPS 204), each from a 32-byte seed wrapped under the account key. A signature is both, 3373 bytes, and holds only if both halves verify',
+        ],
+        [
+            'Keys statement',
+            'All four public keys, the key version and your account ID, signed with both keys; checked by the server on every upload and by every device that reads it',
+        ],
+        [
+            'Version',
+            '2. An identity made before ML-DSA keeps its keys and gains one at its next unlock',
         ],
     ]}
 />
 
-The server refuses to store an ML-KEM public key without that signature. The fingerprint two people compare covers the X25519 key and that signing key, so the signing key a device checks the post-quantum key against is the one the two of you read out.
+The twelve words two people compare are version 3: a digest of the X25519 and Ed25519 keys and of the ML-DSA and ML-KEM keys, so comparing words checks all four.
 
 Every workspace has its own 32-byte key, generated in your browser. It is random, not derived from your account key, so it can be granted to another person later without giving them anything of yours. What you hold is a **grant**: the workspace key wrapped under a key derived from your account key.
 
@@ -131,6 +152,10 @@ Folder and file keys hang off the workspace key, not off your account key. That 
         [
             'Remembered unlock',
             'The worker wraps the account key with a non-exportable AES-256-GCM device key held in IndexedDB; locking or signing out clears it across tabs in that browser',
+        ],
+        [
+            'Device key',
+            'A non-exportable Ed25519 key in its own IndexedDB database, which signs this browser back in to its own entry in Your devices. Kept when you lock; cleared when you sign out or the browser is removed',
         ],
         [
             'Tree mirror',
@@ -301,7 +326,7 @@ We hand out the keys people share to, so HushOS lets you check them. When you ad
 
 <Exact>
 
-The seal is hybrid: an X25519 agreement between a fresh key made for this share and their identity key, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves. Your identity signing key signs the result, and their device checks that signature against the key it pinned for you before opening anything. The recipient mounts the shared item as a root of its own under “Shared with me”.
+The seal is hybrid: an X25519 agreement between a fresh key made for this share and their identity key, and an ML-KEM-768 encapsulation to their post-quantum key, combined into one key that seals the node key. Opening it needs both private halves. Your identity signs the result with both its signing keys, Ed25519 and ML-DSA-65, and their device checks both against the keys it pinned for you before opening anything. The recipient mounts the shared item as a root of its own under “Shared with me”.
 
 <Terms
     rows={[
@@ -311,13 +336,17 @@ The seal is hybrid: an X25519 agreement between a fresh key made for this share 
         ],
         [
             'Envelope',
-            '1256 bytes: the ephemeral key, the 1088-byte ML-KEM ciphertext, nonce, the sealed node key, and the sharer’s Ed25519 signature',
+            'Suite 4, 4565 bytes: the ephemeral key, the 1088-byte ML-KEM ciphertext, nonce, the sealed node key, and the sharer’s 3373-byte Ed25519 and ML-DSA-65 signature',
         ],
+        ['Older suites', 'Suites 1 to 3 are refused: not accepted, not served, not opened'],
         [
             'Replacing keys',
-            'A new identity at the next key version, signed by the one it replaces; a contact’s device asks for the whole chain and checks it from the keys it pinned, only when the person checks them again. Replaced keys vouch for nothing: what they signed shows as Unverified, and a share they signed waits to be shared again',
+            'A new identity at the next key version, signed with both keys of the one it replaces; a contact’s device asks for the whole chain and checks it from the keys it pinned, only when the person checks them again. Replaced keys vouch for nothing: what they signed shows as Unverified, and a share they signed waits to be shared again',
         ],
-        ['Whose key', 'A contact key you pinned, with a fingerprint you can compare in person'],
+        [
+            'Whose key',
+            'A contact you pinned: version 3, holding their X25519 and Ed25519 keys and the digests of their ML-DSA and ML-KEM keys, with twelve words you can compare in person',
+        ],
         ['Roles', 'Viewer, or editor; an editor’s uploads land in your storage'],
         [
             'Authorization',
@@ -327,7 +356,7 @@ The seal is hybrid: an X25519 agreement between a fresh key made for this share 
     ]}
 />
 
-Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: a person’s keys are recorded in your encrypted settings when you add them after comparing words, and a later change is shown as a warning that you must accept, never applied silently. Nothing is pinned without that check: something shared with you by a person you have not added stays shut until you add them. The fingerprint covers the X25519 key and the signing key; the post-quantum key is vouched for by that signing key, checked on your device against the pinned one before it is used, and its digest joins the pin. Shares are only ever sealed hybrid: a person without a post-quantum key yet is not shared with until they have one. Every path that seals to a contact goes through the pin, and the re-keying that follows a revocation seals only to the shares and links your own encrypted record says you made, whatever the server lists. Your device also remembers the newest version of your settings it has seen, and the newest version of your own sharing keys it has opened, and refuses an older copy of either, so the server cannot bring back a key you replaced. A new browser has nothing to compare against yet.
+Because the server serves public keys, a dishonest server could substitute one of its own. That is why contacts are pinned: a person’s keys are recorded in your encrypted settings when you add them after comparing words, and a later change is shown as a warning that you must accept, never applied silently. Nothing is pinned without that check: something shared with you by a person you have not added stays shut until you add them. The words cover all four keys, and a served key that does not match the pin is shown as a changed key. A pin made before post-quantum identities trusts nothing until you compare words again. Shares are only ever sealed hybrid: a person without a post-quantum key yet is not shared with until they have one. Every path that seals to a contact goes through the pin, and the re-keying that follows a revocation seals only to the shares and links your own encrypted record says you made, whatever the server lists. Your device also remembers the newest version of your settings it has seen, and the newest version of your own sharing keys it has opened, and refuses an older copy of either, so the server cannot bring back a key you replaced. A new browser has nothing to compare against yet.
 
 </Exact>
 
@@ -401,7 +430,7 @@ Anyone who can see something through a share or a link can report it. Reporting 
         ['Who can report', 'Anyone with access through a share or a link'],
         [
             'What is sealed',
-            'The reported item’s key, sealed on the reporter’s device to each operator’s X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone. The operators and their keys come from the server',
+            'The reported item’s key, sealed on the reporter’s device to each operator’s X25519 and ML-KEM-768 keys together when the operator has an ML-KEM key; otherwise, to their X25519 key alone, until they next sign in. The operators and their keys come from the server',
         ],
         [
             'What is kept',
@@ -441,8 +470,12 @@ An operator opens a report under their own identity. Which operators a report is
         ],
         ['Reports', 'The content of an item, once someone with access reports it'],
         [
+            'Devices',
+            'The name each of your devices gave itself or you gave it (names are not encrypted), its kind, how it signed in, and when it was added and last active, to the hour',
+        ],
+        [
             'Later, with a quantum computer',
-            'Hybrid share and report envelopes still need the ML-KEM private key, even if X25519 is broken. Legacy envelopes sealed under X25519 alone, including reports to operators without an ML-KEM key, do not have that protection.',
+            'Shares and reports are sealed with X25519 and ML-KEM-768 together, so opening one still needs the ML-KEM private key even if X25519 is broken, and the signatures that decide whose keys to trust (identities, their replacements, shares) need ML-DSA-65 too. Reports filed before reports became hybrid, and reports to an operator who has no ML-KEM key yet, are sealed under X25519 alone, and file and folder signatures are still Ed25519 alone.',
         ],
     ]}
 />
@@ -480,15 +513,15 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 
 - If you lose your password, your recovery phrase and every browser that remembers you, your files are gone. Nobody can get them back, including us.
 - Someone who downloaded a file while they had access keeps that copy. Stopping a share protects what comes next; it can’t reach into someone else’s device.
-- Signing out other browsers takes effect when they next check in with the server. It can’t erase keys a device already holds offline.
+- Signing out other browsers, or removing a device, takes effect when they next check in with the server. It can’t erase keys or files a device already holds offline.
 - Replacing your recovery phrase stops the old one from resetting your password. A recovery kit you downloaded earlier still holds the old phrase and your account key as it was then, so it can still open that key offline. Password resets and a new recovery phrase keep the same account key; only replacing the account key makes a different one.
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
 - The server sees what’s listed above: your email, padded sizes, times, who wrote each change and how your folders nest. Padding hides a file’s exact size, not roughly how big it is.
-- A share made before the other person had a post-quantum key uses X25519 alone until your device locks it again with both.
+- Shares made before post-quantum identities stay shut until you and the other person have compared words again and your device has sealed them anew.
 - Items written before HushOS signed changes, and anything re-locked without a signature your device could verify, show as Unverified until someone writes them again.
 - Whoever runs the server chooses which operator keys a report is sealed to, so they can open anything reported to them.
 - Replacing sharing keys with stolen keys would look like a real replacement to the people you share with. That is why HushOS tells them, and suggests comparing words again.
-- Signatures say who wrote an item, not that it is the newest version: the server could still serve an older, signed state of it. A report to an operator without a post-quantum key uses X25519 alone.
+- Signatures say who wrote an item, not that it is the newest version: the server could still serve an older, signed state of it. A report to an operator without a post-quantum key, and any report filed before reports became hybrid, is sealed under X25519 alone.
 
 </Section>
 
