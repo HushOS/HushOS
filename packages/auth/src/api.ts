@@ -141,6 +141,15 @@ export interface AuthApi {
     /* A contact's successions from key version `from` to the current one, in order. */
     contactSuccession(userId: string, from: number): Promise<{ links: SuccessionLink[] }>;
     /*
+     * The successor's consent for one of this account's own earlier
+     * successions that landed without it (docs/groups-server.md 5). Stored
+     * only where the link has none: `stored` is false when one was there.
+     */
+    backfillSuccessionConsent(input: {
+        oldKeyVersion: number;
+        consent: string;
+    }): Promise<{ stored: boolean }>;
+    /*
      * The upgrade of a version 1 identity to version 2 (same keys, plus ML-DSA
      * and the keys statement). 409 when another device upgraded first: read
      * the identity again and open that one.

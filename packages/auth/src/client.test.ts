@@ -109,7 +109,7 @@ describe('saving device access at sign-in', () => {
 });
 
 describe('a worker refusal', () => {
-    test('that kept the keys leaves the account unlocked; any other failure locks it', async () => {
+    test('that kept the keys, or of a family, leaves the account unlocked; any other failure locks it', async () => {
         items.clear();
         const refusing: CryptoTransport = {
             request: async (operation) => {
@@ -118,6 +118,8 @@ describe('a worker refusal', () => {
                         kept: true,
                     });
                 if (operation === 'identityOpen') throw new Error('Identity keys do not match.');
+                if (operation === 'groupAccept')
+                    throw new Error('The server sent a member list this device cannot read.');
                 return (operation === 'remember' ? bundle : {}) as never;
             },
             lock() {},
@@ -127,6 +129,10 @@ describe('a worker refusal', () => {
         await client.login('maya@example.com', 'correct horse');
         expect(client.store.getState().unlockedUserId).toBe(user.id);
         await expect(client.rpc('identitySucceed', {} as never)).rejects.toThrow('changed');
+        expect(client.store.getState().unlockedUserId).toBe(user.id);
+        // A family the server serves a bad member list for is that family's problem: refusing it
+        // must not lock the account, or the server could lock it on every sync.
+        await expect(client.rpc('groupAccept', {} as never)).rejects.toThrow('member list');
         expect(client.store.getState().unlockedUserId).toBe(user.id);
         await expect(client.rpc('identityOpen', {} as never)).rejects.toThrow('do not match');
         expect(client.store.getState().unlockedUserId).toBeNull();

@@ -1,0 +1,629 @@
+import { describe, expect, test } from 'vitest';
+import {
+    confirmAdmission,
+    createFamily,
+    dropAdmission,
+    loadOutbox,
+    RESEND_DELAYS_MS,
+    resumeOutbox,
+    sendChainCall,
+    stageChange,
+    waitingAdmission,
+    type OutboxEntry,
+} from './outbox';
+import { createMemoryGroupStore, createUnavailableGroupStore } from './store';
+import { syncGroup } from './sync';
+import {
+    AREA,
+    AREA_2,
+    GROUP,
+    USER,
+    harness,
+    noAnswer,
+    pinAt,
+    refusal,
+    rosterBody,
+} from './test-harness';
+
+/*
+ * The outbox's rules (F7; docs/groups-design.md 2.4 "Staged chains", the 1c
+ * plan section 4): what it sends, keeps, drops and wipes on every answer a
+ * roster route gives. A resend must be the very bytes signed once (a re-signed
+ * statement is a second history the server can play back), a change that met
+ * a moved membership must never be resent, and only a 404 carrying
+ * `not-member` may wipe a family from the device.
+ */
+
+function entry(overrides: Partial<OutboxEntry> = {}): OutboxEntry {
+    return {
+        v: 1,
+        id: 'call-1',
+        groupId: GROUP,
+        route: { kind: 'remove', userId: 'b0b0b0b0-0000-4000-8000-000000000003' },
+        body: rosterBody(),
+        stagedEnvelope: 'staged-secrets',
+        state: 'ready',
+        attempts: 0,
+        joinCode: null,
+        ...overrides,
+    };
+}
+
+/* A device that has synced this family before: a record and a settings pin at the head. */
+function synced(h: ReturnType<typeof harness>) {
+    h.settings.doc = { version: 2, contacts: {}, groups: { [GROUP]: pinAt(h.server.head) } };
+    return h.store.putChain({
+        userId: USER,
+        groupId: GROUP,
+        envelope: 'record-5',
+        rosterVersion: h.server.head,
+        areas: [AREA, AREA_2],
+    });
+}
+
+describe('sending', () => {
+    test('keeps the sealed call before the first send, and sends it holding the family’s write lock', async () => {
+        const h = harness();
+        await synced(h);
+        const outcome = await sendChainCall(h.ctx, entry());
+        expect(outcome.status).toBe('landed');
+        expect(h.server.storedAtSend).toEqual([1]);
+        expect(h.server.lockHeldAtSend).toEqual([true]);
+        // Landed: the staged chain is dropped before the family is synced from what is served.
+        const order = h.worker.map((call) => call.operation);
+        expect(order.indexOf('groupDrop')).toBeLessThan(order.lastIndexOf('groupAccept'));
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
+    test.each([
+        ['no answer at all', noAnswer()],
+        ['503 unavailable', refusal(503, 'unavailable')],
+        ['429 rate-limited', refusal(429, 'rate-limited')],
+        ['401 signed out', refusal(401, 'signed-out')],
+        ['a 404 without a code', refusal(404, null)],
+        ['a 501 without a code', refusal(501, null)],
+        ['501 unsupported', refusal(501, 'unsupported')],
+        ['a 500', refusal(500, null)],
+    ])('after %s, resends the very same bytes and keeps the family', async (_label, answer) => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(answer);
+        const outcome = await sendChainCall(h.ctx, entry());
+        expect(outcome.status).toBe('landed');
+        expect(h.server.sent).toHaveLength(2);
+        expect(h.server.sent[1]!.body).toBe(h.server.sent[0]!.body);
+        expect(h.calls('groupForget')).toEqual([]);
+        expect(await h.store.chain(USER, GROUP)).not.toBeNull();
+    });
+
+    test('an outcome still unknown after the resends waits for the next open, which sends the same bytes', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        await synced(first);
+        first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        const outcome = await sendChainCall(first.ctx, entry());
+        expect(outcome.status).toBe('pending');
+        expect(first.sleeps).toEqual(RESEND_DELAYS_MS);
+        expect(first.calls('groupDrop')).toEqual([]);
+        // The tab closes. The next open finds the call and sends it as it was.
+        const reopened = harness({ store });
+        const resumed = await resumeOutbox(reopened.ctx);
+        expect([...resumed.outcomes.values()].map((at) => at.status)).toEqual(['landed']);
+        const bodies = [...first.server.sent, ...reopened.server.sent].map((at) => at.body);
+        expect(new Set(bodies).size).toBe(1);
+        expect(bodies).toHaveLength(RESEND_DELAYS_MS.length + 2);
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+});
+
+describe('refusals', () => {
+    test.each([
+        [400, 'invalid'],
+        [402, 'seats'],
+        [409, 'area-limit'],
+        [409, 'group-limit'],
+        [409, 'held'],
+        [409, 'succession-due'],
+        [409, 'root-mid-rotation'],
+        [409, 'not-pending'],
+        [409, 'unsupported'],
+        [413, 'too-large'],
+        [426, 'unsupported'],
+    ])('%i %s is final: dropped with its staged chain, never resent', async (status, code) => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(refusal(status, code));
+        const outcome = await sendChainCall(h.ctx, entry());
+        expect(outcome).toMatchObject({ status: 'refused', code });
+        expect(h.server.sent).toHaveLength(1);
+        expect(h.calls('groupDrop')).toEqual([{ outboxId: 'call-1' }]);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+        expect(h.calls('groupForget')).toEqual([]);
+    });
+
+    test('stale: dropped and re-synced onto the winner, never resent', async () => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(refusal(409, 'stale', { head: { version: 6 } }));
+        const outcome = await sendChainCall(h.ctx, entry());
+        expect(outcome).toMatchObject({ status: 'stale', data: { head: { version: 6 } } });
+        expect(h.server.sent).toHaveLength(1);
+        const order = h.worker.map((call) => call.operation);
+        expect(order).toContain('groupDrop');
+        expect(order.indexOf('groupDrop')).toBeLessThan(order.lastIndexOf('groupAccept'));
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
+    test.each(['members-changed', 'left-due'] as const)(
+        '%s is never resent: dropped, re-synced, handed back to rebuild',
+        async (code) => {
+            const h = harness();
+            await synced(h);
+            h.server.script.push(refusal(409, code, { userIds: ['someone'] }));
+            const outcome = await sendChainCall(h.ctx, entry());
+            expect(outcome).toEqual({
+                status: 'membership-moved',
+                code,
+                data: { userIds: ['someone'] },
+            });
+            expect(h.server.sent).toHaveLength(1);
+            expect(h.calls('groupDrop')).toEqual([{ outboxId: 'call-1' }]);
+            expect(h.calls('groupAccept')).toHaveLength(1);
+            expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+            // Nothing the next open could send again either.
+            expect((await resumeOutbox(h.ctx)).outcomes).toEqual(new Map());
+            expect(h.server.sent).toHaveLength(1);
+        },
+    );
+
+    test('forbidden: the role went mid-change; dropped and re-synced', async () => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(refusal(403, 'forbidden'));
+        expect(await sendChainCall(h.ctx, entry())).toMatchObject({
+            status: 'refused',
+            code: 'forbidden',
+        });
+        expect(h.server.sent).toHaveLength(1);
+        expect(h.calls('groupAccept')).toHaveLength(1);
+    });
+});
+
+describe('fixes that resend the same roster', () => {
+    test('grants-due: the named grants go on route 22, then the same bytes', async () => {
+        const h = harness();
+        await synced(h);
+        const someone = 'b0b0b0b0-0000-4000-8000-000000000003';
+        h.server.script.push(
+            refusal(409, 'grants-due', { missing: [{ workspaceId: AREA_2, userId: someone }] }),
+        );
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('landed');
+        expect(h.calls('groupGrants')).toEqual([
+            {
+                groupId: GROUP,
+                missing: [{ workspaceId: AREA_2, userId: someone, kemPublicKey: `kem-${someone}` }],
+            },
+        ]);
+        expect(h.server.grants).toEqual([
+            {
+                workspaceId: AREA_2,
+                grants: [
+                    {
+                        workspaceId: AREA_2,
+                        granteeUserId: someone,
+                        envelope: `grant-to-kem-${someone}`,
+                    },
+                ],
+            },
+        ]);
+        expect(h.server.sent[1]!.body).toBe(h.server.sent[0]!.body);
+    });
+
+    test('rotating: the named Drive rotation is walked first, then that area rebuilt under the same roster', async () => {
+        const h = harness();
+        await synced(h);
+        const running = { workspaceId: AREA, rotationId: 'run', nodeId: 'root', targetEpoch: 7 };
+        h.server.script.push(refusal(409, 'rotating', running));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('landed');
+        expect(h.rotationLog.finished).toEqual([running]);
+        expect(h.rotationLog.read).toEqual([[{ workspaceId: AREA, kinds: [] }]]);
+        const [before, after] = h.server.sent.map((at) => JSON.parse(at.body));
+        expect(after.roster).toEqual(before.roster);
+        expect(after.grants).toEqual(before.grants);
+        expect(after.expectedRevision).toBe(before.expectedRevision);
+        // What goes is what the worker rebuilt, the rest of the call as it was signed.
+        const [restaged] = h.outputs('groupRestage') as { body: { rotations: unknown } }[];
+        expect(after.rotations).toEqual(restaged!.body.rotations);
+    });
+
+    test.each(['epoch-stale', 'root-moved'] as const)(
+        '%s: every rotated area rebuilt, the roster bytes unchanged',
+        async (code) => {
+            const h = harness();
+            await synced(h);
+            h.server.script.push(refusal(409, code));
+            expect((await sendChainCall(h.ctx, entry())).status).toBe('landed');
+            expect(h.rotationLog.read).toEqual([
+                [
+                    { workspaceId: AREA, kinds: [] },
+                    { workspaceId: AREA_2, kinds: [] },
+                ],
+            ]);
+            const [before, after] = h.server.sent.map((at) => JSON.parse(at.body));
+            expect(after.roster).toEqual(before.roster);
+        },
+    );
+
+    test('document-stale: every document it names is read again, each area with all its named kinds', async () => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(
+            refusal(409, 'document-stale', {
+                stale: [
+                    { workspaceId: AREA, kind: 'tags' },
+                    { workspaceId: AREA_2, kind: 'tags' },
+                    { workspaceId: AREA_2, kind: 'notes' },
+                ],
+                workspaceId: AREA,
+                kind: 'tags',
+            }),
+        );
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('landed');
+        expect(h.rotationLog.read).toEqual([
+            [
+                { workspaceId: AREA, kinds: ['tags'] },
+                { workspaceId: AREA_2, kinds: ['notes', 'tags'] },
+            ],
+        ]);
+        // What Drive read again is what the worker rebuilds from, untouched.
+        const rebuild = h.calls('groupRestage')[0] as { rebuild: { rotations: unknown } };
+        expect(rebuild.rebuild.rotations).toBe(h.rotationLog.returned[0]);
+        const [before, after] = h.server.sent.map((at) => JSON.parse(at.body));
+        expect(after.roster).toEqual(before.roster);
+    });
+
+    test('a rebuilt call is what the outbox keeps, so a reload sends the rebuilt bytes', async () => {
+        const store = createMemoryGroupStore();
+        const h = harness({ store });
+        await synced(h);
+        h.server.script.push(refusal(409, 'epoch-stale'), ...Array(4).fill(noAnswer()));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('pending');
+        const [kept] = (await loadOutbox(h.ctx, GROUP)).entries;
+        expect(JSON.stringify(kept!.body)).toBe(h.server.sent.at(-1)!.body);
+        expect(h.server.sent.at(-1)!.body).not.toBe(h.server.sent[0]!.body);
+    });
+
+    test('without the family folders open the rotation cannot be rebuilt: the call waits, unsent and kept', async () => {
+        const h = harness({ rotations: false });
+        await synced(h);
+        h.server.script.push(refusal(409, 'rotating', { workspaceId: AREA }));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('pending');
+        expect(h.server.sent).toHaveLength(1);
+        expect(h.calls('groupDrop')).toEqual([]);
+        expect(await h.store.outbox(USER, GROUP)).toHaveLength(1);
+    });
+});
+
+describe('wiping', () => {
+    test('404 not-member wipes the family: worker state, record, outbox, mirrors and settings pin', async () => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(refusal(404, 'not-member'));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('wiped');
+        expect(h.calls('groupForget')).toEqual([{ groupId: GROUP }]);
+        expect(await h.store.chain(USER, GROUP)).toBeNull();
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+        expect(h.mirrorsDeleted).toEqual([[AREA, AREA_2]]);
+        // The settings pin stays: if the family comes back, it is still a mark.
+        expect(h.settings.doc.groups?.[GROUP]).toEqual(pinAt(5));
+    });
+
+    test.each([
+        ['a bare 404', refusal(404, null)],
+        ['a 501', refusal(501, null)],
+        ['501 unsupported', refusal(501, 'unsupported')],
+        ['403 forbidden', refusal(403, 'forbidden')],
+        ['410 gone', refusal(410, 'gone')],
+    ])('%s never wipes', async (_label, answer) => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(answer);
+        await sendChainCall(h.ctx, entry());
+        expect(h.calls('groupForget')).toEqual([]);
+        expect(h.mirrorsDeleted).toEqual([]);
+        expect(await h.store.chain(USER, GROUP)).not.toBeNull();
+        expect(h.settings.doc.groups?.[GROUP]).toBeDefined();
+    });
+});
+
+describe('admissions', () => {
+    test('wait for the admin’s check: never sent on their own, a reload included, and the same roster after it', async () => {
+        const store = createMemoryGroupStore();
+        const h = harness({ store });
+        await synced(h);
+        const newcomer = 'c0c0c0c0-0000-4000-8000-000000000004';
+        const staged = await stageChange(h.ctx, GROUP, {
+            kind: 'admit',
+            userId: newcomer,
+            pin: {} as never,
+            served: {} as never,
+            roles: [],
+        });
+        expect(staged.status).toBe('awaiting-check');
+        expect(h.server.sent).toEqual([]);
+        // Sending it directly does nothing either.
+        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
+        expect(await sendChainCall(h.ctx, staged.entry)).toEqual({ status: 'awaiting-check' });
+        // The tab reloads: the next open sends nothing, and the dialog finds the same roster and code.
+        const reopened = harness({ store });
+        expect((await resumeOutbox(reopened.ctx)).outcomes).toEqual(new Map());
+        expect(reopened.server.sent).toEqual([]);
+        const waiting = await waitingAdmission(reopened.ctx, GROUP, newcomer);
+        expect(waiting?.body).toEqual(staged.entry.body);
+        expect(waiting?.joinCode).toEqual(staged.joinCode);
+        // "Let them in": only now does it go, as it was signed.
+        expect((await confirmAdmission(reopened.ctx, waiting!)).status).toBe('landed');
+        expect(reopened.server.sent).toEqual([
+            { route: 'admit', body: JSON.stringify(staged.entry.body) },
+        ]);
+    });
+
+    test('a stale admission is dropped and goes back to the join code, never resent', async () => {
+        const h = harness();
+        await synced(h);
+        const staged = await stageChange(h.ctx, GROUP, {
+            kind: 'admit',
+            userId: 'c0c0c0c0-0000-4000-8000-000000000004',
+            pin: {} as never,
+            served: {} as never,
+            roles: [],
+        });
+        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
+        h.server.script.push(refusal(409, 'stale'));
+        expect((await confirmAdmission(h.ctx, staged.entry)).status).toBe('stale');
+        expect(h.server.sent).toHaveLength(1);
+        expect((await loadOutbox(h.ctx, GROUP)).entries).toEqual([]);
+    });
+});
+
+describe('creating a family', () => {
+    test('a creation committed but not yet pinned survives a reload and is finished, not sent again', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        // The server stores the family; the settings save then fails as the tab dies.
+        first.settingsLog.failWrite = new Error('offline');
+        const { outcome } = await createFamily(first.ctx, 'Lindqvist family');
+        expect(outcome.status).toBe('pending');
+        expect(first.server.sent.map((at) => at.route)).toEqual(['create']);
+        // The first acceptance vouched with this device's own seed; the record is written.
+        expect(first.calls('groupAccept')).toMatchObject([
+            { creating: { stagedEnvelope: 'creator-seed' } },
+        ]);
+        expect(await store.chain(USER, GROUP)).not.toBeNull();
+        const [kept] = (await loadOutbox(first.ctx)).entries;
+        expect(kept).toMatchObject({ id: 'create-1', state: 'committed' });
+        // Reload. The record marks the family now, so the seed is not needed to vouch again.
+        const reopened = harness({ store, head: 6 });
+        const resumed = await resumeOutbox(reopened.ctx);
+        expect(resumed.outcomes.get('create-1')?.status).toBe('landed');
+        expect(reopened.server.sent).toEqual([]);
+        expect(reopened.calls('groupAccept')).toMatchObject([{ creating: null }]);
+        expect(reopened.settings.doc.groups?.[GROUP]).toMatchObject({ rosterVersion: 6 });
+        // Only now, with the record and the settings pin written, does the seed go.
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+
+    test('a creation interrupted before its first acceptance vouches with the kept seed after a reload', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        first.failNext.set('groupAccept', new Error('The tab closed.'));
+        expect((await createFamily(first.ctx, 'Lindqvist family')).outcome.status).toBe('pending');
+        expect(await store.chain(USER, GROUP)).toBeNull();
+        const reopened = harness({ store });
+        await resumeOutbox(reopened.ctx);
+        expect(reopened.server.sent).toEqual([]);
+        expect(reopened.calls('groupAccept')).toMatchObject([
+            { creating: { stagedEnvelope: 'creator-seed' } },
+        ]);
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+
+    test('a creation sent with no answer is resent as it was, and a replay commits it', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        first.server.script.push(...Array(4).fill(noAnswer()));
+        expect((await createFamily(first.ctx, 'Lindqvist family')).outcome.status).toBe('pending');
+        expect(first.calls('groupAccept')).toEqual([]);
+        const reopened = harness({ store });
+        await resumeOutbox(reopened.ctx);
+        expect(
+            new Set([...first.server.sent, ...reopened.server.sent].map((at) => at.body)).size,
+        ).toBe(1);
+        expect(reopened.calls('groupAccept')).toMatchObject([
+            { creating: { stagedEnvelope: 'creator-seed' } },
+        ]);
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+});
+
+describe('review round 1', () => {
+    test('a rebuild that changes anything but the rotations is refused: nothing kept, nothing sent', async () => {
+        const h = harness();
+        await synced(h);
+        const restage = h.results.groupRestage!;
+        h.results.groupRestage = (input) => {
+            const out = restage(input) as { body: object };
+            return { ...out, body: { ...out.body, keySeal: { envelope: 'not-signed-for' } } };
+        };
+        h.server.script.push(refusal(409, 'epoch-stale'));
+        await expect(sendChainCall(h.ctx, entry())).rejects.toThrow(/keep its member list/);
+        expect(h.server.sent).toHaveLength(1);
+        const [kept] = (await loadOutbox(h.ctx, GROUP)).entries;
+        expect(kept!.body).toEqual(rosterBody());
+    });
+
+    test('a rotation or stale document the server names in a folder this call does not rotate is never walked or read', async () => {
+        const stranger = 'f0f0f0f0-0000-4000-8000-000000000009';
+        for (const answer of [
+            refusal(409, 'rotating', {
+                workspaceId: stranger,
+                rotationId: 'run',
+                nodeId: 'n',
+                targetEpoch: 3,
+            }),
+            refusal(409, 'document-stale', { stale: [{ workspaceId: stranger, kind: 'tags' }] }),
+        ]) {
+            const h = harness();
+            await synced(h);
+            h.server.script.push(answer);
+            expect((await sendChainCall(h.ctx, entry())).status).toBe('pending');
+            expect(h.rotationLog.finished).toEqual([]);
+            expect(h.rotationLog.read).toEqual([]);
+            expect(await h.store.outbox(USER, GROUP)).toHaveLength(1);
+        }
+    });
+
+    test('a target that keeps rewriting tags stops the rebuilds after a few rounds, the call kept', async () => {
+        const h = harness();
+        await synced(h);
+        const stale = () =>
+            refusal(409, 'document-stale', { stale: [{ workspaceId: AREA, kind: 'tags' }] });
+        h.server.script.push(...Array.from({ length: 10 }, stale));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('pending');
+        expect(h.rotationLog.read).toHaveLength(4);
+        expect(h.server.sent).toHaveLength(5);
+        expect(await h.store.outbox(USER, GROUP)).toHaveLength(1);
+    });
+
+    test('a creation resent after no answer and then refused is finished if the server has it, the seed kept until then', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        first.server.script.push(...Array(4).fill(noAnswer()));
+        expect((await createFamily(first.ctx, 'Lindqvist family')).outcome.status).toBe('pending');
+        // It landed; the resend is checked before the replay is seen, and refused.
+        const reopened = harness({ store, head: 6 });
+        reopened.server.script.push(refusal(400, 'invalid', { reason: 'creator-identity' }));
+        const resumed = await resumeOutbox(reopened.ctx);
+        expect(resumed.outcomes.get('create-1')?.status).toBe('landed');
+        expect(reopened.calls('groupAccept')).toMatchObject([
+            { creating: { stagedEnvelope: 'creator-seed' } },
+        ]);
+        expect(reopened.settings.doc.groups?.[GROUP]).toBeDefined();
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+
+    test('a creation refused on its first send is dropped without asking the server for the family', async () => {
+        const h = harness();
+        h.server.script.push(refusal(409, 'group-limit'));
+        expect((await createFamily(h.ctx, 'Lindqvist family')).outcome).toMatchObject({
+            status: 'refused',
+            code: 'group-limit',
+        });
+        expect(h.calls('groupAccept')).toEqual([]);
+        expect(await h.store.outbox(USER)).toEqual([]);
+    });
+
+    test('a creation resent and refused that the server never stored is dropped', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        first.server.script.push(...Array(4).fill(noAnswer()));
+        await createFamily(first.ctx, 'Lindqvist family');
+        const reopened = harness({ store });
+        reopened.server.script.push(refusal(409, 'group-limit'));
+        Object.assign(reopened.ctx.api, {
+            rosters: async () => {
+                throw refusal(404, 'not-member');
+            },
+        });
+        const resumed = await resumeOutbox(reopened.ctx);
+        expect(resumed.outcomes.get('create-1')).toMatchObject({
+            status: 'refused',
+            code: 'group-limit',
+        });
+        expect(await store.outbox(USER)).toEqual([]);
+    });
+
+    test('“Let them in” after another tab’s “Not now” sends nothing and writes nothing back', async () => {
+        const h = harness();
+        await synced(h);
+        const staged = await stageChange(h.ctx, GROUP, {
+            kind: 'admit',
+            userId: 'c0c0c0c0-0000-4000-8000-000000000004',
+            pin: {} as never,
+            served: {} as never,
+            roles: [],
+        });
+        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
+        await dropAdmission(h.ctx, staged.entry);
+        expect(await confirmAdmission(h.ctx, staged.entry)).toEqual({ status: 'dropped' });
+        expect(h.server.sent).toEqual([]);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
+    test('a sync first resends the family’s waiting call, so one that landed elsewhere is let go of', async () => {
+        const h = harness();
+        await synced(h);
+        h.server.script.push(...Array(4).fill(noAnswer()));
+        expect((await sendChainCall(h.ctx, entry())).status).toBe('pending');
+        // The window regains focus: the sync sends the same bytes once, which land (a replay).
+        expect((await syncGroup(h.ctx, GROUP)).status).toBe('accepted');
+        expect(new Set(h.server.sent.map((at) => at.body)).size).toBe(1);
+        expect(h.server.sent).toHaveLength(5);
+        const order = h.worker.map((call) => call.operation);
+        expect(order.lastIndexOf('groupDrop')).toBeLessThan(order.lastIndexOf('groupAccept'));
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+
+    test('outbox records that no longer open are deleted and reported, never resent', async () => {
+        const h = harness();
+        await h.store.putOutbox({
+            id: 'old',
+            userId: USER,
+            groupId: GROUP,
+            envelope: 'before-rotation',
+        });
+        h.results.groupStoreOpen = () => ({ unreadable: true });
+        const resumed = await resumeOutbox(h.ctx);
+        expect(resumed.notices).toEqual([{ kind: 'changes-lost', groupId: GROUP, count: 1 }]);
+        expect(h.server.sent).toEqual([]);
+        expect(await h.store.outbox(USER)).toEqual([]);
+    });
+
+    test('without IndexedDB a family change is refused before anything is sent', async () => {
+        const h = harness({ store: createUnavailableGroupStore() });
+        await expect(createFamily(h.ctx, 'Lindqvist family')).rejects.toThrow(/site storage/);
+        expect(h.server.sent).toEqual([]);
+    });
+
+    test('a document that did not open is read once more before it goes on empty, and the person is told', async () => {
+        for (const stillJunk of [true, false]) {
+            const h = harness();
+            await synced(h);
+            h.results.groupStage = (input) => ({
+                outboxId: 'staged-rotate',
+                body: { ...rosterBody('rotate'), expectedRevision: input.expectedRevision },
+                stagedEnvelope: 'staged-secrets',
+                joinCode: null,
+                needsCheck: [],
+                replaced: [{ workspaceId: AREA, kind: 'tags' }],
+            });
+            const restage = h.results.groupRestage!;
+            h.results.groupRestage = (input) => ({
+                ...(restage(input) as object),
+                replaced: stillJunk ? [{ workspaceId: AREA, kind: 'tags' }] : [],
+            });
+            const staged = await stageChange(h.ctx, GROUP, {
+                kind: 'rotate',
+                rotation: { workspaceId: AREA, targetEpoch: 9, root: {} as never, documents: [] },
+            });
+            expect(h.rotationLog.read).toEqual([[{ workspaceId: AREA, kinds: ['tags'] }]]);
+            if (staged.status !== 'sent' || staged.outcome.status !== 'landed')
+                throw new Error(staged.status);
+            expect(staged.outcome.notices).toEqual(
+                stillJunk
+                    ? [{ kind: 'documents-cleared', workspaceId: AREA, document: 'tags' }]
+                    : [],
+            );
+        }
+    });
+});
