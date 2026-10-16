@@ -1,0 +1,26 @@
+packages/emails/src/templates/security-notice.tsx
+  s_c56e31c87cddde::t_d08d8a83ad4f5b 1-316
+  s_c56e31c87cddde::t_041a4daff90ff4 317-327
+packages/emails/scripts/render.tsx
+  s_c56e31c87cddde::t_adc36e440d38a8 2,67-112
+packages/emails/src/rendered/security-notice.ts
+  s_c56e31c87cddde::t_7407a2242aa0b6 1-19
+packages/emails/src/service.ts
+  s_c56e31c87cddde::t_19f41af963d332 5,162-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "82ef68aec83e8a362a3fb4fe7b561ccd93ce81e5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
