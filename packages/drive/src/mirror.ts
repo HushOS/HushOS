@@ -41,6 +41,12 @@ export function createIndexedDbMirror(name = 'hushos-drive-mirror'): TreeMirror 
                 );
                 db.createObjectStore('cursors', { keyPath: 'workspaceId' });
             },
+            // Another tab, or this one, deleting the database (a family wiped from this device,
+            // sign-out): let go at once rather than block it; the next read opens it again.
+            blocking() {
+                void database?.then((db) => db.close());
+                database = undefined;
+            },
         }));
     return {
         async cursor(workspaceId) {

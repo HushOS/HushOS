@@ -8,6 +8,8 @@ import {
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { useDrive } from '@/components/drive/drive-shell';
+import { AreaNotice } from '@/components/drive/area-notice';
+import { useFamilyArea, waitsForKeyChange, type FamilyArea } from '@/components/drive/family-area';
 import {
     CornerCheck,
     EmptyState,
@@ -61,13 +63,15 @@ import {
 import { toast } from '@/components/ui/toast';
 import { downloadNodes } from '@/lib/downloads';
 import {
+    clientFor,
     copyInto,
-    driveClient,
+    displayName,
     driveError,
     driveKeys,
     folderQueryOptions,
     formatWhen,
     invalidateFolders,
+    refuseWrite,
     sharedQueryOptions,
     sortNodesBy,
     DEFAULT_SORT,
@@ -114,8 +118,15 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseE
  * is also a keyboard shortcut and a palette entry.
  */
 
-function folderLink(rootId: string, folderId: string) {
-    return folderId === rootId
+/* Where a folder's page is: one's own Drive, or a family folder's under its family's space. */
+type Here = { rootId: string; groupId: string | null };
+function folderLink(here: Here, folderId: string) {
+    if (here.groupId)
+        return {
+            to: '/app/s/$groupId/f/$folderId',
+            params: { groupId: here.groupId, folderId },
+        } as const;
+    return folderId === here.rootId
         ? ({ to: '/app/drive' } as const)
         : ({ to: '/app/drive/f/$folderId', params: { folderId } } as const);
 }
@@ -149,12 +160,12 @@ function NodeFace({ node }: { node: DriveNode }) {
  */
 function NodeName({
     node,
-    rootId,
+    here,
     folderId,
     onOpen,
 }: {
     node: DriveNode;
-    rootId: string;
+    here: Here;
     folderId: string;
     onOpen: () => void;
 }) {
@@ -170,7 +181,16 @@ function NodeName({
         onDoubleClick: (event: MouseEvent) => event.stopPropagation(),
         children: node.name,
     };
-    return target === rootId ? (
+    if (here.groupId)
+        return (
+            <Link
+                to="/app/s/$groupId/f/$folderId"
+                params={{ groupId: here.groupId, folderId: target }}
+                search={search}
+                {...props}
+            />
+        );
+    return target === here.rootId ? (
         <Link to="/app/drive" search={search} {...props} />
     ) : (
         <Link
@@ -183,10 +203,15 @@ function NodeName({
 }
 
 export function FolderView({ folderId }: { folderId: string }) {
-    const { rootId, workspaceId } = useDrive();
+    const drive = useDrive();
+    // A family folder's page (the family space), or this account's own Drive.
+    const area = useFamilyArea();
+    const rootId = area?.rootId ?? drive.rootId;
+    const workspaceId = area?.workspaceId ?? drive.workspaceId;
+    const here: Here = { rootId, groupId: area?.groupId ?? null };
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const listing = useQuery(folderQueryOptions(folderId));
+    const listing = useQuery(folderQueryOptions(folderId, area?.workspaceId));
     const [order, setOrder] = useSortOrder();
     const rows = useMemo(
         () => (listing.data ? sortNodesBy(listing.data.children, order) : []),
@@ -221,7 +246,7 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [reporting, setReporting] = useState<DriveNode | null>(null);
     const [tagging, setTagging] = useState<DriveNode[] | null>(null);
     // Tag colours are this workspace's; a shared item's tags read by name alone.
-    const registry = useQuery(tagsQueryOptions).data ?? null;
+    const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const [trashing, setTrashing] = useState(false);
     const paletteOpen = usePaletteOpen();
     // The viewer's state lives in the URL: opening a file pushes an entry, the
@@ -272,23 +297,34 @@ export function FolderView({ folderId }: { folderId: string }) {
         paletteOpen ||
         previewing !== null;
     const enabled = !dialogOpen;
-    const here = folderLink(rootId, folderId);
+    const page = folderLink(here, folderId);
     function showPreview(node: DriveNode | null, replace = false) {
         if (node) {
             if (!replace) pushedPreview.current = true;
-            void navigate({ ...here, search: { preview: node.id }, replace });
+            void navigate({ ...page, search: { preview: node.id }, replace });
         } else if (pushedPreview.current) {
             pushedPreview.current = false;
             router.history.back();
-        } else void navigate({ ...here, search: {}, replace: true });
+        } else void navigate({ ...page, search: {}, replace: true });
     }
 
     const selecting = selection.length > 0;
     const single = selection.length === 1 ? selection[0]! : null;
     const allSelected = rows.length > 0 && selection.length === rows.length;
-    /* Tags need this workspace's registry, so only items of one's own can be tagged. */
+    /*
+     * Tags need this workspace's registry, so only items of one's own can be tagged; a family
+     * folder's items are neither tagged nor shared from here yet.
+     */
     const ownSelection =
-        selection.length > 0 && selection.every((node) => node.workspaceId === workspaceId);
+        !area &&
+        selection.length > 0 &&
+        selection.every((node) => node.workspaceId === workspaceId);
+    /*
+     * In a family folder, nothing is changed or added unless this device may write there
+     * (F9), and nothing is added to a folder a key change has not reached yet (D9).
+     */
+    const writable = !area || area.write === 'writable';
+    const waiting = listing.data ? waitsForKeyChange(area, listing.data.folder) : false;
     function showInfo(node: DriveNode) {
         if (wide) {
             setSelected(new Set([node.id]));
@@ -301,14 +337,14 @@ export function FolderView({ folderId }: { folderId: string }) {
         else if (selection.length === 1) showInfo(selection[0]!);
     }
     function open(node: DriveNode) {
-        if (node.kind === 'folder') void navigate(folderLink(rootId, node.id));
+        if (node.kind === 'folder') void navigate(folderLink(here, node.id));
         else showPreview(node);
     }
     /* A re-encrypted copy of something shared with this person, into the top of their own files. */
     async function saveToMyDrive(nodes: DriveNode[]) {
         if (!nodes.length) return;
         try {
-            const root = (await queryClient.fetchQuery(folderQueryOptions(rootId))).folder;
+            const root = (await queryClient.fetchQuery(folderQueryOptions(drive.rootId))).folder;
             const made = await saveCopy(queryClient, nodes, root, 'drive');
             cue('droplet');
             toast.add({
@@ -342,7 +378,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         let back = 0;
         try {
             for (const node of nodes) {
-                await driveClient.restore(node);
+                await clientFor(node.workspaceId).restore(node);
                 back++;
             }
             cue('success');
@@ -367,7 +403,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         setTrashing(true);
         const done: DriveNode[] = [];
         try {
-            for (const node of nodes) done.push(await driveClient.trash(node));
+            for (const node of nodes) done.push(await clientFor(node.workspaceId).trash(node));
             cue('droplet');
             toast.add({
                 type: 'success',
@@ -398,15 +434,17 @@ export function FolderView({ folderId }: { folderId: string }) {
         }
     }
 
-    useHotkey('Shift+N', () => setCreating(true), { enabled });
-    useHotkey('F2', () => selection.length === 1 && setRenaming(selection[0]!), { enabled });
-    useHotkey('M', () => selection.length > 0 && setMoving(selection), { enabled });
-    useHotkey('C', () => selection.length > 0 && setCopying(selection), { enabled });
+    useHotkey('Shift+N', () => canAdd && setCreating(true), { enabled });
+    useHotkey('F2', () => writable && selection.length === 1 && setRenaming(selection[0]!), {
+        enabled,
+    });
+    useHotkey('M', () => writable && selection.length > 0 && setMoving(selection), { enabled });
+    useHotkey('C', () => !area && selection.length > 0 && setCopying(selection), { enabled });
     useHotkey('D', () => download(selection), { enabled });
     useHotkey('I', toggleInfo, { enabled });
     useHotkey('T', () => ownSelection && setTagging(selection), { enabled });
-    useHotkey('Backspace', () => void trash(selection), { enabled });
-    useHotkey('Delete', () => void trash(selection), { enabled });
+    useHotkey('Backspace', () => writable && void trash(selection), { enabled });
+    useHotkey('Delete', () => writable && void trash(selection), { enabled });
     // Enter on a focused link or button in the view is that control's, not the selection's.
     useHotkey(
         'Enter',
@@ -443,19 +481,24 @@ export function FolderView({ folderId }: { folderId: string }) {
     );
     /* A folder's name as the path shows it: one's own top folder is "My files". */
     const crumbName = (crumb: DriveNode) =>
-        crumb.parentId === null && crumb.workspaceId === workspaceId ? 'My files' : crumb.name;
+        crumb.parentId === null && !area && crumb.workspaceId === workspaceId
+            ? 'My files'
+            : crumb.name;
     const shared = crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId;
+    /* Whether things may be added here: one's own folder, or a family folder this device may write. */
+    const canAdd = !shared && writable && !waiting;
     const title = folder ? crumbName(folder) : crumbs.length ? crumbName(crumbs.at(-1)!) : '';
     // Who can open what, from everything this person shares; a folder in the path that is
-    // shared means everything here is open to the same people.
-    const access = useAccessIndex(!shared);
+    // shared means everything here is open to the same people. A family folder is open to
+    // the family, which its space page says.
+    const access = useAccessIndex(!shared && !area);
     const inheritedFrom = [...crumbs].reverse().find((crumb) => access.has(crumb.id)) ?? null;
     const mounts = useQuery({ ...sharedQueryOptions, enabled: shared });
     const sharedBy = shared
         ? (mounts.data?.find((mount) => mount.node.id === crumbs[0]?.id) ?? null)
         : null;
     // The whole view takes drops, not only the list: an empty folder has no list.
-    const over = useDropZone(dropRef, folder, rows);
+    const over = useDropZone(dropRef, canAdd ? folder : undefined, rows);
     const paletteHandlers = useRef({ download, trash });
     useEffect(() => {
         paletteHandlers.current = { download, trash };
@@ -472,35 +515,38 @@ export function FolderView({ folderId }: { folderId: string }) {
             selectAll: () => setSelected(new Set(rows.map((row) => row.id))),
             clearSelection: () => setSelected(new Set()),
             actions: {
-                newFolder: () => setCreating(true),
-                upload: () => picker.current?.pickFiles(),
-                rename: () => selection.length === 1 && setRenaming(selection[0]!),
-                move: () => selection.length > 0 && setMoving(selection),
-                copy: () => selection.length > 0 && setCopying(selection),
+                newFolder: () => canAdd && setCreating(true),
+                upload: () => canAdd && picker.current?.pickFiles(),
+                rename: () => writable && selection.length === 1 && setRenaming(selection[0]!),
+                move: () => writable && selection.length > 0 && setMoving(selection),
+                copy: () => !area && selection.length > 0 && setCopying(selection),
                 versions: () =>
                     selection.length === 1 &&
                     selection[0]!.kind === 'file' &&
                     setVersionsOf(selection[0]!),
-                share: () =>
-                    selection.length === 1 &&
-                    selection[0]!.workspaceId === workspaceId &&
-                    setSharing(selection[0]!),
+                share: () => ownSelection && selection.length === 1 && setSharing(selection[0]!),
                 tags: () => ownSelection && setTagging(selection),
                 download: () => paletteHandlers.current.download(selection),
-                trash: () => void paletteHandlers.current.trash(selection),
+                trash: () => writable && void paletteHandlers.current.trash(selection),
             },
         });
         // `setSelected` is a state setter and never changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [rows, folder, selection, ownSelection, view, workspaceId]);
+    }, [rows, folder, selection, ownSelection, view, workspaceId, canAdd, writable, area]);
     useEffect(() => () => lendPaletteContext(null), []);
 
     /* Moves dragged rows into a folder row or a crumb further up; with Alt held, copies them. */
     async function moveTo(dragged: string[], destination: DriveNode, copy = false) {
         const nodes = rows.filter((row) => dragged.includes(row.id) && row.id !== destination.id);
-        if (!nodes.length || movingByDrag) return;
+        if (!nodes.length || movingByDrag || !writable || (copy && area)) return;
+        const refused = refuseWrite(destination);
+        if (refused) {
+            toast.add({ type: 'error', title: 'Couldn’t move', description: refused });
+            return;
+        }
         setMovingByDrag(true);
-        const where = destination.parentId === null ? 'My files' : `“${destination.name}”`;
+        const where =
+            destination.parentId === null ? displayName(destination) : `“${destination.name}”`;
         let moved = 0;
         try {
             if (copy) {
@@ -518,7 +564,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             }
             const done: DriveNode[] = [];
             for (const node of nodes) {
-                done.push(await driveClient.move(node, destination));
+                done.push(await clientFor(node.workspaceId).move(node, destination));
                 moved++;
             }
             const origin = folder;
@@ -551,7 +597,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         let back = 0;
         try {
             for (const node of nodes) {
-                await driveClient.move(node, origin);
+                await clientFor(node.workspaceId).move(node, origin);
                 back++;
             }
             cue('success');
@@ -577,11 +623,17 @@ export function FolderView({ folderId }: { folderId: string }) {
      */
     async function moveCrumb(id: string, destination: DriveNode) {
         const node = crumbs.find((crumb) => crumb.id === id);
-        if (!node || movingByDrag) return;
+        if (!node || movingByDrag || !writable) return;
+        const refused = refuseWrite(destination);
+        if (refused) {
+            toast.add({ type: 'error', title: 'Couldn’t move', description: refused });
+            return;
+        }
         setMovingByDrag(true);
-        const where = destination.parentId === null ? 'My files' : `“${destination.name}”`;
+        const where =
+            destination.parentId === null ? displayName(destination) : `“${destination.name}”`;
         try {
-            await driveClient.move(node, destination);
+            await clientFor(node.workspaceId).move(node, destination);
             cue('droplet');
             toast.add({ type: 'success', title: `“${node.name}” moved to ${where}` });
         } catch (error) {
@@ -752,16 +804,24 @@ export function FolderView({ folderId }: { folderId: string }) {
         onReport: setReporting,
         onTrash: (nodes) => void trash(nodes),
     };
-    /* A node's menu: its own actions, or the selection's when it is part of one. */
+    /*
+     * A node's menu: its own actions, or the selection's when it is part of one. A family
+     * folder's items are not shared, tagged, copied or reported from here yet, and nothing
+     * in one is changed while this device may not write there.
+     */
     function entriesFor(node: DriveNode) {
-        const own = node.workspaceId === workspaceId;
+        const own = !area && node.workspaceId === workspaceId;
         const isSelected = selected.has(node.id);
         return nodeEntries(node, isSelected && selection.length > 1 ? selection : [node], {
             ...actions,
             onTags: own ? actions.onTags : null,
             onShare: own ? actions.onShare : null,
-            onSaveCopy: own ? null : actions.onSaveCopy,
-            onReport: own ? null : actions.onReport,
+            onSaveCopy: own || area ? null : actions.onSaveCopy,
+            onReport: own || area ? null : actions.onReport,
+            onCopy: area ? null : actions.onCopy,
+            onRename: writable ? actions.onRename : null,
+            onMove: writable ? actions.onMove : null,
+            onTrash: writable ? actions.onTrash : null,
         });
     }
     const markOpened = (node: DriveNode) => () => {
@@ -804,7 +864,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                         crumbs={crumbs}
                         title={title}
                         shared={shared}
-                        rootId={rootId}
+                        here={here}
+                        area={area}
                         workspaceId={workspaceId}
                         dropOver={dropOver}
                         crumbName={crumbName}
@@ -841,7 +902,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                             </button>
                         ))}
                     </fieldset>
-                    {folder && !shared && (
+                    {folder && canAdd && (
                         <AddMenu picker={picker} onNewFolder={() => setCreating(true)} />
                     )}
                     {folder && <UploadInputs folder={folder} known={rows} handle={picker} />}
@@ -856,6 +917,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     />
                 </div>
             )}
+            {area && <AreaNotice area={area} waiting={waiting} />}
             {sharedBy && (
                 <AccessBanner
                     text={`${sharedBy.granter.name} shared this folder with you. You can ${
@@ -905,12 +967,12 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 icon={FolderPlusIcon}
                                 title="Nothing here yet"
                                 body={
-                                    shared
+                                    !canAdd
                                         ? 'When something is added to this folder, it shows up here.'
                                         : 'Drop files or folders anywhere on this page, or use Add.'
                                 }
                             >
-                                {!shared && (
+                                {canAdd && (
                                     <>
                                         <Button onClick={() => picker.current?.pickFiles()}>
                                             <FileUpIcon />
@@ -945,7 +1007,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                 />
                                             </span>
                                         </th>
-                                        {!shared && (
+                                        {!shared && !area && (
                                             <th
                                                 scope="col"
                                                 className="hidden w-[22%] text-left text-xs font-semibold text-muted-foreground lg:table-cell"
@@ -1033,7 +1095,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                             name={
                                                                 <NodeName
                                                                     node={node}
-                                                                    rootId={rootId}
+                                                                    here={here}
                                                                     folderId={folderId}
                                                                     onOpen={markOpened(node)}
                                                                 />
@@ -1059,7 +1121,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                             }
                                                         />
                                                     </td>
-                                                    {!shared && (
+                                                    {!shared && !area && (
                                                         <td className="hidden min-w-0 pr-4 lg:table-cell">
                                                             <AccessCell
                                                                 access={access.get(node.id)}
@@ -1136,7 +1198,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                         <span className="truncate text-sm font-medium">
                                                             <NodeName
                                                                 node={node}
-                                                                rootId={rootId}
+                                                                here={here}
                                                                 folderId={folderId}
                                                                 onOpen={markOpened(node)}
                                                             />
@@ -1171,7 +1233,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                         )}
                     </ContextMenuTrigger>
                     <ContextMenuContent>
-                        {!shared && (
+                        {canAdd && (
                             <>
                                 <ContextMenuItem onClick={() => setCreating(true)}>
                                     <FolderPlusIcon aria-hidden="true" />
@@ -1201,11 +1263,13 @@ export function FolderView({ folderId }: { folderId: string }) {
                         node={single}
                         location={crumbs.map(crumbName).join(' / ')}
                         onTags={
-                            single?.workspaceId === workspaceId
+                            !area && single?.workspaceId === workspaceId
                                 ? (node) => setTagging([node])
                                 : undefined
                         }
-                        onShare={single?.workspaceId === workspaceId ? setSharing : undefined}
+                        onShare={
+                            !area && single?.workspaceId === workspaceId ? setSharing : undefined
+                        }
                         inherited={inheritedFrom !== null}
                         onClose={() => setDetailsOpen(false)}
                     />
@@ -1221,11 +1285,11 @@ export function FolderView({ folderId }: { folderId: string }) {
                     infoOpen={wide && detailsOpen}
                     onShare={setSharing}
                     onDownload={() => download(selection)}
-                    onMove={() => setMoving(selection)}
-                    onCopy={() => setCopying(selection)}
-                    onRename={setRenaming}
+                    onMove={writable ? () => setMoving(selection) : null}
+                    onCopy={area ? null : () => setCopying(selection)}
+                    onRename={writable ? setRenaming : null}
                     onTags={() => setTagging(selection)}
-                    onTrash={() => void trash(selection)}
+                    onTrash={writable ? () => void trash(selection) : null}
                     onVersions={setVersionsOf}
                     onInfo={toggleInfo}
                     onSelectAll={selectAll}
@@ -1256,6 +1320,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             />
             <VersionsDialog
                 node={versionsOf}
+                writable={writable}
                 open={versionsOf !== null}
                 onOpenChange={(open) => !open && setVersionsOf(null)}
             />
@@ -1263,7 +1328,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 node={infoOf}
                 location={crumbs.map(crumbName).join(' / ')}
                 onShare={
-                    infoOf && infoOf.workspaceId === workspaceId
+                    !area && infoOf && infoOf.workspaceId === workspaceId
                         ? (node) => {
                               setInfoOf(null);
                               setSharing(node);
@@ -1271,7 +1336,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                         : undefined
                 }
                 onTags={
-                    infoOf && infoOf.workspaceId === workspaceId
+                    !area && infoOf && infoOf.workspaceId === workspaceId
                         ? (node) => {
                               setInfoOf(null);
                               setTagging([node]);
@@ -1304,9 +1369,9 @@ export function FolderView({ folderId }: { folderId: string }) {
                 current={previewing}
                 onChange={(node) => showPreview(node, node !== null)}
                 onDownload={(node) => download([node])}
-                onShare={folder?.workspaceId === workspaceId ? setSharing : undefined}
+                onShare={!area && folder?.workspaceId === workspaceId ? setSharing : undefined}
                 access={
-                    shared
+                    shared || area
                         ? undefined
                         : (node) => (
                               <AccessCell
@@ -1379,7 +1444,8 @@ function FolderPath({
     crumbs,
     title,
     shared,
-    rootId,
+    here,
+    area,
     workspaceId,
     dropOver,
     crumbName,
@@ -1387,7 +1453,8 @@ function FolderPath({
     crumbs: DriveNode[];
     title: string;
     shared: boolean;
-    rootId: string;
+    here: Here;
+    area: FamilyArea | null;
     workspaceId: string;
     dropOver: string | null;
     crumbName: (crumb: DriveNode) => string;
@@ -1402,6 +1469,22 @@ function FolderPath({
         '-mx-1.5 shrink-0 rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
     return (
         <nav aria-label="Folder path" className="flex h-11 min-w-0 items-center gap-1">
+            {area && (
+                <>
+                    <Link
+                        to="/app/s/$groupId"
+                        params={{ groupId: area.groupId }}
+                        className={crumbClass}
+                    >
+                        {area.family}
+                    </Link>
+                    <ChevronRightIcon
+                        className="size-5 shrink-0 text-muted-foreground"
+                        strokeWidth={2.2}
+                        aria-hidden="true"
+                    />
+                </>
+            )}
             {shared && (
                 <>
                     <Link to="/app/shared" className={crumbClass}>
@@ -1418,7 +1501,7 @@ function FolderPath({
                 <span key={crumb?.id ?? 'fold'} className="flex shrink-0 items-center gap-1">
                     {crumb ? (
                         <Link
-                            {...folderLink(rootId, crumb.id)}
+                            {...folderLink(here, crumb.id)}
                             data-crumb-id={crumb.id}
                             data-crumb-drag={draggableCrumb(crumb, crumbs.indexOf(crumb))}
                             className={cn(
@@ -1441,7 +1524,7 @@ function FolderPath({
                                 {folded.map((hidden) => (
                                     <DropdownMenuItem
                                         key={hidden.id}
-                                        render={<Link {...folderLink(rootId, hidden.id)} />}
+                                        render={<Link {...folderLink(here, hidden.id)} />}
                                     >
                                         {hidden.name}
                                     </DropdownMenuItem>

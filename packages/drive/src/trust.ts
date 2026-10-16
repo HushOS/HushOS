@@ -1,4 +1,4 @@
-import type { DriveSigners } from '@hushos/crypto';
+import type { DriveSigners, GroupIntegrity } from '@hushos/crypto';
 import type { ContactPin } from '@hushos/crypto/contacts';
 import { fingerprintOfKeys, keyDigest, publicKeyBytes } from '@hushos/crypto/fingerprint';
 import { pinVerified } from '@hushos/crypto/pins';
@@ -13,6 +13,15 @@ import type { NodeView, ServedIdentity, Signer, VersionView } from './api';
  */
 
 export type { Integrity, SignatureForm };
+/*
+ * A record's verdict wherever it is read: a personal one, or inside a
+ * family's folders one of the two only a member list gives (design 2.8):
+ * `key-conflict`, the writer's keys are not the ones this person checked and
+ * no signed chain joins them, worse than Unverified; `former-member`, a valid
+ * signature by someone the member list marks as having left, drawn as
+ * Unverified.
+ */
+export type RecordIntegrity = GroupIntegrity;
 
 /*
  * The statement a record written again is signed with, from what the original
@@ -25,7 +34,7 @@ export type { Integrity, SignatureForm };
  * writing it again never turns it into a record this person vouches for.
  */
 export function signatureFormFor(
-    prior: Integrity | null | undefined,
+    prior: RecordIntegrity | null | undefined,
     source: 'link' | 'drive' = 'drive',
 ): SignatureForm {
     if (source === 'link') return 'saved';
@@ -64,6 +73,12 @@ export type Pin = ContactPin & {
     keysReplacedAt?: string | null;
     replacementSeen?: string | null;
     resealShares?: boolean;
+    /*
+     * The web's own, beside `trustedVia`: the name of the family whose member
+     * list the pin was taken from ("Trust as Lindqvist family does"), so it is
+     * shown as that family's word wherever the pin appears.
+     */
+    trustedViaFamily?: string;
 };
 
 /* Whether People should still say this contact replaced their keys. */
@@ -231,20 +246,30 @@ export async function granterKeysOf(pin: Pin, served: Pick<ServedIdentity, 'mlDs
     return { signingPublicKey: pin.signingPublicKey, mlDsaPublicKey: served.mlDsaPublicKey };
 }
 
-/* An item's checks: its metadata, and its current version when it has one; null when not checked. */
-export type NodeIntegrity = { metadata: Integrity; version: Integrity | null };
+/*
+ * An item's checks: its metadata, and its current version when it has one;
+ * null when not checked. `via`, only inside a family's folders: the group
+ * whose member list vouched for each verified record ("Verified by Lindqvist
+ * family"), null for one this person's own words check vouched for.
+ */
+export type NodeIntegrity = {
+    metadata: RecordIntegrity;
+    version: RecordIntegrity | null;
+    via?: { metadata: string | null; version: string | null };
+};
 
 /* One record that did not verify, who the server says wrote it, and what it is. */
 export type IntegrityIssue = {
     record: 'metadata' | 'version';
-    integrity: Exclude<Integrity, 'verified' | 'saved-from-link'>;
+    integrity: Exclude<RecordIntegrity, 'verified' | 'saved-from-link'>;
     signer: Signer | null;
 };
 
 /*
- * Why an item is shown as Unverified, worst first: a bad signature, then a
- * retired key, an unknown signer, no signature, a re-sealed record, and a
- * check that could not run. `unsigned` is an issue like any other (a stripped
+ * Why an item is shown as Unverified, worst first: keys that conflict with
+ * this person's own check (family folders only), a bad signature, then a
+ * retired key, a former member's record (family folders only), an unknown
+ * signer, no signature, a re-sealed record, and a check that could not run. `unsigned` is an issue like any other (a stripped
  * signature and one never made read the same). A copy saved from a link
  * (`saved-from-link`) is no issue: it carries no mark, only a neutral line in
  * Info. Empty only when everything verified or was saved, or when there was nothing to check (null integrity: a link view,
@@ -273,12 +298,14 @@ export function integrityIssues(
             signer: node.currentVersion?.signer ?? null,
         });
     const rank: Record<IntegrityIssue['integrity'], number> = {
-        'bad-signature': 0,
-        'retired-key': 1,
-        'unknown-signer': 2,
-        unsigned: 3,
-        resealed: 4,
-        unchecked: 5,
+        'key-conflict': 0,
+        'bad-signature': 1,
+        'retired-key': 2,
+        'former-member': 3,
+        'unknown-signer': 4,
+        unsigned: 5,
+        resealed: 6,
+        unchecked: 7,
     };
     return issues.sort((a, b) => rank[a.integrity] - rank[b.integrity]);
 }

@@ -55,6 +55,7 @@ import {
 } from '@/lib/contacts';
 import { afterTrustChanged } from '@/lib/integrity';
 import { formatWhen } from '@/lib/drive';
+import { vouchLine } from '@/lib/family-pin';
 import { cue } from '@/lib/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/people')({
@@ -259,6 +260,8 @@ function People() {
                                 </span>
                                 <span className="truncate text-[13px] text-muted-foreground">
                                     {contact.email}
+                                    {/* Taken on a family's word: the server's name, the family's keys. */}
+                                    {vouchLine(contact) && ` · ${vouchLine(contact)}`}
                                 </span>
                             </span>
                             {stale.data?.has(contact.userId) ? (

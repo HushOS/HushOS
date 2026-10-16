@@ -4,7 +4,7 @@ import { makeZip, predictLength } from 'client-zip';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { downloadWorker, openSink, serviceWorkerUnavailable } from '@/lib/download-sinks';
-import { driveClient } from '@/lib/drive';
+import { clientFor, clientOfNode } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 
 /*
@@ -18,8 +18,9 @@ import { driveApi } from '@/lib/drive-api';
 async function ensureOpen(node: DriveNode) {
     // A node that came from a listing is already open in the worker; only after a
     // lock, which drops every key, does its folder need listing again.
-    if (driveClient.isOpen(node.id) || !node.parentId) return;
-    await driveClient.listFolder(node.parentId);
+    const client = clientFor(node.workspaceId);
+    if (client.isOpen(node.id) || !node.parentId) return;
+    await client.listFolder(node.parentId);
 }
 
 function zip(entries: AsyncIterable<ZipEntry>, sizes: { name: string; size: number }[]) {
@@ -45,7 +46,7 @@ export const downloads = createDownloadManager({
     // Without the service worker the save dialog needs the click's activation, so
     // the sink opens before any folder is listed or URL minted.
     openSinkEarly: serviceWorkerUnavailable,
-    listFolder: (folderId) => driveClient.listFolder(folderId),
+    listFolder: (folderId) => clientOfNode(folderId).listFolder(folderId),
     ensureOpen,
     zip,
 });

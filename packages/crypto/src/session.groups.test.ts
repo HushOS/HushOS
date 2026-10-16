@@ -51,6 +51,7 @@ const BOB = 'b2b2b2b2-0000-4000-8000-000000000002';
 const CAROL = 'c3c3c3c3-0000-4000-8000-000000000003';
 const CHILD = 'c4c4c4c4-0000-4000-8000-000000000004';
 const LATER = 'c5c5c5c5-0000-4000-8000-000000000005';
+const OTHER_WS = 'd6d6d6d6-0000-4000-8000-000000000006';
 const CHECKED = '2026-10-16T00:00:00.000Z';
 const TAMPERED = /could not be opened/;
 const folder = (name: string) => ({ name, mime: null, size: null, modified: null });
@@ -1674,6 +1675,53 @@ describe('group verdicts', () => {
         links: [],
         personal: null,
         ...over,
+    });
+
+    test('a family folder’s records are never judged by personal pins alone', async () => {
+        const f = await family();
+        const folderOf = await bobsFolder(f);
+        const personal = { [BOB]: { current: f.bob.served.signingPublicKey, retired: [] } };
+        // Alice pinned Bob personally: driveVerify would call his record verified, by her pin alone.
+        await expect(
+            f.alice.call('driveVerify', {
+                workspaceId: f.ws,
+                signers: personal,
+                nodes: [folderOf.signed],
+            }),
+        ).rejects.toThrow(/family’s member list/);
+        // Nor copied with its records re-signed on personal pins.
+        await expect(
+            f.alice.call('driveCopyFile', {
+                workspaceId: f.ws,
+                signers: personal,
+                source: {
+                    nodeId: CHILD,
+                    metadataVersion: 1,
+                    metadataEnvelope: folderOf.metadataEnvelope,
+                    metadataSigner: BOB,
+                    metadataSignature: folderOf.metadataSignature,
+                    signer: BOB,
+                    signature: folderOf.metadataSignature,
+                    id: LATER,
+                    objectId: LATER,
+                    contentKeyEnvelope: folderOf.metadataEnvelope,
+                    contentSuite: 2,
+                    plaintextSize: null,
+                },
+                node: {
+                    id: LATER,
+                    parentId: f.area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: folder('Copy'),
+                },
+                versionId: LATER,
+            }),
+        ).rejects.toThrow(/family folder can’t be copied/);
+        // Her own workspace is still checked as ever.
+        await expect(
+            f.alice.call('driveVerify', { workspaceId: OTHER_WS, signers: personal, nodes: [] }),
+        ).resolves.toEqual({ nodes: [] });
     });
 
     test('verified through the family, through one’s own check, a key conflict, and a bad signature only when the links loaded', async () => {

@@ -10,7 +10,15 @@ import { Spinner } from '@/components/motion';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
 import { backfillOwnConsent, bindContactsToQueries } from '@/lib/contacts';
-import { driveClient, driveError, driveKeys, driveOpenQueryOptions } from '@/lib/drive';
+import {
+    closeSpaces,
+    driveClient,
+    driveError,
+    driveKeys,
+    driveOpenQueryOptions,
+} from '@/lib/drive';
+import { familiesSyncAllKey } from '@/lib/families-keys';
+import { capabilitiesQueryOptions } from '@/lib/families-shell';
 import { useChangeFeed } from '@/lib/feed';
 import { preloadViewers } from '@/lib/preload';
 import { resumePendingRotation } from '@/lib/rotation';
@@ -39,8 +47,9 @@ export function useDrive() {
 /*
  * What Drive keeps running while the app is open, mounted once in the app
  * layout rather than in every page: the change feed, the transfer journal,
- * an unfinished rotation, the catalogue build, and the lock that empties them.
- * Pages come and go beneath it without starting any of that again.
+ * an unfinished rotation, the catalogue build, families' outbox and sync, and
+ * the lock that empties them. Pages come and go beneath it without starting
+ * any of that again.
  */
 export function DriveRuntime({ user }: { user: SessionUser }) {
     const unlockedUser = useStore(authClient.store, (state) => state.unlockedUserId);
@@ -59,9 +68,12 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         }
         if (!wasUnlocked.current) return;
         driveClient.close();
+        closeSpaces();
         forgetThumbnails();
         forgetPreviews();
         void queryClient.resetQueries({ queryKey: driveKeys.all });
+        // The worker forgot every family's chain and folder keys too: each family is checked again.
+        void queryClient.resetQueries({ queryKey: ['families'] });
     }, [unlocked, queryClient]);
     const opened = useQuery({ ...driveOpenQueryOptions(user.id), enabled: unlocked });
     const workspaceId = opened.data?.workspaceId;
@@ -83,6 +95,23 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         // Every viewer and grammar, at idle: what is fetched no longer says what was opened.
         preloadViewers();
     }, [workspaceId, queryClient, user.id]);
+    // Families, app-wide: what the outbox holds is sent again and every family synced, so a
+    // change made on another page (or before a reload) lands, and family folders open checked.
+    // Only on a server that serves families, and the families layer loads only then (the
+    // capability comes from lib/families-shell, which stays off that layer).
+    const capabilities = useQuery({
+        ...capabilitiesQueryOptions,
+        enabled: workspaceId !== undefined,
+    });
+    useQuery({
+        // The Families page reads the same query.
+        queryKey: familiesSyncAllKey(user.id),
+        queryFn: async () => (await import('@/lib/families')).syncFamilies(user.id),
+        enabled: unlocked && workspaceId !== undefined && capabilities.data?.groups === true,
+        staleTime: 60_000,
+        refetchOnWindowFocus: true,
+        retry: false,
+    });
     return null;
 }
 

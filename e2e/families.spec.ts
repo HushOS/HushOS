@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 import { newContext, PASSWORD, registerAccount, verificationLink } from './helpers';
 
@@ -13,7 +14,12 @@ import { newContext, PASSWORD, registerAccount, verificationLink } from './helpe
  *    it; "Let them in" stays shut until their words are checked; the code the
  *    newcomer's screen works out is the admin's, a reload keeps nothing, "They
  *    don't match" says not to use the family and keeps nothing either; the
- *    admin shows the code again from Members; then "They match" joins.
+ *    admin shows the code again from Members; then "They match" joins. Then
+ *    the family's folders: the newcomer uploads into "Family" and the creator
+ *    sees it with no mark (her own words check of him vouches); the creator
+ *    uploads, and the newcomer, who never checked her words, sees "Verified by
+ *    Lindqvist family" in Info; the creator makes a second family folder, and
+ *    the newcomer opens it and adds to it.
  * 2. Three people: an invitation opened by the wrong account; the admin on two
  *    devices, one admission held on the wire while the other device lets
  *    someone else in, so the held one meets a stale answer, is signed again
@@ -51,6 +57,45 @@ async function person(browser: Browser, name: string) {
 }
 
 const words = async (scope: Locator) => (await scope.getAttribute('data-words'))!.split(' ');
+
+const fileRow = (page: Page, name: string) =>
+    page.locator('[data-node-id]').filter({ has: page.getByText(name, { exact: true }) });
+const mark = (page: Page, name: string) => fileRow(page, name).locator('[data-integrity]');
+
+/* The family's row under My files, then one of its folders, open and drawn. */
+async function openFamilyFolder(who: Person, family: string, folder: string) {
+    await who.page.goto('/app/drive');
+    await who.page.getByRole('link', { name: family, exact: true }).first().click();
+    await expect(who.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+    const row = who.page.locator(`[data-area="${folder}"]`);
+    // Writable once the family is checked here, the folder's key opened and its top folder listed.
+    await expect(row).toHaveAttribute('data-area-write', 'writable', { timeout: 90_000 });
+    await row.getByRole('link').click();
+    await expect(
+        who.page
+            .getByRole('navigation', { name: 'Folder path' })
+            .getByRole('heading', { level: 1 }),
+    ).toHaveText(folder, { timeout: 60_000 });
+}
+
+async function upload(who: Person, name: string, text: string) {
+    await who.page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles([{ name, mimeType: 'text/plain', buffer: Buffer.from(text) }]);
+    await expect(fileRow(who.page, name)).toBeVisible({ timeout: 60_000 });
+}
+
+/* Selects a row by its padding, as a person does, and opens Info beside the list. */
+async function info(who: Person, name: string) {
+    const box = (await fileRow(who.page, name).boundingBox())!;
+    await who.page.mouse.click(box.x + box.width * 0.6, box.y + box.height / 2);
+    await expect(fileRow(who.page, name)).toHaveAttribute('aria-selected', 'true');
+    await who.page.keyboard.press('i');
+    const panel = who.page.locator('[data-details] [data-info="details"]');
+    await expect(panel).toBeVisible();
+    return panel;
+}
 
 async function createFamily(owner: Person, name: string) {
     await owner.page.goto('/app/families');
@@ -323,6 +368,142 @@ test.describe('two people', () => {
             timeout: 60_000,
         });
         await expect(sam.page.getByText(/shown differently/)).toHaveCount(0);
+    });
+
+    test('family folders: each side’s uploads are checked, and the family vouches where no words were compared', async () => {
+        test.setTimeout(300_000);
+        // Sam's row under My files opens the family's folders, "Family" among them.
+        await openFamilyFolder(sam, family, 'Family');
+        await upload(sam, 'from-sam.txt', 'Written by Sam\n');
+        await expect(mark(sam.page, 'from-sam.txt')).toHaveCount(0);
+
+        // Maya sees it with no mark: she checked Sam's words herself, so her own check vouches
+        // and Info says nothing more.
+        await openFamilyFolder(maya, family, 'Family');
+        await expect(fileRow(maya.page, 'from-sam.txt')).toBeVisible({ timeout: 60_000 });
+        await expect(mark(maya.page, 'from-sam.txt')).toHaveCount(0);
+        const mayaInfo = await info(maya, 'from-sam.txt');
+        await expect(mayaInfo.locator('[data-verified-by]')).toHaveCount(0);
+        await maya.page.keyboard.press('i');
+
+        // Sam never compared Maya's words: what she adds is verified by the family's member list.
+        await upload(maya, 'from-maya.txt', 'Written by Maya\n');
+        await expect(fileRow(sam.page, 'from-maya.txt')).toBeVisible({ timeout: 60_000 });
+        await expect(mark(sam.page, 'from-maya.txt')).toHaveCount(0);
+        const samInfo = await info(sam, 'from-maya.txt');
+        await expect(samInfo.locator('[data-verified-by]')).toHaveText(
+            'Verified by Lindqvist family',
+        );
+        await sam.page.keyboard.press('i');
+    });
+
+    test('in a family folder: no sharing, copying or reporting; downloads byte for byte; versions read-only where the keys changed; and My files never lists it', async () => {
+        test.setTimeout(300_000);
+        await openFamilyFolder(sam, family, 'Family');
+        // The row's menu: what a family folder offers, and what it doesn't yet.
+        await sam.page.getByRole('button', { name: 'More for from-maya.txt' }).click();
+        const menu = sam.page.getByRole('menu');
+        // An item's name, with its shortcut after it when it has one ("Download D").
+        const item = (name: string) =>
+            menu.getByRole('menuitem', { name: new RegExp(`^${name}(?: \\S+)?$`) });
+        for (const offered of ['Download', 'Rename', 'Move', 'Versions', 'Info', 'Move to Trash'])
+            await expect(item(offered)).toBeVisible();
+        for (const absent of ['Share', 'Copy', 'Tags', 'Report', 'Save a copy to my files'])
+            await expect(item(absent)).toHaveCount(0);
+        // Download, the bytes Maya uploaded.
+        const [download] = await Promise.all([
+            sam.page.waitForEvent('download'),
+            item('Download').click(),
+        ]);
+        expect(download.suggestedFilename()).toBe('from-maya.txt');
+        expect(readFileSync((await download.path())!, 'utf8')).toBe('Written by Maya\n');
+
+        // A second version of Sam's file, so Versions has an earlier one.
+        await sam.page
+            .locator('input[type=file]')
+            .first()
+            .setInputFiles([
+                { name: 'from-sam.txt', mimeType: 'text/plain', buffer: Buffer.from('Again\n') },
+            ]);
+        const collision = sam.page.locator('[data-slot=dialog-content]');
+        await expect(collision).toContainText('“from-sam.txt” is already here');
+        await collision.getByRole('button', { name: 'Continue' }).click();
+        await expect(collision).toHaveCount(0);
+        const versions = async () => {
+            await sam.page.getByRole('button', { name: 'More for from-sam.txt' }).click();
+            await sam.page.getByRole('menuitem', { name: 'Versions' }).click();
+            const dialog = sam.page.locator('[data-slot=dialog-content]');
+            await expect(dialog.getByText('Earlier version', { exact: true })).toBeVisible({
+                timeout: 60_000,
+            });
+            return dialog;
+        };
+        const writable = await versions();
+        await expect(
+            writable.getByRole('button', { name: 'Restore earlier version' }),
+        ).toBeVisible();
+        await sam.page.keyboard.press('Escape');
+
+        // Fault-injected: the server says the folder is at a key version no member list names.
+        // The folder reads "keys changed", and Versions can be seen but not changed.
+        const ahead = '**/api/drive/spaces';
+        await sam.page.route(ahead, async (route) => {
+            const response = await route.fetch();
+            const body = await response.json();
+            for (const space of body.spaces)
+                if (space.space.kind === 'group')
+                    for (const area of space.areas) area.workspaceKeyVersion += 1;
+            await route.fulfill({ response, json: body });
+        });
+        await sam.page.reload();
+        await expect(sam.page.locator('[data-area-state="keys-changed"]')).toBeVisible({
+            timeout: 90_000,
+        });
+        const readOnly = await versions();
+        await expect(
+            readOnly.getByRole('button', { name: 'Download earlier version' }),
+        ).toBeVisible();
+        await expect(readOnly.getByRole('button', { name: 'Restore earlier version' })).toHaveCount(
+            0,
+        );
+        await expect(readOnly.getByRole('button', { name: 'Delete earlier version' })).toHaveCount(
+            0,
+        );
+        await sam.page.keyboard.press('Escape');
+        await sam.page.unroute(ahead);
+
+        // My files is Sam's own: none of the family's files are listed there.
+        await sam.page.goto('/app/drive');
+        await expect(
+            sam.page
+                .getByRole('navigation', { name: 'Folder path' })
+                .getByRole('heading', { level: 1 }),
+        ).toHaveText('My files', { timeout: 60_000 });
+        await expect(sam.page.getByText('Nothing here yet')).toBeVisible();
+        for (const name of ['from-maya.txt', 'from-sam.txt'])
+            await expect(fileRow(sam.page, name)).toHaveCount(0);
+    });
+
+    test('a manager makes a second family folder, and the newcomer opens it and adds to it', async () => {
+        test.setTimeout(240_000);
+        await maya.page.getByRole('link', { name: family, exact: true }).first().click();
+        await expect(maya.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        await maya.page.getByRole('button', { name: 'New family folder' }).click();
+        const dialog = maya.page.getByRole('dialog', { name: 'New family folder' });
+        await dialog.getByLabel('Name').fill('Photos');
+        await dialog.getByRole('button', { name: 'Create folder' }).click();
+        await expect(dialog).toHaveCount(0, { timeout: 90_000 });
+        await expect(maya.page.locator('[data-area="Photos"]')).toHaveAttribute(
+            'data-area-write',
+            'writable',
+            { timeout: 90_000 },
+        );
+
+        // Sam doesn't manage the family: no button, but the folder is his to open and add to.
+        await openFamilyFolder(sam, family, 'Photos');
+        await upload(sam, 'beach.txt', 'Sand\n');
+        await sam.page.getByRole('link', { name: family, exact: true }).last().click();
+        await expect(sam.page.getByRole('button', { name: 'New family folder' })).toHaveCount(0);
     });
 });
 

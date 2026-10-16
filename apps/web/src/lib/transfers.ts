@@ -8,7 +8,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { renderThumbnail } from '@/lib/thumbnails';
-import { driveClient, invalidateFolders } from '@/lib/drive';
+import { clientFor, invalidateFolders, refuseWrite } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
 
@@ -30,7 +30,9 @@ export function bindTransfersToQueries(client: QueryClient) {
  * node yet and needs its parent (and the file it replaces) looked up.
  */
 async function openNodes(entry: JournalEntry | QueuedEntry) {
-    const listing = await driveClient.listFolder(entry.parentId);
+    // A family folder's upload is opened by that folder's client, which checks by its member list.
+    const client = clientFor(entry.workspaceId);
+    const listing = await client.listFolder(entry.parentId);
     if (!('uploadId' in entry)) {
         const replaces = entry.replacesId
             ? listing.children.find((child) => child.id === entry.replacesId)
@@ -41,7 +43,7 @@ async function openNodes(entry: JournalEntry | QueuedEntry) {
         ? undefined
         : listing.children.find((child) => child.id === entry.nodeId);
     if (entry.newNode && entry.node)
-        await driveClient.openNode({
+        await client.openNode({
             id: entry.nodeId,
             workspaceId: entry.workspaceId,
             parentId: entry.parentId,
@@ -60,6 +62,8 @@ export const transfers = createTransferManager({
     journal: typeof indexedDB === 'undefined' ? undefined : createIndexedDbJournal(),
     stash: stashAvailable() ? uploadStash : undefined,
     openNodes,
+    // A family folder that may not be written, or one a key change has not reached, at prepare.
+    refuseWrite,
     thumbnail: (file, mime) => renderThumbnail(file, mime),
     onPublished: (node) => {
         if (queryClient) refreshFolderSoon(queryClient, node.parentId);

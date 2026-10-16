@@ -1,4 +1,3 @@
-import type { ContactPin } from '@hushos/auth/api';
 import type { LinkView, ShareRole, ShareView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -57,7 +56,8 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { granteeKeys, settingsQueryOptions } from '@/lib/contacts';
+import { granteeKeys, settingsQueryOptions, type Pin } from '@/lib/contacts';
+import { familyWord, vouchLine } from '@/lib/family-pin';
 import {
     displayName,
     driveClient,
@@ -121,7 +121,7 @@ function ShareForm({
     });
     /* An email being added as a contact: the dialog shows the check in its place. */
     const [adding, setAdding] = useState<string | null>(null);
-    const [chosen, setChosen] = useState<ContactPin | null>(null);
+    const [chosen, setChosen] = useState<Pin | null>(null);
     const [role, setRole] = useState<ShareRole>('viewer');
     /* 'share' while sealing, else the id of the share whose role is changing. */
     const [pending, setPending] = useState<string | null>(null);
@@ -248,6 +248,14 @@ function ShareForm({
                             <span className="truncate text-[13px] text-muted-foreground">
                                 {chosen.email}
                             </span>
+                            {vouchLine(chosen) && (
+                                <span
+                                    data-vouched
+                                    className="truncate text-[13px] text-muted-foreground"
+                                >
+                                    {vouchLine(chosen)}
+                                </span>
+                            )}
                         </span>
                         <RoleSelect
                             value={role}
@@ -444,9 +452,9 @@ function PeopleField({
     onAdd,
 }: {
     loading: boolean;
-    contacts: ContactPin[];
+    contacts: Pin[];
     anyContacts: boolean;
-    onPick: (contact: ContactPin) => void;
+    onPick: (contact: Pin) => void;
     onAdd: (email: string) => void;
 }) {
     const id = useId();
@@ -454,7 +462,11 @@ function PeopleField({
     const [open, setOpen] = useState(false);
     const typed = query.trim();
     const isEmail = EMAIL.test(typed);
-    const known = contacts.some((contact) => contact.email.toLowerCase() === typed.toLowerCase());
+    // A pin taken on a family's word never matches a typed address: its name and address are the
+    // server's, so adding someone by email always goes through comparing words (decision D10).
+    const known = contacts.some(
+        (contact) => !familyWord(contact) && contact.email.toLowerCase() === typed.toLowerCase(),
+    );
     const matches = contacts.filter((contact) =>
         `${contact.name} ${contact.email}`.toLowerCase().includes(typed.toLowerCase()),
     );
@@ -531,6 +543,14 @@ function PeopleField({
                                         <span className="truncate text-[13px] text-muted-foreground">
                                             {contact.email}
                                         </span>
+                                        {vouchLine(contact) && (
+                                            <span
+                                                data-vouched
+                                                className="truncate text-[13px] text-muted-foreground"
+                                            >
+                                                {vouchLine(contact)}
+                                            </span>
+                                        )}
                                     </span>
                                 </CommandItem>
                             ))}

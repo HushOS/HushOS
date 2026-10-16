@@ -1,7 +1,9 @@
 import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
+import { familiesSyncAllKey, familySynced } from '@/lib/families-keys';
 import { familyKeys } from '@/lib/families-shell';
 import { groupsApi, type GroupDetail, type GroupSummary } from '@/lib/groups/api';
 import { groupContext } from '@/lib/groups/client';
@@ -95,32 +97,69 @@ export type FamiliesSync = {
 };
 
 /*
- * Every family synced, after the outbox is sent again. Keyed by route 2's
- * versions, so a member list that moved on the server syncs again by itself.
+ * The app-wide pass: what the outbox holds is sent again, then every family is
+ * synced. The Drive runtime runs it once the account is unlocked and Drive is
+ * open, on servers that serve families, loading this module only then
+ * (components/drive/drive-shell.tsx, under the same query key); the Families
+ * page reads the same query.
+ */
+export async function syncFamilies(userId: string): Promise<FamiliesSync> {
+    const ctx = familyContext(userId);
+    const resumed = await resumeOutbox(ctx);
+    const results = await syncAll(ctx);
+    const notices = [...resumed.notices];
+    for (const [groupId, result] of results) {
+        if ('notices' in result) notices.push(...result.notices);
+        // Family folders' clients follow it, and a family gone from this device takes them along.
+        familySynced(groupId, result);
+    }
+    return { results, notices };
+}
+/* The pass's query key: the drive shell takes it from lib/families-keys, never from here. */
+export const familiesSyncKey = familiesSyncAllKey;
+export const familiesSyncQueryOptions = (userId: string) =>
+    queryOptions({
+        queryKey: familiesSyncKey(userId),
+        queryFn: () => syncFamilies(userId),
+        staleTime: 60_000,
+        refetchOnWindowFocus: true,
+        retry: false,
+    });
+
+/*
+ * Every family synced, after the outbox is sent again: the runtime's pass, run
+ * again whenever route 2's versions move, so a member list that moved on the
+ * server syncs again by itself.
  */
 export function useFamiliesSync(userId: string, groups: readonly GroupSummary[] | undefined) {
     const unlocked = useUnlocked(userId);
     const signature = groups ? signatureOf(groups) : null;
-    return useQuery({
-        queryKey: familyKeys.sync(userId, signature ?? ''),
-        queryFn: async (): Promise<FamiliesSync> => {
-            const ctx = familyContext(userId);
-            const resumed = await resumeOutbox(ctx);
-            const results = await syncAll(ctx);
-            const notices = [...resumed.notices];
-            for (const result of results.values())
-                if ('notices' in result) notices.push(...result.notices);
-            return { results, notices };
-        },
+    const query = useQuery({
+        ...familiesSyncQueryOptions(userId),
         enabled: unlocked && signature !== null,
-        staleTime: 0,
-        refetchOnWindowFocus: true,
-        retry: false,
     });
+    const seen = useRef(signature);
+    const { refetch } = query;
+    useEffect(() => {
+        if (signature !== null && seen.current !== null && seen.current !== signature)
+            void refetch();
+        seen.current = signature;
+    }, [signature, refetch]);
+    return query;
 }
 
-/* One family synced (after the outbox), keyed by its state and member list version. */
-export function useFamilySync(userId: string, groupId: string, summary: GroupSummary | undefined) {
+/*
+ * One family synced (after the outbox), keyed by its state and member list
+ * version. `pollWhileWalking` syncs again that often while a key change walks
+ * one of its folders (a family space does, so its pages see the walk end;
+ * nothing refused meanwhile is retried on its own).
+ */
+export function useFamilySync(
+    userId: string,
+    groupId: string,
+    summary: GroupSummary | undefined,
+    options: { pollWhileWalking?: number } = {},
+) {
     const unlocked = useUnlocked(userId);
     const signature = summary ? `${summary.state}:${summary.rosterVersion}` : null;
     return useQuery({
@@ -130,6 +169,7 @@ export function useFamilySync(userId: string, groupId: string, summary: GroupSum
             const dropped = await dropHeldBack(ctx, groupId);
             const resumed = await resumeOutbox(ctx);
             const result = await syncGroup(ctx, groupId, { state: summary?.state });
+            familySynced(groupId, result);
             const notices = [
                 ...dropped,
                 ...resumed.notices.filter(
@@ -142,6 +182,13 @@ export function useFamilySync(userId: string, groupId: string, summary: GroupSum
         enabled: unlocked && signature !== null,
         staleTime: 0,
         refetchOnWindowFocus: true,
+        refetchInterval: (query) => {
+            const result = query.state.data?.result;
+            const walking =
+                result?.status === 'accepted' &&
+                result.areas.some((area) => area.view.rotation !== null);
+            return walking ? (options.pollWhileWalking ?? false) : false;
+        },
         retry: false,
     });
 }

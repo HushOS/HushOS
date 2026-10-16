@@ -7,6 +7,8 @@ import { ShieldAlertIcon, ShieldQuestionIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import { CheckContact } from '@/components/drive/check-contact';
+import { useFamilyArea } from '@/components/drive/family-area';
+import { TrustAsFamily } from '@/components/drive/trust-as-family';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -19,6 +21,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import { settingsQueryOptions } from '@/lib/contacts';
+import { familyWord, pinName, pinsById } from '@/lib/family-pin';
 import {
     afterTrustChanged,
     checkSignerAgain,
@@ -33,8 +36,12 @@ import {
  * Who this person can name as a writer: themselves, and the contacts whose
  * words they checked. Read from their own pins only; the server names a
  * writer by account id and nothing more. Loaded only where a mark shows.
+ * Inside a family folder, the family's members as the server names them
+ * come too, each with their address: the member list vouches for keys, not
+ * names, and the words say so.
  */
 export function useSignerNames(userId: string | null, enabled: boolean): SignerNames {
+    const area = useFamilyArea();
     const settings = useQuery({
         ...settingsQueryOptions(userId ?? ''),
         enabled: enabled && userId !== null,
@@ -43,15 +50,42 @@ export function useSignerNames(userId: string | null, enabled: boolean): SignerN
     const checked = useQuery({
         queryKey: ['contacts', 'checked', userId, settings.dataUpdatedAt],
         queryFn: async () => {
-            const verified = await signersFromPins(contacts ?? {});
+            // One pin per person whatever case their id is in, their own check first.
+            const pins = pinsById(contacts ?? {});
+            const verified = await signersFromPins(
+                Object.fromEntries([...pins.values()].map((pin) => [pin.userId, pin])),
+            );
+            // A pin taken on a family's word is named as that: the server's name, with the
+            // address and the family beside it, never as someone whose words were compared.
             return Object.fromEntries(
-                Object.keys(verified).map((id) => [id.toLowerCase(), contacts![id]!.name]),
+                Object.keys(verified).map((id) => [
+                    id.toLowerCase(),
+                    pinName(pins.get(id.toLowerCase())!),
+                ]),
             );
         },
         enabled: enabled && contacts !== undefined,
         staleTime: Infinity,
     });
-    return { userId, checked: checked.data ?? {} };
+    // The families whose word this person took for someone: a record vouched for that way says so.
+    const vouchers: Record<string, string> = {};
+    const vouched: NonNullable<SignerNames['vouched']> = {};
+    for (const pin of pinsById(contacts ?? {}).values())
+        if (pin.trustedVia) {
+            vouchers[pin.trustedVia] = familyWord(pin)!;
+            vouched[pin.userId.toLowerCase()] = {
+                name: pin.name,
+                email: pin.email,
+                family: familyWord(pin)!,
+            };
+        }
+    return {
+        userId,
+        checked: checked.data ?? {},
+        vouchers,
+        vouched,
+        ...(area ? { family: { name: area.family, members: area.members } } : {}),
+    };
 }
 
 /*
@@ -107,6 +141,7 @@ export function UnverifiedMark({
     className?: string;
 }) {
     const issues = given ?? (node ? integrityIssues(node) : []);
+    const area = useFamilyArea();
     const queryClient = useQueryClient();
     const userId = useStore(authClient.store, (state) => state.unlockedUserId);
     const names = useSignerNames(userId, issues.length > 0);
@@ -179,6 +214,11 @@ export function UnverifiedMark({
                         variant === 'icon'
                             ? 'relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-warning outline-none transition-colors after:absolute after:-inset-2.5 hover:bg-warning-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:bg-warning-soft'
                             : 'eyebrow inline-flex h-5 shrink-0 cursor-pointer items-center rounded-xs border border-transparent bg-warning-soft px-1.5 whitespace-nowrap text-warning outline-none transition-colors hover:border-warning/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:border-warning/40',
+                        // A key conflict is worse than Unverified: the danger colour, as its words say.
+                        worst === 'key-conflict' &&
+                            (variant === 'icon'
+                                ? 'text-destructive hover:bg-destructive-soft data-popup-open:bg-destructive-soft'
+                                : 'bg-destructive-soft text-destructive hover:border-destructive/40 data-popup-open:border-destructive/40'),
                         className,
                     )}
                 >
@@ -220,13 +260,23 @@ export function UnverifiedMark({
                             }}
                         >
                             {action.kind === 'check'
-                                ? 'Check their words'
+                                ? worst === 'key-conflict'
+                                    ? 'Check it’s them'
+                                    : 'Check their words'
                                 : action.kind === 'again'
                                   ? busy
                                       ? 'Checking…'
                                       : 'Check again'
                                   : 'Try again'}
                         </Button>
+                    )}
+                    {/*
+                     * Outside a family's folders, a writer nobody checked who is in one of this
+                     * person's families: their pin can be taken on the family's word, as an
+                     * explicit act (design 2.8).
+                     */}
+                    {!area && userId && action?.kind === 'check' && worst === 'unknown-signer' && (
+                        <TrustAsFamily userId={userId} signer={action.signer} open={open} />
                     )}
                 </PopoverContent>
             </Popover>

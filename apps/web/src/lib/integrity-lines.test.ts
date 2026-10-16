@@ -1,10 +1,12 @@
-import type { IntegrityIssue } from '@hushos/drive/trust';
+import { integrityIssues, type IntegrityIssue, type NodeIntegrity } from '@hushos/drive/trust';
 import { describe, expect, test } from 'vitest';
 import {
     COULDNT_CHECK,
     issueLines,
     markLabel,
     savedLine,
+    verifiedByLine,
+    vouchedByLine,
     type SignerNames,
 } from './integrity-lines';
 
@@ -116,5 +118,167 @@ describe('a copy saved from a link', () => {
         ).toBeNull();
         // Never names someone this person has not checked.
         expect(savedLine(saved('saved-from-link', 'saved-from-link', STRANGER), names)).toBeNull();
+    });
+});
+
+/*
+ * Inside a family's folders the member list decides (design 2.8), and the
+ * server supplies the members' names: these are the readings a server could
+ * steer by naming someone, by withholding a member's links, or by planting
+ * keys in a member's entry.
+ */
+describe('in a family folder', () => {
+    const FAMILY = 'b0000000-0000-4000-8000-000000000001';
+    const SAM = 'a0000000-0000-4000-8000-000000000004';
+    const family: SignerNames = {
+        ...names,
+        family: {
+            name: 'Lindqvist family',
+            members: {
+                [SAM]: { name: 'Sam Lindqvist', email: 'sam@example.com' },
+                // The server names a checked contact otherwise: the pin's name wins.
+                [MAYA]: { name: 'Mom', email: 'maya@example.com' },
+                // A former member: the server gives no address once someone has left.
+                [STRANGER]: { name: 'Ana Berg', email: null },
+            },
+        },
+    };
+
+    test('a bad signature never accuses anyone, since withheld links make genuine records read so', () => {
+        const [line] = issueLines([issue('bad-signature', SAM)], family);
+        expect(line!.text).toBe('HushOS couldn’t verify this signature.');
+        expect(line!.text).not.toMatch(/Don’t trust/);
+        expect(issueLines([issue('bad-signature', SAM, 'version')], family)[0]!.text).toBe(
+            'HushOS couldn’t verify this version’s signature.',
+        );
+        // Outside a family folder the personal reading stands.
+        expect(issueLines([issue('bad-signature', SAM)], names)[0]!.text).toMatch(
+            /Don’t trust this item/,
+        );
+    });
+
+    test('keys that conflict with this person’s check are worse than Unverified, never an accusation', () => {
+        const [line] = issueLines([issue('key-conflict', MAYA)], family);
+        // Named from the pin, never from what the server calls them.
+        expect(line!.text).toBe(
+            'Maya’s keys don’t match the ones you checked. Check it’s them again.',
+        );
+        expect(line!.text).not.toMatch(/Mom/);
+        expect(line!.action).toEqual({ kind: 'check', signer: { id: MAYA } });
+        expect(markLabel([issue('key-conflict', MAYA)])).toBe('Keys don’t match');
+        // A pin taken on a family's word was never Ana's own check: the server's full name and
+        // address, and the family that vouched for the keys.
+        const vouched: SignerNames = {
+            ...family,
+            checked: {
+                ...family.checked,
+                [SAM]: 'Sam Lindqvist (sam@example.com), whom Berg family vouches for',
+            },
+            vouched: {
+                [SAM]: { name: 'Sam Lindqvist', email: 'sam@example.com', family: 'Berg family' },
+            },
+        };
+        const [onWord] = issueLines([issue('key-conflict', SAM)], vouched);
+        expect(onWord!.text).toBe(
+            'Sam Lindqvist (sam@example.com)’s keys don’t match the ones Berg family vouched for. Check it’s them again.',
+        );
+        expect(onWord!.text).not.toMatch(/you checked/);
+        expect(onWord!.action).toEqual({ kind: 'check', signer: { id: SAM } });
+        // Ranked first, ahead of a bad signature on the other record.
+        const node = {
+            metadataSigner: { id: SAM },
+            currentVersion: { signer: { id: MAYA } },
+            integrity: { metadata: 'bad-signature', version: 'key-conflict' } as NodeIntegrity,
+        };
+        expect(integrityIssues(node).map((at) => at.integrity)).toEqual([
+            'key-conflict',
+            'bad-signature',
+        ]);
+    });
+
+    test('a former member’s work is marked, named as the server names them, with their address where given', () => {
+        expect(issueLines([issue('former-member', SAM)], family)[0]!.text).toBe(
+            'Written by Sam Lindqvist (sam@example.com), who has left Lindqvist family.',
+        );
+        expect(issueLines([issue('former-member', STRANGER, 'version')], family)[0]!.text).toBe(
+            'Added by Ana Berg, who has left Lindqvist family.',
+        );
+        expect(markLabel([issue('former-member', SAM)])).toBe('Unverified');
+    });
+
+    test('Info says "Verified by" only when every record verified and the family vouched for one', () => {
+        const by = (
+            integrity: NodeIntegrity | null,
+            at = { groupId: FAMILY, name: 'Lindqvist family' },
+        ) => verifiedByLine({ integrity }, at);
+        const via = (metadata: string | null, version: string | null) => ({ metadata, version });
+        expect(by({ metadata: 'verified', version: 'verified', via: via(FAMILY, FAMILY) })).toBe(
+            'Verified by Lindqvist family',
+        );
+        // A folder has no version.
+        expect(by({ metadata: 'verified', version: null, via: via(FAMILY, null) })).toBe(
+            'Verified by Lindqvist family',
+        );
+        // This person's own words check vouched: nothing to say.
+        expect(by({ metadata: 'verified', version: 'verified', via: via(null, null) })).toBeNull();
+        // Another family's word counts only when this person took that family's word for the
+        // writer ("Trust as … does"), and then it names that family.
+        const vouched = 'b0000000-0000-4000-8000-000000000003';
+        expect(
+            verifiedByLine(
+                { integrity: { metadata: 'verified', version: null, via: via(vouched, null) } },
+                { groupId: FAMILY, name: 'Lindqvist family' },
+                { [vouched]: 'Berg family' },
+            ),
+        ).toBe('Verified by Berg family');
+        // Another family's word does not count here.
+        const other = 'b0000000-0000-4000-8000-000000000002';
+        expect(
+            by({ metadata: 'verified', version: 'verified', via: via(other, other) }),
+        ).toBeNull();
+        // Any record that did not verify: the mark speaks, never this line.
+        expect(
+            by({ metadata: 'verified', version: 'former-member', via: via(FAMILY, null) }),
+        ).toBeNull();
+        expect(
+            by({ metadata: 'verified', version: 'unchecked', via: via(FAMILY, null) }),
+        ).toBeNull();
+        // Checked by the personal verifier (no member list spoke), outside a family folder,
+        // or nothing checked: nothing.
+        expect(by({ metadata: 'verified', version: null })).toBeNull();
+        expect(
+            verifiedByLine(
+                { integrity: { metadata: 'verified', version: null, via: via(FAMILY, null) } },
+                null,
+            ),
+        ).toBeNull();
+        expect(by(null)).toBeNull();
+    });
+});
+
+describe('outside family folders', () => {
+    test('a record written by someone pinned on a family’s word says that family vouched', () => {
+        const SAM = 'a0000000-0000-4000-8000-000000000004';
+        const vouched: SignerNames = {
+            ...names,
+            vouched: {
+                [SAM]: {
+                    name: 'Sam Lindqvist',
+                    email: 'sam@example.com',
+                    family: 'Lindqvist family',
+                },
+            },
+        };
+        const node = (metadata: IntegrityIssue['integrity'] | 'verified', signer: string) => ({
+            integrity: { metadata, version: 'verified' } as NodeIntegrity,
+            metadataSigner: { id: signer },
+            currentVersion: { signer: { id: signer.toUpperCase() } },
+        });
+        expect(vouchedByLine(node('verified', SAM), vouched)).toBe('Verified by Lindqvist family');
+        // Someone whose words were compared: nothing to add.
+        expect(vouchedByLine(node('verified', MAYA), vouched)).toBeNull();
+        // A record that did not verify: the mark speaks instead.
+        expect(vouchedByLine(node('resealed', SAM), vouched)).toBeNull();
+        expect(vouchedByLine({ ...node('verified', SAM), integrity: null }, vouched)).toBeNull();
     });
 });

@@ -13,7 +13,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { driveClient, driveError, invalidateFolders } from '@/lib/drive';
+import { clientFor, displayName, driveError, invalidateFolders, refuseWrite } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -69,7 +69,9 @@ function CreateFolderForm({
         setPending(true);
         setError('');
         try {
-            const nodes = await driveClient.createFolderPath(parent, segments);
+            const refused = refuseWrite(parent);
+            if (refused) throw new Error(refused);
+            const nodes = await clientFor(parent.workspaceId).createFolderPath(parent, segments);
             await invalidateFolders(queryClient, parent.id);
             cue('success');
             onCreated?.(nodes);
@@ -93,9 +95,7 @@ function CreateFolderForm({
         >
             <DialogHeader>
                 <DialogTitle>New folder</DialogTitle>
-                <DialogDescription>
-                    In “{parent.parentId === null ? 'My files' : parent.name}”.
-                </DialogDescription>
+                <DialogDescription>In “{displayName(parent)}”.</DialogDescription>
             </DialogHeader>
             <div className="flex flex-col gap-1.5">
                 <label htmlFor={id} className="text-[13px] font-semibold">

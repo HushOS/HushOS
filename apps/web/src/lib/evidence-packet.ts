@@ -4,7 +4,7 @@ import { makeZip } from 'client-zip';
 import { createMD5, createSHA1 } from 'hash-wasm';
 import { openSink } from '@/lib/download-sinks';
 import { type PacketTree, packetPaths, printable } from '@/lib/packet-paths';
-import { driveClient } from '@/lib/drive';
+import { clientFor } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
 import { DISCLAIMER, GUIDANCE } from '@/lib/authorities';
 import { categoryLabel, STATUS_LABELS } from '@/lib/reports';
@@ -62,7 +62,7 @@ export async function buildEvidencePacket(
     async function walk(node: DriveNode): Promise<PacketTree> {
         byId.set(node.id, node);
         if (node.kind === 'file') return { id: node.id, name: node.name, kind: 'file' };
-        const listing = await driveClient.listFolder(node.id);
+        const listing = await clientFor(node.workspaceId).listFolder(node.id);
         const children: PacketTree[] = [];
         for (const child of listing.children) children.push(await walk(child));
         return { id: node.id, name: node.name, kind: 'folder', children };

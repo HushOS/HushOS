@@ -253,8 +253,8 @@ function NavGroup({
 
 /*
  * Each family the account is in, as one row under My files (decision D1), named after the
- * family. Until the family spaces arrive (plan step 6) a row opens the family's page; one
- * you accepted but are not in yet opens the join screen.
+ * family. A row opens the family's folders (its space); one you accepted but are not in yet
+ * opens the join screen. The row stays lit on the family's own page too.
  */
 function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) {
     const enabled = useGroupsEnabled();
@@ -263,21 +263,24 @@ function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) 
     return (
         <SidebarMenu className="mt-0.5 gap-0.5">
             {families.map((family) => {
-                const base = `/app/families/${family.id}`;
+                const page = `/app/families/${family.id}`;
+                const space = `/app/s/${family.id}`;
                 return (
                     <SidebarMenuItem key={family.id}>
                         <SidebarMenuButton
                             render={
-                                <Link
-                                    to={
-                                        family.state === 'accepted'
-                                            ? '/app/families/$groupId/join'
-                                            : '/app/families/$groupId'
-                                    }
-                                    params={{ groupId: family.id }}
-                                />
+                                family.state === 'accepted' ? (
+                                    <Link
+                                        to="/app/families/$groupId/join"
+                                        params={{ groupId: family.id }}
+                                    />
+                                ) : (
+                                    <Link to="/app/s/$groupId" params={{ groupId: family.id }} />
+                                )
                             }
-                            isActive={pathname === base || pathname.startsWith(`${base}/`)}
+                            isActive={[page, space].some(
+                                (base) => pathname === base || pathname.startsWith(`${base}/`),
+                            )}
                             tooltip={family.name}
                             className={cn(item, collapsed)}
                         >

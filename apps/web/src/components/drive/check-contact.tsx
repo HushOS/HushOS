@@ -14,6 +14,7 @@ import {
     type Lookup,
     type Pin as ContactPin,
 } from '@/lib/contacts';
+import { vouchLine } from '@/lib/family-pin';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -100,8 +101,16 @@ export function CheckContact({
     }
 
     const first = found ? (found.contact.name.trim().split(/\s+/)[0] ?? found.contact.name) : '';
+    // A pin taken on a family's word is not this person's check: the words are compared like
+    // anyone new's (pinContact then makes it their own and drops the family's mark).
+    const familyVouched = found?.pinned ? vouchLine(found.pinned) : null;
     const alreadyAdded =
-        !recheck && found !== null && found.pinned !== null && !found.changed && !found.stale;
+        !recheck &&
+        found !== null &&
+        found.pinned !== null &&
+        familyVouched === null &&
+        !found.changed &&
+        !found.stale;
     // Words can only be compared over an upgraded identity whose keys statement holds.
     const notUpgraded = found !== null && !found.upgraded;
     const notWriter =
@@ -197,6 +206,7 @@ export function CheckContact({
                 </p>
             ) : (
                 <p className="text-sm leading-snug text-muted-foreground">
+                    {familyVouched && <span data-vouched>{familyVouched}. </span>}
                     Ask {first} to open People you share with in HushOS, choose Your twelve words,
                     and read them to you, on a call or in person. If they match these, it’s really
                     them.

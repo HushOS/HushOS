@@ -1,7 +1,13 @@
 import type { DriveNode } from '@hushos/drive/client';
 import type { QueryClient } from '@tanstack/react-query';
 import { askCollision, type CollisionDecision } from '@/lib/collisions';
-import { driveClient, folderQueryOptions, invalidateFolders, nextName } from '@/lib/drive';
+import {
+    clientFor,
+    folderQueryOptions,
+    invalidateFolders,
+    nextName,
+    refuseWrite,
+} from '@/lib/drive';
 import type { Dropped } from '@/lib/dropped-files';
 import { transfers } from '@/lib/transfers';
 import type { EnqueueInput } from '@hushos/drive/transfers';
@@ -21,6 +27,10 @@ export async function enqueueDropped(
     knownChildren: DriveNode[],
 ) {
     const { files } = dropped;
+    // A family folder that may not be written now, or one a key change has not reached yet
+    // (uploads wait there: docs/groups-server.md 8), takes nothing.
+    const refused = refuseWrite(folder);
+    if (refused) throw new Error(refused);
     // What each destination already holds: the top folder's is known, a folder made by this
     // drop is empty, and any other folder is listed once when first needed.
     const listings = new Map<string, DriveNode[]>([[folder.id, knownChildren]]);
@@ -29,7 +39,9 @@ export async function enqueueDropped(
         if (madeHere.has(parent.id)) return [];
         let children = listings.get(parent.id);
         if (!children) {
-            children = (await queryClient.fetchQuery(folderQueryOptions(parent.id))).children;
+            children = (
+                await queryClient.fetchQuery(folderQueryOptions(parent.id, parent.workspaceId))
+            ).children;
             listings.set(parent.id, children);
         }
         return children;
@@ -50,10 +62,13 @@ export async function enqueueDropped(
             (child) => child.kind === 'folder' && child.name === name,
         );
         if (same) {
+            // A folder already there may be one a key change has not reached yet.
+            const waits = refuseWrite(same);
+            if (waits) throw new Error(waits);
             parents.set(key, same);
             continue;
         }
-        const [created] = await driveClient.createFolderPath(parent, [name]);
+        const [created] = await clientFor(parent.workspaceId).createFolderPath(parent, [name]);
         madeHere.add(created!.id);
         parents.set(key, created!);
         createdAny = true;
@@ -115,6 +130,10 @@ export async function enqueueDropped(
         if (decision.all && !standing) standing = decision;
         if (decision.action === 'skip') continue;
         if (decision.action === 'replace') {
+            // A new version goes under the file's own key: one a key change has not reached
+            // waits too.
+            const waits = refuseWrite(replaces);
+            if (waits) throw new Error(waits);
             ids.push(...transfers.enqueue([{ ...input, replaces }]));
             continue;
         }

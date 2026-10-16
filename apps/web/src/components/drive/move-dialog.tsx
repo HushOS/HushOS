@@ -14,11 +14,13 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import {
+    clientFor,
     copyInto,
-    driveClient,
+    displayName,
     driveError,
     folderQueryOptions,
     invalidateFolders,
+    refuseWrite,
     sortNodes,
 } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
@@ -67,7 +69,8 @@ function MovePicker({
     const [pending, setPending] = useState(false);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState('');
-    const listing = useQuery(folderQueryOptions(folderId));
+    // A family folder's items move within it, listed by its own client.
+    const listing = useQuery(folderQueryOptions(folderId, nodes[0]?.workspaceId));
     const moving = new Set(nodes.map((node) => node.id));
     const currentParent = nodes[0]?.parentId ?? null;
     const sameParent = nodes.every((node) => node.parentId === currentParent);
@@ -85,7 +88,9 @@ function MovePicker({
         try {
             if (mode === 'copy') await copyInto(queryClient, nodes, destination, setProgress);
             else {
-                for (const node of nodes) await driveClient.move(node, destination);
+                const refused = refuseWrite(destination);
+                if (refused) throw new Error(refused);
+                for (const node of nodes) await clientFor(node.workspaceId).move(node, destination);
                 await invalidateFolders(queryClient, currentParent, destination.id);
             }
             cue('success');
@@ -101,7 +106,7 @@ function MovePicker({
 
     const verb = mode === 'copy' ? 'Copy' : 'Move';
     const label = nodes.length === 1 ? `“${nodes[0]!.name}”` : `${nodes.length} items`;
-    const placeName = (folder: DriveNode) => (folder.parentId === null ? 'My files' : folder.name);
+    const placeName = (folder: DriveNode) => displayName(folder);
     const already = mode === 'move' && sameParent && destination?.id === currentParent;
     const trail = listing.data ? [...listing.data.ancestors, listing.data.folder] : [];
     return (

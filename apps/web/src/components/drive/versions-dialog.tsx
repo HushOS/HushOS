@@ -1,6 +1,6 @@
 import type { DriveNode } from '@hushos/drive/client';
 import type { Signer } from '@hushos/drive/api';
-import type { Integrity, IntegrityIssue } from '@hushos/drive/trust';
+import type { IntegrityIssue, RecordIntegrity } from '@hushos/drive/trust';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DownloadIcon, EyeIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useState } from 'react';
@@ -30,7 +30,7 @@ import {
 import { toast } from '@/components/ui/toast';
 import { downloadNodes } from '@/lib/downloads';
 import {
-    driveClient,
+    clientFor,
     driveError,
     driveKeys,
     formatBytes,
@@ -54,7 +54,7 @@ const replacedWhen = (iso: string) =>
  */
 /* A listed version's own check: who added it, as the server says, and whether that holds. */
 function versionIssues(version: {
-    integrity: Integrity | null;
+    integrity: RecordIntegrity | null;
     signer?: Signer | null;
 }): IntegrityIssue[] {
     if (
@@ -70,15 +70,20 @@ export function VersionsDialog({
     node,
     open,
     onOpenChange,
+    writable = true,
 }: {
     node: DriveNode | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    /* False in a family folder this device may not write: versions are seen, never restored or deleted. */
+    writable?: boolean;
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-[600px]">
-                {node && <VersionList node={node} onOpenChange={onOpenChange} />}
+                {node && (
+                    <VersionList node={node} onOpenChange={onOpenChange} writable={writable} />
+                )}
             </DialogContent>
         </Dialog>
     );
@@ -87,9 +92,11 @@ export function VersionsDialog({
 function VersionList({
     node,
     onOpenChange,
+    writable,
 }: {
     node: DriveNode;
     onOpenChange: (open: boolean) => void;
+    writable: boolean;
 }) {
     const queryClient = useQueryClient();
     // Read once when the dialog opens: "deleted in N days" doesn't need to tick.
@@ -99,7 +106,7 @@ function VersionList({
     const [viewing, setViewing] = useState(false);
     const versions = useQuery({
         queryKey: [...driveKeys.all, 'versions', node.id],
-        queryFn: () => driveClient.versions(node),
+        queryFn: () => clientFor(node.workspaceId).versions(node),
         staleTime: 0,
     });
 
@@ -112,7 +119,7 @@ function VersionList({
     async function restore(versionId: string) {
         setPending('restore');
         try {
-            await driveClient.restoreVersion(node, versionId);
+            await clientFor(node.workspaceId).restoreVersion(node, versionId);
             cue('success');
             toast.add({
                 type: 'success',
@@ -135,7 +142,7 @@ function VersionList({
     async function discard(versionId: string) {
         setPending('discard');
         try {
-            await driveClient.discardVersion(node, versionId);
+            await clientFor(node.workspaceId).discardVersion(node, versionId);
             cue('droplet');
             toast.add({ type: 'success', title: `Earlier version of “${node.name}” deleted` });
         } catch (error) {
@@ -232,16 +239,20 @@ function VersionList({
                                 </span>
                             </span>
                             <span className="flex items-center gap-1">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    aria-label="Restore earlier version"
-                                    disabled={pending !== null || earlier.objectStatus !== 'ready'}
-                                    onClick={() => void restore(earlier.id)}
-                                >
-                                    {pending === 'restore' ? <Spinner /> : <RotateCcwIcon />}
-                                    {pending === 'restore' ? 'Restoring…' : 'Restore'}
-                                </Button>
+                                {writable && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        aria-label="Restore earlier version"
+                                        disabled={
+                                            pending !== null || earlier.objectStatus !== 'ready'
+                                        }
+                                        onClick={() => void restore(earlier.id)}
+                                    >
+                                        {pending === 'restore' ? <Spinner /> : <RotateCcwIcon />}
+                                        {pending === 'restore' ? 'Restoring…' : 'Restore'}
+                                    </Button>
+                                )}
                                 <Button
                                     variant="ghost"
                                     size="icon-sm"
@@ -262,17 +273,19 @@ function VersionList({
                                 >
                                     <DownloadIcon />
                                 </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label="Delete earlier version"
-                                    title="Delete"
-                                    className="text-destructive hover:bg-destructive-soft hover:text-destructive"
-                                    disabled={pending !== null}
-                                    onClick={() => setConfirming(earlier.id)}
-                                >
-                                    <Trash2Icon />
-                                </Button>
+                                {writable && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon-sm"
+                                        aria-label="Delete earlier version"
+                                        title="Delete"
+                                        className="text-destructive hover:bg-destructive-soft hover:text-destructive"
+                                        disabled={pending !== null}
+                                        onClick={() => setConfirming(earlier.id)}
+                                    >
+                                        <Trash2Icon />
+                                    </Button>
+                                )}
                             </span>
                         </div>
                     ) : (
@@ -301,7 +314,7 @@ function VersionList({
                                 : '.'
                         }`,
                         restoring: pending === 'restore',
-                        onRestore: () => void restore(earlier.id),
+                        onRestore: writable ? () => void restore(earlier.id) : undefined,
                     }}
                 />
             )}
