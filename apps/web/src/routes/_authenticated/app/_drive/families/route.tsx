@@ -3,7 +3,7 @@ import { createFileRoute, Outlet } from '@tanstack/react-router';
 import { TriangleAlertIcon, UsersIcon } from 'lucide-react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { Button } from '@/components/ui/button';
-import { capabilitiesQueryOptions } from '@/lib/families';
+import { capabilitiesQueryOptions } from '@/lib/families-shell';
 
 /*
  * Every families page: shown only when the server says it serves families

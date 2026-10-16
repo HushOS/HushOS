@@ -40,7 +40,7 @@ import {
     UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
-import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families';
+import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 
 export type NavItem = {
     to:

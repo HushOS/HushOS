@@ -2,7 +2,7 @@ import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
-import { driveApi } from '@/lib/drive-api';
+import { familyKeys } from '@/lib/families-shell';
 import { groupsApi, type GroupDetail, type GroupSummary } from '@/lib/groups/api';
 import { groupContext } from '@/lib/groups/client';
 import type { GroupContext, GroupNotice } from '@/lib/groups/context';
@@ -24,34 +24,13 @@ import { syncAll, syncGroup, type SyncResult } from '@/lib/groups/sync';
  * crypto worker holds every chain, seed and area key.
  */
 
-export const familyKeys = {
-    all: ['families'] as const,
-    capabilities: ['drive', 'capabilities'] as const,
-    user: (userId: string) => ['families', userId] as const,
-    list: (userId: string) => ['families', userId, 'list'] as const,
-    sync: (userId: string, signature: string) => ['families', userId, 'sync', signature] as const,
-    family: (userId: string, groupId: string) => ['families', userId, 'family', groupId] as const,
-    familySync: (userId: string, groupId: string, signature: string) =>
-        ['families', userId, 'family', groupId, 'sync', signature] as const,
-    invitations: (userId: string, groupId: string) =>
-        ['families', userId, 'family', groupId, 'invitations'] as const,
-    pending: (userId: string, groupId: string) =>
-        ['families', userId, 'family', groupId, 'pending'] as const,
-};
-
-/* Whether this server serves families at all (`/drive/capabilities`); absent before 1c, so false. */
-export const capabilitiesQueryOptions = queryOptions({
-    queryKey: familyKeys.capabilities,
-    queryFn: () => driveApi.capabilities(),
-    staleTime: 5 * 60_000,
-    retry: 1,
-});
-
-/* True only when the server says so: the families UI stays hidden otherwise. */
-export function useGroupsEnabled() {
-    const { data } = useQuery({ ...capabilitiesQueryOptions, select: (c) => c.groups === true });
-    return data === true;
-}
+/* The shell's part (keys, capabilities, route 2's list), here for the families pages. */
+export {
+    capabilitiesQueryOptions,
+    familiesQueryOptions,
+    familyKeys,
+    useGroupsEnabled,
+} from '@/lib/families-shell';
 
 const contexts = new Map<string, GroupContext>();
 /* One data-layer context per account: its store, settings access and locks. */
@@ -63,16 +42,6 @@ export function familyContext(userId: string) {
     }
     return ctx;
 }
-
-/* Route 2: the account's families and where it stands in each. Session only, no keys. */
-export const familiesQueryOptions = (userId: string) =>
-    queryOptions({
-        queryKey: familyKeys.list(userId),
-        queryFn: async () => (await groupsApi.listGroups()).groups,
-        staleTime: 15_000,
-        refetchOnWindowFocus: true,
-        retry: 1,
-    });
 
 /* Route 3: the family, its members (names from the server, with their address), seats and what is due. */
 export const familyQueryOptions = (userId: string, groupId: string) =>
