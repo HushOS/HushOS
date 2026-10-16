@@ -1,0 +1,37 @@
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_e4e2a28ac68982 15
+  s_c56e31c87cddde::t_a2621176eef3db 1-14,16-25
+  s_c56e31c87cddde::t_905d1e0347592d 26-2072
+packages/crypto/src/drive.ts
+  s_c56e31c87cddde::t_937ca23620ae6a 202-219,268-291
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_3218aadbe22b05 25-38
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_0fc3c157854af2 1-2742
+packages/crypto/src/session.drive.test.ts
+  s_c56e31c87cddde::t_bf6dd392c3ef7c 1714
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_5efaf1d1f53422 22,25-33,102,126,366-375,377-381,383-390,393-399,578,703,770-772,821,842-843,863-899,914-933,970-975,982,984-1003,1256-1258,1263-1265,1270-1275,1280-1281,1283,1285-1287,1295-1379,1389-1390,1402-1420,1422,1424,1426-1448,1452-1460,1465-1467,1473,1475,1477-1535,1538-1573,1575-1584,1588-1598,1600-1672,1679-1727,1741-1742,1763,2081,2172-2175,2181-2189,2194,2260,2379,2436,2440-2447,2452,2470-2472,2474-2478,2482-2486,2497-2498,2507-2528,2532,2539,2591-2601,2616,2618-2621,2632-2650,2699,2764,2771,2783,2910,2936,2980,3053
+packages/crypto/src/workspace.ts
+  s_c56e31c87cddde::t_d1a4796930e091 56-80,99,112,135-196
+packages/drive/src/client.test.ts
+  s_c56e31c87cddde::t_e5b6bc03c62aae 74,134-136,221-228,245,383-384
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_8a7031010c1f51 1465-1483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e56fe51a64147c21a9874859ecb4961f26fa5bc6",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
