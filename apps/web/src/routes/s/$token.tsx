@@ -242,7 +242,14 @@ function LinkHeader() {
                 </Link>
             ) : (
                 <span className="flex items-center gap-2">
-                    <Link to="/" className={buttonVariants({ variant: 'ghost' })}>
+                    {/* Under 380px there is room for Sign in alone; the logo goes home as this would. */}
+                    <Link
+                        to="/"
+                        className={buttonVariants({
+                            variant: 'ghost',
+                            className: 'max-[379px]:hidden',
+                        })}
+                    >
                         Get HushOS
                     </Link>
                     <Link
@@ -520,23 +527,28 @@ function LinkContents({ opened }: { opened: Opened }) {
             </span>
             <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pt-2 pb-5">
                 <div className="flex min-w-0 flex-col gap-1">
-                    <h1 className="text-[30px] leading-[1.1] font-extrabold tracking-[-0.03em] wrap-anywhere">
-                        {opened.node.name}
+                    {/* A file's name, not a headline: smaller on a phone, and its extension never split. */}
+                    <h1 className="text-[22px] leading-[1.15] font-extrabold tracking-[-0.02em] wrap-anywhere sm:text-[30px] sm:leading-[1.1] sm:tracking-[-0.03em]">
+                        <NodeName name={opened.node.name} />
                     </h1>
                     {count && <span className="text-sm text-muted-foreground">{count}</span>}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <ReportButton opened={opened} />
-                    <SaveToDrive opened={opened} />
+                {/*
+                 * Download first, in reading and focus order alike: it is what most visitors came
+                 * for. On a phone the three stack across the width; from sm up they sit in a row.
+                 */}
+                <div className="flex w-full flex-col gap-2 *:w-full sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:*:w-auto">
                     <Button onClick={() => void downloadNodes([opened.node])}>
                         <DownloadIcon />
                         {opened.node.kind === 'folder' ? 'Download all' : 'Download'}
                     </Button>
+                    <SaveToDrive opened={opened} />
+                    <ReportButton opened={opened} />
                 </div>
             </div>
             <div className="flex flex-col overflow-hidden rounded-2xl border border-rule bg-card">
                 {opened.node.kind === 'file' && (
-                    <div className="flex flex-col items-center gap-4 px-6 py-12">
+                    <div className="flex flex-col items-center gap-4 px-6 py-8 sm:py-12">
                         <FileMark node={opened.node} size="large" />
                         <Button variant="outline" onClick={() => setPreviewing(opened.node)}>
                             <EyeIcon />
@@ -675,6 +687,21 @@ const LINK_ROW =
     'grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-4 px-5 sm:grid-cols-[minmax(0,1fr)_9rem_7rem] sm:px-6';
 
 /* Anyone holding the link can report what it opens; the operators alone get the key. */
+/*
+ * A name with its extension kept whole: a long name breaks anywhere in its stem,
+ * never inside ".json". Folders and names without a short extension are as they are.
+ */
+function NodeName({ name }: { name: string }) {
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0 || name.length - dot > 10) return name;
+    return (
+        <>
+            {name.slice(0, dot)}
+            <span className="whitespace-nowrap">{name.slice(dot)}</span>
+        </>
+    );
+}
+
 function ReportButton({ opened }: { opened: Opened }) {
     const { hasSession } = useRouteContext({ from: '__root__' });
     const [reporting, setReporting] = useState(false);
