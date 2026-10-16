@@ -3,6 +3,7 @@ import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { makeZip } from 'client-zip';
 import { createMD5, createSHA1 } from 'hash-wasm';
 import { openSink } from '@/lib/download-sinks';
+import { type PacketTree, packetPaths, printable } from '@/lib/packet-paths';
 import { driveClient } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
 import { DISCLAIMER, GUIDANCE } from '@/lib/authorities';
@@ -20,6 +21,9 @@ import { categoryLabel, STATUS_LABELS } from '@/lib/reports';
 export const PACKET_FILE_MAX_BYTES = 256 * 1024 * 1024;
 
 type Hashed = {
+    /* The node this entry is, and its names as uploaded (root first), beside the cleaned path. */
+    nodeId: string;
+    names: string[];
     path: string;
     name: string;
     size: number;
@@ -44,8 +48,6 @@ async function digests(bytes: Uint8Array<ArrayBuffer>) {
     };
 }
 
-const safe = (name: string) => name.replaceAll(/[\\/:*?"<>|]/g, '_');
-
 export async function buildEvidencePacket(
     report: ReportView,
     events: ReportEventView[],
@@ -54,17 +56,21 @@ export async function buildEvidencePacket(
 ) {
     const guidance = GUIDANCE[report.category];
     const includeFiles = guidance.includeFiles;
-    // Walk the snapshot the way the operator sees it, names decrypted on this device.
-    const files: { node: DriveNode; path: string }[] = [];
-    async function walk(node: DriveNode, prefix: string) {
-        if (node.kind === 'file') {
-            files.push({ node, path: `${prefix}${safe(node.name)}` });
-            return;
-        }
+    // Walk the snapshot the way the operator sees it, names decrypted on this device; the
+    // paths in the zip come from packetPaths, which keeps them inside it and apart.
+    const byId = new Map<string, DriveNode>();
+    async function walk(node: DriveNode): Promise<PacketTree> {
+        byId.set(node.id, node);
+        if (node.kind === 'file') return { id: node.id, name: node.name, kind: 'file' };
         const listing = await driveClient.listFolder(node.id);
-        for (const child of listing.children) await walk(child, `${prefix}${safe(node.name)}/`);
+        const children: PacketTree[] = [];
+        for (const child of listing.children) children.push(await walk(child));
+        return { id: node.id, name: node.name, kind: 'folder', children };
     }
-    await walk(root, '');
+    const files = packetPaths(await walk(root)).map((entry) => ({
+        ...entry,
+        node: byId.get(entry.nodeId)!,
+    }));
 
     const hashed: Hashed[] = [];
     const contents: { name: string; input: Uint8Array; lastModified?: Date }[] = [];
@@ -72,6 +78,8 @@ export async function buildEvidencePacket(
     for (const file of files) {
         const size = contentSize(file.node) ?? 0;
         const base: Hashed = {
+            nodeId: file.nodeId,
+            names: file.names,
             path: file.path,
             name: file.node.name,
             size,
@@ -137,7 +145,7 @@ export async function buildEvidencePacket(
         `Reporter: ${report.reporter.userId ? `account ${report.reporter.userId}` : `anonymous${report.reporter.email ? `, ${report.reporter.email}` : ''}`}`,
         `Uploader: ${report.uploader.email ?? 'unknown'}${report.uploader.userId ? ` (account ${report.uploader.userId})` : ''}${report.uploader.suspended ? ', suspended' : ''}`,
         `Workspace: ${report.workspaceId}`,
-        `Reported item: ${root.name} (${root.kind}, node ${root.id})`,
+        `Reported item: ${printable(root.name)} (${root.kind}, node ${root.id})`,
         report.filedWith
             ? `Filed with: ${report.filedWith}${report.filedReference ? ` · ${report.filedReference}` : ''}`
             : `Filed with: nobody yet`,
@@ -147,7 +155,7 @@ export async function buildEvidencePacket(
         ``,
         `Files (${hashed.length})`,
         ...hashed.flatMap((file) => [
-            `- ${file.path}  ${file.size} bytes${file.mime ? `  ${file.mime}` : ''}${file.modified ? `  modified ${file.modified}` : ''}`,
+            `- ${printable(file.path)}  ${file.size} bytes${file.mime ? `  ${file.mime}` : ''}${file.modified ? `  modified ${file.modified}` : ''}`,
             `    md5 ${file.md5 ?? '-'}`,
             `    sha1 ${file.sha1 ?? '-'}`,
             `    sha256 ${file.sha256 ?? '-'}`,
@@ -179,7 +187,7 @@ export async function buildEvidencePacket(
     const hashesText = hashed
         .map((file) =>
             [
-                file.path,
+                printable(file.path),
                 `md5=${file.md5 ?? '-'}`,
                 `sha1=${file.sha1 ?? '-'}`,
                 `sha256=${file.sha256 ?? '-'}`,
