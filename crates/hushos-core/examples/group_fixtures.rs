@@ -298,6 +298,40 @@ fn main() {
                 chain_case_json(c)
             })
             .collect::<Vec<_>>(),
+        // First rosters to the same bytes, or refused alike; the creator's own entry, only from an
+        // identity whose keys statement holds. A refusal the core expects to build is a broken
+        // generator.
+        "firstRosterCases": first_roster_cases()
+            .iter()
+            .map(|c| {
+                let verdict = first_roster_verdict(c);
+                let refused = [
+                    "first-roster-not-holder",
+                    "first-roster-left",
+                    "first-roster-same-key-twice",
+                    "first-roster-area-twice",
+                    "first-roster-org-role-in-family",
+                    "first-roster-short-key",
+                    "first-roster-uppercase-group-id",
+                ];
+                assert_eq!(verdict.is_none(), refused.contains(&c.name.as_str()), "{}: the core says {verdict:?}", c.name);
+                first_roster_case_json(c, &verdict)
+            })
+            .collect::<Vec<_>>(),
+        "ownEntryCases": own_entry_cases()
+            .iter()
+            .map(|c| {
+                let verdict = own_entry_verdict(c);
+                let refused = [
+                    "own-entry-other-account",
+                    "own-entry-kem-swapped",
+                    "own-entry-another-keys-signature",
+                    "own-entry-key-version",
+                ];
+                assert_eq!(verdict.is_null(), refused.contains(&c.name.as_str()), "{}: the core says {verdict}", c.name);
+                own_entry_case_json(c, &verdict)
+            })
+            .collect::<Vec<_>>(),
         "sealCases": seal_cases()
             .iter()
             .map(|c| {

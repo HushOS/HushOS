@@ -378,3 +378,29 @@ fn the_web_s_raw_statements_parse_or_are_refused_here_as_the_web_judged_them() {
         assert_eq!(group_statement_is_canonical(b(value, "statement")), expected, "{}", s(value, "name"));
     }
 }
+
+#[test]
+fn the_web_s_first_rosters_build_here_to_the_same_bytes_or_are_refused_as_the_web_judged_them() {
+    let fixture = fixture();
+    let cases = fixture["firstRosterCases"].as_array().unwrap();
+    let names: Vec<String> = cases.iter().map(|c| s(c, "name")).collect();
+    let ours: Vec<String> = first_roster_cases().into_iter().map(|c| c.name).collect();
+    assert_eq!(names, ours);
+    for value in cases {
+        let (case, expected) = first_roster_case_from(value);
+        assert_eq!(first_roster_verdict(&case), expected, "{}", case.name);
+    }
+}
+
+#[test]
+fn the_web_s_own_entries_are_made_here_or_refused_as_the_web_judged_them() {
+    let fixture = fixture();
+    let cases = fixture["ownEntryCases"].as_array().unwrap();
+    let names: Vec<String> = cases.iter().map(|c| s(c, "name")).collect();
+    let ours: Vec<String> = own_entry_cases().into_iter().map(|c| c.name).collect();
+    assert_eq!(names, ours);
+    for value in cases {
+        let (case, expected) = own_entry_case_from(value);
+        assert_eq!(own_entry_verdict(&case), expected, "{}", case.name);
+    }
+}

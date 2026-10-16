@@ -94,6 +94,14 @@ export type SuccessionLink = {
     newKemPublicKey: string;
     /* The old identity's hybrid signature (3373 bytes). Only version 2 links are served. */
     signature: string;
+    /*
+     * The successor's consent (6746 bytes: the old identity's hybrid signature
+     * over the consent statement as "old", then the new one's as "new"), when
+     * the link was uploaded with it. Absent or null for links made before it
+     * was uploaded and not yet backfilled; the group core asks it of links
+     * from a member's first keys up to their entry's (docs/groups-design.md 2.8).
+     */
+    consent?: string | null;
 };
 
 /* The settings key wrapped under the account root: a 24-byte nonce and the 48-byte sealed key. */

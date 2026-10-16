@@ -5,12 +5,14 @@ import {
     checkNextRoster,
     checkNextSuccession,
     droppedHolders,
+    firstRoster,
     foldInEntry,
     groupIntegrityOf,
     groupWriterTrust,
     newRosterEntry,
     nextRoster,
     ownEntry,
+    ownRosterEntry,
     pinAfter,
     trustAsGroupDoes,
     type AcceptInput,
@@ -20,8 +22,11 @@ import {
     type ServedIdentity,
 } from './group-trust';
 import {
+    areaWriteVersion,
     groupKeyDigest,
     groupKeyPair,
+    openAreaGrant,
+    sealAreaGrant,
     groupSuccessionStatement,
     memberSigner,
     openGroupKey,
@@ -39,6 +44,9 @@ import {
 } from './groups';
 import {
     AREA,
+    AREA_SEED,
+    SECOND_AREA,
+    atRoster,
     CHECKED,
     GROUP,
     OTHER_AREA,
@@ -63,6 +71,7 @@ import {
     type History,
     type Person,
 } from './group-testkit';
+import { areaKeyCommitment } from './area-keys';
 import { keyDigest } from './fingerprint';
 import { verifyIdentityKeys, type ServedKeys, type SuccessionLink } from './identity';
 import { MAX_VERIFIED_LINKS, successionPath } from './succession-path';
@@ -3031,3 +3040,267 @@ describe('round 12', () => {
             ).rejects.toThrow('whose words were checked');
     });
 });
+
+describe('milestone 1c: creating a group', () => {
+    test('firstRoster builds the roster version 1 the creator’s own acceptance takes, with the rows of the keys it was given', async () => {
+        const { organizer } = await cast();
+        const areaKey = pattern(32, 77);
+        const entry = await ownRosterEntry(organizer.userId, organizer.served, {
+            roles: ['members', 'billing'],
+        });
+        // The testkit's entry is built from the person's keys by another path.
+        expect(entry).toEqual(organizer.entry(['billing', 'members']));
+        const roster = await firstRoster(
+            GROUP,
+            { ...entry, roles: ['members', 'billing'], sinceVersion: 7 },
+            { kind: 'family', areaKeys: [{ workspaceId: AREA, workspaceKey: areaKey }] },
+        );
+        // Byte for byte what the testkit's history writes for the same creator and area.
+        const h = await history();
+        await h.roster(organizer, [organizer.entry(['billing', 'members'])]);
+        expect(rosterStatement(roster)).toEqual(h.rosters[0]!.statement);
+
+        const groupKey = await groupKeyAt(1);
+        const chain = await accepted({
+            groupId: GROUP,
+            firstKeys: groupKey.publicKey,
+            // The creator made the keys just now: the one other place that says so (design 2.4).
+            firstKeysChecked: true,
+            pins: [],
+            rosters: [await signRoster(roster, groupKey, organizer.signer)],
+            successions: [],
+            mlDsaKeys: mlDsaKeysOf(organizer),
+            me: { userId: organizer.userId, identities: [servedKeysOf(organizer)] },
+            cache: null,
+        });
+        expect(chain.roster.rosterVersion).toBe(1);
+        expect(chain.creatorUserId).toBe(organizer.userId);
+        expect(chain.ownEntryWrongAt).toEqual([]);
+        expect(areaWriteVersion(chain, AREA)).toBe(1);
+        // The row commits to the key given: a grant of it seals and opens through the chain, and
+        // no other key seals under that version.
+        const ctx = {
+            groupId: GROUP,
+            workspaceId: AREA,
+            workspaceKeyVersion: 1,
+            granteeUserId: organizer.userId,
+            granteeKeyVersion: 1,
+            granterUserId: organizer.userId,
+            ...atRoster(chain),
+        };
+        const seal = (key: Uint8Array) =>
+            sealAreaGrant(key, ctx, {
+                chain,
+                areaIdSeed: AREA_SEED,
+                granteeKemPublicKey: organizer.kemPublicKey,
+                granter: organizer.signer,
+            });
+        expect(
+            await openAreaGrant(await seal(areaKey), ctx, {
+                chain,
+                areaIdSeed: AREA_SEED,
+                granterMlDsaPublicKey: organizer.mlDsaPublicKey,
+                reader: { userId: organizer.userId, keyVersion: 1 },
+                grantee: organizer.secrets,
+            }),
+        ).toEqual(areaKey);
+        await expect(seal(pattern(32, 78))).rejects.toThrow('not the one the group’s member list');
+    });
+
+    test('firstRoster sorts the rows, takes no areas, and builds a company’s first roster', async () => {
+        const { organizer } = await cast();
+        const roster = await firstRoster(GROUP, organizer.entry(['members']), {
+            kind: 'family',
+            areaKeys: [
+                { workspaceId: SECOND_AREA, workspaceKey: pattern(32, 101) },
+                { workspaceId: AREA, workspaceKey: pattern(32, 77) },
+            ],
+        });
+        expect(roster.areas).toEqual([
+            {
+                workspaceId: AREA,
+                workspaceKeyVersion: 1,
+                commitment: await areaKeyCommitment(pattern(32, 77)),
+            },
+            {
+                workspaceId: SECOND_AREA,
+                workspaceKeyVersion: 1,
+                commitment: await areaKeyCommitment(pattern(32, 101)),
+            },
+        ]);
+        expect(
+            (await firstRoster(GROUP, organizer.entry(['members']), { kind: 'family' })).areas,
+        ).toEqual([]);
+        const org = await firstRoster(GROUP, organizer.entry(['data_admin', 'members']), {
+            kind: 'org',
+        });
+        const groupKey = await groupKeyAt(1);
+        const chain = await accepted({
+            ...creatorReading(organizer),
+            groupId: GROUP,
+            firstKeys: groupKey.publicKey,
+            rosters: [await signRoster(org, groupKey, organizer.signer)],
+        });
+        expect(chain.kind).toBe('org');
+    });
+
+    test('firstRoster refuses each first roster acceptance refuses, and acceptance refuses it signed by hand', async () => {
+        const { organizer } = await cast();
+        const groupKey = await groupKeyAt(1);
+        const row = async (workspaceId: string, seed: number) => ({
+            workspaceId,
+            workspaceKeyVersion: 1,
+            commitment: await areaKeyCommitment(pattern(32, seed)),
+        });
+        // Each with what firstRoster says, then what acceptance says of the same roster.
+        const refusals: [
+            string,
+            RosterMember,
+            { workspaceId: string; seed: number }[],
+            string,
+            string,
+        ][] = [
+            [
+                'not a holder',
+                organizer.entry(['billing']),
+                [{ workspaceId: AREA, seed: 77 }],
+                'holds the group key',
+                'holds the group key',
+            ],
+            [
+                'left',
+                organizer.entry(['members'], 1, 'left'),
+                [],
+                'holds the group key',
+                'holds the group key',
+            ],
+            [
+                'one key for two areas',
+                organizer.entry(['members']),
+                [
+                    { workspaceId: AREA, seed: 77 },
+                    { workspaceId: SECOND_AREA, seed: 77 },
+                ],
+                'earlier keys',
+                'was used before',
+            ],
+        ];
+        for (const [name, creator, keys, message, accepting] of refusals) {
+            await expect(
+                firstRoster(GROUP, creator, {
+                    kind: 'family',
+                    areaKeys: keys.map((k) => ({
+                        workspaceId: k.workspaceId,
+                        workspaceKey: pattern(32, k.seed),
+                    })),
+                }),
+                name,
+            ).rejects.toThrow(message);
+            // The same roster, signed as a client that skipped the checks would sign it.
+            const h = await history('family', {
+                areas: await Promise.all(keys.map((k) => row(k.workspaceId, k.seed))),
+            });
+            await h.roster(organizer, [creator]);
+            await expect(
+                acceptRosters({
+                    ...creatorReading(organizer),
+                    groupId: GROUP,
+                    firstKeys: groupKey.publicKey,
+                    rosters: h.rosters,
+                }),
+                name,
+            ).rejects.toThrow(accepting);
+        }
+        // What the statement itself cannot carry: an area named twice, a company role in a family,
+        // a key of the wrong length, a group id outside the canonical form.
+        const members = organizer.entry(['members']);
+        for (const [creator, options, groupId, message] of [
+            [
+                members,
+                {
+                    kind: 'family',
+                    areaKeys: [
+                        { workspaceId: AREA, workspaceKey: pattern(32, 77) },
+                        { workspaceId: AREA, workspaceKey: pattern(32, 78) },
+                    ],
+                },
+                GROUP,
+                'Invalid roster areas.',
+            ],
+            [
+                organizer.entry(['data_admin', 'members']),
+                { kind: 'family' },
+                GROUP,
+                'Invalid roster role.',
+            ],
+            [
+                members,
+                {
+                    kind: 'family',
+                    areaKeys: [{ workspaceId: AREA, workspaceKey: pattern(31, 77) }],
+                },
+                GROUP,
+                'Invalid workspace key.',
+            ],
+            [members, { kind: 'family' }, GROUP.toUpperCase(), 'Invalid group id.'],
+        ] as const)
+            await expect(
+                firstRoster(groupId, creator, {
+                    kind: options.kind,
+                    areaKeys: 'areaKeys' in options ? [...options.areaKeys] : [],
+                }),
+            ).rejects.toThrow(message);
+    });
+
+    test('ownRosterEntry takes only an identity whose keys statement holds for this account', async () => {
+        const { organizer, adult } = await cast();
+        const options = { roles: ['members', 'billing'] as GroupRole[] };
+        // Roster version 1's entry: sinceVersion 1, whatever else.
+        expect(await ownRosterEntry(organizer.userId, organizer.served, options)).toEqual(
+            organizer.entry(['billing', 'members'], 1),
+        );
+        const adult2 = await person(2, 2);
+        expect(await ownRosterEntry(adult2.userId, adult2.served, options)).toEqual(
+            adult2.entry(['billing', 'members'], 1),
+        );
+        for (const [userId, identity] of [
+            // The organizer's identity claimed for another account.
+            [adult.userId, organizer.served],
+            // Another KEM key the keys statement never named.
+            [organizer.userId, { ...organizer.served, kemPublicKey: adult.served.kemPublicKey }],
+            // Another identity's keys statement.
+            [organizer.userId, { ...organizer.served, keysSignature: adult.served.keysSignature }],
+            // A key version the keys statement never named.
+            [organizer.userId, { ...organizer.served, keyVersion: 2 }],
+        ] as const)
+            await expect(ownRosterEntry(userId, identity, options)).rejects.toThrow(
+                'not this account’s keys',
+            );
+        // An earlier identity's keys statement holds too; the creator signs with their current
+        // keys, so a first roster naming the earlier ones is one no device takes.
+        const earlier = await ownRosterEntry(adult.userId, adult.served, options);
+        const roster = await firstRoster(GROUP, earlier, { kind: 'family' });
+        const groupKey = await groupKeyAt(1);
+        await expect(
+            acceptRosters({
+                ...creatorReading(adult2),
+                mlDsaKeys: mlDsaKeysOf(adult, adult2),
+                groupId: GROUP,
+                firstKeys: groupKey.publicKey,
+                rosters: [await signRoster(roster, groupKey, adult2.signer)],
+            }),
+        ).rejects.toThrow('not signed by the member it names');
+    });
+});
+
+/* A creator accepting their own group: they made the keys, so firstKeysChecked; their own identity. */
+function creatorReading(who: Person) {
+    return {
+        firstKeysChecked: true,
+        pins: [],
+        successions: [],
+        mlDsaKeys: mlDsaKeysOf(who),
+        me: { userId: who.userId, identities: [servedKeysOf(who)] },
+        cache: null,
+    };
+}

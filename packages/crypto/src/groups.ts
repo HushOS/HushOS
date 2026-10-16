@@ -45,7 +45,7 @@ import type { AcceptedRosters } from './group-trust';
 import type { ServedKeys, SuccessionLink } from './identity';
 import { successionPath } from './succession-path';
 import { checkId } from './ids';
-import { areaKeyCommitment } from './area-keys';
+import { areaKeyCommitment, rowsAfter } from './area-keys';
 
 /*
  * The group core's cryptography (docs/groups-design.md 2): the group key and
@@ -1044,8 +1044,6 @@ export async function nextAreaKey(
 /* An area's new key, for nextRoster to turn into its row. */
 export type AreaKey = { workspaceId: string; workspaceKey: Uint8Array };
 
-const EARLIER_KEY = 'This is one of the group’s earlier keys: a rotation needs a new one.';
-
 /*
  * The rows a roster carries for new area keys (2.4, 2.6): each at its area's
  * next version (1 for a new area), with the key's commitment, sorted by
@@ -1058,28 +1056,7 @@ const EARLIER_KEY = 'This is one of the group’s earlier keys: a rotation needs
  */
 export async function areaRows(chain: AcceptedRosters, keys: AreaKey[]): Promise<RosterArea[]> {
     requireAccepted(chain);
-    const areas = new Set<string>();
-    for (const { workspaceId } of keys) {
-        uuid(workspaceId, 'workspace id');
-        if (areas.has(workspaceId)) throw new CryptoError('Invalid roster areas.');
-        areas.add(workspaceId);
-    }
-    const listed = new Set(Object.values(chain.areaKeys).flat());
-    const fresh = new Set<string>();
-    const rows: RosterArea[] = [];
-    for (const { workspaceId, workspaceKey } of keys) {
-        const commitment = await areaKeyCommitment(workspaceKey);
-        if (listed.has(commitment) || fresh.has(commitment)) throw new CryptoError(EARLIER_KEY);
-        fresh.add(commitment);
-        rows.push({
-            workspaceId,
-            workspaceKeyVersion: (areaCommitments(chain, workspaceId)?.length ?? 0) + 1,
-            commitment,
-        });
-    }
-    return rows.sort((a, b) =>
-        a.workspaceId < b.workspaceId ? -1 : a.workspaceId > b.workspaceId ? 1 : 0,
-    );
+    return rowsAfter(chain.areaKeys, keys);
 }
 
 /*
