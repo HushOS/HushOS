@@ -12,6 +12,7 @@ COPY packages/emails/package.json ./packages/emails/package.json
 COPY packages/config/package.json ./packages/config/package.json
 COPY packages/db/package.json ./packages/db/package.json
 COPY packages/drive/package.json ./packages/drive/package.json
+COPY packages/groups/package.json ./packages/groups/package.json
 COPY packages/jobs/package.json ./packages/jobs/package.json
 COPY packages/logging/package.json ./packages/logging/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
