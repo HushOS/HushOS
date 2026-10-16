@@ -12,10 +12,12 @@
         "./billing": "./src/billing.ts",
         "./app": "./src/app.ts",
         "./storage": "./src/storage.ts",
-        "./groups": "./src/groups.ts"
+        "./groups": "./src/groups.ts",
+        "./group-limits": "./src/group-limits.ts"
     },
     "scripts": {
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@t3-oss/env-core": "0.13.11",
@@ -24,6 +26,7 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
-        "typescript": "7.0.2"
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0"
     }
 }

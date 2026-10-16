@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { SMALL_BODY_BYTES, rosterBodyLimit } from '@hushos/groups/protocol';
-import { describe, expect, test } from 'vitest';
+import { WORKSPACE_DOCUMENT_BYTES, WORKSPACE_DOCUMENT_KINDS } from '@hushos/drive/protocol';
+import { MAX_ROSTER_BODY_BYTES, SMALL_BODY_BYTES, rosterBodyLimit } from '@hushos/groups/protocol';
+import { describe, expect, test, vi } from 'vitest';
 import { createGroupRequestHandler, type GroupRequestDeps } from './group-requests';
 
 /*
@@ -151,7 +152,7 @@ describe('roster routes', () => {
     });
 
     test("the cap follows the group's head: exactly the cap passes, one byte more is 413", async () => {
-        const limit = rosterBodyLimit(10_000, 2);
+        const limit = rosterBodyLimit(10_000, 2, 'all');
         const { handle, seen } = setup();
         const at = await handle(request('POST', `groups/${GROUP}/rosters`, streamed(limit).body));
         expect(at.status).toBe(200);
@@ -161,6 +162,88 @@ describe('roster routes', () => {
         );
         expect(over.status).toBe(413);
         expect(seen.handled).toHaveLength(1);
+    });
+
+    test('only the routes that rotate areas get room for their documents: every area, one, or none', async () => {
+        const routes: [string, string, 'all' | 'one' | 'none'][] = [
+            ['POST', `groups/${GROUP}/rosters`, 'all'],
+            ['PATCH', `groups/${GROUP}/members/${USER}`, 'all'],
+            ['POST', `groups/${GROUP}/members/${USER}/remove`, 'all'],
+            ['POST', `groups/${GROUP}/areas/${USER}/rotations`, 'one'],
+            ['POST', `groups/${GROUP}/members/${USER}/admit`, 'none'],
+            ['POST', `groups/${GROUP}/areas`, 'none'],
+        ];
+        for (const [method, path, documents] of routes) {
+            const limit = rosterBodyLimit(10_000, 2, documents);
+            const { handle, seen } = setup();
+            expect((await handle(request(method, path, streamed(limit + 1).body))).status).toBe(
+                413,
+            );
+            expect((await handle(request(method, path, streamed(limit).body))).status).toBe(200);
+            expect(seen.handled).toHaveLength(1);
+        }
+    });
+
+    test("the room is one area's documents at Drive's limits per area rotated, outside the 8 MiB, for at most 50 areas", () => {
+        // One area's re-sealed documents at the most a workspace may hold: every kind, the
+        // longest names and versions, envelopes adding up to the byte limit.
+        const each = Math.floor(WORKSPACE_DOCUMENT_BYTES / WORKSPACE_DOCUMENT_KINDS);
+        const documents = Array.from({ length: WORKSPACE_DOCUMENT_KINDS }, (_, i) => ({
+            kind: `k${i}`.padEnd(32, 'x'),
+            version: 2147483646,
+            envelope: Buffer.alloc(each, i).toString('base64url'),
+        }));
+        const perArea = JSON.stringify({ documents }).length;
+        // A head large enough to fill the 8 MiB: the documents' room is never clipped by it.
+        const fullHead = 6 * 1024 * 1024;
+        const none = rosterBodyLimit(fullHead, 10, 'none');
+        expect(none).toBeLessThanOrEqual(MAX_ROSTER_BODY_BYTES);
+        expect(rosterBodyLimit(fullHead, 10, 'one')).toBeGreaterThanOrEqual(none + perArea);
+        expect(rosterBodyLimit(fullHead, 10, 'one')).toBeLessThan(none + 2 * perArea);
+        expect(rosterBodyLimit(fullHead, 10, 'all')).toBeGreaterThanOrEqual(none + 10 * perArea);
+        // No more areas counted than an operator may allow, whatever the group claims.
+        expect(rosterBodyLimit(fullHead, 5000, 'all')).toBe(rosterBodyLimit(fullHead, 50, 'all'));
+        expect(rosterBodyLimit(fullHead, 51, 'all')).toBe(rosterBodyLimit(fullHead, 50, 'all'));
+    });
+
+    test('one account has at most two roster bodies in flight; a third is 429 unread, and others are unaffected', async () => {
+        const waiting: (() => void)[] = [];
+        const { handle, seen } = setup({
+            sessionUser: async (req) => ({ id: req.headers.get('x-user') ?? USER }),
+            handle: async (req) => {
+                const bytes = (await req.arrayBuffer()).byteLength;
+                seen.handled.push({ path: new URL(req.url).pathname, bytes });
+                await new Promise<void>((resolve) => waiting.push(resolve));
+                return Response.json({ ok: true });
+            },
+        });
+        const as = (user: string) => {
+            const sent = request('POST', `groups/${GROUP}/rosters`, streamed(2).body);
+            sent.headers.set('x-user', user);
+            return sent;
+        };
+        const first = handle(as(USER));
+        const second = handle(as(USER));
+        await vi.waitFor(() => expect(waiting).toHaveLength(2));
+        const third = streamed();
+        const thirdRequest = request('POST', `groups/${GROUP}/rosters`, third.body);
+        thirdRequest.headers.set('x-user', USER);
+        const refused = await handle(thirdRequest);
+        expect(refused.status).toBe(429);
+        expect(((await refused.json()) as { code: string }).code).toBe('rate-limited');
+        expect(third.state.pulled).toBeLessThanOrEqual(CHUNK);
+        // Someone else is not held up by this account's bodies.
+        const other = handle(as('2d9f3e4f-5f6c-4d7e-8f80-91a2b3c4d5e6'));
+        await vi.waitFor(() => expect(waiting).toHaveLength(3));
+        // Once one finishes, the account may send another.
+        waiting[0]!();
+        expect((await first).status).toBe(200);
+        const fourth = handle(as(USER));
+        await vi.waitFor(() => expect(waiting).toHaveLength(4));
+        for (const resolve of waiting.slice(1)) resolve();
+        expect((await Promise.all([second, other, fourth])).map((r) => r.status)).toEqual([
+            200, 200, 200,
+        ]);
     });
 
     test('an id in capitals is the same group, not a stranger', async () => {

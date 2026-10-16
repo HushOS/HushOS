@@ -1,7 +1,12 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
+import {
+    DOCUMENT_ENVELOPE_MAX_BYTES,
+    WORKSPACE_DOCUMENT_BYTES,
+    WORKSPACE_DOCUMENT_KINDS,
+} from '@hushos/drive/protocol';
 import {
     authRepository,
     driveRepository,
@@ -23,6 +28,7 @@ import {
     groupMemberships,
     groupRosters,
     users,
+    workspaceDocuments,
     workspaceKeys,
     workspaces,
 } from '../../db/src/schema';
@@ -32,6 +38,7 @@ import {
     accepted,
     b64,
     admitted,
+    documentEnvelope,
     entries,
     family,
     forgedRoster,
@@ -40,6 +47,7 @@ import {
     member,
     nextAreaRow,
     nextRoster,
+    resealedDocuments,
     rootWire,
     rotationWire,
     sealWire,
@@ -51,6 +59,17 @@ import {
     type Member,
 } from '../test/kit';
 import * as groups from './server';
+import type * as DriveProtocol from '@hushos/drive/protocol';
+
+/*
+ * As if clients had shipped more document kinds than `tags`: a rotation must
+ * carry every kind an area holds, so these tests use several. The server's own
+ * list is tested in @hushos/drive (server.document-kinds.test.ts).
+ */
+vi.mock('@hushos/drive/protocol', async (original) => ({
+    ...(await original<typeof DriveProtocol>()),
+    DOCUMENT_KINDS: ['tags', 'pins', 'views', 'notes'],
+}));
 
 /*
  * The group domain with the real crypto core and a real database: every
@@ -2308,5 +2327,320 @@ describe('the root a roster rotation re-keys (route 29)', () => {
         expect(await send(fresh)).toMatchObject({ version: 2 });
         for (const id of [liveShare, shared.share.id, liveLink, linked.link.id])
             expect(await live(id)).toEqual({ revokedAt: null, keyEpoch: rotation.targetEpoch });
+    });
+});
+
+describe('workspace documents ride on the rotation', () => {
+    const DOCUMENT_LIMITS = { kinds: WORKSPACE_DOCUMENT_KINDS, bytes: WORKSPACE_DOCUMENT_BYTES };
+    /* A member's ordinary document write, at the version they read (0 for none). */
+    async function writeDocument(workspaceId: string, kind: string, version: number) {
+        const envelope = Buffer.from(documentEnvelope(), 'base64url');
+        const written = await driveRepository.putWorkspaceDocument({
+            limits: DOCUMENT_LIMITS,
+            workspaceId,
+            kind,
+            version,
+            envelope,
+        });
+        if (written.status !== 'ok') throw new Error(written.status);
+        return envelope;
+    }
+    async function documentsOf(workspaceId: string) {
+        return db
+            .select()
+            .from(workspaceDocuments)
+            .where(eq(workspaceDocuments.workspaceId, workspaceId))
+            .orderBy(workspaceDocuments.kind);
+    }
+    async function stateOf(groupId: string, userId: string) {
+        const [row] = await db
+            .select({ state: groupMemberships.state })
+            .from(groupMemberships)
+            .where(and(eq(groupMemberships.groupId, groupId), eq(groupMemberships.userId, userId)));
+        return row?.state;
+    }
+    async function areaOf(workspaceId: string) {
+        const [area] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+        const [root] = await db
+            .select()
+            .from(driveNodes)
+            .where(and(eq(driveNodes.workspaceId, workspaceId), isNull(driveNodes.parentId)));
+        return { version: area!.workspaceKeyVersion, rootEpoch: root!.keyEpoch };
+    }
+
+    test('route 24 stores each at the next version with the roster; a stale, missing or foreign one refuses the whole call, and the same roster bytes land once rebuilt', async () => {
+        const fam = await family();
+        await writeDocument(fam.areaId, 'tags', 0);
+        await writeDocument(fam.areaId, 'tags', 1);
+        await writeDocument(fam.areaId, 'pins', 0);
+        // The rotator reads the area now: tags at 2, pins at 1.
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        const send = (documents: typeof rotation.documents) =>
+            groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: { ...rotation, documents },
+                grants,
+            });
+        const tags = rotation.documents.find((document) => document.kind === 'tags')!;
+        const pins = rotation.documents.find((document) => document.kind === 'pins')!;
+        expect([tags.version, pins.version]).toEqual([2, 1]);
+        const invalidDocuments = {
+            code: 'invalid',
+            status: 400,
+            data: { reason: 'rotation-documents' },
+        };
+        // A kind the area does not hold, one named twice, or bytes a document write would refuse.
+        expect(
+            await refusal(
+                send([tags, pins, { kind: 'notes', version: 1, envelope: documentEnvelope() }]),
+            ),
+        ).toMatchObject(invalidDocuments);
+        expect(await refusal(send([tags, tags, pins]))).toMatchObject(invalidDocuments);
+        expect(
+            await refusal(send([{ ...tags, envelope: b64(randomBytes(24 + 16 + 100)) }, pins])),
+        ).toMatchObject(invalidDocuments);
+        // One left out is named, so a client that did not know the kind learns it and re-reads it.
+        expect(await refusal(send([pins]))).toMatchObject({
+            code: 'document-stale',
+            status: 409,
+            data: { workspaceId: fam.areaId, kind: 'tags' },
+        });
+        // A member rewrites the tags after the rotator read them.
+        const theirs = await writeDocument(fam.areaId, 'tags', 2);
+        const before = await areaOf(fam.areaId);
+        expect(await refusal(send([tags, pins]))).toMatchObject({
+            code: 'document-stale',
+            status: 409,
+            data: { workspaceId: fam.areaId, kind: 'tags' },
+        });
+        // Nothing of the call stayed: no roster, the area key and root as they were, the
+        // documents as the member left them, no Drive rotation started.
+        expect(await rosterCount(fam.groupId)).toBe(1);
+        expect(await areaOf(fam.areaId)).toEqual(before);
+        expect((await documentsOf(fam.areaId)).map((row) => [row.kind, row.version])).toEqual([
+            ['pins', 1],
+            ['tags', 3],
+        ]);
+        expect((await documentsOf(fam.areaId))[1]!.envelope.equals(theirs)).toBe(true);
+        expect(
+            await db
+                .select()
+                .from(driveRotations)
+                .where(eq(driveRotations.workspaceId, fam.areaId)),
+        ).toEqual([]);
+        // The client re-reads, re-seals and resends the same roster bytes: it lands.
+        const resealed = await resealedDocuments(fam.areaId);
+        expect(await send(resealed)).toMatchObject({ version: 2 });
+        const stored = await documentsOf(fam.areaId);
+        expect(stored.map((row) => [row.kind, row.version, row.envelopeSuite])).toEqual([
+            ['pins', 2, 1],
+            ['tags', 4, 1],
+        ]);
+        for (const row of stored)
+            expect(
+                row.envelope.equals(
+                    Buffer.from(
+                        resealed.find((document) => document.kind === row.kind)!.envelope,
+                        'base64url',
+                    ),
+                ),
+            ).toBe(true);
+        expect((await areaOf(fam.areaId)).version).toBe(2);
+        // A write built on what was read before the rotation no longer lands over the re-sealed one.
+        expect(
+            await driveRepository.putWorkspaceDocument({
+                limits: DOCUMENT_LIMITS,
+                workspaceId: fam.areaId,
+                kind: 'tags',
+                version: 3,
+                envelope: Buffer.from(documentEnvelope(), 'base64url'),
+            }),
+        ).toMatchObject({ status: 'stale', document: { version: 4 } });
+    });
+
+    test('a family removal (route 19) carries every area’s documents; stale ones in several areas are named in one answer, and the rebuilt rotations land with the same roster bytes', async () => {
+        const fam = await family();
+        const second = await areaCall(fam);
+        await groups.createArea(fam.organizer.userId, fam.groupId, second);
+        const secondId = second.area.workspaceId;
+        // A member admitted with both areas' keys.
+        const plain = await member();
+        await accepted(fam, plain);
+        const admission = await nextRoster(fam, fam.organizer, [
+            ...entries(fam.h),
+            plain.who.entry([]),
+        ]);
+        await groups.admit(fam.organizer.userId, fam.groupId, plain.userId, {
+            ...admission.call,
+            grants: await Promise.all(
+                [fam.areaId, secondId].map((workspaceId) =>
+                    grantWire(
+                        fam.groupId,
+                        workspaceId,
+                        1,
+                        fam.organizer.who,
+                        plain.who,
+                        admission.at,
+                    ),
+                ),
+            ),
+        });
+        await writeDocument(fam.areaId, 'tags', 0);
+        await writeDocument(secondId, 'tags', 0);
+        // The removal rotates both areas, with both areas' documents. Each new key is its own:
+        // the kit would derive the same one for every area but its first.
+        const before = entries(fam.h).find((entry) => entry.userId === plain.userId)!;
+        const removal = await nextRoster(
+            fam,
+            fam.organizer,
+            withEntry(fam.h, { ...before, status: 'left' }),
+            {
+                areas: await Promise.all(
+                    [fam.areaId, secondId].sort().map(async (workspaceId) => ({
+                        workspaceId,
+                        workspaceKeyVersion: 2,
+                        commitment: await areaKeyCommitment(randomBytes(32)),
+                    })),
+                ),
+            },
+        );
+        const rotations = [
+            await rotationWire(fam.areaId, fam.organizer.who, 1),
+            await rotationWire(secondId, fam.organizer.who, 1),
+        ];
+        const grants = await Promise.all(
+            [fam.areaId, secondId].map((workspaceId) =>
+                grantWire(
+                    fam.groupId,
+                    workspaceId,
+                    2,
+                    fam.organizer.who,
+                    fam.organizer.who,
+                    removal.at,
+                ),
+            ),
+        );
+        const remove = () =>
+            groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                ...removal.call,
+                rotations,
+                grants,
+            });
+        // The removed member writes both areas' tags before the removal arrives.
+        await writeDocument(fam.areaId, 'tags', 1);
+        await writeDocument(secondId, 'tags', 1);
+        const rostersBefore = await rosterCount(fam.groupId);
+        // Every stale document in one answer, the first also on its own as before.
+        expect(await refusal(remove())).toMatchObject({
+            code: 'document-stale',
+            status: 409,
+            data: {
+                workspaceId: fam.areaId,
+                kind: 'tags',
+                stale: [
+                    { workspaceId: fam.areaId, kind: 'tags' },
+                    { workspaceId: secondId, kind: 'tags' },
+                ],
+            },
+        });
+        // Nothing of the removal stayed; the member is still in.
+        expect(await rosterCount(fam.groupId)).toBe(rostersBefore);
+        expect((await areaOf(fam.areaId)).version).toBe(1);
+        expect((await areaOf(secondId)).version).toBe(1);
+        expect(await stateOf(fam.groupId, plain.userId)).toBe('active');
+        // Both areas' documents rebuilt from one answer; the roster bytes are the same.
+        rotations[0] = { ...rotations[0]!, documents: await resealedDocuments(fam.areaId) };
+        rotations[1] = { ...rotations[1]!, documents: await resealedDocuments(secondId) };
+        expect(await remove()).toMatchObject({ version: rostersBefore + 1 });
+        expect(await stateOf(fam.groupId, plain.userId)).toBe('removed');
+        for (const [workspaceId, version] of [
+            [fam.areaId, 3],
+            [secondId, 3],
+        ] as const) {
+            expect((await areaOf(workspaceId)).version).toBe(2);
+            const [tags] = await documentsOf(workspaceId);
+            expect(tags!.version).toBe(version);
+            const sent = rotations.find((r) => r.workspaceId === workspaceId)!.documents[0]!;
+            expect(tags!.envelope.equals(Buffer.from(sent.envelope, 'base64url'))).toBe(true);
+        }
+    });
+
+    test('a rotation cannot re-seal an area’s documents past what a workspace may hold', async () => {
+        const fam = await family();
+        for (const kind of ['tags', 'pins', 'views']) await writeDocument(fam.areaId, kind, 0);
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        const send = (documents: typeof rotation.documents) =>
+            groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                ...rotated.call,
+                rotation: { ...rotation, documents },
+                grants,
+            });
+        // Each at the largest size a document may be: together past the workspace's bytes.
+        const largest = b64(randomBytes(DOCUMENT_ENVELOPE_MAX_BYTES));
+        expect(
+            await refusal(send(rotation.documents.map((d) => ({ ...d, envelope: largest })))),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'rotation-documents' } });
+        expect((await areaOf(fam.areaId)).version).toBe(1);
+        // Re-sealed at the size they were, it lands.
+        expect(await send(rotation.documents)).toMatchObject({ version: 2 });
+    });
+
+    test('a role change (route 18) that marks a departed holder left carries the area’s documents', async () => {
+        const { fam, holder } = await withHolder();
+        const plain = await member();
+        await admitted(fam, plain);
+        await writeDocument(fam.areaId, 'tags', 0);
+        await groups.leave(holder.userId, fam.groupId);
+        const leaving = entries(fam.h).find((entry) => entry.userId === holder.userId)!;
+        const { at, call } = await nextRoster(fam, fam.organizer, [
+            ...withEntry(fam.h, { ...leaving, status: 'left' }).filter(
+                (entry) => entry.userId !== plain.userId,
+            ),
+            plain.who.entry(['members']),
+        ]);
+        const rotation = await rotationWire(fam.areaId, fam.organizer.who, 1);
+        const succession = wire(await fam.h.succession(fam.organizer.who));
+        const seals: Awaited<ReturnType<typeof sealWire>>[] = [];
+        for (const to of [fam.organizer, plain])
+            seals.push(await sealWire(fam.groupId, fam.organizer.who, to.who, at, 2));
+        const grants: Awaited<ReturnType<typeof grantWire>>[] = [];
+        for (const to of [fam.organizer, plain])
+            grants.push(await grantWire(fam.groupId, fam.areaId, 2, fam.organizer.who, to.who, at));
+        const promote = (documents: typeof rotation.documents) =>
+            groups.patchMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                ...call,
+                succession,
+                seals,
+                rotations: [{ ...rotation, documents }],
+                grants,
+            });
+        expect(await refusal(promote([]))).toMatchObject({
+            code: 'document-stale',
+            data: { stale: [{ workspaceId: fam.areaId, kind: 'tags' }] },
+        });
+        expect(await promote(rotation.documents)).toMatchObject({ groupKeyVersion: 2 });
+        const [tags] = await documentsOf(fam.areaId);
+        expect(tags!.version).toBe(2);
+        expect(
+            tags!.envelope.equals(Buffer.from(rotation.documents[0]!.envelope, 'base64url')),
+        ).toBe(true);
+    });
+
+    test('a rotation carrying a kind the server does not keep is invalid, even one the area holds', async () => {
+        const fam = await family();
+        // Stored past the domain (as a kind from before the list would be): only the list refuses it.
+        await writeDocument(fam.areaId, 'bogus', 0);
+        const { rotation, rotated, grants } = await rotateDefaultArea(fam);
+        expect(rotation.documents.map((document) => document.kind)).toEqual(['bogus']);
+        expect(
+            await refusal(
+                groups.rotateArea(fam.organizer.userId, fam.groupId, fam.areaId, {
+                    ...rotated.call,
+                    rotation,
+                    grants,
+                }),
+            ),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'rotation-documents' } });
+        expect((await areaOf(fam.areaId)).version).toBe(1);
     });
 });

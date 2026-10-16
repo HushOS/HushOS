@@ -3757,9 +3757,26 @@ export async function putWorkspaceDocument(input: {
     envelope: Buffer;
     /* With the writer named, a group area re-checks under its lock that they may still write. */
     writer?: string;
+    /*
+     * The most kinds the workspace may hold, and the most stored envelope bytes between them
+     * (WORKSPACE_DOCUMENT_KINDS and WORKSPACE_DOCUMENT_BYTES in @hushos/drive/protocol).
+     */
+    limits: { kinds: number; bytes: number };
 }) {
     return db.transaction(async (tx) => {
-        if (input.writer) await requireStillWriter(tx, input.workspaceId, input.writer);
+        /*
+         * The workspace's row first, as every Drive write and a roster's area lock take it:
+         * writes to its documents queue here, so two cannot both pass the limits below, and a
+         * roster that re-seals them (lockAreas, then the rows) sees each write whole or not.
+         */
+        const [workspace] = await tx
+            .select({ groupId: workspaces.groupId })
+            .from(workspaces)
+            .where(eq(workspaces.id, input.workspaceId))
+            .for('no key update');
+        if (!workspace) throw new Error('Workspace not found.');
+        if (input.writer)
+            await requireStillWriter(tx, input.workspaceId, input.writer, workspace.groupId);
         const columns = {
             kind: workspaceDocuments.kind,
             version: workspaceDocuments.version,
@@ -3767,6 +3784,25 @@ export async function putWorkspaceDocument(input: {
             envelopeSuite: workspaceDocuments.envelopeSuite,
             updatedAt: workspaceDocuments.updatedAt,
         };
+        const held = await tx
+            .select({
+                kind: workspaceDocuments.kind,
+                version: workspaceDocuments.version,
+                bytes: sql<number>`octet_length(${workspaceDocuments.envelope})`.mapWith(Number),
+            })
+            .from(workspaceDocuments)
+            .where(eq(workspaceDocuments.workspaceId, input.workspaceId));
+        const mine = held.find((row) => row.kind === input.kind);
+        // A stale write is answered stale first: the client merges, and only then meets a limit.
+        if ((mine?.version ?? 0) === input.version) {
+            if (!mine && held.length >= input.limits.kinds)
+                return { status: 'limit' as const, limit: 'kinds' as const };
+            const others = held
+                .filter((row) => row.kind !== input.kind)
+                .reduce((sum, row) => sum + row.bytes, 0);
+            if (others + input.envelope.length > input.limits.bytes)
+                return { status: 'limit' as const, limit: 'bytes' as const };
+        }
         if (input.version === 0) {
             const [inserted] = await tx
                 .insert(workspaceDocuments)

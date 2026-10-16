@@ -571,6 +571,18 @@ const rotationSchema = t.Object({
     // The root's old key under the new area key (docs/groups-server.md 8).
     previousRootKeyEnvelope: keyEnvelopeSchema,
     selfGrant: workspaceKeySchema,
+    /*
+     * The area's workspace documents re-sealed under the new key, one per document it holds
+     * (docs/groups-server.md 8). No item cap of their own: the body cap counts what the
+     * group's areas store, and the repository refuses any kind the area does not hold.
+     */
+    documents: t.Array(
+        t.Object({
+            kind: documentKindSchema,
+            version: t.Integer({ minimum: 1, maximum: 2147483646 }),
+            envelope: documentEnvelopeSchema,
+        }),
+    ),
 });
 const rosterCallFields = {
     expectedRevision: revisionSchema,

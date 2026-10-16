@@ -36,6 +36,7 @@ import {
     groupRosters,
     groups,
     users,
+    workspaceDocuments,
     workspaceKeys,
     workspaceStorage,
     workspaces,
@@ -182,6 +183,12 @@ export type AreaInput = {
  * envelope, so a member who holds only the current area key (a fresh device,
  * someone admitted mid-walk) can still open what the walk has not reached.
  * The removed member already holds that old key, so it tells them nothing.
+ *
+ * `documents` are the area's workspace documents (the tags registry, ...)
+ * sealed again under the new area key: one per document the area holds, each
+ * naming the version the rotator read and stored at the next, as a document
+ * write would (docs/groups-server.md 8, "Workspace documents ride on the
+ * rotation"). Nothing re-seals them after the roster lands.
  */
 export type RotationInput = {
     workspaceId: string;
@@ -191,7 +198,11 @@ export type RotationInput = {
     root: RotatedNodeInput;
     previousRootKeyEnvelope: Buffer;
     selfGrant: SelfGrantInput;
+    documents: RotationDocumentInput[];
 };
+
+/* A workspace document re-sealed under a rotation's new area key, for `version + 1`. */
+export type RotationDocumentInput = { kind: string; version: number; envelope: Buffer };
 
 /*
  * Which route the write comes from, and so which roster changes it may make
@@ -247,6 +258,17 @@ export type ChainResult =
           rotationId: string;
           nodeId: string;
           targetEpoch: number;
+      }
+    /*
+     * Workspace documents of the rotated areas not at the version the rotation names, or
+     * left out of it: every one in `stale`, the first also as `workspaceId` and `kind`.
+     * Re-read them, re-seal, resend with the same roster bytes.
+     */
+    | {
+          status: 'document-stale';
+          workspaceId: string;
+          kind: string;
+          stale: { workspaceId: string; kind: string }[];
       }
     | {
           status:
@@ -800,6 +822,85 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
             prevParentKeyEpoch: rotation.toVersion,
         })
         .where(eq(driveNodes.id, root!.id));
+    await resealDocuments(tx, rotation.workspaceId, rotation.documents);
+}
+
+/*
+ * Every rotated area's workspace documents against the call, before any of
+ * the call is written: exactly one entry per document each area holds now,
+ * each at the version stored. Called after lockAreas, so the rows are taken
+ * after the areas' rows, in the order putWorkspaceDocument takes them (the
+ * workspace's row first), and stay locked until the rotations re-seal them.
+ *
+ * A kind an area does not hold, or one named twice, is the client's mistake:
+ * documents are never deleted, so no race makes one. One left out, or one at
+ * another version, was written after the rotator read it, or is a kind its
+ * client does not know: every such document across the call is named in one
+ * `document-stale`, so the client re-reads them all before it resends.
+ */
+async function checkRotationDocuments(
+    tx: Tx,
+    groupId: string,
+    rotations: readonly RotationInput[],
+) {
+    const stale: { workspaceId: string; kind: string }[] = [];
+    for (const rotation of rotations) {
+        const sent = new Map(rotation.documents.map((document) => [document.kind, document]));
+        if (sent.size !== rotation.documents.length) invalid('rotation-documents');
+        const [area] = await tx
+            .select({ id: workspaces.id })
+            .from(workspaces)
+            .where(and(eq(workspaces.id, rotation.workspaceId), eq(workspaces.groupId, groupId)));
+        if (!area) invalid('rotation-area');
+        const stored = await tx
+            .select({ kind: workspaceDocuments.kind, version: workspaceDocuments.version })
+            .from(workspaceDocuments)
+            .where(eq(workspaceDocuments.workspaceId, rotation.workspaceId))
+            .orderBy(workspaceDocuments.kind)
+            .for('update');
+        const held = new Set(stored.map((row) => row.kind));
+        if (rotation.documents.some((document) => !held.has(document.kind)))
+            invalid('rotation-documents');
+        for (const row of stored)
+            if (sent.get(row.kind)?.version !== row.version)
+                stale.push({ workspaceId: rotation.workspaceId, kind: row.kind });
+    }
+    if (stale.length > 0) refuse({ status: 'document-stale', ...stale[0]!, stale });
+}
+
+/*
+ * A rotated area's workspace documents, sealed again under the new area key in
+ * the roster's own transaction, after checkRotationDocuments held them to the
+ * call: each stored at the next version as a document write stores it
+ * (putWorkspaceDocument: suite 1, `updated_at` moved; documents are not on the
+ * change feed). Without this every rotation would leave them under a key
+ * version clients no longer open them with.
+ */
+async function resealDocuments(
+    tx: Tx,
+    workspaceId: string,
+    documents: readonly RotationDocumentInput[],
+) {
+    for (const document of documents) {
+        const [stored] = await tx
+            .update(workspaceDocuments)
+            .set({
+                version: document.version + 1,
+                envelope: document.envelope,
+                envelopeSuite: 1,
+                updatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(workspaceDocuments.workspaceId, workspaceId),
+                    eq(workspaceDocuments.kind, document.kind),
+                    eq(workspaceDocuments.version, document.version),
+                ),
+            )
+            .returning({ kind: workspaceDocuments.kind });
+        // Checked under the same locks a moment ago: a miss here is a bug, never a race.
+        if (!stored) throw new Error('A rotation document moved under its lock.');
+    }
 }
 
 /*
@@ -1238,6 +1339,7 @@ export async function appendChain(input: {
                 }
                 if (route.kind === 'area') await insertArea(tx, groupId, uploader, route.area);
                 if ((input.rotations?.length ?? 0) > 0 && !roster) invalid('rotation-roster');
+                await checkRotationDocuments(tx, groupId, input.rotations ?? []);
                 for (const rotation of input.rotations ?? [])
                     await applyRotation(tx, groupId, uploader, rotation);
                 await upsertSeals(
