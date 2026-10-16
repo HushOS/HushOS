@@ -212,6 +212,20 @@ export async function check(box: Locator) {
     }).toPass({ timeout: 60_000 });
 }
 
+/*
+ * Waits until a sign-in or sign-up has landed on Home, not merely reached /app.
+ * The router puts /app in the address bar before Home's code has loaded; a goto
+ * then makes WebKit cancel those imports, TanStack Router reloads the page for
+ * the "missing" module, and that reload to /app interrupts the goto. Home's
+ * heading renders only once its code is in.
+ */
+export async function landedOnHome(page: Page) {
+    await page.waitForURL(/\/app\/?$/, { timeout: 60_000 });
+    await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({
+        timeout: 60_000,
+    });
+}
+
 /* Registers a fresh account and leaves the page on the Drive root, unlocked. */
 export async function registerAccount(
     page: Page,
@@ -255,8 +269,7 @@ export async function registerAccount(
         return { email };
     }
     // A finished sign-up lands on Home, empty for a new account; the tests start in Files.
-    await page.waitForURL(/\/app\/?$/);
-    await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
+    await landedOnHome(page);
     await expect(page.getByText('Nothing here yet')).toBeVisible();
     await page.goto('/app/drive', { waitUntil: 'networkidle' });
     await expect(page.getByText('Nothing here yet')).toBeVisible({ timeout: 60_000 });

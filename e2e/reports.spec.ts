@@ -232,7 +232,11 @@ test('removing the content stops the link and the owner’s restore; suspending 
         timeout: 60_000,
     });
     await owner.locator('form button[type=submit]').click();
-    await owner.waitForURL(/\/app/, { timeout: 60_000 });
+    // Back where the suspension found them, once that page has drawn: not just any /app URL.
+    await owner.waitForURL(/\/app\/trash$/, { timeout: 60_000 });
+    await expect(owner.getByRole('heading', { level: 1, name: 'Trash' })).toBeVisible({
+        timeout: 60_000,
+    });
     // The queue no longer lists the report as open; the closed view still does.
     await operator.goto('/app/admin/reports');
     await expect(operator.getByText(/ever filed/)).toBeVisible({ timeout: 60_000 });

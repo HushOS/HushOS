@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mailSubjects, newPage, PASSWORD, registerAccount } from './helpers';
+import { landedOnHome, mailSubjects, newPage, PASSWORD, registerAccount } from './helpers';
 
 /*
  * Devices, step 1 (docs/devices-design.md), with two browsers on one account:
@@ -35,7 +35,7 @@ async function signIn(page: Page, email: string, password = PASSWORD) {
     const field = page.locator('input[autocomplete=current-password]');
     await field.fill(password);
     await field.press('Enter');
-    await page.waitForURL(/\/app/, { timeout: 60_000 });
+    await landedOnHome(page);
 }
 
 async function count(email: string, subject: string) {
