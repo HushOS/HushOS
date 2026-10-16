@@ -19,6 +19,29 @@ export {
     METADATA_MAX_BYTES,
 } from '@hushos/crypto/drive';
 export { LINK_KDF_VERSION, LINK_PASSWORD_MIN_LENGTH } from '@hushos/crypto/links';
+import { DOCUMENT_ENVELOPE_MAX_BYTES } from '@hushos/crypto/drive';
+
+/*
+ * What one workspace may keep in sealed documents (docs/drive-design.md,
+ * "Sealed workspace documents"), personal or group area alike: at most 8
+ * kinds, and stored envelopes of at most two documents at the largest size
+ * (2 MiB and 80 bytes) between them. Every client writes one kind today, the
+ * tags registry, so this is room to grow, not a squeeze. The bound matters in
+ * a group area: every rotation of the area carries all its documents again,
+ * re-sealed, in the roster call, so whatever members may store here is what a
+ * roster body must make room for (docs/groups-server.md 4, "Body caps"), ten
+ * areas over.
+ */
+export const WORKSPACE_DOCUMENT_KINDS = 8;
+/*
+ * The document kinds the server stores: what shipped clients write, and
+ * nothing else, so no member can plant a kind other clients do not know (a
+ * group area's rotation must carry every kind the area holds). Widen this when
+ * a client ships a new kind, before that client is released; never narrow it
+ * while any workspace holds the kind. The limits above stay as the backstop.
+ */
+export const DOCUMENT_KINDS: readonly string[] = ['tags'];
+export const WORKSPACE_DOCUMENT_BYTES = 2 * DOCUMENT_ENVELOPE_MAX_BYTES;
 
 /*
  * 2: the thumbnail is a trailer of the object and the version envelope carries the sizes.
@@ -87,6 +110,8 @@ export type DriveErrorCode =
     | 'expired'
     | 'rotating'
     | 'forbidden'
+    /* A workspace document write would pass WORKSPACE_DOCUMENT_KINDS or WORKSPACE_DOCUMENT_BYTES. */
+    | 'document-limit'
     /* A write's signature did not verify against the writer's current signing key. */
     | 'bad-signature';
 

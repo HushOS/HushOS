@@ -46,6 +46,9 @@ import {
     TOMBSTONE_DAYS,
     TRASH_RETENTION_DAYS,
     UPLOAD_TTL_HOURS,
+    DOCUMENT_KINDS,
+    WORKSPACE_DOCUMENT_BYTES,
+    WORKSPACE_DOCUMENT_KINDS,
     type Capabilities,
     type DriveErrorCode,
 } from './protocol';
@@ -991,6 +994,12 @@ function documentKind(kind: string) {
     if (!DOCUMENT_KIND.test(kind)) throw new DriveError('invalid', 'Invalid document kind.');
     return kind;
 }
+/* A kind a document may be written as: one a shipped client writes (DOCUMENT_KINDS). */
+function writableDocumentKind(kind: string) {
+    if (!DOCUMENT_KINDS.includes(documentKind(kind)))
+        throw new DriveError('invalid', 'This server does not keep that kind of document.');
+    return kind;
+}
 export async function workspaceDocument(userId: string, workspaceId: string, kind: string) {
     await requireMember(userId, workspaceId);
     const row = await driveRepository.getWorkspaceDocument(workspaceId, documentKind(kind));
@@ -1005,13 +1014,27 @@ export async function putWorkspaceDocument(
     await requireMember(userId, workspaceId);
     const result = await driveRepository.putWorkspaceDocument({
         workspaceId,
-        kind: documentKind(kind),
+        kind: writableDocumentKind(kind),
         version: input.version,
         envelope: documentEnvelope(input.envelope),
         writer: userId,
+        limits: { kinds: WORKSPACE_DOCUMENT_KINDS, bytes: WORKSPACE_DOCUMENT_BYTES },
     });
     if (result.status === 'stale')
         throw stale({ document: result.document ? documentView(result.document) : null });
+    if (result.status === 'limit')
+        throw new DriveError(
+            'document-limit',
+            result.limit === 'kinds'
+                ? `A workspace keeps at most ${WORKSPACE_DOCUMENT_KINDS} kinds of settings.`
+                : 'This workspace’s settings are too large to save.',
+            409,
+            {
+                limit: result.limit,
+                kinds: WORKSPACE_DOCUMENT_KINDS,
+                bytes: WORKSPACE_DOCUMENT_BYTES,
+            },
+        );
     return { document: documentView(result.document) };
 }
 
@@ -2467,6 +2490,26 @@ export type RotatedNodeWire = {
         unsealableLinks: string[];
     } | null;
 };
+
+/*
+ * A workspace document sealed again under a group area's new key, decoded as
+ * a document write decodes it (a kind the server keeps, and its envelope
+ * padded and within the document cap): what a roster's area rotation carries
+ * per document.
+ */
+export function rotatedDocumentInput(document: {
+    kind: string;
+    version: number;
+    envelope: string;
+}) {
+    if (!Number.isSafeInteger(document.version) || document.version < 1)
+        throw new DriveError('invalid', 'Invalid document version.');
+    return {
+        kind: writableDocumentKind(document.kind),
+        version: document.version,
+        envelope: documentEnvelope(document.envelope),
+    };
+}
 
 /* A rotated node decoded: what a rotation batch, and a group area's rotation of its root, take. */
 export function rotatedNodeInput(node: RotatedNodeWire): rotationsRepository.RotatedNodeInput {
