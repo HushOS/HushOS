@@ -8,6 +8,7 @@
         "./protocol": "./src/protocol.ts",
         "./server": "./src/server.ts",
         "./device": "./src/device.ts",
+        "./device-identity": "./src/device-identity.ts",
         "./recovery": "./src/recovery.ts",
         "./identity": "./src/identity.ts",
         "./drive": "./src/drive.ts",

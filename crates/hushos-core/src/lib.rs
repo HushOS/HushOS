@@ -1,7 +1,7 @@
 //! The client side of the HushOS protocol, once, for every app that is not the
 //! web: OPAQUE, the account key and its device memory, workspace grants, Drive
 //! node, metadata and version envelopes, content chunks, writer signatures,
-//! shares, links, reports, identity succession, scoped ids and the recovery key. Everything here
+//! shares, links, reports, identity succession, scoped ids, the recovery key and the device key. Everything here
 //! is byte-for-byte what `packages/crypto` seals in the browser, so a record
 //! written on one platform opens on the others.
 //!
@@ -13,6 +13,7 @@
 mod account;
 mod bytes;
 mod contacts;
+mod devices;
 mod drive;
 mod envelope;
 mod error;
@@ -29,6 +30,7 @@ mod signatures;
 pub use account::*;
 pub use bytes::*;
 pub use contacts::*;
+pub use devices::*;
 pub use drive::*;
 pub use error::*;
 pub use identity::*;

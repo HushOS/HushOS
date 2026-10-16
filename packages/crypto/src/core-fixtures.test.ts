@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { restoreAccountKey } from './device';
+import { deviceSessionStatement, emailDigest } from './device-identity';
 import {
     chunkCount,
     ciphertextSize,
@@ -674,5 +675,21 @@ describe('records sealed by the Rust core', () => {
         await expect(
             openSettingsKey(root, rotation.userId, rotation.settingsKey),
         ).rejects.toThrow();
+    });
+
+    it("builds the core's device session statement byte for byte and accepts its proof for that attempt only", async () => {
+        const session = core.deviceSession;
+        const statement = await deviceSessionStatement(session);
+        expect(statement).toEqual(decode(session.statement));
+        const publicKey = decode(session.publicKey, 32);
+        const signature = decode(session.signature, 64);
+        expect(await verifyStatement(statement, signature, publicKey)).toBe(true);
+        // Another attempt's statement: the proof does not carry over.
+        const other = await deviceSessionStatement({
+            ...session,
+            attemptToken: `${session.attemptToken}x`,
+        });
+        expect(await verifyStatement(other, signature, publicKey)).toBe(false);
+        expect(await emailDigest(session.email)).toBe(session.emailHash);
     });
 });
