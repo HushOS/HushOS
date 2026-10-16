@@ -1,0 +1,34 @@
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_017fa80d1b52a5 1117-1121
+  s_c56e31c87cddde::t_a85169b436b896 1097-1116,1122-1126,1135-1137,1250
+docs/groups-server.md
+  s_c56e31c87cddde::t_4d439cda747686 77,169,239
+packages/db/drizzle/20261016164352_group_creation_digest/migration.sql
+  s_c56e31c87cddde::t_d7d5d5622ad373 1-2
+packages/db/drizzle/20261016164352_group_creation_digest/snapshot.json
+  s_c56e31c87cddde::t_b28c75365c45dd 1-11391
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_87b0b2ed7f9850 1043-1044,1117
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_2a92634ef79f66 14
+packages/db/src/schema/groups.ts
+  s_c56e31c87cddde::t_bc97350709acc1 69-74,101-104
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_0e8e88d3e08ce3 18,39,212-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8f768b436b8f786d442f35512c68f6f7ff6a028c",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
