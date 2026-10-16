@@ -82,6 +82,12 @@ const TEXT_EXT = new Set([
     'gitignore',
 ]);
 const VIDEO_EXT = new Set(['mp4', 'm4v', 'webm', 'mov', 'ogv']);
+/*
+ * The types browsers give a .ts file: an MPEG transport stream, which no browser plays in a
+ * video element, though the file is nearly always TypeScript. Such a file falls through to
+ * its name, and its text preview checks the bytes first.
+ */
+const TRANSPORT_STREAM = new Set(['video/mp2t', 'video/vnd.dlna.mpeg-tts']);
 const AUDIO_EXT = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba']);
 
 export function extensionOf(name: string) {
@@ -96,7 +102,8 @@ export function previewKind(node: DriveNode): PreviewKind {
     const ext = extensionOf(node.name);
     if (mime.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image';
     if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
-    if (mime.startsWith('video/') || VIDEO_EXT.has(ext)) return 'video';
+    if ((mime.startsWith('video/') && !TRANSPORT_STREAM.has(mime)) || VIDEO_EXT.has(ext))
+        return 'video';
     if (mime.startsWith('audio/') || AUDIO_EXT.has(ext)) return 'audio';
     if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx')
         return 'markdown';
