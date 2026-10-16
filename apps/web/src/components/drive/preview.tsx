@@ -545,12 +545,15 @@ function TextPreview({
         { text: string; truncated: boolean; binary: false } | { binary: true } | null
     >(null);
     const [error, setError] = useState<string | null>(null);
+    /* A file recorded as video but shown as text (a .ts file) may really be a video. */
+    const unsure =
+        kind === 'sniff' || (node.metadata?.mime ?? '').toLowerCase().startsWith('video/');
     useEffect(() => {
         let active = true;
         readAll(reader, PREVIEW_LIMITS.text, (value) => active && setProgress(value))
             .then(({ bytes, truncated }) => {
                 if (!active) return;
-                if (kind === 'sniff' && !looksLikeText(bytes)) {
+                if (unsure && !looksLikeText(bytes)) {
                     setState({ binary: true });
                     return;
                 }
@@ -570,7 +573,7 @@ function TextPreview({
         return () => {
             active = false;
         };
-    }, [reader, kind, versionId]);
+    }, [reader, unsure, versionId]);
     if (error) return <Failed message={error} onDownload={onDownload} />;
     if (!state) return <Opening name={node.name} progress={progress} />;
     if (state.binary) return <NoPreview node={node} onDownload={onDownload} />;
