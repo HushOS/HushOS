@@ -1958,7 +1958,7 @@ const reportGone = () => new DriveError('not-found', 'This report does not exist
 
 /* Who a report is sealed to. Empty means this instance takes no reports yet. */
 function servedOperator(o: Parameters<typeof publicIdentity>[0] & { userId: string }) {
-    return { userId: o.userId, ...publicIdentity(o) };
+    return { ...publicIdentity(o), userId: o.userId };
 }
 
 /* A report key envelope of either suite: 112 bytes sealed under X25519 alone, 1224 hybrid. */

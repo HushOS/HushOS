@@ -13,6 +13,7 @@ import { db } from './client';
 import {
     accountEnrollments,
     accountIdentities,
+    accountRecoveryKeys,
     accountIdentityHistory,
     accountIntents,
     billingCustomers,
@@ -136,6 +137,114 @@ async function signedIn(userId: string, credentialVersion = 1) {
 
 beforeEach(resetDatabase);
 afterAll(closeDatabase);
+
+/*
+ * Every nested part of an input carries its fields only: an account id (or a workspace id) inside
+ * one is never what a row is written under. The account is the one the call names.
+ */
+describe('nested input never names the account', () => {
+    const claiming = <T extends object>(part: T, userId: string, workspaceId?: string) =>
+        ({ ...part, userId, ...(workspaceId ? { workspaceId } : {}) }) as T;
+
+    test('registerAccount writes every key row under the new account, whatever the parts claim', async () => {
+        const victim = await registered();
+        const [before] = await db
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, victim.id));
+        const [victimGrant] = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, victim.id));
+        const parts = registration();
+        const result = await auth.registerAccount({
+            enrollmentTokenHash: await verifiedEnrollment(`${randomUUID()}@hushos.test`),
+            ...parts,
+            envelope: claiming(parts.envelope, victim.id),
+            recovery: claiming(parts.recovery, victim.id),
+            identity: claiming(parts.identity, victim.id),
+            workspace: {
+                ...parts.workspace,
+                grant: claiming(parts.workspace.grant, victim.id, victimGrant!.workspaceId),
+            },
+        });
+        expect(result.status).toBe('created');
+        if (result.status !== 'created') return;
+        const [identity] = await db
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, result.user.id));
+        expect(identity!.signingPublicKey).toEqual(parts.identity.signingPublicKey);
+        const [recovery] = await db
+            .select()
+            .from(accountRecoveryKeys)
+            .where(eq(accountRecoveryKeys.userId, result.user.id));
+        expect(recovery!.publicKey).toEqual(parts.recovery.publicKey);
+        const grants = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, result.user.id));
+        expect(grants.map((g) => g.workspaceId)).toEqual([parts.workspace.id]);
+        // The account named inside the parts is untouched.
+        const [after] = await db
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, victim.id));
+        expect(after).toEqual(before);
+        expect(
+            await db.select().from(workspaceKeys).where(eq(workspaceKeys.userId, victim.id)),
+        ).toEqual([victimGrant]);
+    });
+
+    test('initializeAccount writes recovery, identity and grant under the signed-in account, whatever the parts claim', async () => {
+        const user = await registered();
+        const victim = await registered();
+        await db.delete(accountRecoveryKeys).where(eq(accountRecoveryKeys.userId, user.id));
+        await db.delete(accountIdentities).where(eq(accountIdentities.userId, user.id));
+        const [grant] = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, user.id));
+        await db.delete(workspaceKeys).where(eq(workspaceKeys.userId, user.id));
+        const [victimGrant] = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, victim.id));
+        const parts = registration();
+        expect(
+            await auth.initializeAccount({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash: await signedIn(user.id),
+                initialQuotaBytes: 1_073_741_824n,
+                recovery: claiming(parts.recovery, victim.id),
+                identity: claiming(parts.identity, victim.id),
+                workspace: {
+                    id: grant!.workspaceId,
+                    grant: claiming(parts.workspace.grant, victim.id, victimGrant!.workspaceId),
+                },
+            }),
+        ).toBe(true);
+        const [identity] = await db
+            .select()
+            .from(accountIdentities)
+            .where(eq(accountIdentities.userId, user.id));
+        expect(identity!.signingPublicKey).toEqual(parts.identity.signingPublicKey);
+        const [recovery] = await db
+            .select()
+            .from(accountRecoveryKeys)
+            .where(eq(accountRecoveryKeys.userId, user.id));
+        expect(recovery!.publicKey).toEqual(parts.recovery.publicKey);
+        const grants = await db
+            .select()
+            .from(workspaceKeys)
+            .where(eq(workspaceKeys.userId, user.id));
+        expect(grants.map((g) => [g.workspaceId, g.keyVersion])).toEqual([[grant!.workspaceId, 1]]);
+        expect(
+            await db.select().from(workspaceKeys).where(eq(workspaceKeys.userId, victim.id)),
+        ).toEqual([victimGrant]);
+    });
+});
 
 describe('registerAccount', () => {
     test('creates the account, workspace, allowance and keys, and consumes the enrollment', async () => {
