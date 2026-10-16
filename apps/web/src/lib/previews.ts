@@ -96,7 +96,11 @@ export function previewKind(node: DriveNode): PreviewKind {
     const ext = extensionOf(node.name);
     if (mime.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image';
     if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
-    if (mime.startsWith('video/') || VIDEO_EXT.has(ext)) return 'video';
+    /*
+     * Browsers label a .ts file video/mp2t, the MPEG transport stream type, though it is
+     * nearly always TypeScript, and no browser plays a transport stream in a video element.
+     */
+    if ((mime.startsWith('video/') && mime !== 'video/mp2t') || VIDEO_EXT.has(ext)) return 'video';
     if (mime.startsWith('audio/') || AUDIO_EXT.has(ext)) return 'audio';
     if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx')
         return 'markdown';
