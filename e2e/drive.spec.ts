@@ -359,12 +359,24 @@ test('the viewer lives in the URL: a name link opens it, arrows replace the entr
             .getByRole('link', { name: 'notes.md' })
             .click({ modifiers: ['ControlOrMeta'] }),
     ]);
-    // A fresh tab server-renders /app from cold; on a shared CI dev server that
-    // takes longer than the default, the same as the dialog below.
-    await expect(tab).toHaveURL(/preview=/, { timeout: 60_000 });
-    await expect(tab.locator('[data-slot=dialog-content]')).toContainText('notes.md', {
-        timeout: 60_000,
-    });
+    // The tab is read directly, not through expect(tab) or a tab locator: when its
+    // first page arrives before Playwright has finished attaching to the tab (a fast
+    // dev server on CI), Playwright keeps that load as a navigation still to finish,
+    // and every expect on the tab then waits for it for good. A fresh tab
+    // server-renders /app from cold, which on a shared CI dev server takes a while.
+    await expect.poll(() => tab.url(), { timeout: 60_000 }).toMatch(/preview=/);
+    await expect
+        .poll(
+            () =>
+                tab
+                    .evaluate(
+                        () =>
+                            document.querySelector('[data-slot=dialog-content]')?.textContent ?? '',
+                    )
+                    .catch(() => ''),
+            { timeout: 60_000 },
+        )
+        .toContain('notes.md');
     await tab.close();
 
     // Closing from the viewer's own control also steps back, so the history has no leftover entry.
