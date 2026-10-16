@@ -39,33 +39,41 @@ function unsafe(char: string) {
     );
 }
 
-/* Names Windows keeps for devices, with or without an extension. */
-const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+/* Names Windows keeps for devices, with or without an extension, spaces before it too. */
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9]|conin\$|conout\$)\s*(\..*)?$/i;
 /* Leaves room under the 255-byte name limit for a " (12)" made unique below. */
 const MAX_BYTES = 240;
 const encoder = new TextEncoder();
 
 /*
- * One name as one path segment: unsafe characters become "_", trailing dots and
- * spaces go (Windows drops them, so ".. " would act as ".."), an empty, "." or
- * ".." name is "_", a device name gets a leading "_", and the result is cut on
- * whole code points to MAX_BYTES of UTF-8.
+ * One name as one path segment. NFKC first, so full-width "．．／" and a
+ * superscript "COM¹" are judged as the "../" and "COM1" an ANSI extractor or
+ * Windows would make of them; then unsafe characters become "_", the name is cut
+ * on whole code points to MAX_BYTES of UTF-8, trailing dots and spaces go
+ * (Windows drops them, so ".. " would act as ".."), an empty, "." or ".." name
+ * is "_", and a device name, judged last as the cut may have made one, gets a
+ * leading "_".
  */
 export function packetSegment(name: string) {
-    let segment = Array.from(name, (char) => (unsafe(char) ? '_' : char))
-        .join('')
-        .replace(/[.\s]+$/, '');
-    if (segment === '' || segment === '.' || segment === '..') segment = '_';
-    if (RESERVED.test(segment)) segment = `_${segment}`;
+    const cleaned = Array.from(name.normalize('NFKC'), (char) => (unsafe(char) ? '_' : char));
     let out = '';
     let bytes = 0;
-    for (const char of segment) {
+    for (const char of cleaned) {
         bytes += encoder.encode(char).length;
         if (bytes > MAX_BYTES) break;
         out += char;
     }
-    return out.replace(/[.\s]+$/, '') || '_';
+    out = out.replace(/[.\s]+$/, '');
+    if (out === '' || out === '.' || out === '..') return '_';
+    return RESERVED.test(out) ? `_${out}` : out;
 }
+
+/*
+ * When two names are the same file to a file system: NFC and NFD forms are one
+ * on macOS, and case folds wider than toLowerCase on NTFS (σ and ς). Matching
+ * too much only costs a " (2)".
+ */
+const sameKey = (segment: string) => segment.normalize('NFKC').toUpperCase().toLowerCase();
 
 /* "photo.jpg" taken: "photo (2).jpg"; a folder or a name without an extension: "notes (2)". */
 function numbered(segment: string, n: number, file: boolean) {
@@ -75,7 +83,7 @@ function numbered(segment: string, n: number, file: boolean) {
 
 /*
  * Every file's path, folders first-come first-named: within a folder, names that
- * come out the same (case aside, as macOS and Windows compare them) get " (2)",
+ * come out the same to a file system (sameKey) get " (2)",
  * " (3)" in the order they are listed, so no entry overwrites another and
  * hashes.txt never lists two hashes under one path.
  */
@@ -92,9 +100,9 @@ export function packetPaths(root: PacketTree): PacketPath[] {
         for (const child of node.children ?? []) {
             const base = packetSegment(child.name);
             let unique = base;
-            for (let n = 2; taken.has(unique.toLowerCase()); n++)
+            for (let n = 2; taken.has(sameKey(unique)); n++)
                 unique = numbered(base, n, child.kind === 'file');
-            taken.add(unique.toLowerCase());
+            taken.add(sameKey(unique));
             visit(child, unique, `${path}/`, here);
         }
     }

@@ -9,15 +9,33 @@ const folder = (id: string, name: string, children: PacketTree[]): PacketTree =>
     children,
 });
 
-/* What an extractor would do with each segment: a dot pair, or a name that becomes one. */
-const climbs = (segment: string) => {
+/* What an extractor would do with each part of a segment: a dot pair, or a name that becomes one. */
+const climbs = (segment: string) =>
+    segment.split(/[\\/]/).some((part) => climbsAlone(part.normalize('NFKC')));
+const climbsAlone = (segment: string) => {
     const cut = segment.split('\0')[0]!; // C extractors and Python's zipfile stop at a NUL
     const windows = cut.replace(/[. ]+$/, ''); // Windows drops trailing dots and spaces
     return ['', '.', '..'].includes(cut) || ['', '.', '..'].includes(windows);
 };
 
 describe('packet paths for names a reported person chose', () => {
-    const hostile = ['.', '..', '', '..\0x', '.. ', '...', ' ', '..\u202e', '\u202e..', '.\0'];
+    const hostile = [
+        '.',
+        '..',
+        '',
+        '..\0x',
+        '.. ',
+        '...',
+        ' ',
+        '..\u202e',
+        '\u202e..',
+        '.\0',
+        '..\\..\\x',
+        '．．',
+        '．．／x',
+        '.. .',
+        '\u3000..',
+    ];
 
     it('never makes a segment that climbs out of the zip or is empty', () => {
         const tree = folder(
@@ -59,6 +77,29 @@ describe('packet paths for names a reported person chose', () => {
         );
     });
 
+    it('treats names a file system sees as one as colliding', () => {
+        const nfc = 'caf\u00e9.jpg';
+        const nfd = 'cafe\u0301.jpg';
+        const tree = folder('root', 'r', [
+            file('1', nfc),
+            file('2', nfd),
+            file('3', '\u03c3.txt'), // σ
+            file('4', '\u03c2.txt'), // ς, the same letter to NTFS
+            file('5', 'ＡＢ.txt'), // full-width
+            file('6', 'ab.txt'),
+        ]);
+        const keys = packetPaths(tree).map((entry) =>
+            entry.path.normalize('NFKC').toUpperCase().toLowerCase(),
+        );
+        expect(new Set(keys).size).toBe(keys.length);
+    });
+
+    it('takes bidi marks and controls out of a segment', () => {
+        expect(packetSegment('invoice\u202efdp.exe')).toBe('invoice_fdp.exe');
+        expect(packetSegment('a\u200fb\u2066c\u061cd')).toBe('a_b_c_d');
+        expect(packetSegment('x\u0085y\u007fz')).toBe('x_y_z');
+    });
+
     it('never lets a file with an empty name take its folder’s path', () => {
         const tree = folder('root', 'dir', [
             file('empty', ''),
@@ -85,8 +126,21 @@ describe('packet paths for names a reported person chose', () => {
     });
 
     it('does not use a name Windows keeps for a device', () => {
-        for (const name of ['CON', 'nul.txt', 'Com1', 'lpt9.log'])
-            expect(packetSegment(name).startsWith('_')).toBe(true);
+        const longCon = `con${' '.repeat(300)}x`; // the byte cut and trim leave "con"
+        for (const name of [
+            'CON',
+            'nul.txt',
+            'Com1',
+            'lpt9.log',
+            'nul .txt',
+            'COM¹',
+            'CONIN$',
+            'conout$.log',
+            longCon,
+        ])
+            expect(packetSegment(name).startsWith('_'), JSON.stringify(name.slice(0, 12))).toBe(
+                true,
+            );
         expect(packetSegment('console.txt')).toBe('console.txt');
     });
 
