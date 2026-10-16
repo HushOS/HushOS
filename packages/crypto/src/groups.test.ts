@@ -1397,7 +1397,7 @@ describe('round 8', () => {
         expect(() => parseRoster(text(JSON.stringify(over)))).toThrow('Invalid roster members.');
         // A large statement encodes to base64url without exceeding the engine's argument limit.
         expect(encode(bytes).length).toBeGreaterThan(65536);
-    });
+    }, 30_000); // builds 10,000-member rosters and 4 MiB statements: about 6 s on a CI runner
 
     test('Codex 1 and 5: identity key versions stop at 2^53 - 1; an empty byte string is never canonical', async () => {
         const [a, b] = await Promise.all([person(2), person(3)]);
