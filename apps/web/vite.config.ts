@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, extname, join } from 'node:path';
 import mdx from '@mdx-js/rollup';
 import tailwindcss from '@tailwindcss/vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
@@ -36,6 +39,65 @@ function mdxMeta(): Plugin {
             const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
             const frontmatter = block ? Bun.YAML.parse(block[1] ?? '') : {};
             return `export const frontmatter = ${JSON.stringify(frontmatter)};`;
+        },
+    };
+}
+
+/*
+ * What pdf.js fetches by name while it reads a PDF: the wasm decoders for
+ * JPEG 2000 and JBIG2 images and ICC colour, the standard fonts it draws when a
+ * PDF names one without embedding it, and Adobe's CMaps for CJK text. Without
+ * them those images are dropped and those fonts substituted. They are served
+ * from this origin under the build's assets path, versioned by pdf.js's own so
+ * they can be cached for good, and `__PDFJS_ASSETS__` lists them for the
+ * viewer and the thumbnailer (lib/pdf-assets.ts). The scripting engine is left
+ * out: scripts in a PDF never run.
+ */
+function pdfjsAssets(): Plugin {
+    const root = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
+    const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+        version: string;
+    };
+    const base = `assets/pdfjs-${version}/`;
+    const files = ['cmaps', 'iccs', 'standard_fonts', 'wasm'].flatMap((dir) =>
+        readdirSync(join(root, dir))
+            .filter((name) => !name.startsWith('quickjs'))
+            .map((name) => `${dir}/${name}`),
+    );
+    const types: Record<string, string> = {
+        '.wasm': 'application/wasm',
+        '.js': 'text/javascript',
+        '.ttf': 'font/ttf',
+    };
+    return {
+        name: 'hushos:pdfjs-assets',
+        config() {
+            // What a device fetches ahead of its first PDF: everything but licences and fallbacks.
+            const preload = files.filter((file) => /\.(bcmap|icc|pfb|ttf|wasm)$/.test(file));
+            // A define rather than a virtual module, so worker bundles see it too.
+            return { define: { __PDFJS_ASSETS__: JSON.stringify({ base: `/${base}`, preload }) } };
+        },
+        configureServer(server) {
+            const known = new Set(files);
+            server.middlewares.use(`/${base}`, (request, response, next) => {
+                const file = (request.url ?? '').split('?')[0]?.slice(1) ?? '';
+                if (!known.has(file)) return next();
+                response.setHeader(
+                    'content-type',
+                    types[extname(file)] ?? 'application/octet-stream',
+                );
+                response.setHeader('cache-control', 'public, max-age=31536000, immutable');
+                response.end(readFileSync(join(root, file)));
+            });
+        },
+        generateBundle() {
+            if (this.environment.name !== 'client') return;
+            for (const file of files)
+                this.emitFile({
+                    type: 'asset',
+                    fileName: base + file,
+                    source: readFileSync(join(root, file)),
+                });
         },
     };
 }
@@ -90,6 +152,7 @@ export default defineConfig({
     },
     plugins: [
         oneRequestPerConnectionInCI(),
+        pdfjsAssets(),
         mdxMeta(),
         {
             // MDX compiles to React components at build time, so legal pages and
