@@ -1,0 +1,23 @@
+apps/web/Dockerfile
+  s_c56e31c87cddde::t_610082efef9a1d 15
+packages/db/Dockerfile
+  s_c56e31c87cddde::t_619f0e9b6add0d 15
+packages/jobs/Dockerfile
+  s_c56e31c87cddde::t_589d91791a3e5a 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b1d31f3ed9c1588b8351bcef2d3114b68a888099",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
