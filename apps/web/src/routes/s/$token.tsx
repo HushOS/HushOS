@@ -242,7 +242,14 @@ function LinkHeader() {
                 </Link>
             ) : (
                 <span className="flex items-center gap-2">
-                    <Link to="/" className={buttonVariants({ variant: 'ghost' })}>
+                    {/* Under 380px there is room for Sign in alone; the logo goes home as this would. */}
+                    <Link
+                        to="/"
+                        className={buttonVariants({
+                            variant: 'ghost',
+                            className: 'max-[380px]:hidden',
+                        })}
+                    >
                         Get HushOS
                     </Link>
                     <Link
@@ -520,23 +527,31 @@ function LinkContents({ opened }: { opened: Opened }) {
             </span>
             <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pt-2 pb-5">
                 <div className="flex min-w-0 flex-col gap-1">
-                    <h1 className="text-[30px] leading-[1.1] font-extrabold tracking-[-0.03em] wrap-anywhere">
-                        {opened.node.name}
+                    {/* A page title at the app's scale (PageHeader); dir=auto for a right-to-left name. */}
+                    <h1
+                        dir="auto"
+                        className="text-xl leading-tight font-extrabold tracking-[-0.03em] wrap-anywhere sm:text-[28px]"
+                    >
+                        <NodeName name={opened.node.name} kind={opened.node.kind} />
                     </h1>
                     {count && <span className="text-sm text-muted-foreground">{count}</span>}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <ReportButton opened={opened} />
-                    <SaveToDrive opened={opened} />
+                {/*
+                 * Download first, in reading and focus order alike, unlike the app's rows that end
+                 * on the blue button: it is what most visitors came for (DESIGN.md, Share). On a
+                 * phone the two stack across the width; from sm up they sit in a row.
+                 */}
+                <div className="flex w-full flex-col gap-2 *:w-full sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:*:w-auto">
                     <Button onClick={() => void downloadNodes([opened.node])}>
                         <DownloadIcon />
                         {opened.node.kind === 'folder' ? 'Download all' : 'Download'}
                     </Button>
+                    <SaveToDrive opened={opened} />
                 </div>
             </div>
             <div className="flex flex-col overflow-hidden rounded-2xl border border-rule bg-card">
                 {opened.node.kind === 'file' && (
-                    <div className="flex flex-col items-center gap-4 px-6 py-12">
+                    <div className="flex flex-col items-center gap-4 px-6 py-8 sm:py-12">
                         <FileMark node={opened.node} size="large" />
                         <Button variant="outline" onClick={() => setPreviewing(opened.node)}>
                             <EyeIcon />
@@ -660,6 +675,10 @@ function LinkContents({ opened }: { opened: Opened }) {
                     </>
                 )}
             </div>
+            {/* The least-used action, quiet under what it is about rather than in the row. */}
+            <div className="flex justify-end pt-2">
+                <ReportButton opened={opened} />
+            </div>
             <Preview
                 files={opened.node.kind === 'file' ? [opened.node] : files}
                 current={previewing}
@@ -673,6 +692,27 @@ function LinkContents({ opened }: { opened: Opened }) {
 /* Name, when it changed, size; the date gives way on a phone. */
 const LINK_ROW =
     'grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-4 px-5 sm:grid-cols-[minmax(0,1fr)_9rem_7rem] sm:px-6';
+
+/*
+ * A file's name with its extension as one piece: the line breaks at the dot before
+ * anywhere else, and splits the extension only when it alone is wider than the line,
+ * so the page never scrolls sideways. Each part is isolated, so bidi controls in a
+ * name cannot make "invoice\u202Efdp.exe" read as a PDF. Folders and names whose
+ * last dot starts no short extension are one piece.
+ */
+const EXTENSION = /^\.[^\s.]{1,9}$/u;
+function NodeName({ name, kind }: { name: string; kind: DriveNode['kind'] }) {
+    const dot = name.lastIndexOf('.');
+    const extension = kind === 'file' && dot > 0 ? name.slice(dot) : '';
+    if (!EXTENSION.test(extension)) return <bdi>{name}</bdi>;
+    return (
+        <>
+            <bdi>{name.slice(0, dot)}</bdi>
+            <wbr />
+            <bdi>{extension}</bdi>
+        </>
+    );
+}
 
 /* Anyone holding the link can report what it opens; the operators alone get the key. */
 function ReportButton({ opened }: { opened: Opened }) {
