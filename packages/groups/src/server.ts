@@ -25,7 +25,12 @@ import {
 } from '@hushos/crypto/groups';
 import { verifyHybrid } from '@hushos/crypto/signatures';
 import { authRepository, groupsRepository, madeFor } from '@hushos/db';
-import { nodeEnvelopesInput, nodeView, rotatedNodeInput } from '@hushos/drive/server';
+import {
+    nodeEnvelopesInput,
+    nodeView,
+    rotatedNodeInput,
+    rotationWorkView,
+} from '@hushos/drive/server';
 import { sendGroupInvitation } from '@hushos/emails/server';
 import { appEnv } from '@hushos/env/app';
 import { groupsEnv } from '@hushos/env/groups';
@@ -1907,6 +1912,33 @@ export async function putPreviousRoot(
             );
         case 'unavailable':
             throw unavailable();
+    }
+}
+
+/*
+ * Route 29: an area's root as a roster rotation re-keys it (route 24, or the
+ * rotations a family removal carries), in the shape of Drive's rotation work:
+ * the node, its versions, its live shares with their grantees' identities and
+ * its live links, leaving out what a departed member granted, as the walk
+ * does. Only `members` holders rotate, so only they read it, and only while
+ * they hold the area's current key (a grant at it from a granter still active,
+ * or their own wrap of it): without it they could not open the root to re-key
+ * it. A hold does not stop a roster's rotation, so it does not stop this read.
+ */
+export async function areaRoot(userId: string, groupId: string, workspaceId: string) {
+    await membershipOf(groupId, userId, 'members');
+    const result = await groupsRepository.areaRootWork({ groupId, workspaceId, userId });
+    switch (result.status) {
+        case 'ok':
+            return rotationWorkView(result.root);
+        // An area of another group, or none; or (never expected) an area whose root is missing,
+        // which no rotation could re-key either. The caller is a holder here, so not `not-member`.
+        case 'area':
+            throw invalid('area');
+        // As route 23 answers a member with no grant: a holder waits for one (route 22) or its
+        // own wrap of the current key, then reads again.
+        case 'no-key':
+            throw new GroupError('forbidden', 'You have not been given this area’s key yet.', 403);
     }
 }
 

@@ -2504,6 +2504,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         body,
                     ),
             )
+            // Route 29: what a holder's device re-keys when a roster rotates the area.
+            .get(
+                '/groups/:id/areas/:workspaceId/root',
+                { params: areaParams },
+                async ({ request, sessionToken, params }) =>
+                    groups.areaRoot(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                    ),
+            )
             .post(
                 '/groups/:id/areas/:workspaceId/rotations',
                 {

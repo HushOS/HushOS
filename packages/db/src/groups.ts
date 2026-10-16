@@ -11,7 +11,13 @@ import {
 } from './drive';
 import { madeFor } from './ids';
 import { pgCode } from './readiness';
-import { rotateNodeIn, startRotationIn, type RotatedNodeInput } from './rotations';
+import {
+    rootWorkIn,
+    rotateNodeIn,
+    startRotationIn,
+    type RotatedNodeInput,
+    type RotationWorkNode,
+} from './rotations';
 import {
     accountIdentities,
     accountIdentityHistory,
@@ -2526,6 +2532,63 @@ export async function replacePreviousRoot(input: {
                 return { status: 'ok' as const, changeSeq };
             }),
         async () => ({ status: 'unavailable' as const }),
+    );
+}
+
+/*
+ * An area's root with everything a roster rotation re-seals on it (route 29):
+ * the node, its versions, its live shares with their grantees' identities and
+ * its live links, as Drive's rotation work lists them. Only for someone who
+ * holds the area's current key, as route 3's `due.grants` counts it (a grant
+ * at the current version from a granter still active, or a self-grant at it):
+ * nobody else could open the root to re-key it, so nobody else is shown who it
+ * is shared with. One read-only snapshot, so the key check, the change sequence
+ * the rotator must name and the grants it re-seals belong together. `area` for
+ * an area of another group, or none. The caller's role is the domain's to check.
+ */
+export type AreaRootResult =
+    | { status: 'ok'; root: RotationWorkNode }
+    | { status: 'area' | 'no-key' };
+export async function areaRootWork(input: {
+    groupId: string;
+    workspaceId: string;
+    userId: string;
+}): Promise<AreaRootResult> {
+    return db.transaction(
+        async (tx) => {
+            const [area] = await tx
+                .select({ version: workspaces.workspaceKeyVersion })
+                .from(workspaces)
+                .where(
+                    and(
+                        eq(workspaces.id, input.workspaceId),
+                        eq(workspaces.groupId, input.groupId),
+                    ),
+                );
+            if (!area) return { status: 'area' as const };
+            const held = await tx.execute<{ holds: boolean }>(sql`
+                select exists (
+                    select 1 from ${areaGrants} g
+                    join ${groupMemberships} granter
+                      on granter.group_id = ${input.groupId}
+                     and granter.user_id = g.granter_user_id
+                     and granter.state = 'active'
+                    where g.workspace_id = ${input.workspaceId}
+                      and g.workspace_key_version = ${area.version}
+                      and g.grantee_user_id = ${input.userId}
+                ) or exists (
+                    select 1 from ${workspaceKeys} k
+                    where k.workspace_id = ${input.workspaceId}
+                      and k.user_id = ${input.userId}
+                      and k.workspace_key_version = ${area.version}
+                ) as holds
+            `);
+            if (!held.rows[0]?.holds) return { status: 'no-key' as const };
+            const root = await rootWorkIn(tx, input.workspaceId);
+            // Every area is created with its root and a root is never purged: none is no area to rotate.
+            return root ? { status: 'ok' as const, root } : { status: 'area' as const };
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
 }
 

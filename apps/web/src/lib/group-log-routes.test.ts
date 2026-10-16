@@ -33,6 +33,11 @@ test('an unknown group path is logged as unknown, a known one by its pattern', (
             '/api/groups/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4/members/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4/admit',
         ),
     ).toBe('groups/:id/members/:userId/admit');
+    expect(
+        groupLogAction(
+            '/api/groups/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4/areas/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4/root',
+        ),
+    ).toBe('groups/:id/areas/:workspaceId/root');
     expect(groupLogAction('/api/groups/0B7F1C2E-3D4A-4B5C-8D6E-7F8091A2B3C4/rosters')).toBe(
         'groups/:id/rosters',
     );

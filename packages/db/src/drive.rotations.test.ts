@@ -229,10 +229,12 @@ describe('rotation', () => {
         // The sibling outside the subtree is not work.
         expect(work.nodes.some((n) => n.id === outside.id)).toBe(false);
 
+        // The nodes as the work lists them: a share or link sealed on one moved its change sequence.
+        const [projectWork, innerWork] = work.nodes;
         // A child before its parent is refused; a stale change sequence is refused.
-        expect(await signed.rotateNodes({ ...ws, nodes: [rotated(inner, targetEpoch)] })).toEqual([
-            { id: inner.id, status: 'parent-not-ready' },
-        ]);
+        expect(
+            await signed.rotateNodes({ ...ws, nodes: [rotated(innerWork!, targetEpoch)] }),
+        ).toEqual([{ id: inner.id, status: 'parent-not-ready' }]);
         expect(
             await signed.rotateNodes({
                 ...ws,
@@ -245,7 +247,7 @@ describe('rotation', () => {
         const first = await signed.rotateNodes({
             ...ws,
             nodes: [
-                rotated(project, rootEpoch, {
+                rotated(projectWork!, rootEpoch, {
                     shares: [{ id: shared.share.id, shareEnvelope: randomBytes(4565) }],
                 }),
             ],
@@ -464,5 +466,131 @@ describe('rotation', () => {
         ).toBe('stale');
         expect(await rotations.finishRotation(ws)).toBe(true);
         expect((await db.select().from(driveLinks)).length).toBe(0);
+    });
+
+    test('a share or link sealed after the work was read makes that node stale, and the grant stays live', async () => {
+        const project = await folder(rootId, rootEpoch);
+        const linked = await folder(project.id, project.keyEpoch);
+        const resealed = await folder(project.id, project.keyEpoch);
+        const shareOn = async (node: { id: string; keyEpoch: number }) => {
+            const result = await drive.createShare({
+                workspaceId: owner.workspaceId,
+                nodeId: node.id,
+                granterUserId: owner.userId,
+                granteeUserId: guest.userId,
+                role: 'viewer',
+                keyEpoch: node.keyEpoch,
+                shareEnvelope: randomBytes(4565),
+            });
+            if (result.status !== 'ok') throw new Error(result.status);
+            return result.share.id;
+        };
+        const earlyShare = await shareOn(resealed);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            startedBy: null,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
+        };
+        const workFor = async (id: string) =>
+            (await rotations.listRotationWork(ws)).nodes.find((node) => node.id === id)!;
+        const send = async (
+            node: { id: string; changeSeq: number | null },
+            epoch: number,
+            extra = {},
+        ) => (await signed.rotateNodes({ ...ws, nodes: [rotated(node, epoch, extra)] }))[0]?.status;
+        const live = async (table: typeof driveShares | typeof driveLinks, id: string) => {
+            const [row] = await db.select().from(table).where(eq(table.id, id));
+            return { revokedAt: row!.revokedAt, keyEpoch: row!.keyEpoch };
+        };
+
+        // A share made after the read: the batch that never saw it is stale, not a revocation.
+        const projectWork = await workFor(project.id);
+        const lateShare = await shareOn(project);
+        expect(await send(projectWork, rootEpoch)).toBe('stale');
+        expect(await live(driveShares, lateShare)).toEqual({
+            revokedAt: null,
+            keyEpoch: project.keyEpoch,
+        });
+        // Read again, it is in the work and is re-sealed with the node.
+        const reread = await workFor(project.id);
+        expect(reread.shares.map((share) => share.id)).toEqual([lateShare]);
+        expect(
+            await send(reread, rootEpoch, {
+                shares: [{ id: lateShare, shareEnvelope: randomBytes(4565) }],
+            }),
+        ).toBe('ok');
+        expect(await live(driveShares, lateShare)).toEqual({
+            revokedAt: null,
+            keyEpoch: ws.targetEpoch,
+        });
+
+        // A link made after the read.
+        const linkedWork = await workFor(linked.id);
+        const link = await drive.createLink({
+            id: randomUUID(),
+            workspaceId: owner.workspaceId,
+            nodeId: linked.id,
+            granterUserId: owner.userId,
+            tokenHash: hash(randomUUID()),
+            keyEpoch: linked.keyEpoch,
+            linkEnvelope: env(),
+            linkSalt: randomBytes(16),
+            secretEnvelope: randomBytes(104),
+            hasPassword: false,
+            expiresAt: null,
+        });
+        if (link.status !== 'ok') throw new Error(link.status);
+        expect(await send(linkedWork, ws.targetEpoch)).toBe('stale');
+        expect(await live(driveLinks, link.link.id)).toEqual({
+            revokedAt: null,
+            keyEpoch: linked.keyEpoch,
+        });
+        // A link re-sealed under a new password after the read; a new expiry alone is no seal.
+        const linkedAgain = await workFor(linked.id);
+        const updated = await drive.updateLink({
+            workspaceId: owner.workspaceId,
+            linkId: link.link.id,
+            keyEpoch: linked.keyEpoch,
+            seal: {
+                linkEnvelope: env(),
+                linkSalt: randomBytes(16),
+                hasPassword: true,
+                secretEnvelope: randomBytes(104),
+            },
+        });
+        if (updated.status !== 'ok') throw new Error(updated.status);
+        expect(await send(linkedAgain, ws.targetEpoch)).toBe('stale');
+        const linkedNow = await workFor(linked.id);
+        await drive.updateLink({
+            workspaceId: owner.workspaceId,
+            linkId: link.link.id,
+            keyEpoch: linked.keyEpoch,
+            expiresAt: new Date(Date.now() + 86_400_000),
+        });
+        expect((await workFor(linked.id)).changeSeq).toBe(linkedNow.changeSeq);
+
+        // A share re-sealed (to the grantee's new keys) after the read.
+        const resealedWork = await workFor(resealed.id);
+        expect(
+            await drive.resealShare({
+                workspaceId: owner.workspaceId,
+                shareId: earlyShare,
+                granterUserId: owner.userId,
+                keyEpoch: resealed.keyEpoch,
+                shareEnvelope: randomBytes(4565),
+            }),
+        ).toEqual({ status: 'ok' });
+        expect(await send(resealedWork, ws.targetEpoch)).toBe('stale');
+        expect(await live(driveShares, earlyShare)).toEqual({
+            revokedAt: null,
+            keyEpoch: resealed.keyEpoch,
+        });
     });
 });
