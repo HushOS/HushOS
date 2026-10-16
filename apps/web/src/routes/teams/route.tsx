@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
+import { AccessDemo } from '@/components/access-demo';
 import { Shot } from '@/components/screenshot';
 import {
     container,
@@ -56,7 +57,7 @@ const today = [
     },
     {
         title: 'See who can open everything',
-        body: 'Every file and folder in the list says who can open it. A link anyone can open is marked in its own colour, so it never hides.',
+        body: 'Every file and folder in the list says who can open it. A link anyone can open is marked with the blue link icon, so it never hides.',
     },
     {
         title: 'Links for clients and suppliers',
@@ -64,7 +65,7 @@ const today = [
     },
     {
         title: 'Stop sharing, and mean it',
-        body: 'When someone leaves, stop sharing with them. They’re refused straight away, and the folder’s keys change so what they had stops opening.',
+        body: 'When someone leaves, stop sharing with them. They’re refused on their next request, and the folder’s keys change, so nothing new opens for them. What they already downloaded stays with them.',
     },
     {
         title: 'Kept in the EU',
@@ -138,6 +139,7 @@ function TeamsPage() {
                                 </div>
                             ))}
                         </div>
+                        <AccessDemo />
                     </div>
                 </section>
 
