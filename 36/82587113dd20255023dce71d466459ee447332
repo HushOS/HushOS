@@ -1,0 +1,19 @@
+apps/web/src/routes/s/$token.tsx
+  s_a965107c48ca30::t_d881b7cd017d84 244-251,529-531,535-539,544-545,550,689-703
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3682587113dd20255023dce71d466459ee447332",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
