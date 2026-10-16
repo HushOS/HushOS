@@ -1,0 +1,24 @@
+apps/web/src/lib/pdf-assets.ts
+  s_e3ffbc2669b228::t_c3163f39c4d402 21-23,25,27-32,34-47
+apps/web/src/components/drive/pdf-viewer.tsx
+  s_e3ffbc2669b228::t_c3163f39c4d402 9,45,113
+  s_e3ffbc2669b228::t_0a302e0232a992 79-81,112
+apps/web/src/lib/thumbnails.ts
+  s_e3ffbc2669b228::t_c3163f39c4d402 177-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "099ce6108430f879ac316752d443e060093940c1",
+  "prompts": {},
+  "sessions": {
+    "s_e3ffbc2669b228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "55a6d35c-7a29-4515-93f1-eb65a1f22b88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
