@@ -463,3 +463,13 @@ h2:hover > .heading-anchor,
         background-color: var(--id-ground, light-dark(var(--surface), var(--ground)));
     }
 }
+
+/*
+ * The app on a phone: its panel and sticky header are full-bleed card, so body is
+ * card too. From md up the panel floats on the ground, which body keeps.
+ */
+@media (width < 48rem) {
+    :root:has([data-slot='sidebar-inset']) body {
+        background-color: var(--card);
+    }
+}

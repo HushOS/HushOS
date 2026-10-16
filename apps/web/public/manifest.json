@@ -10,8 +10,8 @@
     "start_url": "/app",
     "display": "standalone",
     "orientation": "any",
-    "theme_color": "#f3f4f8",
-    "background_color": "#f3f4f8",
+    "theme_color": "#ffffff",
+    "background_color": "#ffffff",
     "categories": ["productivity", "utilities"],
     "launch_handler": {
         "client_mode": "navigate-existing"

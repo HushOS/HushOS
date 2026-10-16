@@ -46,6 +46,7 @@ import { isAppleTouch, viewportContent } from '@/lib/viewport';
 import { forgetReturn } from '@/lib/return-to';
 import styles from '@/styles.css?url';
 import { ThemeColor } from '@/components/theme-color';
+import { SitePage } from '@/components/site';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {
@@ -165,11 +166,13 @@ function StatusPage({
     description: string;
     action?: ReactNode;
 }) {
+    // A public page, so its edges match it (identities.css, Browser edges); the panel is
+    // raised off the page's own card.
     return (
-        <div className="flex min-h-svh flex-col">
+        <SitePage>
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-4 py-16">
-                <div className="sheet px-6 py-8 sm:px-8">
+                <div className="rounded-2xl border border-rule bg-popover px-6 py-8 shadow-sm sm:px-8">
                     <p className="eyebrow text-muted-foreground">{code}</p>
                     <h1 className="mt-3 text-2xl font-bold tracking-tight text-balance">{title}</h1>
                     <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
@@ -184,7 +187,7 @@ function StatusPage({
                 </div>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 
