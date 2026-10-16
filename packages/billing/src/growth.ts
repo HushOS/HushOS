@@ -134,6 +134,36 @@ export async function getReferralLanding(code: string): Promise<ReferralLanding 
  * invite code is not an offer and has its own page.
  */
 const OFFER = /^[A-Za-z0-9_-]{1,64}$/;
+
+/*
+ * A live creator's offer, by their slug or code, from the database alone: what
+ * the offer's social card shows. It never asks Polar, so a crawler or anyone
+ * guessing codes at /og/go-<code>.jpg cannot spend the organisation's Polar quota.
+ */
+export async function getAffiliateOffer(
+    slug: string,
+): Promise<Pick<OfferLanding, 'name' | 'code' | 'terms'> | null> {
+    if (!OFFER.test(slug)) return null;
+    const bySlug = SLUG.test(slug) ? await growthRepository.getAffiliateBySlug(slug) : null;
+    const resolved = bySlug ? null : await growthRepository.resolveCode(slug);
+    const affiliate = bySlug ?? (resolved?.kind === 'affiliate' ? resolved.affiliate : null);
+    if (!affiliate?.active) return null;
+    return { name: affiliate.name, code: affiliate.code, terms: affiliateTerms(affiliate) };
+}
+
+function affiliateTerms(affiliate: {
+    percentOff: number;
+    duration: 'once' | 'forever' | 'repeating';
+    durationMonths: number | null;
+}): OfferLanding['terms'] {
+    return {
+        type: 'percentage',
+        percentOff: affiliate.percentOff,
+        duration: affiliate.duration,
+        durationMonths: affiliate.durationMonths,
+    };
+}
+
 export async function getOfferLanding(slug: string): Promise<OfferLanding | null> {
     if (!OFFER.test(slug)) return null;
     const bySlug = SLUG.test(slug) ? await growthRepository.getAffiliateBySlug(slug) : null;
@@ -144,12 +174,7 @@ export async function getOfferLanding(slug: string): Promise<OfferLanding | null
             kind: 'affiliate',
             name: affiliate.name,
             code: affiliate.code,
-            terms: {
-                type: 'percentage',
-                percentOff: affiliate.percentOff,
-                duration: affiliate.duration,
-                durationMonths: affiliate.durationMonths,
-            },
+            terms: affiliateTerms(affiliate),
             endsAt: null,
             productIds: [],
             catalogue: await listCatalogue(),
