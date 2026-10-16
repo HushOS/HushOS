@@ -16,6 +16,7 @@ import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
 import { ensureSessionUser, sessionQueryOptions } from '@/lib/session';
 import { authError, emailValue } from '@/lib/form';
 import { oneOf } from '@/lib/search';
+import { cardMeta, publicOrigin } from '@/lib/social';
 import { cue } from '@/lib/sounds';
 
 const securityChanged = oneOf(['password', 'master-key', 'recovery-key', 'uncertain']);
@@ -50,9 +51,18 @@ export const Route = createFileRoute('/login')({
         Vary: 'Cookie',
         'Referrer-Policy': 'no-referrer',
     }),
-    head: () => ({
+    loader: () => ({ origin: publicOrigin() }),
+    head: ({ loaderData }) => ({
         meta: [
             { title: 'Sign in · HushOS' },
+            ...(loaderData
+                ? cardMeta({
+                      origin: loaderData.origin,
+                      card: 'login',
+                      title: 'Sign in to HushOS',
+                      description: 'Your drive, unlocked on your own device.',
+                  })
+                : []),
             {
                 name: 'description',
                 content: 'Sign in to HushOS.',
@@ -119,6 +129,7 @@ function LoginPage() {
     return (
         <AuthLayout
             title="Welcome back"
+            art="HELLO"
             footer={
                 <>
                     New to HushOS?{' '}

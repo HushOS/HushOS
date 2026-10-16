@@ -35,6 +35,7 @@ import { fetchSessionUser } from '@/lib/session';
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouteContext, useRouter } from '@tanstack/react-router';
+import { cardMeta, publicOrigin } from '@/lib/social';
 import {
     ChevronRightIcon,
     CopyPlusIcon,
@@ -65,7 +66,22 @@ export const Route = createFileRoute('/s/$token')({
         const preview = id(search.preview);
         return { ...(folder ? { folder } : {}), ...(preview ? { preview } : {}) };
     },
-    head: () => ({ meta: [{ title: 'Shared with a link · HushOS' }] }),
+    // The same card for every link: what is behind one is never in its preview.
+    loader: () => ({ origin: publicOrigin() }),
+    head: ({ loaderData }) => ({
+        meta: [
+            { title: 'Shared with a link · HushOS' },
+            ...(loaderData
+                ? cardMeta({
+                      origin: loaderData.origin,
+                      card: 'shared',
+                      title: 'Someone shared something with you',
+                      description:
+                          'Open it in your browser. It was locked on their device before it was sent.',
+                  })
+                : []),
+        ],
+    }),
     component: LinkPage,
 });
 

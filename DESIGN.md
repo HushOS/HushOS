@@ -409,7 +409,7 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
 
 ## Email
 
-Transactional emails (`packages/emails`) look like the site: the light ground, a white card with 16px corners and a rule header holding the ink logo square (26px, 8px corners) beside the name, ink text, the facts about a link as ruled rows, and one plain Hush blue button with 10px corners. Mono appears only on a link printed for copying. Dark mode follows the tokens via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial. Templates render at build time (`bun run email:render`); preview with `bun run email:preview`. Social cards (`/og.jpg`, `/og/<page>.jpg`, 1200×630, Takumi) are a white page, the ink wordmark and the heading style; a share link's card is generic.
+Transactional emails (`packages/emails`) look like the site: the light ground, a white card with 16px corners and a rule header holding the ink logo square (26px, 8px corners) beside the name, ink text, the facts about a link as ruled rows, and one plain Hush blue button with 10px corners. Mono appears only on a link printed for copying. Dark mode follows the tokens via `prefers-color-scheme` and Outlook's `[data-ogsc]`. Type falls back to Arial. Templates render at build time (`bun run email:render`); preview with `bun run email:preview`. Social cards (`/og.jpg`, `/og/<page>.jpg`, 1200×630, Takumi) are drawn as Dither describes: the page's words on its identity's ground beside a dithered cover panel. Sign-in, sign-up and every shared link use one fixed card each; a shared link's card never names what is behind it.
 
 ## Accessibility
 

@@ -127,6 +127,37 @@ export function pageSocialMeta(input: {
     ];
 }
 
+/*
+ * A card for a page that is not indexed (sign-in, sign-up, a shared link): the
+ * image and the words a chat app shows when the address is pasted, and nothing
+ * that names the page's own contents. No og:url, so a link's path is never repeated.
+ * The origin comes from the route's loader, as everywhere else, so the server's and
+ * the browser's tags agree.
+ */
+export function cardMeta(input: {
+    origin: string;
+    card: string;
+    title: string;
+    description: string;
+}) {
+    const image = new URL(`/og/${input.card}.jpg`, input.origin).href;
+    return [
+        { property: 'og:type', content: 'website' },
+        { property: 'og:site_name', content: 'HushOS' },
+        { property: 'og:title', content: input.title },
+        { property: 'og:description', content: input.description },
+        { property: 'og:image', content: image },
+        { property: 'og:image:type', content: 'image/jpeg' },
+        { property: 'og:image:width', content: '1200' },
+        { property: 'og:image:height', content: '630' },
+        { property: 'og:image:alt', content: input.title },
+        { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:title', content: input.title },
+        { name: 'twitter:description', content: input.description },
+        { name: 'twitter:image', content: image },
+    ];
+}
+
 export function publicSocialMeta(origin: string) {
     const title = 'HushOS · Nobody else can look inside.';
     const description =

@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
+import { cardMeta, publicOrigin } from '@/lib/social';
 import { ensureSessionUser } from '@/lib/session';
 
 export const Route = createFileRoute('/register')({
@@ -21,9 +22,18 @@ export const Route = createFileRoute('/register')({
         if (user && location.pathname !== '/register/complete') throw redirect({ to: '/app' });
         return { user };
     },
-    head: () => ({
+    loader: () => ({ origin: publicOrigin() }),
+    head: ({ loaderData }) => ({
         meta: [
             { title: 'Create an account · HushOS' },
+            ...(loaderData
+                ? cardMeta({
+                      origin: loaderData.origin,
+                      card: 'register',
+                      title: 'Your private drive starts here',
+                      description: 'Everything is locked on your device first. We can’t open it.',
+                  })
+                : []),
             { name: 'referrer', content: 'no-referrer' },
             { name: 'robots', content: 'noindex' },
         ],
