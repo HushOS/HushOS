@@ -1,0 +1,41 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Devices.swift
+  s_c56e31c87cddde::t_ff853e21cfaa2f 1-112
+  s_c56e31c87cddde::t_00c14a1e9bde7b 113-139
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DevicesTests.swift
+  s_c56e31c87cddde::t_575540df1a393b 1-76
+apps/ios/App/DevicesView.swift
+  s_c56e31c87cddde::t_7f86c627d771ac 1-167,172
+  s_c56e31c87cddde::t_4ab892123f3675 168-171,173-194
+apps/ios/App/AccountView.swift
+  s_c56e31c87cddde::t_96b5ba28a2530c 52-55,97
+apps/ios/App/AppModel.swift
+  s_c56e31c87cddde::t_ed5019d8705381 37-43,90-91,95-101,118-120,199-203,206,212-262,290-291
+apps/ios/App/DriveStore.swift
+  s_c56e31c87cddde::t_747cb58f1b8b1a 310-319,1093-1094
+apps/ios/App/MainView.swift
+  s_c56e31c87cddde::t_a13094f7292490 149-152
+apps/ios/App/SignInView.swift
+  s_c56e31c87cddde::t_aec3a3a61bddfc 47-59
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_c56e31c87cddde::t_8f3937d61b8bba 117-118
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_c56e31c87cddde::t_f5600e21000b76 2-4,128-133,142-145,170-215,223-231,241-242
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Keychain.swift
+  s_c56e31c87cddde::t_2158ef46ac66c4 17-18,44-62,106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "14f426a5d88df64c5b2b9b8b92c47d0187ec78de",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
