@@ -11,16 +11,54 @@ import { integrityIssues, type IntegrityIssue, type NodeIntegrity } from '@husho
  * Who wrote a record, as this person can say it: the server names a signer by
  * account id alone, so a name comes only from their own pins. `you` for this
  * account, a checked contact's name, or null for anyone else.
+ *
+ * Inside a family's folders (`family`) the verdicts are the member list's
+ * (design 2.8), and a member nobody checked personally is named as the server
+ * names them, with their address beside the name where the server gives it
+ * (decision D10): the member list vouches for their keys, never for the name.
  */
-export type SignerNames = { userId: string | null; checked: Record<string, string> };
-type Named = { kind: 'you' } | { kind: 'contact'; name: string } | { kind: 'unknown' };
+export type SignerNames = {
+    userId: string | null;
+    checked: Record<string, string>;
+    /* Families whose word this person took for someone, by group id: their names. */
+    vouchers?: Record<string, string>;
+    /*
+     * Pins taken on a family's word, by user id: the server's name and address,
+     * and the family that vouched for the keys (never this person's own check).
+     */
+    vouched?: Record<string, { name: string; email: string; family: string }>;
+    family?: {
+        name: string;
+        members: Record<string, { name: string; email: string | null }>;
+    };
+};
+type Named =
+    | { kind: 'you' }
+    | {
+          kind: 'contact';
+          name: string;
+          /* Set for a pin taken on a family's word. */
+          vouched?: { name: string; email: string; family: string };
+      }
+    | { kind: 'member'; name: string; email: string | null }
+    | { kind: 'unknown' };
 
 export function nameSigner(signer: Signer | null, names: SignerNames): Named {
     if (!signer) return { kind: 'unknown' };
-    if (names.userId && signer.id.toLowerCase() === names.userId.toLowerCase())
-        return { kind: 'you' };
-    const name = names.checked[signer.id.toLowerCase()];
-    return name ? { kind: 'contact', name } : { kind: 'unknown' };
+    const id = signer.id.toLowerCase();
+    if (names.userId && id === names.userId.toLowerCase()) return { kind: 'you' };
+    const name = names.checked[id];
+    const vouched = names.vouched?.[id];
+    if (name) return vouched ? { kind: 'contact', name, vouched } : { kind: 'contact', name };
+    const member = names.family?.members[id];
+    return member ? { kind: 'member', ...member } : { kind: 'unknown' };
+}
+
+/* A member as a sentence names them: a checked contact by their pin, anyone else as the server does. */
+function memberWords(named: Named, fallback: string) {
+    if (named.kind === 'contact') return firstName(named.name);
+    if (named.kind === 'member') return named.email ? `${named.name} (${named.email})` : named.name;
+    return fallback;
 }
 
 /* "Maya" from "Maya Lindqvist": what a sentence calls someone the second time. */
@@ -53,7 +91,31 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
     const version = record === 'version';
     const named = nameSigner(signer, names);
     const plain = version ? CANT_CONFIRM_VERSION : CANT_CONFIRM;
+    const family = names.family?.name;
     switch (integrity) {
+        // Never an accusation: the keys differ from the ones this person checked, and no
+        // signed chain joins them. Comparing words again is the way out.
+        case 'key-conflict': {
+            // A pin taken on a family's word was never this person's check: the keys are the
+            // ones that family vouched for, and the name and address are the server's.
+            if (named.kind === 'contact' && named.vouched)
+                return {
+                    text: `${named.vouched.name} (${named.vouched.email})’s keys don’t match the ones ${named.vouched.family} vouched for. Check it’s them again.`,
+                    action: signer ? { kind: 'check', signer } : null,
+                };
+            const who = memberWords(named, 'Its writer');
+            return {
+                text: `${who === 'Its writer' ? 'Its writer’s' : `${who}’s`} keys don’t match the ones you checked. Check it’s them again.`,
+                action: signer ? { kind: 'check', signer } : null,
+            };
+        }
+        case 'former-member': {
+            const who = memberWords(named, 'someone');
+            return {
+                text: `${version ? 'Added' : 'Written'} by ${who}, who has left ${family ?? 'the family'}.`,
+                action: null,
+            };
+        }
         case 'unchecked':
             return { text: COULDNT_CHECK, action: { kind: 'retry' } };
         // No signature reads as any other record nobody can vouch for: a server that strips
@@ -67,6 +129,18 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
                 action: signer && named.kind === 'unknown' ? { kind: 'check', signer } : null,
             };
         case 'bad-signature': {
+            // In a family's folders a server withholding a member's links makes their genuine
+            // records read this way (design 2.8, "Withholding links"): it is said as what it is.
+            if (family)
+                return {
+                    text: version
+                        ? 'HushOS couldn’t verify this version’s signature.'
+                        : 'HushOS couldn’t verify this signature.',
+                    action:
+                        signer && named.kind === 'contact'
+                            ? { kind: 'again', signer, name: named.name }
+                            : null,
+                };
             const whose =
                 named.kind === 'you'
                     ? 'your'
@@ -126,11 +200,73 @@ export function issueLines(issues: IntegrityIssue[], names: SignerNames): IssueL
     return issues.map((issue) => line(issue, names));
 }
 
-/* What the mark says on its face: Couldn't check when nothing could be, else Unverified. */
+/*
+ * What the mark says on its face: Couldn't check when nothing could be, a
+ * key conflict (worse than Unverified) as its own words, else Unverified.
+ */
 export function markLabel(issues: IntegrityIssue[]) {
-    return issues.length > 0 && issues.every((issue) => issue.integrity === 'unchecked')
-        ? 'Couldn’t check'
-        : 'Unverified';
+    if (issues.length > 0 && issues.every((issue) => issue.integrity === 'unchecked'))
+        return 'Couldn’t check';
+    if (issues.some((issue) => issue.integrity === 'key-conflict')) return 'Keys don’t match';
+    return 'Unverified';
+}
+
+/*
+ * Outside family folders, the same line for an item whose verified records
+ * were written by someone this person trusts on a family's word ("Trust as
+ * Lindqvist family does"): the verdict rests on that family's member list,
+ * not on words this person compared, and Info says so. Null when every
+ * record did not verify, or no verified record's writer is pinned that way.
+ */
+export function vouchedByLine(
+    node: {
+        integrity: NodeIntegrity | null;
+        metadataSigner?: Signer | null;
+        currentVersion: { signer?: Signer | null } | null;
+    },
+    names: SignerNames,
+) {
+    const integrity = node.integrity;
+    if (!integrity) return null;
+    const records = [
+        { verdict: integrity.metadata, signer: node.metadataSigner ?? null },
+        ...(integrity.version === null
+            ? []
+            : [{ verdict: integrity.version, signer: node.currentVersion?.signer ?? null }]),
+    ];
+    if (!records.every((record) => record.verdict === 'verified')) return null;
+    for (const { signer } of records) {
+        const vouched = signer ? names.vouched?.[signer.id.toLowerCase()] : undefined;
+        if (vouched) return `Verified by ${vouched.family}`;
+    }
+    return null;
+}
+
+/*
+ * The line Info shows for an item a family's member list vouched for, and
+ * nothing for anything else: every record verified, at least one of them by
+ * a family's word rather than this person's own check (design 2.8): this
+ * folder's family, or another whose word this person took for the writer
+ * ("Trust as … does", `vouchers`).
+ */
+export function verifiedByLine(
+    node: { integrity: NodeIntegrity | null },
+    family: { groupId: string; name: string } | null,
+    vouchers: Record<string, string> = {},
+) {
+    const integrity = node.integrity;
+    if (!family || !integrity?.via) return null;
+    const records = [
+        { verdict: integrity.metadata, via: integrity.via.metadata },
+        ...(integrity.version === null
+            ? []
+            : [{ verdict: integrity.version, via: integrity.via.version }]),
+    ];
+    if (!records.every((record) => record.verdict === 'verified')) return null;
+    if (records.some((record) => record.via === family.groupId))
+        return `Verified by ${family.name}`;
+    const other = records.find((record) => record.via && vouchers[record.via]);
+    return other ? `Verified by ${vouchers[other.via!]}` : null;
 }
 
 /*

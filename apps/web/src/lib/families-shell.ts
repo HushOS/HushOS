@@ -15,7 +15,6 @@ export const familyKeys = {
     capabilities: ['drive', 'capabilities'] as const,
     user: (userId: string) => ['families', userId] as const,
     list: (userId: string) => ['families', userId, 'list'] as const,
-    sync: (userId: string, signature: string) => ['families', userId, 'sync', signature] as const,
     family: (userId: string, groupId: string) => ['families', userId, 'family', groupId] as const,
     familySync: (userId: string, groupId: string, signature: string) =>
         ['families', userId, 'family', groupId, 'sync', signature] as const,

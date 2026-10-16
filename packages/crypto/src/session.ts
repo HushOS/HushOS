@@ -2727,6 +2727,13 @@ export function createCryptoSession() {
             }
             case 'driveVerify': {
                 const { workspaceId } = message.input;
+                // A family folder's records are judged only as its member list says (groupVerify):
+                // by personal pins alone a former member's record could read verified and be
+                // signed again as this person's own.
+                if (groups.isArea(workspaceId))
+                    throw new CryptoError(
+                        'A family folder is checked only with the family’s member list.',
+                    );
                 const trusted = trustSet(message.input.signers);
                 const nodes: DriveVerifiedNode[] = [];
                 for (const node of message.input.nodes) {
@@ -2944,6 +2951,11 @@ export function createCryptoSession() {
             }
             case 'driveCopyFile': {
                 const { workspaceId, source, node, versionId } = message.input;
+                // A copy re-signs its source as checked by personal pins alone: in a family folder
+                // that could sign a former member's record as this person's own. Not until a copy
+                // takes the family's trust (1c step 7).
+                if (groups.isArea(workspaceId))
+                    throw new CryptoError('Files in a family folder can’t be copied yet.');
                 requireWritable(workspaceId);
                 const sourceKey = nodeKey(workspaceId, source.nodeId);
                 if (!sourceKey) throw new CryptoError('Open the containing folder first.');

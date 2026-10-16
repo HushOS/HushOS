@@ -1,5 +1,6 @@
+import type { CryptoResults } from '@hushos/crypto';
 import { describe, expect, test } from 'vitest';
-import { syncGroup } from './sync';
+import { areaWrite, syncGroup, writeRefusal } from './sync';
 import { AREA, GROUP, USER, harness, pinAt, refusal } from './test-harness';
 
 /*
@@ -129,7 +130,15 @@ describe('syncing a family', () => {
             selfGrantToStore: selfGrant as never,
             pinArea: { workspaceId: AREA, version: 1 },
         });
-        h.results.driveOpenNodes = () => ({ nodes: [] });
+        h.results.driveOpenNodes = () => ({
+            nodes: [
+                {
+                    id: 'root',
+                    metadata: { name: 'Family', mime: null, size: null, modified: null },
+                    content: null,
+                },
+            ],
+        });
         const result = await syncGroup(h.ctx, GROUP);
         if (result.status !== 'accepted') throw new Error(result.status);
         expect(stored).toEqual([[AREA, selfGrant]]);
@@ -242,5 +251,74 @@ describe('syncing a family', () => {
         // The row goes only once the record is written.
         expect(order).toEqual(['record, outbox 1']);
         expect(await h.store.outbox(USER, GROUP)).toEqual([]);
+    });
+});
+
+/*
+ * What a family folder page says it may do (plan section 5, F9). The worker
+ * refuses any write this does not allow either way; a wrong reading here would
+ * offer Add where the worker refuses, or say a folder is fine whose server is
+ * ahead of or behind the member list.
+ */
+describe('areaWrite', () => {
+    const root = { id: 'root' } as never;
+    const opened = (reason: CryptoResults['groupOpenArea']['reason']) => ({
+        version: 1,
+        writable: reason === null,
+        reason,
+        selfGrantToStore: null,
+        pinArea: { workspaceId: AREA, version: 1 },
+    });
+    const view = (withRoot: boolean) => ({
+        workspaceKeyVersion: 1,
+        changeSeq: 0,
+        root: withRoot ? root : null,
+        rotation: null,
+    });
+    test.each([
+        ['not opened at all', null, false, true, 'read-only'],
+        ['no grant at the latest version', opened('no-grant-at-latest'), true, true, 'read-only'],
+        ['the server behind the member list', opened('server-behind'), true, true, 'keys-changed'],
+        ['the server ahead of the member list', opened('server-ahead'), true, true, 'keys-changed'],
+        ['the root not listed yet, then listed', opened('root-unknown'), true, true, 'writable'],
+        ['a root under an older key', opened('root-behind'), false, true, 'keys-changed'],
+        ['a root that did not open', opened('root-unknown'), false, true, 'keys-changed'],
+        ['no root at all', opened('root-unknown'), false, false, 'read-only'],
+        ['nothing wrong and the root listed', opened(null), true, true, 'writable'],
+    ] as const)('%s', (_case, state, rootListed, withRoot, expected) => {
+        expect(areaWrite({ opened: state, rootListed, view: view(withRoot) })).toBe(expected);
+    });
+});
+
+/*
+ * Adding to a family folder while a key change walks it (D9): only a folder at
+ * the walk's target epoch (re-keyed, or made since) takes anything. One below
+ * is under a key the removed member holds.
+ */
+describe('writeRefusal', () => {
+    const state = (
+        write: ReturnType<typeof areaWrite>,
+        rotation: { targetEpoch: number } | null,
+    ) => ({
+        write,
+        view: {
+            workspaceKeyVersion: 1,
+            changeSeq: 0,
+            root: null,
+            rotation: rotation ? { id: 'r', nodeId: 'root', ...rotation } : null,
+        },
+    });
+    test('the walk’s target epoch is the boundary: at it a folder takes things, one below waits', () => {
+        const walking = state('writable', { targetEpoch: 7 });
+        expect(writeRefusal(walking, { keyEpoch: 7 })).toBeNull();
+        expect(writeRefusal(walking, { keyEpoch: 8 })).toBeNull();
+        expect(writeRefusal(walking, { keyEpoch: 6 })).toMatch(/^Finishing a key change\./);
+        // No walk: any folder.
+        expect(writeRefusal(state('writable', null), { keyEpoch: 1 })).toBeNull();
+    });
+    test('no state, or a folder the worker may not write, refuses whatever the epoch', () => {
+        expect(writeRefusal(undefined, { keyEpoch: 99 })).toMatch(/Open the family again/);
+        expect(writeRefusal(state('read-only', null), { keyEpoch: 99 })).toMatch(/couldn’t check/);
+        expect(writeRefusal(state('keys-changed', null), { keyEpoch: 99 })).toMatch(/keys changed/);
     });
 });

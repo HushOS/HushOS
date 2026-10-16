@@ -89,9 +89,10 @@ export type MenuEntry = {
 export type NodeActions = {
     onOpen: (node: DriveNode) => void;
     onDownload: (nodes: DriveNode[]) => void;
-    onRename: (node: DriveNode) => void;
-    onMove: (nodes: DriveNode[]) => void;
-    onCopy: (nodes: DriveNode[]) => void;
+    /* Rename, Move, Copy and Trash are absent where nothing may be changed (a family folder this device may not write). */
+    onRename: ((node: DriveNode) => void) | null;
+    onMove: ((nodes: DriveNode[]) => void) | null;
+    onCopy: ((nodes: DriveNode[]) => void) | null;
     onVersions: (node: DriveNode) => void;
     onInfo: (node: DriveNode) => void;
     /* Absent for a node in someone else's workspace: tags are sealed with one's own registry. */
@@ -102,7 +103,7 @@ export type NodeActions = {
     onSaveCopy: ((nodes: DriveNode[]) => void) | null;
     /* Present only for someone else's node: the operators get its key, sealed here. */
     onReport: ((node: DriveNode) => void) | null;
-    onTrash: (nodes: DriveNode[]) => void;
+    onTrash: ((nodes: DriveNode[]) => void) | null;
 };
 
 /*
@@ -115,7 +116,7 @@ export function nodeEntries(
     targets: DriveNode[],
     actions: NodeActions,
 ): MenuEntry[][] {
-    const { onTags, onShare, onSaveCopy, onReport } = actions;
+    const { onTags, onShare, onSaveCopy, onReport, onRename, onMove, onCopy, onTrash } = actions;
     const many = targets.length > 1;
     const open: MenuEntry[] = [
         {
@@ -140,27 +141,27 @@ export function nodeEntries(
             onSelect: () => onSaveCopy(targets),
         });
     const organise: MenuEntry[] = [];
-    if (!many)
+    if (onRename && !many)
         organise.push({
             label: 'Rename',
             icon: PencilIcon,
-            onSelect: () => actions.onRename(node),
+            onSelect: () => onRename(node),
             shortcut: 'F2',
         });
-    organise.push(
-        {
+    if (onMove)
+        organise.push({
             label: 'Move',
             icon: FolderInputIcon,
-            onSelect: () => actions.onMove(targets),
+            onSelect: () => onMove(targets),
             shortcut: 'M',
-        },
-        {
+        });
+    if (onCopy)
+        organise.push({
             label: 'Copy',
             icon: CopyIcon,
-            onSelect: () => actions.onCopy(targets),
+            onSelect: () => onCopy(targets),
             shortcut: 'C',
-        },
-    );
+        });
     if (onTags)
         organise.push({
             label: 'Tags',
@@ -185,15 +186,16 @@ export function nodeEntries(
     const groups = [open, organise, about];
     if (onReport && !many)
         groups.push([{ label: 'Report', icon: FlagIcon, onSelect: () => onReport(node) }]);
-    groups.push([
-        {
-            label: 'Move to Trash',
-            icon: Trash2Icon,
-            onSelect: () => actions.onTrash(targets),
-            shortcut: keyLabel('Backspace'),
-            destructive: true,
-        },
-    ]);
+    if (onTrash)
+        groups.push([
+            {
+                label: 'Move to Trash',
+                icon: Trash2Icon,
+                onSelect: () => onTrash(targets),
+                shortcut: keyLabel('Backspace'),
+                destructive: true,
+            },
+        ]);
     return groups.filter((group) => group.length > 0);
 }
 
@@ -285,11 +287,12 @@ export function NodeSelectionBar({
     infoOpen: boolean;
     onShare: (node: DriveNode) => void;
     onDownload: () => void;
-    onMove: () => void;
-    onCopy: () => void;
-    onRename: (node: DriveNode) => void;
+    /* Absent where nothing may be changed, or (Copy) copied out, here. */
+    onMove: (() => void) | null;
+    onCopy: (() => void) | null;
+    onRename: ((node: DriveNode) => void) | null;
     onTags: () => void;
-    onTrash: () => void;
+    onTrash: (() => void) | null;
     onVersions: (node: DriveNode) => void;
     onInfo: () => void;
     onSelectAll: () => void;
@@ -309,14 +312,16 @@ export function NodeSelectionBar({
                 />
             )}
             <SelectionAction icon={DownloadIcon} label="Download" onClick={onDownload} />
-            <SelectionAction icon={FolderInputIcon} label="Move" onClick={onMove} />
-            <SelectionAction
-                icon={CopyIcon}
-                label="Copy"
-                className="max-sm:hidden"
-                onClick={onCopy}
-            />
-            {single && (
+            {onMove && <SelectionAction icon={FolderInputIcon} label="Move" onClick={onMove} />}
+            {onCopy && (
+                <SelectionAction
+                    icon={CopyIcon}
+                    label="Copy"
+                    className="max-sm:hidden"
+                    onClick={onCopy}
+                />
+            )}
+            {single && onRename && (
                 <SelectionAction
                     icon={PencilIcon}
                     label="Rename"
@@ -332,12 +337,14 @@ export function NodeSelectionBar({
                     onClick={onTags}
                 />
             )}
-            <SelectionAction
-                icon={Trash2Icon}
-                label="Move to Trash"
-                disabled={trashing}
-                onClick={onTrash}
-            />
+            {onTrash && (
+                <SelectionAction
+                    icon={Trash2Icon}
+                    label="Move to Trash"
+                    disabled={trashing}
+                    onClick={onTrash}
+                />
+            )}
             {/* The less common actions, and on a phone every action the bar has no room for. */}
             <DropdownMenu>
                 <DropdownMenuTrigger
@@ -358,10 +365,12 @@ export function NodeSelectionBar({
                             <Share2Icon aria-hidden="true" /> Share
                         </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem className="sm:hidden" onClick={onCopy}>
-                        <CopyIcon aria-hidden="true" /> Copy
-                    </DropdownMenuItem>
-                    {single && (
+                    {onCopy && (
+                        <DropdownMenuItem className="sm:hidden" onClick={onCopy}>
+                            <CopyIcon aria-hidden="true" /> Copy
+                        </DropdownMenuItem>
+                    )}
+                    {single && onRename && (
                         <DropdownMenuItem className="sm:hidden" onClick={() => onRename(single)}>
                             <PencilIcon aria-hidden="true" /> Rename
                         </DropdownMenuItem>

@@ -66,7 +66,8 @@ export type ViewerVersion = {
     meta: string;
     banner: string;
     restoring: boolean;
-    onRestore: () => void;
+    /* Absent where nothing may be changed (a family folder this device may not write). */
+    onRestore?: () => void;
 };
 
 export function Preview({
@@ -252,14 +253,16 @@ export function Preview({
                                 <span className="min-w-0 flex-1">
                                     <b>Earlier version.</b> {version.banner}
                                 </span>
-                                <Button
-                                    size="sm"
-                                    disabled={version.restoring}
-                                    onClick={version.onRestore}
-                                >
-                                    {version.restoring ? <Spinner /> : <RotateCcwIcon />}
-                                    {version.restoring ? 'Restoring…' : 'Restore this version'}
-                                </Button>
+                                {version.onRestore && (
+                                    <Button
+                                        size="sm"
+                                        disabled={version.restoring}
+                                        onClick={version.onRestore}
+                                    >
+                                        {version.restoring ? <Spinner /> : <RotateCcwIcon />}
+                                        {version.restoring ? 'Restoring…' : 'Restore this version'}
+                                    </Button>
+                                )}
                             </div>
                         )}
                         <SourceSwitch.Provider value={switchValue}>

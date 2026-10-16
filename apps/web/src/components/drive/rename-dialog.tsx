@@ -12,7 +12,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { driveClient, driveError, invalidateFolders } from '@/lib/drive';
+import { clientFor, driveError, invalidateFolders } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
 export function RenameDialog({
@@ -73,7 +73,7 @@ function RenameForm({
         setPending(true);
         setError('');
         try {
-            const renamed = await driveClient.rename(node, name);
+            const renamed = await clientFor(node.workspaceId).rename(node, name);
             await invalidateFolders(queryClient, renamed.parentId);
             cue('success');
             onOpenChange(false);

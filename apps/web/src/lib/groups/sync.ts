@@ -1,5 +1,11 @@
 import type { CryptoResults, GroupView, RosterFork, ServedChain } from '@hushos/crypto';
-import { GroupApiError, isNotMember, type MemberIdentity, type ServedRosterPage } from './api';
+import {
+    GroupApiError,
+    isNotMember,
+    type MemberIdentity,
+    type ServedRosterPage,
+    type SpaceList,
+} from './api';
 import type { GroupContext, GroupNotice } from './context';
 import { flushOutbox } from './outbox';
 import { settlePin, type OpenedArea } from './pins';
@@ -23,9 +29,64 @@ export type AreaState = {
     opened: CryptoResults['groupOpenArea'] | null;
     /* Why it is not open, when it is not: shown as "Couldn't check this folder's keys". */
     error: string | null;
-    /* Whether the root was listed under the area's write version (the worker's own check). */
+    /* Whether the root opened here under the area's write version (what the worker counts). */
     rootListed: boolean;
+    /* The folder's name, from its root's sealed metadata; null when the root did not open. */
+    name: string | null;
+    /* Route 25's view of the area: what its Drive client opens (lib/spaces.ts). */
+    view: {
+        workspaceKeyVersion: number;
+        changeSeq: number;
+        root: AreaRoot | null;
+        rotation: { id: string; nodeId: string; targetEpoch: number } | null;
+    };
+    /* What this device may do in it, as the worker will allow it (areaWrite). */
+    write: AreaWrite;
 };
+type AreaRoot = NonNullable<
+    Extract<SpaceList[number]['areas'][number], { idSeed: string }>['root']
+>;
+
+/*
+ * Whether a family folder may be written on this device, as the worker decides
+ * it (plan section 5, F9): it opened at the member list's latest key version,
+ * the server serves that version, and its root opened here under it. Else
+ * `read-only` (no grant at the latest version, or no root, so its keys could
+ * not be checked) or `keys-changed` (the server is behind or ahead of the
+ * member list, or the root is not under the latest key: a key change the
+ * server withheld, or one it ran ahead of). The worker refuses every write
+ * that is not `writable` whatever this says; this only lets the page say so.
+ */
+export type AreaWrite = 'writable' | 'read-only' | 'keys-changed';
+
+/*
+ * Why nothing may be added to `folder` in a family folder now, or null: the
+ * worker refuses a write the member list does not allow whatever this says
+ * (F9), and a folder a running key change has not reached yet (its key epoch
+ * below the walk's target) takes nothing until it has (docs/groups-server.md
+ * 8, decision D9). Nothing waits on its own: the person tries again after.
+ */
+export function writeRefusal(
+    state: Pick<AreaState, 'write' | 'view'> | undefined,
+    folder: { keyEpoch: number },
+) {
+    if (!state) return 'Open the family again, then try again.';
+    if (state.write === 'read-only')
+        return 'HushOS couldn’t check this folder’s keys on this device, so nothing can be added to it.';
+    if (state.write === 'keys-changed')
+        return 'This folder’s keys changed. Use Check again on the folder, then try again.';
+    const rotation = state.view.rotation;
+    if (rotation && folder.keyEpoch < rotation.targetEpoch)
+        return 'Finishing a key change. You can add to this folder once it’s done; try again then.';
+    return null;
+}
+export function areaWrite(state: Pick<AreaState, 'opened' | 'rootListed' | 'view'>): AreaWrite {
+    const reason = state.opened?.reason;
+    if (!state.opened || reason === 'no-grant-at-latest') return 'read-only';
+    if (reason === 'server-behind' || reason === 'server-ahead') return 'keys-changed';
+    if (state.rootListed) return 'writable';
+    return state.view.root ? 'keys-changed' : 'read-only';
+}
 
 export type SyncResult =
     | {
@@ -198,6 +259,14 @@ export async function openAreas(
             opened: null,
             error: null,
             rootListed: false,
+            name: null,
+            view: {
+                workspaceKeyVersion: area.workspaceKeyVersion,
+                changeSeq: area.changeSeq,
+                root: area.root,
+                rotation: area.rotation,
+            },
+            write: 'read-only',
         };
         out.push(state);
         try {
@@ -223,7 +292,7 @@ export async function openAreas(
                     });
             const root = area.root;
             if (root) {
-                await ctx.rpc('driveOpenNodes', {
+                const listed = await ctx.rpc('driveOpenNodes', {
                     workspaceId: area.workspaceId,
                     nodes: [
                         {
@@ -241,12 +310,19 @@ export async function openAreas(
                         },
                     ],
                 });
-                state.rootListed = root.parentKeyEpoch === view.areas[area.workspaceId];
+                // Only a root that opened (its envelope under the area key at that version) counts.
+                const opened = listed.nodes[0];
+                state.name = opened && !opened.error ? (opened.metadata?.name ?? null) : null;
+                state.rootListed =
+                    opened !== undefined &&
+                    !opened.error &&
+                    root.parentKeyEpoch === view.areas[area.workspaceId];
             }
         } catch (error) {
             if (isNotMember(error)) throw error;
             state.error = error instanceof Error ? error.message : 'Please try again.';
         }
+        state.write = areaWrite(state);
     }
     return out;
 }

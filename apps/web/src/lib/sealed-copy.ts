@@ -1,7 +1,7 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { makeZip, predictLength } from 'client-zip';
 import { openSink } from '@/lib/download-sinks';
-import { driveClient } from '@/lib/drive';
+import { clientFor } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { safeFileName } from '@/lib/save-file';
 
@@ -103,7 +103,7 @@ export async function collectSealed(root: DriveNode) {
     async function walk(node: DriveNode) {
         nodes.push(record(node));
         if (node.kind !== 'folder') return;
-        const listing = await driveClient.listFolder(node.id);
+        const listing = await clientFor(node.workspaceId).listFolder(node.id);
         for (const child of listing.children) await walk(child);
     }
     await walk(root);

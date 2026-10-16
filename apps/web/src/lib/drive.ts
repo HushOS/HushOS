@@ -2,6 +2,7 @@ import {
     contentSize,
     createDriveClient,
     createIndexedDbMirror,
+    type DriveClient,
     type DriveNode,
 } from '@hushos/drive/client';
 import { ROOT_LABEL } from '@hushos/drive/protocol';
@@ -20,6 +21,7 @@ import {
     trustGranter,
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
+import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
  * The browser's Drive client and its query layer. Folder listings live in the
@@ -49,6 +51,29 @@ export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
 });
 
+/*
+ * Family folders each have a Drive client of their own (lib/spaces.ts, loaded
+ * with the family pages), registered here by workspace so code that holds a
+ * node reaches the client that lists, checks and writes it without importing
+ * the families layer. Anything never registered is this account's own Drive;
+ * a family folder forgotten here throws rather than falling back to it
+ * (lib/space-registry.ts).
+ */
+const spaces = createSpaceRegistry<DriveClient>(() => driveClient);
+export const registerSpace = spaces.register;
+export const clientFor = spaces.clientFor;
+export const clientOfNode = spaces.clientOfNode;
+/* Why nothing may be added to `folder` now, or null: checked before any upload, folder or move into it. */
+export const refuseWrite = spaces.refuseWrite;
+/* After a lock: every family folder's client forgets what it opened, as the personal one does. */
+export const closeSpaces = spaces.closeAll;
+/* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
+export const forgetSpace = spaces.forget;
+export const pruneSpaces = spaces.prune;
+
+/* Shown while a key change walks a family folder: adding to a folder it has not reached is refused. */
+export const FINISHING_KEY_CHANGE = 'Finishing a key change…';
+
 export const driveKeys = {
     all: ['drive'] as const,
     shared: ['drive', 'shared'] as const,
@@ -68,12 +93,16 @@ export const driveOpenQueryOptions = (userId: string) =>
         retry: false,
     });
 
-/* The catalogue answers first when it can, so a folder draws before the server is asked. */
-export const folderQueryOptions = (folderId: string) =>
+/*
+ * The catalogue answers first when it can, so a folder draws before the server
+ * is asked. `workspaceId` names a family folder's workspace, whose client
+ * lists it; without it, this account's own Drive does (shares included).
+ */
+export const folderQueryOptions = (folderId: string, workspaceId?: string | null) =>
     queryOptions({
         queryKey: driveKeys.folder(folderId),
-        queryFn: () => driveClient.listFolder(folderId),
-        placeholderData: () => driveClient.localListing(folderId) ?? undefined,
+        queryFn: () => clientFor(workspaceId).listFolder(folderId),
+        placeholderData: () => clientFor(workspaceId).localListing(folderId) ?? undefined,
         staleTime: 15_000,
         retry: 1,
     });
@@ -118,6 +147,7 @@ export async function invalidateFolders(queryClient: QueryClient, ...folderIds: 
     ]);
     // Recent, search and tags read the catalogue, which otherwise waits for the next feed poll.
     void driveClient.catchUp().catch(() => {});
+    for (const client of spaces.clients()) void client.catchUp().catch(() => {});
 }
 
 /* The name a copy takes among `taken`: the original, else "name (copy)", "name (copy 2)", and so on. */
@@ -154,7 +184,9 @@ export async function copyInto(
     destination: DriveNode,
     onProgress?: (done: number) => void,
 ) {
-    const listing = await queryClient.fetchQuery(folderQueryOptions(destination.id));
+    const listing = await queryClient.fetchQuery(
+        folderQueryOptions(destination.id, destination.workspaceId),
+    );
     const taken = new Set(listing.children.map((child) => child.name));
     let done = 0;
     try {
@@ -162,7 +194,7 @@ export async function copyInto(
             const name = copyName(node.name, taken);
             taken.add(name);
             const before = done;
-            await driveClient.copyTree(node, destination, name, (made) => {
+            await clientFor(destination.workspaceId).copyTree(node, destination, name, (made) => {
                 done = before + made;
                 onProgress?.(done);
             });
@@ -260,9 +292,14 @@ export function sortNodesBy(nodes: DriveNode[], order: SortOrder) {
 }
 
 /* The size a file shows: what its version envelope sealed, else what its metadata says. */
-/* An item's name as the person sees it: their top folder is "My files", whatever it is stored as. */
-export function displayName(node: Pick<DriveNode, 'name' | 'parentId'>) {
-    return node.parentId === null ? ROOT_LABEL : node.name;
+/*
+ * An item's name as the person sees it: their top folder is "My files",
+ * whatever it is stored as; a family folder's top folder is its own name.
+ */
+export function displayName(node: Pick<DriveNode, 'name' | 'parentId'> & { workspaceId?: string }) {
+    return node.parentId === null && !(node.workspaceId && spaces.has(node.workspaceId))
+        ? ROOT_LABEL
+        : node.name;
 }
 
 export function nodeSize(node: DriveNode) {

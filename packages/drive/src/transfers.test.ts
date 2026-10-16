@@ -4,7 +4,12 @@ import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
 import { scopedId } from '../../db/src/ids';
 import { createMemoryJournal } from './journal';
-import { backoffDelay, createTransferManager, type UploadStash } from './transfers';
+import {
+    backoffDelay,
+    createTransferManager,
+    type TransferManagerOptions,
+    type UploadStash,
+} from './transfers';
 
 /*
  * The upload engine against a fake worker, a fake API and an in-memory journal:
@@ -89,6 +94,8 @@ function harness(
         offline?: () => boolean;
         /* What the fake worker hashes a chunk to; by name and index unless a test changes the bytes. */
         digest?: (file: File, index: number) => string;
+        refuseWrite?: (target: DriveNode) => string | null;
+        openNodes?: TransferManagerOptions['openNodes'];
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -310,7 +317,8 @@ function harness(
         stash: options.stash,
         random: options.random,
         offline: options.offline,
-        openNodes: async () => ({ parent: node('root', null) }),
+        openNodes: options.openNodes ?? (async () => ({ parent: node('root', null) })),
+        refuseWrite: options.refuseWrite,
         onPublished: (n) => published.push(n.id),
         // Ids as the server derives them, minted without Web Crypto's real-time digest,
         // which fake timers would never let resolve.
@@ -367,6 +375,56 @@ describe('backoff', () => {
 });
 
 describe('transfer manager', () => {
+    test('a key change that lands after a file was queued stops it at prepare, and a retry goes once the walk reached the folder', async () => {
+        // The running key change's target epoch, null before it lands; what the walk has re-keyed.
+        let target: number | null = null;
+        const epochs = new Map([
+            ['waiting', 1],
+            ['old', 1],
+        ]);
+        const at = (id: string, parentId: string | null = 'root') => ({
+            ...node(id, parentId),
+            keyEpoch: epochs.get(id) ?? 9,
+        });
+        const existing = { ...at('old'), kind: 'file' as const };
+        const h = harness({
+            // As the app's refusal reads it: by the key epoch of the node it is handed.
+            refuseWrite: (t) =>
+                target !== null && t.keyEpoch < target ? 'Finishing a key change.' : null,
+            // The folder (and the file replaced) as listed now, not as when queued.
+            openNodes: async (entry) => ({
+                parent: at(entry.parentId, null),
+                ...('replacesId' in entry && entry.replacesId
+                    ? { replaces: { ...at(entry.replacesId), kind: 'file' as const } }
+                    : {}),
+            }),
+        });
+        const [intoFolder, replacing] = h.manager.enqueue([
+            { file: fakeFile(CHUNK), parent: at('waiting') },
+            { file: fakeFile(CHUNK), parent: at('root', null), replaces: existing },
+        ]);
+        target = 5;
+        await settle(2_000);
+        for (const id of [intoFolder!, replacing!]) {
+            expect(h.item(id).status).toBe('failed');
+            expect(h.item(id).error).toBe('Finishing a key change.');
+        }
+        // Nothing was wrapped under the old keys, and the server saw nothing.
+        for (const operation of ['driveCreateNodes', 'driveUploadPrepare', 'driveUploadSend'])
+            expect(h.calls).not.toContain(operation);
+        expect(h.server.uploads.size).toBe(0);
+        // The walk re-keys both: the snapshots taken when they were queued are still at epoch 1,
+        // so a retry goes only because the folder and the file are looked up again.
+        epochs.set('waiting', 5);
+        epochs.set('old', 5);
+        await h.manager.retry(intoFolder!);
+        await h.manager.retry(replacing!);
+        await settle(2_000);
+        expect(h.item(intoFolder!).status).toBe('done');
+        expect(h.item(replacing!).status).toBe('done');
+        expect(h.givenEpochs.length).toBe(1);
+    });
+
     test('uploads through a bounded pool, journals digests before sends, completes once', async () => {
         const h = harness();
         const [id] = h.manager.enqueue([{ file: fakeFile(5 * CHUNK), parent: node('root', null) }]);

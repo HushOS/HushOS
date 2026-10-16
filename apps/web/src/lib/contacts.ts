@@ -786,15 +786,29 @@ export async function trustGranter(
  */
 const signersCache = new WeakMap<object, ReturnType<typeof signersFromPins>>();
 export async function trustedSigners(userId: string) {
-    const loaded = boundQueryClient
-        ? await boundQueryClient.fetchQuery(settingsQueryOptions(userId))
-        : await loadSettings(userId);
+    const loaded = await cachedSettings(userId);
     let signers = signersCache.get(loaded.settings);
     if (!signers) {
         signers = signersFromPins(loaded.settings.contacts);
         signersCache.set(loaded.settings, signers);
     }
     return signers;
+}
+
+/* The settings as the query layer holds them, so a listing does not open them again. */
+function cachedSettings(userId: string) {
+    return boundQueryClient
+        ? boundQueryClient.fetchQuery(settingsQueryOptions(userId))
+        : loadSettings(userId);
+}
+
+/*
+ * This person's pins, as family folder verdicts take them (lib/groups/writers.ts).
+ * The same object while the settings do not change, so what is built from it can be
+ * kept until they do.
+ */
+export async function contactPins(userId: string) {
+    return (await cachedSettings(userId)).settings.contacts;
 }
 
 /* Grantees whose pin followed a succession: what was shared with them waits to be sealed again. */

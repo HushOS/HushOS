@@ -40,7 +40,12 @@ import {
     type NodeChange,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
-import { signatureFormFor, type Integrity, type NodeIntegrity, type SignatureForm } from './trust';
+import {
+    signatureFormFor,
+    type NodeIntegrity,
+    type RecordIntegrity,
+    type SignatureForm,
+} from './trust';
 
 /*
  * Browser orchestration for Drive. Keys live in the crypto worker and are reached
@@ -169,7 +174,33 @@ export type TrustedGranter = {
 };
 /* A grantee's keys as a pin vouches for them: share suite 4 needs the KEM key. */
 export type TrustedGrantee = { encryptionPublicKey: string; kemPublicKey: string | null };
+/*
+ * Records checked by a verifier other than driveVerify (a family folder's,
+ * groupVerify): each node's metadata and versions, with the group whose
+ * member list vouched for a verified one (`via`), null otherwise.
+ */
+export type VerifiedRecords = {
+    id: string;
+    metadata: RecordIntegrity;
+    via: string | null;
+    versions: { id: string; integrity: RecordIntegrity; via: string | null }[];
+}[];
 export type DriveClientOptions = {
+    /*
+     * A workspace whose key the caller has already opened in the worker, and
+     * how to read it: a family folder, opened by the family's sync (route
+     * 25's area view, groupOpenArea, its root listed). `open` then neither
+     * opens a workspace grant nor makes a root: a folder without one cannot
+     * be opened here. Without it, `open` loads this account's own workspace.
+     */
+    view?: () => Promise<WorkspaceView>;
+    /*
+     * Checks who wrote what is listed, in place of driveVerify against the
+     * personal trust set: a family folder's records are judged by the
+     * family's member list (groupVerify). It must fail closed, as driveVerify
+     * does: a check that throws reads `unchecked`.
+     */
+    verify?: (workspaceId: string, nodes: DriveSignedNode[]) => Promise<VerifiedRecords>;
     /*
      * Where this device keeps the workspace's tree as the server serves it, so
      * the catalogue (names, tags, search) rebuilds without the network and an
@@ -336,21 +367,29 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         const out = new Map<string, NodeIntegrity>();
         if (!nodes.length || linkWorkspaces.has(nodes[0]!.workspaceId)) return out;
         try {
-            const { nodes: verified } = await rpc('driveVerify', {
-                workspaceId: nodes[0]!.workspaceId,
-                signers: await trustedSigners(),
-                nodes: nodes.map((node) =>
+            const verified = await checkRecords(
+                nodes[0]!.workspaceId,
+                nodes.map((node) =>
                     signedNodeOf(node, node.currentVersion ? [node.currentVersion] : []),
                 ),
-            });
+            );
             for (const [index, node] of nodes.entries()) {
-                const result = verified[index];
+                // Matched by id as well as place: a verifier that answers out of order checks nothing.
+                const result = verified[index]?.id === node.id ? verified[index] : undefined;
+                const version = node.currentVersion
+                    ? result?.versions.find((v) => v.id === node.currentVersion!.id)
+                    : undefined;
                 out.set(node.id, {
                     metadata: result?.metadata ?? 'unchecked',
-                    version: node.currentVersion
-                        ? (result?.versions.find((v) => v.id === node.currentVersion!.id)
-                              ?.integrity ?? 'unchecked')
-                        : null,
+                    version: node.currentVersion ? (version?.integrity ?? 'unchecked') : null,
+                    ...(options.verify
+                        ? {
+                              via: {
+                                  metadata: result?.via ?? null,
+                                  version: version?.via ?? null,
+                              },
+                          }
+                        : {}),
                 });
             }
         } catch {
@@ -361,6 +400,25 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 });
         }
         return out;
+    }
+    /* Records checked by the client's verifier: the family's member list, or the personal trust set. */
+    async function checkRecords(workspaceId: string, nodes: DriveSignedNode[]) {
+        if (options.verify) return options.verify(workspaceId, nodes);
+        const { nodes: verified } = await rpc('driveVerify', {
+            workspaceId,
+            signers: await trustedSigners(),
+            nodes,
+        });
+        return verified.map((node) => ({
+            id: node.id,
+            metadata: node.metadata,
+            via: null,
+            versions: node.versions.map((version) => ({
+                id: version.id,
+                integrity: version.integrity,
+                via: null,
+            })),
+        }));
     }
     /* The trust set, or a refusal: nothing is checked or re-signed against a guess. */
     async function trustedSigners() {
@@ -377,6 +435,19 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     function open(userId: string) {
         currentUserId = userId;
         opening ??= (async () => {
+            if (options.view) {
+                // Opened elsewhere (a family folder's sync): its key is in the worker already, and
+                // its root is made with the folder itself, never here.
+                const view = await options.view();
+                if (!view.root) throw new Error('This folder isn’t ready yet. Try again later.');
+                workspace = view;
+                await options.openIdentity?.(userId);
+                return {
+                    workspaceId: view.workspaceId,
+                    root: view.root,
+                    changeSeq: view.changeSeq,
+                };
+            }
             const view = await api.workspace();
             if (!view.grant)
                 throw new Error('This account has no workspace key yet. Finish account setup.');
@@ -701,8 +772,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             } while (cursor);
         } catch (error) {
             // A folder this client has not seen (a deep link into a share): mount the
-            // shares, which opens their keys, and try each owner's workspace.
-            if (!(error instanceof DriveApiError) || error.status !== 404 || first) throw error;
+            // shares, which opens their keys, and try each owner's workspace. A family
+            // folder's client holds no shares: its folders are its own workspace's.
+            if (options.view || !(error instanceof DriveApiError) || error.status !== 404 || first)
+                throw error;
             const candidates = new Set(
                 (await mountShares()).map((mount) => mount.workspaceId).filter((id) => id !== ws),
             );
@@ -946,7 +1019,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (!listed.length)
             return [] as (VersionListView & {
                 content: DriveContentInfo | null;
-                integrity: Integrity | null;
+                integrity: RecordIntegrity | null;
             })[];
         const { versions: opened } = await rpc('driveOpenVersions', {
             workspaceId: node.workspaceId,
@@ -954,16 +1027,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             versions: listed.map(versionEnvelopeOf),
         });
         // Each version on its own: an earlier one may have been added by someone else.
-        const checked = new Map<string, Integrity>();
+        const checked = new Map<string, RecordIntegrity>();
         const link = linkWorkspaces.has(node.workspaceId);
         if (!link) {
             try {
-                const { nodes } = await rpc('driveVerify', {
-                    workspaceId: node.workspaceId,
-                    signers: await trustedSigners(),
-                    nodes: [signedNodeOf(node, listed)],
-                });
-                for (const version of nodes[0]?.versions ?? [])
+                const nodes = await checkRecords(node.workspaceId, [signedNodeOf(node, listed)]);
+                for (const version of nodes[0]?.id === node.id ? nodes[0].versions : [])
                     checked.set(version.id, version.integrity);
             } catch {
                 /* Unchecked: every version below says so. */
@@ -1772,6 +1841,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         close,
         /* Whether the worker holds this node's key, so a caller can skip re-listing its folder. */
         isOpen: (nodeId: string) => openedNodes.has(nodeId),
+        /* Whether this client has seen the node listed (which workspace holds it is known). */
+        knows: (nodeId: string) => workspaceOf.has(nodeId),
         get workspace() {
             return workspace;
         },

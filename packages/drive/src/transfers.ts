@@ -128,6 +128,16 @@ export type TransferManagerOptions = {
     openNodes?: (
         entry: JournalEntry | QueuedEntry,
     ) => Promise<{ parent: DriveNode; replaces?: DriveNode }>;
+    /*
+     * Why nothing may be written into `target` now, or null: asked again at
+     * prepare, right before a node or a content key is made, since a family
+     * folder's key change can land after a file was queued (adding to a folder
+     * the walk has not reached is refused: docs/groups-server.md 8). A refused
+     * folder is looked up again (openNodes) before the answer stands, so a
+     * walk that has reached it since lets the upload go. A refusal fails the
+     * upload with that sentence; nothing retries it on its own.
+     */
+    refuseWrite?: (target: DriveNode) => string | null;
     /* Called once a version is published; the app invalidates its folder listing. */
     onPublished?: (node: NodeView, parentId: string) => void;
     /*
@@ -590,12 +600,31 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.preparing = false;
         }
     }
+    function refusalOf(parent: DriveNode, replaces: DriveNode | undefined) {
+        return (
+            options.refuseWrite?.(parent) ??
+            (replaces ? (options.refuseWrite?.(replaces) ?? null) : null)
+        );
+    }
     async function prepareInner(u: Internal, generation: number, file: File, parent: DriveNode) {
         if (options.thumbnail && !u.thumbnail)
             u.thumbnail = options.thumbnail(file, u.item.mime).catch(() => null);
         const workspaceId = workspaceOf(u);
         await mintIds(u, workspaceId);
         if (u.generation !== generation) return;
+        // Asked again here, right before a node or a content key is made: into the folder, or as
+        // a new version under the file's own key, either may be waiting for a key change.
+        let refused = refusalOf(parent, u.replaces);
+        if (refused && options.openNodes && u.queued) {
+            // The folder as it was when queued may be under an older key than it is now (the walk
+            // may have reached it since): looked up afresh, then asked again.
+            const fresh = await options.openNodes(u.queued);
+            if (u.generation !== generation) return;
+            parent = u.parent = fresh.parent;
+            if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
+            refused = refusalOf(parent, u.replaces);
+        }
+        if (refused) throw new Error(refused);
         const seeds = u.seeds!;
         const metadata: NodeMetadata = {
             name: u.item.name,

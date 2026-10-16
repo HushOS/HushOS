@@ -11,13 +11,14 @@ import {
     UnverifiedMark,
     useSignerNames,
 } from '@/components/drive/unverified-mark';
+import { useFamilyArea } from '@/components/drive/family-area';
 import { FileMark } from '@/components/drive/file-mark';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
-import { nameSigner } from '@/lib/integrity-lines';
-import { driveClient, driveError, formatBytes, formatWhen } from '@/lib/drive';
+import { nameSigner, verifiedByLine, vouchedByLine } from '@/lib/integrity-lines';
+import { clientFor, driveError, formatBytes, formatWhen, type driveClient } from '@/lib/drive';
 import { extensionOf } from '@/lib/previews';
 import { saveSealedCopy } from '@/lib/sealed-copy';
 import { useSharpImage } from '@/lib/sharp-image';
@@ -198,7 +199,7 @@ function OwnCopy({ node }: { node: DriveNode }) {
         if (keys) return keys;
         setPending(true);
         try {
-            const exported = await driveClient.exportKeys(node);
+            const exported = await clientFor(node.workspaceId).exportKeys(node);
             setKeys(exported);
             return exported;
         } catch (error) {
@@ -316,9 +317,13 @@ function ChangedBy({ issue }: { issue: IntegrityIssue }) {
                   ? 'You'
                   : named.kind === 'contact'
                     ? named.name
-                    : issue.signer
-                      ? 'Someone you haven’t checked'
-                      : 'Unknown'}
+                    : named.kind === 'member'
+                      ? named.email
+                          ? `${named.name} (${named.email})`
+                          : named.name
+                      : issue.signer
+                        ? 'Someone you haven’t checked'
+                        : 'Unknown'}
         </span>
     );
 }
@@ -333,8 +338,18 @@ export function ItemDetails({
     nameFirst = false,
 }: ItemDetailsProps) {
     const access = useAccessIndex(Boolean(onShare));
-    const registry = useQuery(tagsQueryOptions).data ?? null;
+    // A family folder's items: no tags here yet (they are one's own registry's), and the
+    // family's word on who wrote them.
+    const area = useFamilyArea();
+    const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const tagIds = registry ? tagsOf(registry, node.id) : [];
+    const userId = useStore(authClient.store, (state) => state.unlockedUserId);
+    const names = useSignerNames(userId, true);
+    // In a family folder the verdict says whose word vouched (`via`); elsewhere a writer pinned
+    // on a family's word does.
+    const verifiedBy = area
+        ? verifiedByLine(node, { groupId: area.groupId, name: area.family }, names.vouchers)
+        : vouchedByLine(node, names);
     const version = node.kind === 'file' ? node.currentVersion : null;
     const size = contentSize(node);
     const unverified = integrityIssues(node);
@@ -387,6 +402,11 @@ export function ItemDetails({
                         </span>
                     </Fact>
                 )}
+                {verifiedBy && (
+                    <Fact label="Checked">
+                        <span data-verified-by>{verifiedBy}</span>
+                    </Fact>
+                )}
                 {version && version.objectStatus !== 'ready' && (
                     <Fact label="Status">
                         <span
@@ -402,29 +422,33 @@ export function ItemDetails({
                         </span>
                     </Fact>
                 )}
-                <dt className="pt-0.5 text-muted-foreground">Tags</dt>
-                <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    {tagIds.length ? (
-                        <TagStamps
-                            tagIds={tagIds}
-                            registry={registry}
-                            itemName={node.name}
-                            max={16}
-                            className="flex-wrap"
-                        />
-                    ) : (
-                        <span>None</span>
-                    )}
-                    {onTags && (
-                        <button
-                            type="button"
-                            className="cursor-pointer text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
-                            onClick={() => onTags(node)}
-                        >
-                            Edit
-                        </button>
-                    )}
-                </dd>
+                {!area && (
+                    <>
+                        <dt className="pt-0.5 text-muted-foreground">Tags</dt>
+                        <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            {tagIds.length ? (
+                                <TagStamps
+                                    tagIds={tagIds}
+                                    registry={registry}
+                                    itemName={node.name}
+                                    max={16}
+                                    className="flex-wrap"
+                                />
+                            ) : (
+                                <span>None</span>
+                            )}
+                            {onTags && (
+                                <button
+                                    type="button"
+                                    className="cursor-pointer text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                                    onClick={() => onTags(node)}
+                                >
+                                    Edit
+                                </button>
+                            )}
+                        </dd>
+                    </>
+                )}
             </dl>
             <SavedFromLinkLine node={node} />
             <div className="rounded-xl border border-rule">

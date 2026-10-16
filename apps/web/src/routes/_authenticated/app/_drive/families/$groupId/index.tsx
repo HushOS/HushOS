@@ -19,7 +19,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import {
     afterFamilyChange,
@@ -53,8 +53,8 @@ export const Route = createFileRoute('/_authenticated/app/_drive/families/$group
 /*
  * One family: who waits to join, the members, open invitations, and leaving.
  * The member list is synced on this device first (after the outbox), and a
- * list shown differently is the hard warning. The family's folders open from
- * the sidebar once the family spaces arrive (plan step 6).
+ * list shown differently is the hard warning. The family's folders are its
+ * space (/app/s/<family>), which its sidebar row opens.
  */
 function FamilyPage() {
     const { groupId } = Route.useParams();
@@ -136,6 +136,13 @@ function FamilyPage() {
                         : undefined
                 }
             >
+                <Link
+                    to="/app/s/$groupId"
+                    params={{ groupId }}
+                    className={buttonVariants({ variant: 'outline' })}
+                >
+                    Family folders
+                </Link>
                 {manager && <Button onClick={() => setInviting(true)}>Invite someone</Button>}
             </PageHeader>
 
