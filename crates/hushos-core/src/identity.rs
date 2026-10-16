@@ -192,10 +192,18 @@ pub(crate) fn kem_decapsulate(seed: &[u8], ciphertext: &[u8]) -> CoreResult<Zero
     Ok(secret)
 }
 
-/* Version 1 or 2 at a positive key version; version 2 carries all of its lattice parts. */
+/*
+ * Version 1 or 2 at a key version of 1..2^53-1 (the web's safe integers);
+ * version 2 carries all of its lattice parts and a keys signature that is not
+ * empty, as the web's guard asks.
+ */
 fn check_envelope(envelope: &IdentityEnvelope) -> CoreResult<()> {
-    let complete = envelope.kem.is_some() && envelope.ml_dsa.is_some() && envelope.keys_signature.is_some();
-    if !matches!(envelope.version, 1 | 2) || envelope.key_version < 1 || (envelope.version == 2 && !complete)
+    let complete = envelope.kem.is_some()
+        && envelope.ml_dsa.is_some()
+        && envelope.keys_signature.as_deref().is_some_and(|signature| !signature.is_empty());
+    if !matches!(envelope.version, 1 | 2)
+        || !(1..=crate::signatures::MAX_SAFE_INTEGER).contains(&envelope.key_version)
+        || (envelope.version == 2 && !complete)
     {
         return Err(input("Unsupported identity envelope."));
     }
@@ -666,8 +674,13 @@ pub fn identity_verify_keys(user_id: String, identity: PublicIdentity) -> bool {
 
 /// A link of a succession chain, as the server serves it: the old identity's
 /// keys, the new one's, and the old identity's hybrid signature over the
-/// version 2 statement ([`crate::succession_statement`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// version 2 statement ([`crate::succession_statement`]), what personal pins
+/// follow. `consent`, on links made from round 8 on, is two hybrid signatures
+/// over the consent statement ([`crate::succession_consent_statement`]), the
+/// old identity's as "old" then the new identity's as "new" (6746 bytes,
+/// base64url): the successor's consent, which the group core asks of links
+/// into keys it reached from a member's first keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SuccessionLink {
     pub old_key_version: u64,
@@ -681,7 +694,13 @@ pub struct SuccessionLink {
     pub new_kem_public_key: String,
     /// base64url, 3373 bytes.
     pub signature: String,
+    /// base64url, 6746 bytes, or none on a link from before round 8.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub consent: Option<String>,
 }
+
+/// The size of a link's consent: two hybrid signatures, the old identity's and the new one's.
+pub const SUCCESSION_CONSENT_BYTES: usize = 2 * HYBRID_SIGNATURE_BYTES;
 
 /// A new identity and the succession signature that vouches for it.
 #[derive(Debug, Clone)]
@@ -691,6 +710,10 @@ pub struct IdentitySuccession {
     pub identity: IdentityEnvelope,
     /// base64url, 3373 bytes (the hybrid signature): send as `signature`.
     pub signature: String,
+    /// base64url, 6746 bytes: the successor's consent (the version 3 statement
+    /// signed by the old identity, then by the new one). The group core follows
+    /// only links that carry it.
+    pub consent: String,
 }
 
 /// The keys a contact was pinned with, from a version 3 pin: X25519 and
@@ -746,6 +769,7 @@ pub struct SuccessionSigner {
 ///     new_encryption_public_key: next.identity.encryption_public_key.clone(), new_signing_public_key: next.identity.signing_public_key.clone(),
 ///     new_ml_dsa_public_key: next.identity.ml_dsa.clone().unwrap().public_key,
 ///     new_kem_public_key: next.identity.kem.clone().unwrap().public_key, signature: next.signature,
+///     consent: Some(next.consent),
 /// };
 /// let signer = SuccessionSigner { signing_public_key: current.signing_public_key, ml_dsa_public_key: current.ml_dsa.unwrap().public_key };
 /// assert!(succession_verify("user-1".into(), link.clone(), signer.clone()));
@@ -782,10 +806,64 @@ pub fn identity_succeed(
         new_ml_dsa_public_key: lattice(&identity),
         new_kem_public_key: identity.kem.as_ref().expect("minted with a KEM key").public_key.clone(),
         signature: String::new(),
+        consent: None,
     };
-    let signature =
-        sign_hybrid(&keys.signing_seed, &keys.ml_dsa_seed, &succession_statement(user_id, link)?)?;
-    Ok(IdentitySuccession { identity, signature: encode(&signature) })
+    let signature = sign_hybrid(
+        &keys.signing_seed,
+        &keys.ml_dsa_seed,
+        &succession_statement(user_id.clone(), link.clone())?,
+    )?;
+    // The successor consents: the old identity signs the consent statement as "old", the new one
+    // as "new".
+    let next = identity_open(user_id.clone(), account_key.to_vec(), identity.clone())?;
+    let consent_as =
+        |role| crate::signatures::succession_consent_statement(user_id.clone(), link.clone(), role);
+    let mut consent = sign_hybrid(
+        &keys.signing_seed,
+        &keys.ml_dsa_seed,
+        &consent_as(crate::signatures::ConsentRole::Old)?,
+    )?;
+    consent.extend(sign_hybrid(
+        &next.signing_seed,
+        &next.ml_dsa_seed,
+        &consent_as(crate::signatures::ConsentRole::New)?,
+    )?);
+    Ok(IdentitySuccession { identity, signature: encode(&signature), consent: encode(&consent) })
+}
+
+/// Whether a link carries its successor's consent: the consent statement
+/// signed, both halves each, by the old keys as "old" and by the new keys the
+/// link itself names as "new". What the group core asks of links into keys it
+/// reached from a member's first keys (planted keys can sign a link away from
+/// themselves, never the member's consent to it); everywhere else, and for
+/// personal pins ([`succession_chain_verify`]), the version 2 signature holds.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn succession_consent_verify(user_id: String, link: SuccessionLink) -> bool {
+    let check = || -> CoreResult<bool> {
+        let Some(consent) = link.consent.as_deref() else {
+            return Ok(false);
+        };
+        let consent = decode("consent", consent, Some(SUCCESSION_CONSENT_BYTES))?;
+        let statement =
+            |role| crate::signatures::succession_consent_statement(user_id.clone(), link.clone(), role);
+        let under = |signing: &str, ml_dsa: &str| -> CoreResult<HybridPublicKey> {
+            Ok(HybridPublicKey {
+                signing_public_key: decode("signingPublicKey", signing, Some(32))?,
+                ml_dsa_public_key: decode("mlDsaPublicKey", ml_dsa, Some(ML_DSA_PUBLIC_KEY_BYTES))?,
+            })
+        };
+        let (old, new) = consent.split_at(HYBRID_SIGNATURE_BYTES);
+        Ok(verify_hybrid(
+            &under(&link.old_signing_public_key, &link.old_ml_dsa_public_key)?,
+            &statement(crate::signatures::ConsentRole::Old)?,
+            old,
+        ) && verify_hybrid(
+            &under(&link.new_signing_public_key, &link.new_ml_dsa_public_key)?,
+            &statement(crate::signatures::ConsentRole::New)?,
+            new,
+        ))
+    };
+    check().unwrap_or(false)
 }
 
 /// Whether one link holds: its version 2 statement, signed with both halves
@@ -827,8 +905,12 @@ fn ml_dsa_digest_of(public_key: &str) -> Option<String> {
 /// - the last link's new X25519, Ed25519, ML-DSA and ML-KEM keys are the
 ///   served ones.
 ///
-/// Any gap, fork or bad signature and the chain does not hold: that is the
-/// changed-key warning, never a silent update.
+/// The chain is every link from the first one at the pin to the end of the
+/// list, in the order served: links before it are skipped, but a link after
+/// the chain's end, or the links out of order, and it does not hold. Any gap,
+/// fork or bad signature and the chain does not hold: that is the changed-key
+/// warning, never a silent update. (The group core does not use this
+/// verifier: it walks the verified links as a graph, `succession_path.rs`.)
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn succession_chain_verify(
     user_id: String,
@@ -911,6 +993,24 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn codex_r3_the_envelope_guard_is_the_web_s_a_safe_integer_key_version_and_a_keys_signature() {
+        let root = random(32);
+        let envelope = identity_create(USER.into(), root.clone(), 1).unwrap();
+        assert!(identity_open(USER.into(), root.clone(), envelope.clone()).is_ok());
+        for refused in [
+            IdentityEnvelope { key_version: 0, ..envelope.clone() },
+            IdentityEnvelope { key_version: crate::signatures::MAX_SAFE_INTEGER + 1, ..envelope.clone() },
+            IdentityEnvelope { keys_signature: Some(String::new()), ..envelope.clone() },
+            IdentityEnvelope { keys_signature: None, ..envelope.clone() },
+        ] {
+            assert_eq!(
+                identity_open(USER.into(), root.clone(), refused).unwrap_err().to_string(),
+                "Unsupported identity envelope."
+            );
+        }
+    }
+
     fn ml_dsa_of(envelope: &IdentityEnvelope) -> String {
         envelope.ml_dsa.as_ref().unwrap().public_key.clone()
     }
@@ -927,6 +1027,7 @@ pub(crate) mod tests {
             new_ml_dsa_public_key: ml_dsa_of(next),
             new_kem_public_key: next.kem.as_ref().unwrap().public_key.clone(),
             signature: signature.into(),
+            consent: None,
         }
     }
 
@@ -1327,6 +1428,90 @@ pub(crate) mod tests {
             SuccessionLink { signature: encode(&padded), ..one },
             signer(&first)
         ));
+    }
+
+    #[test]
+    fn a_successor_co_signs_its_link_and_only_both_keys_each_in_its_role_make_consent() {
+        let root = random(32);
+        let first = identity_create(USER.into(), root.clone(), 1).unwrap();
+        let next = identity_succeed(USER.into(), root.clone(), first.clone()).unwrap();
+        let one_sided = link(&first, &next.identity, &next.signature);
+        let consented = SuccessionLink { consent: Some(next.consent.clone()), ..one_sided.clone() };
+        assert_eq!(decode("c", &next.consent, None).unwrap().len(), SUCCESSION_CONSENT_BYTES);
+        assert!(succession_consent_verify(USER.into(), consented.clone()));
+        // No consent, another account, or a byte flipped in either key's half.
+        assert!(!succession_consent_verify(USER.into(), one_sided.clone()));
+        assert!(!succession_consent_verify(FRIEND.into(), consented.clone()));
+        for at in [5, HYBRID_SIGNATURE_BYTES + 5, SUCCESSION_CONSENT_BYTES - 1] {
+            let flipped = SuccessionLink { consent: Some(flip(&next.consent, at)), ..one_sided.clone() };
+            assert!(!succession_consent_verify(USER.into(), flipped), "byte {at}");
+        }
+        // The halves swapped: each half is checked under its own key.
+        let bytes = decode("c", &next.consent, None).unwrap();
+        let (old_half, new_half) = bytes.split_at(HYBRID_SIGNATURE_BYTES);
+        let swapped = encode(&[new_half, old_half].concat());
+        assert!(!succession_consent_verify(
+            USER.into(),
+            SuccessionLink { consent: Some(swapped), ..one_sided.clone() }
+        ));
+        // The version 2 signature is no consent, alone, doubled, or beside the new key's half:
+        // the consent has its own domain.
+        let v2 = decode("s", &next.signature, None).unwrap();
+        for consent in [v2.clone(), [v2.as_slice(), &v2].concat(), [v2.as_slice(), new_half].concat()] {
+            assert!(!succession_consent_verify(
+                USER.into(),
+                SuccessionLink { consent: Some(encode(&consent)), ..one_sided.clone() }
+            ));
+        }
+        // What a holder of the old keys alone can make: the old keys' signature in both roles.
+        use crate::signatures::ConsentRole;
+        let old = identity_open(USER.into(), root.clone(), first.clone()).unwrap();
+        let consent_as = |role| {
+            crate::signatures::succession_consent_statement(USER.into(), one_sided.clone(), role).unwrap()
+        };
+        let statement = consent_as(ConsentRole::Old);
+        let by_old = sign_hybrid(&old.signing_seed, &old.ml_dsa_seed, &statement).unwrap();
+        let by_old_as_new =
+            sign_hybrid(&old.signing_seed, &old.ml_dsa_seed, &consent_as(ConsentRole::New)).unwrap();
+        assert!(!succession_consent_verify(
+            USER.into(),
+            SuccessionLink {
+                consent: Some(encode(&[by_old.as_slice(), &by_old_as_new].concat())),
+                ..one_sided.clone()
+            }
+        ));
+        // The role tag: the new keys' signature over the "old" statement is no "new" half.
+        let new_keys = identity_open(USER.into(), root.clone(), next.identity.clone()).unwrap();
+        let new_as_old = sign_hybrid(&new_keys.signing_seed, &new_keys.ml_dsa_seed, &statement).unwrap();
+        assert!(!succession_consent_verify(
+            USER.into(),
+            SuccessionLink { consent: Some(encode(&[old_half, &new_as_old].concat())), ..one_sided.clone() }
+        ));
+        assert!(verify_hybrid(
+            &HybridPublicKey {
+                signing_public_key: decode("k", &first.signing_public_key, Some(32)).unwrap(),
+                ml_dsa_public_key: decode("m", &ml_dsa_of(&first), None).unwrap(),
+            },
+            &statement,
+            &by_old
+        ));
+        assert!(!succession_consent_verify(
+            USER.into(),
+            SuccessionLink {
+                consent: Some(encode(&[by_old.as_slice(), &by_old].concat())),
+                ..one_sided.clone()
+            }
+        ));
+        // The consent binds the new keys: moved onto a link to another identity, it fails.
+        let other = identity_create(USER.into(), root, 2).unwrap();
+        assert!(!succession_consent_verify(
+            USER.into(),
+            SuccessionLink { consent: Some(next.consent.clone()), ..link(&first, &other, &next.signature) }
+        ));
+        // The personal verifier is unchanged: it follows the link with or without consent.
+        for l in [one_sided, consented] {
+            assert!(succession_chain_verify(USER.into(), pinned(&first), served(&next.identity), vec![l]));
+        }
     }
 
     /* Three generations of one account: the first pinned by a contact, the third served now. */

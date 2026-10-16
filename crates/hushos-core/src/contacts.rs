@@ -92,6 +92,38 @@ pub fn key_digest(public_key: Vec<u8>) -> String {
     Sha256::digest(&public_key).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A 32-byte key digest as a contact pin keeps it (lowercase hex) from the
+/// base64url a group statement or group pin carries it as. Contact pins and
+/// group pins are only ever compared through these, as the same bytes.
+///
+/// ```
+/// let hex = "07".repeat(32);
+/// let base64url = hushos_core::digest_base64url(hex.clone())?;
+/// assert_eq!(hushos_core::digest_hex(base64url.clone())?, hex);
+/// assert!(hushos_core::same_key_digest(Some(hex), base64url));
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn digest_hex(base64url: String) -> CoreResult<String> {
+    Ok(decode("key digest", &base64url, Some(32))
+        .map_err(|_| input("Invalid key digest."))?
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// The base64url of a 32-byte key digest kept as lowercase hex; see [`digest_hex`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn digest_base64url(hex: String) -> CoreResult<String> {
+    digest_bytes(&hex).map(|bytes| encode(&bytes)).ok_or_else(|| input("Invalid key digest."))
+}
+
+/// Whether a pin's hex digest and a statement's base64url digest name the same key; malformed is never.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn same_key_digest(hex: Option<String>, base64url: String) -> bool {
+    hex.is_some_and(|hex| digest_hex(base64url).is_ok_and(|ours| ours == hex))
+}
+
 /* Lowercase hex to bytes, refusing anything but a 32-byte digest. */
 fn digest_bytes(hex: &str) -> Option<Vec<u8>> {
     if hex.len() != 64 || !hex.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {

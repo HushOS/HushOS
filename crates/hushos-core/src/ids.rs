@@ -10,6 +10,10 @@
 //! lowercased, the seed base64url). The server recomputes the id from the
 //! seed, the kind and the workspace of the request, so an id made for one
 //! workspace cannot be asked about in another.
+//!
+//! Groups add two kinds (docs/groups-design.md 5): a `Group` id is scoped to
+//! the account that creates the group, and a `Workspace` id (a group's area)
+//! to its group.
 
 use crate::bytes::{decode, encode, random};
 use crate::envelope::context;
@@ -29,6 +33,10 @@ pub enum IdKind {
     Object,
     Link,
     Report,
+    /// A group, scoped to the account that creates it.
+    Group,
+    /// A group's area, scoped to its group.
+    Workspace,
 }
 
 impl IdKind {
@@ -39,6 +47,8 @@ impl IdKind {
             IdKind::Object => "object",
             IdKind::Link => "link",
             IdKind::Report => "report",
+            IdKind::Group => "group",
+            IdKind::Workspace => "workspace",
         }
     }
 }
@@ -108,6 +118,27 @@ pub fn new_id(kind: IdKind, scope_id: String) -> CoreResult<NewId> {
     Ok(NewId { id: derive_id(kind, scope_id, seed.clone())?, seed })
 }
 
+/// Refuses an id that `seed` does not derive for `kind` in `scope_id`, with
+/// one answer for every cause (a malformed seed, another scope, another kind),
+/// as the server refuses it: a client never takes a group or area id it could
+/// not derive itself.
+///
+/// ```
+/// use hushos_core::{check_id, new_id, IdKind};
+/// let creator = "11111111-1111-4111-8111-111111111111".to_string();
+/// let group = new_id(IdKind::Group, creator.clone())?;
+/// assert!(check_id(IdKind::Group, creator.clone(), group.seed.clone(), group.id.clone()).is_ok());
+/// assert!(check_id(IdKind::Workspace, creator, group.seed, group.id).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn check_id(kind: IdKind, scope_id: String, seed: String, id: String) -> CoreResult<()> {
+    match derive_id(kind, scope_id, seed) {
+        Ok(derived) if derived == id => Ok(()),
+        _ => Err(input("This id was not made for this workspace or group.")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +175,8 @@ mod tests {
             (IdKind::Object, "6dde5ef0-b985-8abe-8944-97934bb8d8be"),
             (IdKind::Link, "dac762e3-30c4-848b-8683-a0e1a9f3dc03"),
             (IdKind::Report, "58dfe84c-7431-807d-8130-07f8eadb43a7"),
+            (IdKind::Group, "42c6fdd2-9543-8b80-91e2-96fabf53d061"),
+            (IdKind::Workspace, "6407e0fd-93df-8a89-98a2-3322d10516a8"),
         ];
         for (kind, id) in expected {
             assert_eq!(derive_id(kind, WS.into(), seed.clone()).unwrap(), id, "{kind:?}");
@@ -167,7 +200,15 @@ mod tests {
             derive_id(IdKind::Node, "22222222-2222-4222-8222-222222222222".into(), seed(1)).unwrap()
         );
         assert_ne!(base, derive_id(IdKind::Node, WS.into(), seed(2)).unwrap());
-        let kinds = [IdKind::Node, IdKind::Version, IdKind::Object, IdKind::Link, IdKind::Report];
+        let kinds = [
+            IdKind::Node,
+            IdKind::Version,
+            IdKind::Object,
+            IdKind::Link,
+            IdKind::Report,
+            IdKind::Group,
+            IdKind::Workspace,
+        ];
         let ids: std::collections::HashSet<_> =
             kinds.iter().map(|kind| derive_id(*kind, WS.into(), seed(1)).unwrap()).collect();
         assert_eq!(ids.len(), kinds.len());
@@ -181,6 +222,22 @@ mod tests {
         assert!(derive_id(IdKind::Node, WS.into(), encode(&[1; 17])).is_err());
         assert!(derive_id(IdKind::Node, WS.into(), format!("{}=", seed(1))).is_err());
         assert!(derive_id(IdKind::Node, String::new(), seed(1)).is_err());
+    }
+
+    #[test]
+    fn a_group_or_area_id_not_derived_from_its_seed_and_scope_is_refused() {
+        let id = derive_id(IdKind::Group, WS.into(), seed(1)).unwrap();
+        assert!(check_id(IdKind::Group, WS.into(), seed(1), id.clone()).is_ok());
+        for (kind, scope, seed, id) in [
+            (IdKind::Group, "22222222-2222-4222-8222-222222222222".to_string(), seed(1), id.clone()),
+            (IdKind::Workspace, WS.to_string(), seed(1), id.clone()),
+            (IdKind::Group, WS.to_string(), seed(2), id.clone()),
+            (IdKind::Group, WS.to_string(), "not a seed".to_string(), id.clone()),
+            (IdKind::Group, WS.to_string(), seed(1), id.to_uppercase()),
+        ] {
+            let refused = check_id(kind, scope, seed, id).unwrap_err();
+            assert_eq!(refused.to_string(), "This id was not made for this workspace or group.");
+        }
     }
 
     #[test]

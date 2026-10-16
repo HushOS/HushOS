@@ -50,6 +50,11 @@ fn words() -> Vec<&'static str> {
     WORDLIST.lines().map(str::trim).filter(|w| !w.is_empty()).collect()
 }
 
+/* The BIP-39 English list, as the fingerprint words and the join code read it. */
+pub(crate) fn wordlist() -> Vec<&'static str> {
+    words()
+}
+
 /* BIP-39: 256 bits of entropy plus its 8-bit SHA-256 checksum, read in 11-bit words. */
 pub(crate) fn phrase_from_entropy(entropy: &[u8]) -> String {
     let words = words();
