@@ -1,0 +1,26 @@
+apps/web/src/components/theme-color.tsx
+  s_a965107c48ca30::t_da4de5fc557286 1-41
+  s_a965107c48ca30::t_f00f232694d3ad 42-44
+apps/web/src/identities.css
+  s_a965107c48ca30::t_b454c455ea201d 60-65,68,76,87,99,110,120,130,140,150,448-465
+apps/web/src/routes/__root.tsx
+  s_a965107c48ca30::t_9f49f7520e28f0 48,102-103,229-248,251
+apps/web/src/routes/s/$token.tsx
+  s_a965107c48ca30::t_2e713207b3a6d0 236-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3ec09926f8ba791f539f0d9e4adccd615d6fed9c",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
