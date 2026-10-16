@@ -44,7 +44,11 @@ async function digests(bytes: Uint8Array<ArrayBuffer>) {
     };
 }
 
-const safe = (name: string) => name.replaceAll(/[\\/:*?"<>|]/g, '_');
+// A path segment in the zip: a name of "." or ".." (anyone can name a folder so) would climb out of it.
+const safe = (name: string) => {
+    const cleaned = name.replaceAll(/[\\/:*?"<>|]/g, '_');
+    return cleaned === '.' || cleaned === '..' ? '_' : cleaned;
+};
 
 export async function buildEvidencePacket(
     report: ReportView,
