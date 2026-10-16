@@ -2,6 +2,7 @@ import { emailEnv, validateEmailAdapter } from '@hushos/env/email';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
+import { securityNotice } from './rendered/security-notice';
 import { shareNotice } from './rendered/share-notice';
 import { verifyEmail } from './rendered/verify-email';
 
@@ -154,6 +155,39 @@ export async function sendShareEmail(
     await adapter.send({
         to,
         subject: `${input.granterName} shared something with you · HushOS`,
+        html: fillTemplate(template.html, values, true),
+        text: fillTemplate(template.text, values, false),
+    });
+}
+
+export type SecurityNoticeKind = keyof typeof securityNotice;
+const securitySubjects: Record<SecurityNoticeKind, string> = {
+    'new-device': 'New sign-in to your account · HushOS',
+    'device-removed': 'A device was removed from your account · HushOS',
+    'devices-removed': 'Devices were removed from your account · HushOS',
+    'password-attempts': 'Someone kept trying to confirm your password · HushOS',
+};
+
+/*
+ * A security notice about the account's devices: when it happened (written by
+ * the caller, in UTC), how many devices for a removal of all others, and a link
+ * to the device list. It carries nothing the device said about itself.
+ */
+export async function sendSecurityNotice(
+    to: string,
+    input: { kind: SecurityNoticeKind; when: string; count?: number; accountUrl: string },
+) {
+    adapter ??= createEmailAdapter();
+    const values = {
+        when: input.when,
+        count: String(input.count ?? 1),
+        accountUrl: input.accountUrl,
+        logoUrl: new URL('/email/hushos-logo-dark.png', input.accountUrl).href,
+    };
+    const template = securityNotice[input.kind];
+    await adapter.send({
+        to,
+        subject: securitySubjects[input.kind],
         html: fillTemplate(template.html, values, true),
         text: fillTemplate(template.text, values, false),
     });
