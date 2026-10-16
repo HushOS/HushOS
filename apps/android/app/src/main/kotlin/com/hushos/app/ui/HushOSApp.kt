@@ -79,6 +79,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -111,10 +112,16 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         }
     }
     // A session that ended on its own gets its own words, not "Something went wrong".
+    // Removed from the account on another device: said as that, not as a password change.
     if (state.signedOutNotice && state.gate == Gate.SIGNED_OUT) AlertDialog(
         onDismissRequest = model::clearSignedOut,
-        title = { Text("You’ve been signed out") },
-        text = { Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.") },
+        title = { Text(if (state.removed) "Removed from your account" else "You’ve been signed out") },
+        text = {
+            Text(
+                if (state.removed) "This ${if (com.hushos.app.data.Auth.deviceName(LocalContext.current) == "Android tablet") "tablet" else "phone"} was removed from your account. Sign in again to use it."
+                else "Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.",
+            )
+        },
         confirmButton = { TextButton(onClick = model::clearSignedOut) { Text("Sign in") } },
     )
     // What happened and what to do, in plain words; the raw detail only behind Details.

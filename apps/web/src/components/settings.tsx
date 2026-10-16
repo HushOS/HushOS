@@ -156,7 +156,7 @@ export function DialogField({
                 )}
             </div>
             {error ? (
-                <p id={`${id}-error`} className="text-[13px] text-destructive">
+                <p id={`${id}-error`} role="alert" className="text-[13px] text-destructive">
                     {error}
                 </p>
             ) : (

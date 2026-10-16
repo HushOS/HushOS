@@ -2,7 +2,7 @@
 
 This document adds devices to HushOS accounts: a list of the devices signed in to an account, an optional rule that a new device must be approved by one of them, and push notifications for approvals, security notices, shares and family events. Device approval is what child accounts rely on at conversion (`docs/envelope-migrations.md` 7), and what company sign-in assumes for key unlock (the build plan's SSO layer).
 
-Revised on 15 October after the independent review in `docs/pq-devices-crypto-review.md`.
+Revised on 15 October after the independent review in `docs/pq-devices-crypto-review.md`, and on 16 October for step 1 as built (section 12).
 
 Decisions settled with the owner (2026-10-15):
 
@@ -308,28 +308,31 @@ What conversion does not protect against is in `docs/envelope-migrations.md` 7 a
 
 Base64url without padding; ids lowercase UUIDs.
 
-| Route                                           | Body → response                                                                   | Notes                                                                              |
-| ----------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `POST /api/auth/devices`                        | `{ kind, name, signingPublicKey }` → `{ device }`                                 | Registers the current session's device; once per session                           |
-| `GET /api/auth/devices`                         | → `[{ id, kind, name, approvedBy, createdAt, lastSeenAt, current }]`              |                                                                                    |
-| `PATCH /api/auth/devices/:id`                   | `{ name }`                                                                        |                                                                                    |
-| `DELETE /api/auth/devices/:id`                  |                                                                                   | Ends its sessions and push registration; a security notice                         |
-| `POST /api/auth/approvals` (pending session)    | `{ kind, name, commitment }` → `{ requestId, expiresAt }`                         | Replaces an unopened request; 409 `busy` while one is opened; 429 after five a day |
-| `GET /api/auth/approvals/:id` (pending session) | → `{ state, approverEphemeralKey?, sealed? }`                                     | The new device polls, or listens on its open connection                            |
-| `POST /api/auth/approvals/:id/reveal` (pending) | `{ newDeviceSigningKey, transferX25519, transferKem, nonce }`                     | Only after `open`, once per request; 409 otherwise                                 |
-| `GET /api/auth/approvals` (approved device)     | → `[{ requestId, kind, name, location, createdAt, commitment, opened, reveal? }]` | `reveal` once the new device has revealed, to the opening device only              |
-| `POST /api/auth/approvals/:id/open`             | `{ deviceId, ephemeralKey }`                                                      | First approving device only; 409 for the others                                    |
-| `POST /api/auth/approvals/:id/approve`          | `{ deviceId, signature, sealed }`                                                 | `sealed` carries the marks, and the account key under Keys need a device           |
-| `POST /api/auth/approvals/:id/deny`             | `{ notMe }`                                                                       | Also what a wrong code sends; `notMe` ("This wasn't me") sends a security notice   |
-| `POST /api/auth/approvals/:id/phrase`           | `{ signature }` (recovery signing key, over the phrase approval statement)        |                                                                                    |
-| `POST /api/auth/approvals/:id/wait`             |                                                                                   | Emails the link; Approve new devices only                                          |
-| `POST /api/auth/approvals/wait/cancel`          | `{ token }` or a device session                                                   |                                                                                    |
-| `PUT /api/auth/security/device-approval`        | `{ level, reauth, approval }`                                                     | `level`: `off`, `approve`, `keys`; 409 `policy` below a required level             |
-| `PUT /api/notifications/registration`           | `{ kind: 'relay', handle }` or `{ kind: 'webpush', subscription }`                | Per device                                                                         |
-| `GET /api/notifications`                        | → `[{ id, kind, createdAt, refs }]`                                               | Every unfetched event for this device, after a coalesced ping                      |
-| `GET /api/notifications/:id`                    | → `{ kind, createdAt, refs }`                                                     | Only to devices of the account it is for; `refs` are ids (share, group, request)   |
-| `GET`/`PUT /api/notifications/settings`         | `{ shares, family }`                                                              | Security events and guardian activity are not settings                             |
-| `PATCH /api/groups/:id/policies`                | `{ deviceApproval: { level } }`                                                   | Guardians for child accounts; company admins later                                 |
+| Route                                           | Body → response                                                                                                 | Notes                                                                                                            |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/devices`                        | `{ kind, name, signingPublicKey? }` → `{ device }`                                                              | Registers the current session's device, once; 409 `registered` after                                             |
+| `GET /api/auth/devices`                         | → `{ devices: [{ id, kind, name, approvedBy, approvedByDeviceId, createdAt, lastSeenAt, current, signedIn }] }` | The device asking first, then by last seen                                                                       |
+| `PUT /api/auth/devices/:id`                     | `{ name }`                                                                                                      | PUT, not PATCH: Android's `HttpURLConnection` refuses PATCH                                                      |
+| `DELETE /api/auth/devices/:id`                  | `{ attemptToken, finishLoginRequest }`                                                                          | Ends its sessions and push registration; a security notice; 409 `current` for the device asking                  |
+| `DELETE /api/auth/devices/others`               | `{ attemptToken, finishLoginRequest }` → `{ removed }`                                                          | Every device but the one asking; one security notice                                                             |
+| `POST /api/auth/devices/reauth`                 | `{ startLoginRequest }` → `{ attemptToken, loginResponse }`                                                     | The password proof both removals carry: OPAQUE, one use, bound to the session, tagged `devices`                  |
+| `POST /api/auth/session/forget`                 | `{}` → `{ forgotten }`                                                                                          | A removed device acknowledges its wipe; clears the cookie only for a token with no live session that was removed |
+| `POST /api/auth/approvals` (pending session)    | `{ kind, name, commitment }` → `{ requestId, expiresAt }`                                                       | Replaces an unopened request; 409 `busy` while one is opened; 429 after five a day                               |
+| `GET /api/auth/approvals/:id` (pending session) | → `{ state, approverEphemeralKey?, sealed? }`                                                                   | The new device polls, or listens on its open connection                                                          |
+| `POST /api/auth/approvals/:id/reveal` (pending) | `{ newDeviceSigningKey, transferX25519, transferKem, nonce }`                                                   | Only after `open`, once per request; 409 otherwise                                                               |
+| `GET /api/auth/approvals` (approved device)     | → `[{ requestId, kind, name, location, createdAt, commitment, opened, reveal? }]`                               | `reveal` once the new device has revealed, to the opening device only                                            |
+| `POST /api/auth/approvals/:id/open`             | `{ deviceId, ephemeralKey }`                                                                                    | First approving device only; 409 for the others                                                                  |
+| `POST /api/auth/approvals/:id/approve`          | `{ deviceId, signature, sealed }`                                                                               | `sealed` carries the marks, and the account key under Keys need a device                                         |
+| `POST /api/auth/approvals/:id/deny`             | `{ notMe }`                                                                                                     | Also what a wrong code sends; `notMe` ("This wasn't me") sends a security notice                                 |
+| `POST /api/auth/approvals/:id/phrase`           | `{ signature }` (recovery signing key, over the phrase approval statement)                                      |                                                                                                                  |
+| `POST /api/auth/approvals/:id/wait`             |                                                                                                                 | Emails the link; Approve new devices only                                                                        |
+| `POST /api/auth/approvals/wait/cancel`          | `{ token }` or a device session                                                                                 |                                                                                                                  |
+| `PUT /api/auth/security/device-approval`        | `{ level, reauth, approval }`                                                                                   | `level`: `off`, `approve`, `keys`; 409 `policy` below a required level                                           |
+| `PUT /api/notifications/registration`           | `{ kind: 'relay', handle }` or `{ kind: 'webpush', subscription }`                                              | Per device                                                                                                       |
+| `GET /api/notifications`                        | → `[{ id, kind, createdAt, refs }]`                                                                             | Every unfetched event for this device, after a coalesced ping                                                    |
+| `GET /api/notifications/:id`                    | → `{ kind, createdAt, refs }`                                                                                   | Only to devices of the account it is for; `refs` are ids (share, group, request)                                 |
+| `GET`/`PUT /api/notifications/settings`         | `{ shares, family }`                                                                                            | Security events and guardian activity are not settings                                                           |
+| `PATCH /api/groups/:id/policies`                | `{ deviceApproval: { level } }`                                                                                 | Guardians for child accounts; company admins later                                                               |
 
 Under Keys need a device, every route that writes a password envelope (password change, phrase reset, `/auth/security/finish`, conversion) is refused with 409 `keys-need-a-device` if it carries one. Start over with new keys uses the conversion's switch and rotation routes (`docs/groups-design.md` 4) with a full session on an approved device and the password, and no hold.
 
@@ -392,3 +395,46 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
 ## 11. Open question
 
 - **Can an account's email change?** There is no route for it today. The 72-hour wait, its cancel link and every security notice go to that address, so a person who loses it, or shares it with someone they no longer trust, cannot move them.
+
+## 12. Step 1 as built (16 October)
+
+Milestone 1 is built. Where it differs from sections 1 and 8, this section is what the code does.
+
+**The table.** `approved_by` is split in two: `approved_by` (the fixed values above plus `device`) and `approved_by_device_id`, a foreign key that must be null unless `approved_by = 'device'`. `approved_by` is nullable, paired with `approved_at`, so step 2 can write a device that is not approved yet; step 1 never does. `kind`, `name` and `signing_public_key` are null until the client describes itself ("Unknown device"). The key is unique per account, never globally.
+
+**Every session has a device.** Section 1's "existing sessions become devices on their next request" left sessions that never register (an attacker's, an old bundle's) invisible. Instead:
+
+- the migration gives every live session a device of its own, `approved_by = 'existing'`, reusing the session's id;
+- every new session gets its device in the transaction that creates it;
+- `sessions.device_id` is nullable in this release, so a container of the previous release can still sign people in during a rolling update; such a session does not resolve on the new release and the person signs in again. Remove all other devices ends the account's sessions without a device too, since the previous release still accepts them. **The next release adds `sessions_device_not_null`** (as `pq_identity_not_null` followed `pq_identity`), and it begins with `DELETE FROM sessions WHERE device_id IS NULL`.
+- Drizzle applies every pending migration in one transaction, so the exclusive lock `ADD COLUMN` takes on `sessions` lasts the whole run; adding the foreign key `NOT VALID` and validating it in the same run gains nothing against that. What helps is `lock_timeout`: the migration fails, and is run again, rather than queue requests behind it. The `users` foreign key locks `users` too, in the opposite order to a sign-in, so a deadlock with a sign-in is possible during the run; it surfaces the same way, as a failed migration (docs/self-hosting.md).
+
+**The device key comes back at sign-in.** Without it, every password change, phrase reset or thirty-day expiry would add a device. The key is made in step 1 and used for one thing: `login/finish` may carry `device: { id, signature }`, an Ed25519 signature by the device key over
+
+```
+["hushos/device/session",1,userId,deviceId,sha256(attemptToken)]
+```
+
+(ids lowercased, the digest of the attempt token's UTF-8, base64url; built identically in `packages/db/src/signatures.ts`, `packages/crypto/src/device-identity.ts` and `crates/hushos-core/src/devices.rs`, held together by the fixtures). The attempt is consumed before anything is checked, so a signature is good for one sign-in. A valid proof brings the device back with its approval unchanged and ends its previous session; a missing, wrong or revoked one makes a new device and never fails the sign-in. The client sends a proof only when the email being signed in with has the digest stored beside the key. A device that never got a key (a browser without Ed25519 in Web Crypto) is lent to the next sign-in by its own session cookie, and only then.
+
+**Where the key lives.** Only the web key is non-exportable (an Ed25519 `CryptoKey` in its own IndexedDB database, `hushos-device-identity`). The Secure Enclave holds no Ed25519 keys, and Android's Keystore has Ed25519 only from API 33 (the app's minimum is 29), so on the phones the 32-byte seed is kept wrapped: in the shared Keychain (`device-identity`, after first unlock, this device only; the Files extensions share it) and in the Keystore-backed encrypted preferences.
+
+**A session belongs to a device by the server's say-so.** Requests are not signed with the device key; a stolen session cookie is indistinguishable from the device it came from until that device is removed.
+
+**Enrolment** is the first device of an account that has none and is less than 30 minutes old; every other new device is `password`.
+
+**Sign-out removes the device** (revoked, its sessions ended, its key deleted on the device); a lock keeps both. **The device asking cannot remove itself** (409 `current`); signing out is that.
+
+**Proving the password while signed in is limited per session**: ten starts in 15 minutes for each session and thirty for the account, so another session on the account cannot use up the owner's Remove, Change password or Delete account. A wrong password fails on the device, so the server sees only starts that never finish; past five in an hour the account's email hears of it (no device named).
+
+**Removing a device asks for the password** (both Remove and Remove all other devices): a one-use OPAQUE exchange bound to the session and tagged `devices`, as account deletion does it. A removed device clears what it kept, files kept on a phone among them, so a session cookie alone (a browser left locked, a stolen cookie) must not be able to set that off. It does not stop code running in the page (a hostile extension, a script injected into HushOS), which can read the password as it is typed; that is out of scope on the web, as `docs/opaque-auth-design.md` says of XSS. The proof is bound to removal, not to which device: one made for removing one device would also remove all others. On the web the exchange runs in its own worker operations, so the open account stays open and a wrong password is a refusal, not a lock. **Step 2:** the removing device also signs a removal statement with the account's identity, and a removed device clears anything only after checking it against its own pinned identity; that stops a hostile server too, which the password does not.
+
+**A removed device learns it was removed.** Removal records the ended sessions' token hashes in `removed_session_tokens` for seven days; `/api/auth/session` then answers `{ user: null, removed: true }` for as long as the device keeps its cookie. The web, iOS and Android then clear the saved unlock, the device key, Drive's mirror and stashes and files kept on the phone. The web runs the wipe one at a time across its tabs, asks the server again before every step that deletes, and only then acknowledges it with `POST /api/auth/session/forget`, which drops the cookie only if it is still the removed one; it never signs out for this, since sign-out would end a session someone opened meanwhile. A wipe cut short is tried again at the next check. The phones ask as soon as a request answers 401, with the session still stored, and stop polling; a sign-in started before the answer keeps everything, and one started during the wipe waits for it. Each says the device was removed ("This iPhone was removed from your account. Sign in again to use it."). Nothing promises this to the person: a device kept offline never asks.
+
+**What every session on the account sees.** The list, with names, kinds and approvals, to every device including an intruder's. When each device was added and last seen are rounded to the hour by the server (and sorted by that, then by id), and shown as a day, so the list does not say when the owner is awake. Any device can rename any other (the owner's choice); the kind and approval line beside each name is not renameable. Names are not encrypted, and the rename dialog says so.
+
+**Retention.** A device with no key and no session goes after a day (nothing can lead back to it). A keyed device with no session and unseen for 90 days is revoked. Revoked rows, with the names they carried, are deleted 90 days after.
+
+**Names.** Browsers say "Firefox on Linux", iPhones "iPhone" or "iPad", Android "Android phone" or "Android tablet"; any device can be renamed from any other. Names are 1 to 40 letters, marks, numbers, spaces and `'’()._·-`, so no control or bidi characters.
+
+**Notices.** The email part of section 5's device notices: a new sign-in that came in with the password alone (not enrolment, not a device coming back), a removal, and a removal of all others. They never carry the device's name (which the device chose), its address or its browser, and at most ten an hour go to one account; past that they are dropped and the action still happens.

@@ -1,4 +1,19 @@
-import { and, asc, count, eq, gt, gte, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import {
+    and,
+    asc,
+    count,
+    desc,
+    eq,
+    gt,
+    gte,
+    inArray,
+    isNotNull,
+    isNull,
+    lte,
+    ne,
+    or,
+    sql,
+} from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { db } from './client';
 import { keyedHash } from './hash-key';
@@ -9,8 +24,15 @@ import {
     storageEntitlements,
     workspaces,
 } from './schema';
-import { keysStatement, successionStatement, verifyHybrid } from './signatures';
 import {
+    deviceSessionStatement,
+    keysStatement,
+    successionStatement,
+    verifyHybrid,
+    verifySignature,
+} from './signatures';
+import {
+    accountDevices,
     accountEnrollments,
     accountIntents,
     accountRecoveryKeys,
@@ -22,10 +44,12 @@ import {
     authRateLimits,
     opaqueCredentials,
     opaqueLoginAttempts,
+    removedSessionTokens,
     serverSecrets,
     sessions,
     userSettings,
     users,
+    type DeviceKind,
 } from './schema';
 
 const userFields = { id: users.id, name: users.name, email: users.email, role: users.role };
@@ -235,16 +259,42 @@ export async function consumeLoginAttempt(tokenHash: Buffer) {
     return attempt ?? null;
 }
 
+/*
+ * How long after sign-up the first device counts as the one the account was
+ * created on (`enrolment`), when the account has no device yet. Registration
+ * opens no session, so this is how the first sign-in is told apart.
+ */
+export const DEVICE_ENROLMENT_SECONDS = 30 * 60;
+/* How long a removed device's session tokens are remembered, so it learns it was removed. */
+export const REMOVED_TOKEN_SECONDS = 7 * 24 * 60 * 60;
+/* A keyed device with no session for this long is revoked; a revoked row this old is deleted. */
+export const DEVICE_IDLE_DAYS = 90;
+export const DEVICE_REVOKED_DAYS = 90;
+
+export type CreatedDevice = 'enrolment' | 'password';
+
+/*
+ * Opens a session, on a device. In one transaction under the account's lock:
+ * - a device that proves it holds its key (`device`, a signature over this
+ *   attempt) comes back to its own row, keeping how it was approved;
+ * - otherwise the browser's previous session, if it is this account's and its
+ *   device never got a key, lends its device: holding the cookie is the proof;
+ * - otherwise a new device, `enrolment` when the account is fresh and has none,
+ *   `password` in every other case.
+ * A bad or revoked proof never fails the sign-in; it just makes a new device.
+ * The device's other session, if any, ends: one live session per device.
+ */
 export async function createSession(input: {
     userId: string;
     credentialVersion: number;
     tokenHash: Buffer;
     previousTokenHash: Buffer | null;
     expiresAt: Date;
+    device?: { id: string; signature: Buffer; attemptDigest: Buffer };
 }) {
     return db.transaction(async (tx) => {
         const [user] = await tx
-            .select({ ...userFields, suspendedAt: users.suspendedAt })
+            .select({ ...userFields, suspendedAt: users.suspendedAt, createdAt: users.createdAt })
             .from(users)
             .where(eq(users.id, input.userId))
             .for('update');
@@ -269,22 +319,113 @@ export async function createSession(input: {
             );
         if (!record) return null;
 
-        if (input.previousTokenHash) {
-            await tx.delete(sessions).where(eq(sessions.tokenHash, input.previousTokenHash));
+        const now = new Date();
+        let device: { id: string; registered: boolean } | null = null;
+        let created: CreatedDevice | null = null;
+        if (input.device && UUID_PATTERN.test(input.device.id)) {
+            const [row] = await tx
+                .select({ id: accountDevices.id, key: accountDevices.signingPublicKey })
+                .from(accountDevices)
+                .where(
+                    and(
+                        eq(accountDevices.id, input.device.id),
+                        eq(accountDevices.userId, user.id),
+                        isNull(accountDevices.revokedAt),
+                        isNotNull(accountDevices.approvedAt),
+                        isNotNull(accountDevices.signingPublicKey),
+                    ),
+                )
+                .for('update');
+            if (
+                row?.key &&
+                verifySignature(
+                    row.key,
+                    deviceSessionStatement({
+                        userId: user.id,
+                        deviceId: row.id,
+                        attemptDigest: input.device.attemptDigest,
+                    }),
+                    input.device.signature,
+                )
+            )
+                device = { id: row.id, registered: true };
         }
+        if (!device && input.previousTokenHash) {
+            const [previous] = await tx
+                .select({ id: accountDevices.id, kind: accountDevices.kind })
+                .from(sessions)
+                .innerJoin(accountDevices, eq(accountDevices.id, sessions.deviceId))
+                .where(
+                    and(
+                        eq(sessions.tokenHash, input.previousTokenHash),
+                        eq(sessions.userId, user.id),
+                        isNull(accountDevices.revokedAt),
+                        isNotNull(accountDevices.approvedAt),
+                        isNull(accountDevices.signingPublicKey),
+                    ),
+                )
+                .for('update', { of: accountDevices });
+            if (previous) device = { id: previous.id, registered: previous.kind !== null };
+        }
+        const attached = device !== null;
+        if (!device) {
+            const [existing] = await tx
+                .select({ count: count() })
+                .from(accountDevices)
+                .where(eq(accountDevices.userId, user.id));
+            created =
+                (existing?.count ?? 0) === 0 &&
+                user.createdAt.getTime() > now.getTime() - DEVICE_ENROLMENT_SECONDS * 1000
+                    ? 'enrolment'
+                    : 'password';
+            const [row] = await tx
+                .insert(accountDevices)
+                .values({
+                    userId: user.id,
+                    approvedBy: created,
+                    approvedAt: now,
+                    createdAt: now,
+                    lastSeenAt: now,
+                })
+                .returning({ id: accountDevices.id });
+            if (!row) throw new Error('Could not create the device.');
+            device = { id: row.id, registered: false };
+        } else
+            await tx
+                .update(accountDevices)
+                .set({ lastSeenAt: now })
+                .where(eq(accountDevices.id, device.id));
+
+        if (input.previousTokenHash)
+            await tx.delete(sessions).where(eq(sessions.tokenHash, input.previousTokenHash));
+        await tx.delete(sessions).where(eq(sessions.deviceId, device.id));
         await tx.insert(sessions).values({
             userId: user.id,
             credentialVersion: input.credentialVersion,
             tokenHash: input.tokenHash,
+            deviceId: device.id,
             expiresAt: input.expiresAt,
-            lastSeenAt: new Date(),
+            lastSeenAt: now,
         });
-        const { suspendedAt: _suspendedAt, ...plain } = user;
-        return { user: plain, key: record.key };
+        const { suspendedAt: _suspendedAt, createdAt: _createdAt, ...plain } = user;
+        return {
+            user: plain,
+            key: record.key,
+            device: { id: device.id, attached, registered: device.registered, created },
+        };
     });
 }
 
-export async function getSessionUser(
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/*
+ * The session behind a token, with its device, or null. Only a session on a
+ * device that is approved and not revoked resolves: removing a device ends its
+ * sessions in the same step, and this join is the second line. A session
+ * without a device (written by a container of the previous release during a
+ * rolling update) does not resolve either; that person signs in again.
+ */
+export async function getSession(
     tokenHash: Buffer,
     lifetime: { idleSeconds: number; maxSeconds: number },
 ) {
@@ -295,6 +436,8 @@ export async function getSessionUser(
             user: { ...userFields, credentialVersion: sessions.credentialVersion },
             sessionId: sessions.id,
             createdAt: sessions.createdAt,
+            deviceId: accountDevices.id,
+            deviceKind: accountDevices.kind,
         })
         .from(sessions)
         .innerJoin(users, eq(users.id, sessions.userId))
@@ -303,6 +446,15 @@ export async function getSessionUser(
             and(
                 eq(opaqueCredentials.userId, users.id),
                 eq(opaqueCredentials.version, sessions.credentialVersion),
+            ),
+        )
+        .innerJoin(
+            accountDevices,
+            and(
+                eq(accountDevices.id, sessions.deviceId),
+                eq(accountDevices.userId, sessions.userId),
+                isNull(accountDevices.revokedAt),
+                isNotNull(accountDevices.approvedAt),
             ),
         )
         .where(
@@ -314,25 +466,48 @@ export async function getSessionUser(
             ),
         );
     if (!result) return null;
-    // Slide the idle deadline on activity, at most every five minutes, never past the cap.
+    // Slide the idle deadline on activity, at most every five minutes, never past the cap; the
+    // device's last-seen moves with its own session, and only then.
     const absoluteExpiry = new Date(result.createdAt.getTime() + lifetime.maxSeconds * 1000);
     const idleExpiry = new Date(now.getTime() + lifetime.idleSeconds * 1000);
-    await db
-        .update(sessions)
-        .set({
-            lastSeenAt: now,
-            expiresAt: idleExpiry < absoluteExpiry ? idleExpiry : absoluteExpiry,
-        })
+    const expiresAt = idleExpiry < absoluteExpiry ? idleExpiry : absoluteExpiry;
+    const throttle = new Date(now.getTime() - 5 * 60_000);
+    await db.execute(sql`
+        with touched as (
+            update ${sessions}
+            set last_seen_at = ${now}, expires_at = ${expiresAt}
+            where ${sessions.id} = ${result.sessionId}
+              and (${sessions.lastSeenAt} is null or ${sessions.lastSeenAt} < ${throttle})
+            returning ${sessions.deviceId} as device_id
+        )
+        update ${accountDevices} set last_seen_at = ${now}
+        where ${accountDevices.id} in (select device_id from touched)
+    `);
+    return {
+        user: result.user,
+        device: { id: result.deviceId, registered: result.deviceKind !== null },
+    };
+}
+
+export async function getSessionUser(
+    tokenHash: Buffer,
+    lifetime: { idleSeconds: number; maxSeconds: number },
+) {
+    return (await getSession(tokenHash, lifetime))?.user ?? null;
+}
+
+/* Whether this token's session ended because its device was removed, in the last week. */
+export async function wasRemoved(tokenHash: Buffer) {
+    const [row] = await db
+        .select({ tokenHash: removedSessionTokens.tokenHash })
+        .from(removedSessionTokens)
         .where(
             and(
-                eq(sessions.id, result.sessionId),
-                or(
-                    isNull(sessions.lastSeenAt),
-                    lt(sessions.lastSeenAt, new Date(Date.now() - 5 * 60_000)),
-                ),
+                eq(removedSessionTokens.tokenHash, tokenHash),
+                gt(removedSessionTokens.expiresAt, new Date()),
             ),
         );
-    return result.user;
+    return row !== undefined;
 }
 
 export async function updateUserName(userId: string, name: string) {
@@ -344,8 +519,270 @@ export async function updateUserName(userId: string, name: string) {
     return user ?? null;
 }
 
-export async function deleteSession(tokenHash: Buffer) {
-    await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
+/*
+ * Signing out: the session's device is revoked with every session it has, so a
+ * shared computer keeps nothing tied to the account. A session without a device
+ * (the previous release's) just ends.
+ */
+export async function signOutDevice(tokenHash: Buffer) {
+    await db.transaction(async (tx) => {
+        const [session] = await tx
+            .select({ userId: sessions.userId, deviceId: sessions.deviceId })
+            .from(sessions)
+            .where(eq(sessions.tokenHash, tokenHash));
+        if (!session) return;
+        await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, session.userId))
+            .for('update');
+        if (session.deviceId) {
+            await tx
+                .update(accountDevices)
+                .set({ revokedAt: new Date() })
+                .where(
+                    and(eq(accountDevices.id, session.deviceId), isNull(accountDevices.revokedAt)),
+                );
+            await tx.delete(sessions).where(eq(sessions.deviceId, session.deviceId));
+        }
+        await tx.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
+    });
+}
+
+/* ------------------------------------------------------------------------- */
+/* Devices                                                                    */
+/* ------------------------------------------------------------------------- */
+
+const deviceFields = {
+    id: accountDevices.id,
+    kind: accountDevices.kind,
+    name: accountDevices.name,
+    approvedBy: accountDevices.approvedBy,
+    approvedByDeviceId: accountDevices.approvedByDeviceId,
+    createdAt: accountDevices.createdAt,
+    lastSeenAt: accountDevices.lastSeenAt,
+};
+
+/*
+ * The account's devices that are not revoked, whether each has a live session,
+ * and which one is asking: that one first, then the most recently seen. Only
+ * this account's rows, ever.
+ */
+export async function listDevices(userId: string, currentDeviceId: string) {
+    const rows = await db
+        .select({
+            ...deviceFields,
+            // Written out in full: inside a select's field list, column references render unqualified.
+            signedIn: sql<boolean>`exists (select 1 from "sessions" as "live" join "opaque_credentials" as "credential" on "credential"."user_id" = "live"."user_id" and "credential"."version" = "live"."credential_version" where "live"."device_id" = "account_devices"."id" and "live"."expires_at" > now())`,
+        })
+        .from(accountDevices)
+        .where(and(eq(accountDevices.userId, userId), isNull(accountDevices.revokedAt)))
+        // By the hour the list shows, then by id: the exact order would say which was used last.
+        .orderBy(
+            desc(sql`date_trunc('hour', ${accountDevices.lastSeenAt})`),
+            asc(accountDevices.id),
+        );
+    const devices = rows.map((row) => ({
+        ...row,
+        signedIn: Boolean(row.signedIn),
+        current: row.id === currentDeviceId,
+    }));
+    return [...devices.filter((d) => d.current), ...devices.filter((d) => !d.current)];
+}
+
+export type RegisterDeviceResult =
+    | { status: 'ok'; device: Awaited<ReturnType<typeof listDevices>>[number] }
+    | { status: 'session' | 'registered' | 'key-in-use' };
+
+/*
+ * The session's own device describes itself: its kind, its name and, when the
+ * client could make one, its signing key. Once: a device that already
+ * described itself is refused, so a key is set exactly once and only on the
+ * device the session belongs to.
+ */
+export async function registerDevice(input: {
+    sessionTokenHash: Buffer;
+    kind: DeviceKind;
+    name: string;
+    signingPublicKey: Buffer | null;
+}): Promise<RegisterDeviceResult> {
+    return db.transaction(async (tx) => {
+        const [session] = await tx
+            .select({ userId: sessions.userId, deviceId: sessions.deviceId })
+            .from(sessions)
+            .where(
+                and(
+                    eq(sessions.tokenHash, input.sessionTokenHash),
+                    gt(sessions.expiresAt, new Date()),
+                ),
+            );
+        if (!session?.deviceId) return { status: 'session' };
+        const [device] = await tx
+            .select({ kind: accountDevices.kind, revokedAt: accountDevices.revokedAt })
+            .from(accountDevices)
+            .where(
+                and(
+                    eq(accountDevices.id, session.deviceId),
+                    eq(accountDevices.userId, session.userId),
+                ),
+            )
+            .for('update');
+        if (!device || device.revokedAt) return { status: 'session' };
+        if (device.kind !== null) return { status: 'registered' };
+        if (input.signingPublicKey) {
+            const [taken] = await tx
+                .select({ id: accountDevices.id })
+                .from(accountDevices)
+                .where(
+                    and(
+                        eq(accountDevices.userId, session.userId),
+                        eq(accountDevices.signingPublicKey, input.signingPublicKey),
+                    ),
+                );
+            if (taken) return { status: 'key-in-use' };
+        }
+        const now = new Date();
+        const [row] = await tx
+            .update(accountDevices)
+            .set({
+                kind: input.kind,
+                name: input.name,
+                signingPublicKey: input.signingPublicKey,
+                lastSeenAt: now,
+            })
+            .where(eq(accountDevices.id, session.deviceId))
+            .returning(deviceFields);
+        if (!row) return { status: 'session' };
+        return { status: 'ok', device: { ...row, signedIn: true, current: true } };
+    });
+}
+
+/* Any of the account's devices, renamed from any of them. Another account's, or a revoked one, is missing. */
+export async function renameDevice(input: { userId: string; deviceId: string; name: string }) {
+    const [row] = await db
+        .update(accountDevices)
+        .set({ name: input.name })
+        .where(
+            and(
+                eq(accountDevices.id, input.deviceId),
+                eq(accountDevices.userId, input.userId),
+                isNull(accountDevices.revokedAt),
+            ),
+        )
+        .returning(deviceFields);
+    return row ?? null;
+}
+
+/*
+ * The acting session's device under the account's lock, read after the lock is
+ * held: a device removed by a request that ran first has no session left.
+ */
+async function actingDevice(tx: Tx, userId: string, sessionTokenHash: Buffer) {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
+    const [acting] = await tx
+        .select({ deviceId: accountDevices.id })
+        .from(sessions)
+        .innerJoin(accountDevices, eq(accountDevices.id, sessions.deviceId))
+        .where(
+            and(
+                eq(sessions.tokenHash, sessionTokenHash),
+                eq(sessions.userId, userId),
+                gt(sessions.expiresAt, new Date()),
+                isNull(accountDevices.revokedAt),
+            ),
+        );
+    return acting?.deviceId ?? null;
+}
+
+/* Ends every session of `deviceIds` and remembers their tokens for a week, so the devices learn why. */
+async function endDeviceSessions(tx: Tx, deviceIds: string[]) {
+    if (deviceIds.length === 0) return;
+    const ended = await tx
+        .delete(sessions)
+        .where(inArray(sessions.deviceId, deviceIds))
+        .returning({ tokenHash: sessions.tokenHash });
+    if (ended.length === 0) return;
+    const expiresAt = new Date(Date.now() + REMOVED_TOKEN_SECONDS * 1000);
+    await tx
+        .insert(removedSessionTokens)
+        .values(ended.map(({ tokenHash }) => ({ tokenHash, expiresAt })))
+        .onConflictDoNothing();
+}
+
+export type RevokeResult =
+    | { status: 'ok'; removed: number }
+    | { status: 'session' | 'missing' | 'current' };
+
+/*
+ * Removes one of the account's other devices: it is revoked and its sessions
+ * end at once. Under the account's lock, so two devices removing each other at
+ * the same moment cannot both succeed: the second finds its own device gone.
+ * The device asking cannot remove itself (that is signing out).
+ */
+export async function revokeDevice(input: {
+    userId: string;
+    deviceId: string;
+    sessionTokenHash: Buffer;
+}): Promise<RevokeResult> {
+    return db.transaction(async (tx) => {
+        const acting = await actingDevice(tx, input.userId, input.sessionTokenHash);
+        if (!acting) return { status: 'session' };
+        if (acting === input.deviceId) return { status: 'current' };
+        const [target] = await tx
+            .update(accountDevices)
+            .set({ revokedAt: new Date() })
+            .where(
+                and(
+                    eq(accountDevices.id, input.deviceId),
+                    eq(accountDevices.userId, input.userId),
+                    isNull(accountDevices.revokedAt),
+                ),
+            )
+            .returning({ id: accountDevices.id });
+        if (!target) return { status: 'missing' };
+        await endDeviceSessions(tx, [target.id]);
+        return { status: 'ok', removed: 1 };
+    });
+}
+
+/* Removes every device of the account but the one asking. */
+export async function revokeOtherDevices(input: {
+    userId: string;
+    sessionTokenHash: Buffer;
+}): Promise<RevokeResult> {
+    return db.transaction(async (tx) => {
+        const acting = await actingDevice(tx, input.userId, input.sessionTokenHash);
+        if (!acting) return { status: 'session' };
+        const revoked = await tx
+            .update(accountDevices)
+            .set({ revokedAt: new Date() })
+            .where(
+                and(
+                    eq(accountDevices.userId, input.userId),
+                    ne(accountDevices.id, acting),
+                    isNull(accountDevices.revokedAt),
+                ),
+            )
+            .returning({ id: accountDevices.id });
+        await endDeviceSessions(
+            tx,
+            revoked.map((row) => row.id),
+        );
+        // Sessions a container of the previous release opened during a rolling update have no
+        // device, and that release still accepts them: they end here too, and are told why.
+        const deviceless = await tx
+            .delete(sessions)
+            .where(and(eq(sessions.userId, input.userId), isNull(sessions.deviceId)))
+            .returning({ tokenHash: sessions.tokenHash });
+        if (deviceless.length > 0) {
+            const expiresAt = new Date(Date.now() + REMOVED_TOKEN_SECONDS * 1000);
+            await tx
+                .insert(removedSessionTokens)
+                .values(deviceless.map(({ tokenHash }) => ({ tokenHash, expiresAt })))
+                .onConflictDoNothing();
+        }
+        return { status: 'ok', removed: revoked.length };
+    });
 }
 
 /*
@@ -373,6 +810,23 @@ export async function consumeRateLimit(bucket: Buffer, limit: number, windowMs: 
 }
 
 /*
+ * Takes one use back off a bucket, for a count of things that should have finished and
+ * did (a password proof started, then completed). The row goes at zero.
+ */
+export async function releaseRateLimit(bucket: Buffer) {
+    const keyHash = keyedHash(bucket);
+    await db.transaction(async (tx) => {
+        await tx
+            .delete(authRateLimits)
+            .where(and(eq(authRateLimits.keyHash, keyHash), lte(authRateLimits.count, 1)));
+        await tx
+            .update(authRateLimits)
+            .set({ count: sql`${authRateLimits.count} - 1` })
+            .where(and(eq(authRateLimits.keyHash, keyHash), gt(authRateLimits.count, 1)));
+    });
+}
+
+/*
  * Removes expired rows in bounded batches so a large backlog never holds a lock or
  * a connection for long. Runs from the background worker, never inside a request.
  */
@@ -391,6 +845,21 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
         }
         return total;
     }
+    /* `statement` deletes or updates at most `batch` rows per run; repeated until fewer come back. */
+    async function repeat(statement: () => ReturnType<typeof db.execute>) {
+        let total = 0;
+        while (!options.signal?.aborted) {
+            const affected = (await statement()).rowCount ?? 0;
+            total += affected;
+            if (affected < batch) break;
+        }
+        return total;
+    }
+    const sessionsSwept = await sweep(sessions, sessions.id, sessions.expiresAt);
+    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const idleCutoff = new Date(now.getTime() - DEVICE_IDLE_DAYS * 24 * 60 * 60 * 1000);
+    const revokedCutoff = new Date(now.getTime() - DEVICE_REVOKED_DAYS * 24 * 60 * 60 * 1000);
+    const noSession = sql`not exists (select 1 from ${sessions} where ${sessions.deviceId} = ${accountDevices.id})`;
     return {
         enrollments: await sweep(
             accountEnrollments,
@@ -407,8 +876,32 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
             accountRecoveryAttempts.tokenHash,
             accountRecoveryAttempts.expiresAt,
         ),
-        sessions: await sweep(sessions, sessions.id, sessions.expiresAt),
+        sessions: sessionsSwept,
         rateLimits: await sweep(authRateLimits, authRateLimits.keyHash, authRateLimits.expiresAt),
+        removedTokens: await sweep(
+            removedSessionTokens,
+            removedSessionTokens.tokenHash,
+            removedSessionTokens.expiresAt,
+        ),
+        // A device without a key and without a session can never come back: neither a
+        // signature nor a cookie leads to it any more. A day's grace for one just made.
+        keylessDevices: await repeat(() =>
+            db.execute(
+                sql`delete from ${accountDevices} where ${accountDevices.id} in (select ${accountDevices.id} from ${accountDevices} where ${accountDevices.signingPublicKey} is null and ${accountDevices.createdAt} < ${dayAgo} and ${noSession} limit ${batch})`,
+            ),
+        ),
+        // A keyed device unseen for 90 days with no session is revoked; it signs in as new.
+        idleDevices: await repeat(() =>
+            db.execute(
+                sql`update ${accountDevices} set revoked_at = ${now} where ${accountDevices.id} in (select ${accountDevices.id} from ${accountDevices} where ${accountDevices.revokedAt} is null and ${accountDevices.signingPublicKey} is not null and ${accountDevices.lastSeenAt} < ${idleCutoff} and ${noSession} limit ${batch})`,
+            ),
+        ),
+        // Revoked rows, with the names they carried, go 90 days after.
+        revokedDevices: await repeat(() =>
+            db.execute(
+                sql`delete from ${accountDevices} where ${accountDevices.id} in (select ${accountDevices.id} from ${accountDevices} where ${accountDevices.revokedAt} < ${revokedCutoff} limit ${batch})`,
+            ),
+        ),
     };
 }
 

@@ -189,6 +189,7 @@ The image runs the same `bun run db:migrate` command, Drizzle Kit configuration,
 - Failure exits the new container before it becomes ready. Configure the platform to retain the old healthy container until its replacement passes `/api/ready`.
 - Supply `SERVER_SHUTDOWN_TIMEOUT=30` and a container stop grace period longer than 30 seconds so requests drain.
 - Old and new versions overlap, so schema changes must be backward compatible: add new structures first and remove obsolete columns or constraints in a later release, after old containers have stopped.
+- The devices release (`20261016013230_devices`) gives every live session a device and adds `sessions.device_id` as nullable. Drizzle applies all pending migrations in one transaction, so `sessions` stays locked against every signed-in request from the moment the column is added until the run commits: on a table of a few thousand sessions that is milliseconds, on millions it is a short outage, so pick a quiet moment there. The migration waits at most five seconds for that lock (`lock_timeout`) and fails rather than queue requests behind it; run it again. While old containers still run, a sign-in through one of them makes a session without a device, which the new containers do not accept: that person is asked to sign in again. A later release deletes sessions still without a device and makes the column `NOT NULL`; take it only once no container of the previous release is left.
 - A failed application rollout does not undo migrations already applied.
 
 ### One role per process

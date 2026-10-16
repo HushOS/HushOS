@@ -91,6 +91,7 @@ const authActions = new Set([
     'login/start',
     'login/finish',
     'session',
+    'session/forget',
     'logout',
     'recover/email',
     'recover',
@@ -113,6 +114,10 @@ const authActions = new Set([
     'settings',
     'settings-key',
     'profile',
+    'devices',
+    'devices/:id',
+    'devices/others',
+    'devices/reauth',
 ]);
 const FAILURE_TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
 export type Failure = { kind: string; code?: string; cause?: Failure };
@@ -168,10 +173,12 @@ function privatePage(path: string) {
     return pagePatterns.find(([pattern]) => pattern.test(path))?.[1] ?? '/private/unknown';
 }
 export function authLogAction(pathname: string) {
-    // A contact's succession chain names the account in its path: logged as the pattern.
+    // A contact's succession chain names the account in its path, a device its id: both
+    // are stable identifiers, logged as the pattern.
     const action = pathname
         .slice('/api/auth/'.length)
-        .replace(/^contacts\/[0-9a-f-]{36}\/succession$/, 'contacts/:userId/succession');
+        .replace(/^contacts\/[0-9a-f-]{36}\/succession$/, 'contacts/:userId/succession')
+        .replace(/^devices\/[0-9a-f-]{36}$/, 'devices/:id');
     return authActions.has(action) ? action : 'unknown';
 }
 

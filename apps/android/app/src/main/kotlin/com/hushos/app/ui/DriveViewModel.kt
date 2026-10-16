@@ -131,6 +131,8 @@ data class DriveState(
     val linkWaiting: Boolean = false,
     /* The session ended on its own (a password changed elsewhere): said once over sign-in. */
     val signedOutNotice: Boolean = false,
+    /* The session ended because this phone was removed from the account: the notice says so. */
+    val removed: Boolean = false,
     /* The account was just deleted: the last screen says so before sign-in. */
     val accountDeleted: Boolean = false,
     /* Searches made on this phone, newest first. */
@@ -193,9 +195,27 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { connectivity.registerDefaultNetworkCallback(network) }.onFailure { android.util.Log.w("HushOS", "network callback", it) }
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Shared.origin(context) }?.let { origin -> _state.update { it.copy(origin = origin) } }
-            val user = withContext(Dispatchers.IO) { runCatching { Auth.currentUser(context) } }
+            val check = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context) } }
+            val user = check.map { (it as? com.hushos.app.data.SessionCheck.SignedIn)?.user }
             when {
-                user.isSuccess && user.getOrNull() != null -> signedIn(user.getOrNull()!!)
+                check.getOrNull() is com.hushos.app.data.SessionCheck.Removed -> {
+                    // Removed from the account on another device: what this phone kept for it goes,
+                    // queued transfers first, so none writes a decrypted file after the wipe.
+                    withContext(Dispatchers.IO) {
+                        stopTransfers()
+                        Auth.forgetRemoved(context)
+                    }
+                    filesAppChanged()
+                    _state.update { it.copy(gate = Gate.SIGNED_OUT, signedOutNotice = true, removed = true) }
+                }
+                user.isSuccess && user.getOrNull() != null -> {
+                    signedIn(user.getOrNull()!!)
+                    // A session from before devices describes this phone and gets its key.
+                    (check.getOrNull() as? com.hushos.app.data.SessionCheck.SignedIn)?.device?.let { device ->
+                        val signed = user.getOrNull()!!
+                        launch(Dispatchers.IO) { runCatching { Auth.registerDevice(context, device, signed.id, signed.email) } }
+                    }
+                }
                 user.isFailure && withContext(Dispatchers.IO) { Shared.session(context) } != null -> {
                     val session = withContext(Dispatchers.IO) { Shared.session(context) }!!
                     signedIn(SessionUser(session.userId, "", "", 0uL))
@@ -351,7 +371,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun setOrigin(origin: String) = _state.update { it.copy(origin = origin.trim().trimEnd('/')) }
 
     fun signIn(email: String, password: String, done: (String?) -> Unit) {
+        signInGeneration++
         viewModelScope.launch {
+            wiping?.join()
             val result = withContext(Dispatchers.IO) { runCatching { Auth.signIn(context, state.value.origin, email, password) } }
             result.onSuccess { signedIn(it); done(null) }.onFailure { done(it.message ?: Auth.UNREACHABLE) }
         }
@@ -374,10 +396,59 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun sessionLost() {
         showingOwnWords = false
+        val ended = Shared.session(context)
         Shared.clearSession(context)
         vault = null
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
+        // Ended because this phone was removed from the account: everything of the account goes too,
+        // unless someone has signed in since (the generation moved), and a sign-in started after the
+        // answer waits for the wipe (signIn joins `wiping`).
+        if (ended != null) viewModelScope.launch {
+            val generation = signInGeneration
+            val removed = withContext(Dispatchers.IO) { runCatching { Auth.sessionCheck(context, ended) }.getOrNull() } is com.hushos.app.data.SessionCheck.Removed
+            // On the main thread from here to `wiping` being set: no sign-in can start in between.
+            if (!removed || generation != signInGeneration ||
+                !Auth.mayForgetRemoved(ended, Shared.session(context), com.hushos.app.data.AccountStore.of(context).owner())) return@launch
+            val wipe = launch(Dispatchers.IO) {
+                stopTransfers()
+                Auth.forgetRemoved(context)
+            }
+            wiping = wipe
+            wipe.join()
+            wiping = null
+            filesAppChanged()
+            _state.update { if (it.gate == Gate.SIGNED_OUT) it.copy(signedOutNotice = true, removed = true) else it }
+        }
+    }
+
+    /* Bumped as every sign-in starts: a removal check answered after it clears nothing. */
+    private var signInGeneration = 0
+    /* A removal wipe under way: a sign-in waits for it, so the wipe never takes the new session. */
+    private var wiping: kotlinx.coroutines.Job? = null
+
+    /*
+     * Stops the account's queued and running transfers and waits for the cancel to be recorded, before
+     * a wipe. A worker already writing checks the account again before it keeps anything (Vault).
+     */
+    private fun stopTransfers() {
+        runCatching { androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG).result.get() }
+    }
+
+    /* The account's devices, for Account › Devices. A failure is a message to show; a lost session signs out. */
+    fun loadDevices(done: (List<com.hushos.app.data.AccountDevice>?, String?) -> Unit) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) { runCatching { Auth.devices(context) } }
+        result.onSuccess { done(it, null) }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(null, failure.message ?: com.hushos.app.data.Problems.SERVER)
+        }
+    }
+
+    /* Rename, remove one or remove every other device; `done` gets null on success or the reason. */
+    fun changeDevices(action: (Context) -> Unit, done: (String?) -> Unit) = viewModelScope.launch {
+        val result = withContext(Dispatchers.IO) { runCatching { action(context) } }
+        result.onSuccess { done(null) }.onFailure { failure ->
+            if (failure is NotAuthenticated) sessionLost() else done(failure.message ?: com.hushos.app.data.Problems.SERVER)
+        }
     }
 
     fun clearError() = _state.update { it.copy(error = null) }
@@ -1083,7 +1154,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         null
     }, done)
 
-    fun clearSignedOut() = _state.update { it.copy(signedOutNotice = false, accountDeleted = false) }
+    fun clearSignedOut() = _state.update { it.copy(signedOutNotice = false, accountDeleted = false, removed = false) }
 
     /* The phrase, the recovery key for the kit file, and whether the phrase was confirmed as saved. */
     data class RecoveryKit(val phrase: String, val recovery: org.json.JSONObject, val confirmed: Boolean)

@@ -794,3 +794,37 @@ fn the_web_s_saved_signatures_read_as_saved_and_as_nothing_else() {
         Integrity::SavedFromLink
     );
 }
+
+#[test]
+fn the_web_s_device_session_proof_is_this_core_s_byte_for_byte() {
+    let session = &fixture()["deviceSession"];
+    let (user, device, attempt) = (s(session, "userId"), s(session, "deviceId"), s(session, "attemptToken"));
+    // The statement both sides sign, and the digest of the attempt it names.
+    let statement = device_session_statement(user.clone(), device.clone(), attempt.clone()).unwrap();
+    assert_eq!(statement, b(session, "statement"));
+    assert!(String::from_utf8(statement)
+        .unwrap()
+        .ends_with(&format!("\"{}\"]", s(session, "attemptDigest"))));
+    // Ed25519 is deterministic: the same seed signs the same bytes here as libsodium did there.
+    let seed = b(session, "seed");
+    assert_eq!(device_signing_public_key(seed.clone()).unwrap(), b(session, "publicKey"));
+    assert_eq!(
+        device_session_sign(seed, user.clone(), device.clone(), attempt.clone()).unwrap(),
+        s(session, "signature")
+    );
+    assert!(device_session_verify(
+        b(session, "publicKey"),
+        user.clone(),
+        device.clone(),
+        attempt.clone(),
+        b(session, "signature")
+    ));
+    assert!(!device_session_verify(
+        b(session, "publicKey"),
+        user,
+        device,
+        format!("{attempt}x"),
+        b(session, "signature")
+    ));
+    assert_eq!(device_email_hash(s(session, "email")), s(session, "emailDigest"));
+}

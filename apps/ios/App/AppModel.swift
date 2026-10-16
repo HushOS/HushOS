@@ -34,6 +34,13 @@ final class AppModel {
     }
     /* A link that opened the app; acted on once signed in (or right away if already). */
     var pendingLink: URL?
+    /* This phone was removed from the account on another device: sign-in says so, until someone signs in. */
+    var removedNotice = false
+    private var checkingRemoval = false
+    /* Bumped as every sign-in starts: a removal check answered after it clears nothing. */
+    private var signInGeneration = 0
+    /* A removal wipe under way: a sign-in waits for it, so the wipe never takes the new session. */
+    private var wiping: Task<Void, Never>?
 
     struct OriginProblem: Error { let message: String }
 
@@ -80,10 +87,18 @@ final class AppModel {
 
     func start() async {
         do {
-            if let user = try await Auth.currentUser(), let session = SharedKeychain.session {
+            let check = try await Auth.checkSession()
+            if case let .signedIn(user, device) = check, let session = SharedKeychain.session {
                 // Signed in before the store recorded owners: what is on the phone is this account's (another's goes).
                 AccountStore.shared.adopt(AccountOwner(session))
                 signedIn(user)
+                // A session from before devices describes this phone and gets its key.
+                if let device { Task { try? await Auth.registerDevice(if: device, userId: user.id, email: user.email) } }
+                return
+            }
+            if check == .removed {
+                await forgetRemovedDevice()
+                removedNotice = true
                 return
             }
         } catch {
@@ -100,6 +115,9 @@ final class AppModel {
     }
 
     func signIn(email: String, password: String) async throws {
+        removedNotice = false
+        signInGeneration += 1
+        await wiping?.value
         let previous = AccountStore.shared.owner()
         // Auth.signIn removes another account's data (AccountStore.claim) before the new session is stored.
         let user = try await Auth.signIn(origin: origin, email: email, password: password)
@@ -178,10 +196,66 @@ final class AppModel {
 
     func leaveDeleted() { state = .signedOut }
 
-    /* The session died under us (a 401): back to sign-in with the address filled, Files location left until then. */
+    /*
+     * The session died under us (a 401): back to sign-in with the address filled, Files location
+     * left until then. If it died because this phone was removed from the account, everything of
+     * the account on the phone goes as well, as on sign-out.
+     */
     func sessionLost() {
         if let email = user?.email, !email.isEmpty { lastEmail = email }
+        let ended = SharedKeychain.session
         SharedKeychain.delete(SharedKeychain.sessionAccount)
+        user = nil
+        vault = nil
+        owner = nil
+        state = .signedOut
+        if let ended { Task { await forgetIfRemoved(ended) } }
+    }
+
+    /*
+     * A request just answered 401: ask at once, with the session still stored, whether this phone
+     * was removed rather than signed out. Removed, everything of the account on the phone goes and
+     * sign-in says why; otherwise the "signed out" alert stays for the person to act on. Nothing is
+     * cleared if anyone signed in meanwhile.
+     */
+    func sessionEnded() async {
+        guard !checkingRemoval, let ended = SharedKeychain.session else { return }
+        checkingRemoval = true
+        defer { checkingRemoval = false }
+        await forgetIfRemoved(ended)
+    }
+
+    /*
+     * Asks whether `ended` was removed and, if so and nothing has changed since, wipes. A sign-in
+     * started while the question was out (the generation moved) keeps everything. From the answer
+     * to `wiping` being set nothing suspends, so a sign-in that starts after finds the wipe and
+     * waits for it rather than racing it.
+     */
+    private func forgetIfRemoved(_ ended: SharedKeychain.Session) async {
+        let generation = signInGeneration
+        guard (try? await Auth.checkSession(ended)) == .removed,
+              generation == signInGeneration,
+              Devices.mayForgetRemoved(ended: ended, current: SharedKeychain.session, owner: AccountStore.shared.owner())
+        else { return }
+        let wipe = Task { await forgetRemovedDevice() }
+        wiping = wipe
+        await wipe.value
+        wiping = nil
+        removedNotice = true
+    }
+
+    /*
+     * The server says this phone was removed from the account: what it kept for the account goes
+     * (kept files, the mirror, the remembered account key, the device key), as on sign-out, without
+     * asking the server for anything more. Housekeeping, not a guarantee: whatever was copied off
+     * the phone before stays where it went.
+     */
+    private func forgetRemovedDevice() async {
+        await BackgroundTransfers.shared.cancelAll()
+        await FilesDomain.remove()
+        SharedKeychain.delete(SharedKeychain.sessionAccount)
+        AccountStore.shared.wipe()
+        TransferNotices.shared.clear()
         user = nil
         vault = nil
         owner = nil
@@ -213,6 +287,8 @@ final class AppModel {
 
     /* The reset, then the app signed in under the new password, as a sign-in leaves it. */
     func recover(_ enrollment: RecoveryEnrollment, password: String, phrase: [String]) async throws -> RecoveredAccount {
+        signInGeneration += 1
+        await wiping?.value
         let previous = AccountStore.shared.owner()
         let account = try await Auth.recover(enrollment, password: password, phrase: phrase)
         await anotherAccount(since: previous)

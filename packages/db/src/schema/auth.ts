@@ -10,7 +10,9 @@ import {
     smallint,
     text,
     timestamp,
+    uniqueIndex,
     uuid,
+    type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
@@ -99,6 +101,87 @@ export const accountKeys = pgTable(
     ],
 );
 
+export type DeviceKind = 'web' | 'ios' | 'android';
+/*
+ * How a device got in (docs/devices-design.md 1). Step 1 writes `enrolment`,
+ * `password` and `existing`; the rest arrive with approval. Null is the
+ * pending state approval will use: a device row that is not approved yet.
+ */
+export type DeviceApproval =
+    | 'enrolment'
+    | 'password'
+    | 'device'
+    | 'phrase'
+    | 'email-wait'
+    | 'guardian'
+    | 'existing';
+
+/*
+ * One app installation or browser profile signed in to an account. Its name and
+ * kind are what the client said about itself; the Ed25519 key is the device's
+ * own, made on the device and used to come back to this row at the next sign-in
+ * (`deviceSessionStatement`). A revoked row stays for 90 days, then goes.
+ */
+export const accountDevices = pgTable(
+    'account_devices',
+    {
+        id: uuid().defaultRandom().primaryKey(),
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        // Null until the client describes itself: listed as an unknown device.
+        kind: text().$type<DeviceKind>(),
+        name: text(),
+        signingPublicKey: bytea('signing_public_key'),
+        approvedBy: text('approved_by').$type<DeviceApproval>(),
+        approvedByDeviceId: uuid('approved_by_device_id').references(
+            (): AnyPgColumn => accountDevices.id,
+            { onDelete: 'set null' },
+        ),
+        approvedAt: timestamp('approved_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+        revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    },
+    (table) => [
+        // Behind the self-reference's on-delete-set-null, so a sweep's deletes don't scan the table.
+        index('account_devices_approver_idx')
+            .on(table.approvedByDeviceId)
+            .where(sql`${table.approvedByDeviceId} is not null`),
+        index('account_devices_user_live_idx')
+            .on(table.userId)
+            .where(sql`${table.revokedAt} is null`),
+        // Per account, never global: a global constraint would say whether a key is in use elsewhere.
+        uniqueIndex('account_devices_user_key_idx')
+            .on(table.userId, table.signingPublicKey)
+            .where(sql`${table.signingPublicKey} is not null`),
+        check(
+            'account_devices_kind_valid',
+            sql`${table.kind} is null or ${table.kind} in ('web', 'ios', 'android')`,
+        ),
+        check(
+            'account_devices_name_length',
+            sql`${table.name} is null or char_length(${table.name}) between 1 and 40`,
+        ),
+        check(
+            'account_devices_key_length',
+            sql`${table.signingPublicKey} is null or octet_length(${table.signingPublicKey}) = 32`,
+        ),
+        check(
+            'account_devices_approved_by_valid',
+            sql`${table.approvedBy} is null or ${table.approvedBy} in ('enrolment', 'password', 'device', 'phrase', 'email-wait', 'guardian', 'existing')`,
+        ),
+        check(
+            'account_devices_approver_valid',
+            sql`${table.approvedBy} = 'device' or ${table.approvedByDeviceId} is null`,
+        ),
+        check(
+            'account_devices_approval_pair',
+            sql`(${table.approvedBy} is null) = (${table.approvedAt} is null)`,
+        ),
+    ],
+);
+
 export const sessions = pgTable(
     'sessions',
     {
@@ -108,6 +191,12 @@ export const sessions = pgTable(
             .references(() => users.id, { onDelete: 'cascade' }),
         tokenHash: bytea('token_hash').notNull().unique(),
         credentialVersion: integer('credential_version').notNull(),
+        /*
+         * The device the session belongs to; at most one live session per device.
+         * Nullable for one release, so a container still on the previous version can
+         * sign people in during a rolling update; `sessions_device_not_null` follows.
+         */
+        deviceId: uuid('device_id').references(() => accountDevices.id, { onDelete: 'cascade' }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
         lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
@@ -115,9 +204,27 @@ export const sessions = pgTable(
     (table) => [
         index('sessions_user_idx').on(table.userId),
         index('sessions_expiry_idx').on(table.expiresAt),
+        uniqueIndex('sessions_device_idx').on(table.deviceId),
         check('sessions_token_hash_length', sql`octet_length(${table.tokenHash}) = 32`),
         check('sessions_version_positive', sql`${table.credentialVersion} > 0`),
         check('sessions_expiry_valid', sql`${table.expiresAt} > ${table.createdAt}`),
+    ],
+);
+
+/*
+ * Sessions that ended because their device was removed, by token digest, for a
+ * week: a removed device that comes back online is told it was removed (not
+ * merely signed out), so it can clear what it kept. Nothing else is recorded.
+ */
+export const removedSessionTokens = pgTable(
+    'removed_session_tokens',
+    {
+        tokenHash: bytea('token_hash').primaryKey(),
+        expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    },
+    (table) => [
+        index('removed_session_tokens_expiry_idx').on(table.expiresAt),
+        check('removed_session_tokens_hash_length', sql`octet_length(${table.tokenHash}) = 32`),
     ],
 );
 
@@ -137,7 +244,7 @@ export const opaqueLoginAttempts = pgTable(
     (table) => [
         check(
             'opaque_login_attempts_purpose_binding',
-            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
+            sql`(${table.purpose} = 'login' and ${table.sessionTokenHash} is null) or (${table.purpose} in ('delete', 'password', 'master-key', 'recovery-key', 'devices') and ${table.sessionTokenHash} is not null and octet_length(${table.sessionTokenHash}) = 32)`,
         ),
         index('opaque_login_attempts_user_idx').on(table.userId),
         index('opaque_login_attempts_expiry_idx').on(table.expiresAt),

@@ -114,6 +114,8 @@ public struct AccountStore: Sendable {
             Mirror(url: Unbacked.local.appendingPathComponent("mirror.sqlite"))?.wipe()
             // The remembered device opens this account's key; the next account makes its own.
             SharedKeychain.delete(SharedKeychain.deviceAccount)
+            // The device key belongs to this account's device row; another account makes its own.
+            SharedKeychain.delete(SharedKeychain.deviceIdentityAccount)
             // What an earlier version kept in the defaults: recent searches and the address the sign-in screen offers.
             UserDefaults.standard.removeObject(forKey: "search.recent")
             UserDefaults.standard.removeObject(forKey: "lastEmail")

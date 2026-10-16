@@ -45,6 +45,16 @@ describe('paths', () => {
         expect(authLogAction(`/api/auth/contacts/${FOLDER}/succession/extra`)).toBe('unknown');
     });
 
+    test('a device is logged as its pattern, never its id, and nothing below it is served', () => {
+        const logged = redact({ path: `/api/auth/devices/${FOLDER}` }).path;
+        expect(logged).toBe('/api/auth/devices/:id');
+        expect(String(logged)).not.toContain(FOLDER);
+        // Unknown paths answer 404 before their body is read; a longer one must stay unknown.
+        expect(authLogAction(`/api/auth/devices/${FOLDER}/extra`)).toBe('unknown');
+        expect(authLogAction(`/api/auth/devices/${FOLDER}x`)).toBe('unknown');
+        expect(authLogAction('/api/auth/devices/others')).toBe('devices/others');
+    });
+
     test('a page that carries an identifier is logged as its pattern', () => {
         expect(redact({ path: `/app/drive/f/${FOLDER}` }).path).toBe('/app/drive/f/:folderId');
         expect(redact({ path: `/app/tags/${FOLDER}` }).path).toBe('/app/tags/:tagId');

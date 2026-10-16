@@ -49,6 +49,10 @@ struct AccountView: View {
                 Section {
                     Button { changingPassword = true } label: { row("key", "Change password", nil, chevron: true) }.alpineRow()
                     Button { showingPhrase = true } label: { row("scroll", "Recovery phrase", "Gets you back in if you forget your password", chevron: true) }.alpineRow()
+                    NavigationLink { DevicesView().environment(store) } label: {
+                        row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
+                    }
+                    .alpineRow()
                     Button { showingPeople = true } label: { row("person.2", "People you share with", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
                     Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
@@ -90,7 +94,7 @@ struct AccountView: View {
                 Button("Sign out", role: .destructive) { Task { await model.signOut() } }
             } message: {
                 // Signing out removes the kept copies; say so only when there are some.
-                Text("You’ll need your email and password to sign back in on this iPhone." + (Offline.entries().isEmpty ? "" : " Files kept on this iPhone are removed."))
+                Text("This iPhone leaves your list of devices, and you’ll need your email and password to sign back in on it." + (Offline.entries().isEmpty ? "" : " Files kept on this iPhone are removed."))
             }
             .onChange(of: store.route, initial: true) { _, link in
                 if link == .trash {

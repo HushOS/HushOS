@@ -510,8 +510,25 @@ fn main() {
         "legacyIdentity": envelope_json(&rewrapped_legacy),
     });
 
+    // A device key's sign-in proof, made here: the web must build the same statement and accept the signature.
+    let device_key = device_signing_create().unwrap();
+    let (device_user, device_id, attempt_token) =
+        (user_id.to_uppercase(), uuid(), e(&random_bytes(32).unwrap()));
+    let device_email = " Sam.Example@HushOS.TEST\t".to_string();
+    let device_session = json!({
+        "userId": device_user,
+        "deviceId": device_id,
+        "attemptToken": attempt_token,
+        "publicKey": e(&device_key.public_key),
+        "statement": e(&device_session_statement(device_user.clone(), device_id.clone(), attempt_token.clone()).unwrap()),
+        "signature": device_session_sign(device_key.seed.to_vec(), device_user.clone(), device_id.clone(), attempt_token.clone()).unwrap(),
+        "email": device_email,
+        "emailHash": device_email_hash(device_email.clone()),
+    });
+
     let out = json!({
         "generatedBy": "crates/hushos-core/examples/fixtures.rs",
+        "deviceSession": device_session,
         "link": link,
         "recovery": recovery,
         "report": report,

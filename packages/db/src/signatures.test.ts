@@ -2,7 +2,9 @@ import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { hybridSignerFromSeed, signingKeyFromSeed } from '../test/helpers';
+import { readFileSync } from 'node:fs';
 import {
+    deviceSessionStatement,
     keysStatement,
     metadataSigned,
     metadataStatement,
@@ -360,5 +362,44 @@ describe('verification', () => {
                 versionSigned(version, signer.sign(metadataStatement(metadata, 'resealed'))),
             ),
         ).toBe(false);
+    });
+});
+
+describe('the device session statement', () => {
+    test('the label, lowercase ids and the attempt token’s digest, base64url', () => {
+        expect(
+            deviceSessionStatement({
+                userId: WORKSPACE,
+                deviceId: NODE,
+                attemptDigest: createHash('sha256').update('abc').digest(),
+            }).toString('utf8'),
+        ).toBe(
+            '["hushos/device/session",1,"0f8fad5b-d9cb-469f-a165-70867728950e","7c9e6679-7425-40de-944b-e07fc1f90ae7","ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0"]',
+        );
+    });
+
+    test('is the bytes the web wrote into the core fixture, and its proof verifies here', () => {
+        const fixture = JSON.parse(
+            readFileSync(
+                new URL('../../../crates/hushos-core/fixtures/web.json', import.meta.url),
+                'utf8',
+            ),
+        ).deviceSession as Record<string, string>;
+        const statement = deviceSessionStatement({
+            userId: fixture.userId!,
+            deviceId: fixture.deviceId!,
+            // The server passes the attempt's stored token hash: SHA-256 of the token's UTF-8.
+            attemptDigest: createHash('sha256').update(fixture.attemptToken!).digest(),
+        });
+        expect(statement.toString('base64url')).toBe(fixture.statement);
+        const publicKey = Buffer.from(fixture.publicKey!, 'base64url');
+        const signature = Buffer.from(fixture.signature!, 'base64url');
+        expect(verifySignature(publicKey, statement, signature)).toBe(true);
+        const other = deviceSessionStatement({
+            userId: fixture.userId!,
+            deviceId: fixture.deviceId!,
+            attemptDigest: createHash('sha256').update(`${fixture.attemptToken}x`).digest(),
+        });
+        expect(verifySignature(publicKey, other, signature)).toBe(false);
     });
 });

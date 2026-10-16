@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { encryptKey } from '../src/aead';
 import { rememberAccountKey } from '../src/device';
+import { attemptDigest, deviceSessionStatement, emailDigest } from '../src/device-identity';
 import {
     CHUNK_SIZE,
     CONTENT_SUITE,
@@ -701,6 +702,27 @@ const fingerprints = {
     ),
 };
 
+// A device key's sign-in proof: the statement, and the Ed25519 signature from a fixed seed. Ed25519 is
+// deterministic, so the core must produce these exact bytes from the same seed.
+const deviceSeed = bytes(32, 41);
+const deviceKeys = sodium.crypto_sign_seed_keypair(deviceSeed);
+const deviceSessionInput = {
+    userId,
+    deviceId: uuid().toUpperCase(),
+    attemptToken: encode(bytes(32, 43)),
+};
+const deviceStatement = await deviceSessionStatement(deviceSessionInput);
+const deviceSession = {
+    ...deviceSessionInput,
+    seed: encode(deviceSeed),
+    publicKey: encode(deviceKeys.publicKey),
+    attemptDigest: await attemptDigest(deviceSessionInput.attemptToken),
+    statement: encode(deviceStatement),
+    signature: encode(await signStatement(deviceStatement, deviceKeys.privateKey)),
+    email: '  Maya.Example@HushOS.test ',
+    emailDigest: await emailDigest('  Maya.Example@HushOS.test '),
+};
+
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
 await mkdir(out, { recursive: true });
 await writeFile(
@@ -724,6 +746,7 @@ await writeFile(
             upgrade,
             fingerprints,
             ids,
+            deviceSession,
         },
         null,
         2,

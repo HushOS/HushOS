@@ -64,7 +64,7 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
                     useLogger().set({ auth: { failure: describeFailure(error) } });
                     useLogger().error(new Error('Authentication request failed.'));
                 }
-                return status(error.status, { message: error.message });
+                return status(error.status, { message: error.message, code: error.code });
             }
             if (error instanceof ValidationError || error instanceof ParseError)
                 return status(400, { message: 'Please check your information and try again.' });
@@ -129,6 +129,23 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
         }
     })
     .as('global');
+
+/*
+ * A device security notice, sent after the action and never awaited: the action
+ * already happened, and a mail problem is the operator's. Logged by class and
+ * code only, on the auth failure field the redaction allows.
+ */
+function notifyDevices(
+    log: ReturnType<typeof useLogger>,
+    userId: string,
+    kind: 'new-device' | 'device-removed' | 'devices-removed',
+    count?: number,
+) {
+    void auth.notifyDevices(userId, kind, count).catch((error: unknown) => {
+        log.set({ auth: { failure: describeFailure(error) } });
+        log.error(new Error('Security notice failed.'));
+    });
+}
 
 /* What the operator gets to see about a failure: the class and machine code, one cause deep. */
 function describeFailure(error: unknown) {
@@ -401,6 +418,12 @@ const workspaceKeySchema = t.Object({
 });
 const workspaceSetupSchema = t.Object({ id: workspaceIdSchema, grant: workspaceKeySchema });
 
+/* The second half of the password exchange removing devices asks for (POST /auth/devices/reauth). */
+const deviceRemovalSchema = t.Object({
+    attemptToken: tokenSchema,
+    finishLoginRequest: opaqueMessage,
+});
+
 const securityActionSchema = t.Union([
     t.Literal('password'),
     t.Literal('master-key'),
@@ -494,15 +517,31 @@ export const apiApp = new Elysia({ prefix: '/api' })
     )
     .post(
         '/auth/login/finish',
-        { body: t.Object({ attemptToken: tokenSchema, finishLoginRequest: opaqueMessage }) },
-        async ({ sessionToken, body, set }) => {
+        {
+            body: t.Object({
+                attemptToken: tokenSchema,
+                finishLoginRequest: opaqueMessage,
+                // A device key's proof for this attempt (docs/devices-design.md, step 1).
+                device: t.Optional(t.Object({ id: uuidSchema, signature: signatureSchema })),
+            }),
+        },
+        async ({ sessionToken, body, set, log }) => {
             const {
                 user,
                 envelope,
+                device,
+                newDevice,
                 sessionToken: token,
-            } = await auth.finishLogin(body.attemptToken, body.finishLoginRequest, sessionToken);
+            } = await auth.finishLogin(
+                body.attemptToken,
+                body.finishLoginRequest,
+                sessionToken,
+                body.device,
+            );
             set.headers['set-cookie'] = authCookie('session', token);
-            return { user, envelope };
+            // A device that came in with the password alone: the account's email hears of it.
+            if (newDevice) notifyDevices(log, user.id, 'new-device');
+            return { user, envelope, device };
         },
     )
     .post('/auth/recover/email', { body: t.Object({ email: emailSchema }) }, ({ body, request }) =>
@@ -676,9 +715,81 @@ export const apiApp = new Elysia({ prefix: '/api' })
             return auth.putSettings(sessionToken, body);
         },
     )
-    .get('/auth/session', async ({ sessionToken }) => ({
-        user: await auth.getSessionUser(sessionToken),
-    }))
+    // A removed device keeps hearing `removed` until it has cleared what it kept and acknowledges
+    // it (POST /auth/session/forget): a wipe cut short is tried again on the next check.
+    .get('/auth/session', ({ sessionToken }) => auth.sessionState(sessionToken))
+    // The acknowledgement after that wipe: the cookie goes only if it is still the removed one.
+    .post(
+        '/auth/session/forget',
+        { body: t.Object({}) },
+        async ({ request, sessionToken, set }) => {
+            guardAuthMutation(request);
+            const forgotten = await auth.mayForgetSession(sessionToken);
+            if (forgotten) set.headers['set-cookie'] = authCookie('session', null);
+            return { forgotten };
+        },
+    )
+    .get('/auth/devices', ({ sessionToken, set }) => {
+        set.headers['Cache-Control'] = 'no-store';
+        return auth.listDevices(sessionToken);
+    })
+    .post(
+        '/auth/devices',
+        {
+            body: t.Object({
+                kind: t.Union([t.Literal('web'), t.Literal('ios'), t.Literal('android')]),
+                name: t.String({ minLength: 1, maxLength: 200 }),
+                signingPublicKey: t.Optional(
+                    t.String({ minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]+$' }),
+                ),
+            }),
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.registerDevice(sessionToken, body);
+        },
+    )
+    // Removing devices asks for the password again: the first half of that OPAQUE exchange.
+    .post(
+        '/auth/devices/reauth',
+        { body: t.Object({ startLoginRequest: opaqueMessage }) },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.startDeviceRemoval(sessionToken, body.startLoginRequest);
+        },
+    )
+    // Static beside the parameter: Elysia prefers it, and the id's pattern refuses "others" anyway.
+    .delete(
+        '/auth/devices/others',
+        { body: deviceRemovalSchema },
+        async ({ request, sessionToken, body, log }) => {
+            guardAuthMutation(request);
+            const { userId, removed } = await auth.removeOtherDevices(sessionToken, body);
+            if (removed > 0) notifyDevices(log, userId, 'devices-removed', removed);
+            return { removed };
+        },
+    )
+    .put(
+        '/auth/devices/:id',
+        {
+            params: t.Object({ id: uuidSchema }),
+            body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }),
+        },
+        ({ request, sessionToken, params, body }) => {
+            guardAuthMutation(request);
+            return auth.renameDevice(sessionToken, params.id, body);
+        },
+    )
+    .delete(
+        '/auth/devices/:id',
+        { params: t.Object({ id: uuidSchema }), body: deviceRemovalSchema },
+        async ({ request, sessionToken, params, body, log }) => {
+            guardAuthMutation(request);
+            const { userId, removed } = await auth.removeDevice(sessionToken, params.id, body);
+            notifyDevices(log, userId, 'device-removed');
+            return { removed };
+        },
+    )
     .post(
         '/auth/profile',
         { body: t.Object({ name: t.String({ minLength: 1, maxLength: 200 }) }) },
@@ -2065,6 +2176,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
                     error instanceof auth.AuthError
                         ? error.message
                         : 'Authentication is temporarily unavailable. Please try again.',
+                code: error instanceof auth.AuthError ? error.code : undefined,
             },
             { status: error instanceof auth.AuthError ? error.status : 503, headers },
         );

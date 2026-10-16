@@ -104,6 +104,7 @@ export const relations = defineRelations(schema, (r) => ({
         credential: r.one.opaqueCredentials({ from: r.users.id, to: r.opaqueCredentials.userId }),
         accountKey: r.one.accountKeys({ from: r.users.id, to: r.accountKeys.userId }),
         sessions: r.many.sessions({ from: r.users.id, to: r.sessions.userId }),
+        devices: r.many.accountDevices({ from: r.users.id, to: r.accountDevices.userId }),
         loginAttempts: r.many.opaqueLoginAttempts({
             from: r.users.id,
             to: r.opaqueLoginAttempts.userId,
@@ -117,6 +118,11 @@ export const relations = defineRelations(schema, (r) => ({
     },
     sessions: {
         user: r.one.users({ from: r.sessions.userId, to: r.users.id, optional: false }),
+        device: r.one.accountDevices({ from: r.sessions.deviceId, to: r.accountDevices.id }),
+    },
+    accountDevices: {
+        user: r.one.users({ from: r.accountDevices.userId, to: r.users.id, optional: false }),
+        sessions: r.many.sessions({ from: r.accountDevices.id, to: r.sessions.deviceId }),
     },
     opaqueLoginAttempts: {
         user: r.one.users({ from: r.opaqueLoginAttempts.userId, to: r.users.id }),

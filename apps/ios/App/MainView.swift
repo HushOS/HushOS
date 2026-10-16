@@ -146,6 +146,10 @@ struct MainView: View {
                     model.pendingLink = nil
                     Task { await route(url, store: store) }
                 }
+                // The moment a request says the session is over, find out whether this phone was removed.
+                .onChange(of: store.error) { _, error in
+                    if error == DriveStore.sessionEnded { Task { await model.sessionEnded() } }
+                }
                 .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded }, set: { if !$0 { store.error = nil } })) {
                     Button("Sign in") {
                         store.error = nil
