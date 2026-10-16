@@ -358,7 +358,7 @@ The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing els
 - Do say what happened and what to do next, in one or two plain sentences.
 - Don't use amber or any colour of its own for links, or `warning` for anything but a caution.
 - Don't use tint alone for selection or the active place.
-- Don't add icon tiles for decoration, stat grids, pulsing dots, gradients, glows, illustrations, emoji or exclamation marks.
+- Don't add icon tiles for decoration, stat grids, pulsing dots, gradients, glows, illustrations, emoji or exclamation marks in the product. The public site's Dither layer (below) is the one exception, and it has its own rules.
 - Don't write assurance blurbs ("bank-grade", "your data is safe with us") or name protocols in primary UI; that belongs on the security page and under Technical details.
 - Don't put an ellipsis on a button except while it works.
 - Don't draw an actions row above a large title on the phones, or an avatar as the way into Account.
@@ -367,13 +367,23 @@ The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing els
 
 ## Motion
 
-Motion has a purpose or it does not ship: feedback for a press, a state that changed, content that arrived. Nothing animates on page load except the auth entrance, and nothing animates on hover except colour.
+Motion has a purpose or it does not ship: feedback for a press, a state that changed, content that arrived. In the product, nothing animates on page load except the auth entrance, and nothing animates on hover except colour. The public site has more room; see Dither.
 
 - **Tooling.** CSS first; Motion for React only for exits, height to auto and interruptible swaps (`components/motion.tsx`: `TextSwap`, `IconSwap`, `Collapse`, `PendingLabel`, `Spinner`, `MotionProvider` with `reducedMotion="user"`).
 - **Springs.** Swaps `duration 0.3, bounce 0`; arrivals `0.45, bounce 0.15`; icon swaps `0.22`; collapses `0.4`.
 - **Curves.** `ease-out-expo` for entrances and exits, `ease-in-out-cubic` for moves, `ease-out-soft` at 150ms for colour and borders. Never `ease-in`.
 - **Navigation bar.** A 2px primary hairline across the top while a page under `/app` loads; it waits 150ms, creeps toward 85%, then fills and fades in 200ms.
 - `prefers-reduced-motion` collapses CSS animation to nothing and limits Motion to opacity and colour. The phones follow the system's Reduce Motion.
+
+## Dither
+
+Alpine is the system; Dither is its voice on the public face of HushOS. It is the texture of a locked file: words spelled in dots on a field of faint dots, with loose dots around them or an ordered-dither (Bayer 4×4) wash rising from the foot. It decorates; it never carries information that is not also in words.
+
+- **Where.** The public site's pages, the social cards (`/og/<key>.jpg`), the README banner, the panel beside the sign-up and sign-in card on wide screens, and share-link QR codes. Inside `/app` only that QR, in the Share dialog: nothing else there (no file list, dialog, menu, sheet or form) uses it. The recovery kit's QR keeps square modules: it is printed small and must always scan.
+- **Covers.** `Cover` and `CoverArt` (`components/cover.tsx`) draw a word from a 5×7 dot font, seeded so a cover never changes between builds. A blog post names its own in frontmatter (`cover`, `tone`). Tones: blue, lime, sun, orange, mint, sage, graphite, and quiet (the page's own fill and muted ink). Colour is for telling things apart (posts, cards); a row of facts is quiet.
+- **Identities.** Each marketing page sets `data-identity` through `SitePage` (`identities.css`): home is sealed in Hush blue, the blog a notebook, About a letter, Security a blueprint, Pricing bright, Teams an office. Each keeps the spine: header, footer, logo, Geist and the one blue action. In the dark every public page is the same near-black; identities differ by accent. High contrast skips every identity, the hero's wash and the sign-in panel; covers stay, as decoration hidden from screen readers.
+- **Motion.** Covers wipe open as they scroll in (scroll-driven, so nothing on screen at load is hidden), the home headline scrambles one word under the pointer, the blog index shows a post's cover beside the row under the pointer, long pages carry a reading-progress hairline, and Security has hands-on demos (a link taken apart, the real padding rule, one file seen by you and by us). Reduced motion stops all of it except the progress hairline, which moves only as the reader scrolls. Nothing gates content behind an intro.
+- **dither-kit.** The hero's wash and the generative avatars are vendored from dither-kit (MIT, `components/dither-kit/`, with its `LICENSE`), copied from its registry and changed only for formatting, this app's `cn` and its stricter types. Re-copy to update.
 
 ## Sound
 

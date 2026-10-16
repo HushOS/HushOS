@@ -117,6 +117,7 @@ export function EmailStep({
     return (
         <AuthLayout
             title={register ? 'Create your account' : 'Reset your password'}
+            art={register ? 'START' : 'RESET'}
             description={
                 register
                     ? 'We’ll email you a link to confirm it’s you.'
@@ -255,6 +256,7 @@ export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' })
         <AuthLayout
             icon={<MailIcon strokeWidth={1.9} aria-hidden="true" />}
             title="Check your inbox"
+            art="MAIL"
             description={
                 <>
                     We sent a link to{' '}

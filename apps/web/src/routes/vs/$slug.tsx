@@ -1,6 +1,6 @@
 import { createFileRoute, Link, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { container, H1, H2, Lede, StartFree } from '@/components/site';
+import { container, H1, H2, Lede, SitePage, StartFree } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { type Answer, type Comparison, comparisons, findComparison } from '@/lib/compare';
 import { formatDate } from '@/lib/content';
@@ -45,7 +45,7 @@ function ComparePage() {
     const { comparison } = Route.useLoaderData();
     const others = comparisons.filter((entry) => entry.slug !== comparison.slug);
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage>
             <SiteHeader />
             <main className="flex-1">
                 <header className={cn(container, 'pt-10 pb-10 lg:pt-20 lg:pb-14')}>
@@ -144,7 +144,7 @@ function ComparePage() {
                 </aside>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 

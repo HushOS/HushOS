@@ -13,6 +13,31 @@ import { salesContactQueryOptions } from '@/lib/social';
  * way everywhere, "Talk to us", and questions that open in place.
  */
 
+/*
+ * The identity a marketing page wears over the shared spine (see identities.css
+ * and DESIGN.md → Dither). A page without one is plain Alpine, on the ground rather than
+ * the raised surface in the dark.
+ */
+export type Identity = 'home' | 'blog' | 'about' | 'security' | 'pricing' | 'teams';
+
+/* A public page's outermost element: the full-height column, in its identity's colours. */
+export function SitePage({ identity, children }: { identity?: Identity; children: ReactNode }) {
+    return (
+        <div
+            data-site=""
+            data-identity={identity}
+            className="flex min-h-svh flex-col bg-card text-foreground"
+        >
+            {children}
+        </div>
+    );
+}
+
+/* How far through a long page you are: a hairline across the top, driven by the scroll alone. */
+export function ReadProgress() {
+    return <div aria-hidden="true" className="read-progress" />;
+}
+
 /* The column the header, the footer and every section keep to. */
 export const container = 'mx-auto w-full max-w-6xl px-4 sm:px-8';
 

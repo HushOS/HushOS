@@ -3,8 +3,12 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon, CheckIcon, CopyIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { DitherGradient } from '@/components/dither-kit/gradient';
+import { Cover } from '@/components/cover';
+import { LockStory } from '@/components/lock-story';
+import { Scramble } from '@/components/scramble';
 import { Phones, Shot } from '@/components/screenshot';
-import { container, Faq, H1, H2, Lede, StartFree, TextLink } from '@/components/site';
+import { container, Faq, H1, H2, Lede, SitePage, StartFree, TextLink } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
 import { formatDate, posts } from '@/lib/content';
@@ -94,17 +98,36 @@ const faq = [
     },
 ];
 
+/* What the product is like, then three facts a person can check: one grid of six. */
 const facts = [
     {
+        title: 'On every screen',
+        art: { word: 'WEB', tone: 'quiet' as const },
+        body: 'Your drive in a browser and in the apps for iPhone and Android, the same everywhere.',
+    },
+    {
+        title: 'Opens right there',
+        art: { word: 'PDF', tone: 'quiet' as const },
+        body: 'Photos, PDFs, video and Office files open right there in HushOS.',
+    },
+    {
+        title: 'Nothing lost by accident',
+        art: { word: '30', tone: 'quiet' as const },
+        body: 'Deleted things wait in the trash for 30 days, and replacing a file keeps the one before.',
+    },
+    {
         title: 'You can see who has access',
+        art: { word: 'WHO', tone: 'quiet' as const },
         body: 'Every file and folder says who can open it: only you, the people you chose, or anyone with the link. Stop sharing, and what you shared stops opening for them.',
     },
     {
         title: 'Kept in the EU',
+        art: { word: 'EU', tone: 'quiet' as const },
         body: 'The service we run keeps its servers and your files in the European Union. Or run HushOS yourself and keep it wherever you like.',
     },
     {
         title: 'Open for anyone to check',
+        art: { word: 'AGPL', tone: 'quiet' as const },
         body: 'All of HushOS is open source under the AGPL: the app and the server. Anyone can read how it works, and anyone can run their own.',
     },
 ];
@@ -163,40 +186,61 @@ function LandingPage() {
     const { billingEnabled } = Route.useRouteContext();
     const latest = posts[0];
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage identity="home">
             <SiteHeader />
             <main className="flex-1">
-                <section className={cn(container, 'pt-8 pb-8 lg:pt-14 lg:pb-14')}>
-                    <div className="flex max-w-[860px] flex-col gap-6">
-                        {/* A plain link, not a pill: the announcement is news, not a badge. */}
-                        <Link
-                            to="/blog/$slug"
-                            params={{ slug: 'hushos-1-0' }}
-                            className="inline-flex w-fit items-center gap-1.5 text-[15px] font-semibold text-primary underline-offset-4 hover:text-primary-hover hover:underline"
-                        >
-                            HushOS 1.0 is out
-                            <ArrowRightIcon className="size-4 shrink-0" aria-hidden="true" />
-                        </Link>
-                        <H1>Nobody else can look inside.</H1>
-                        <Lede>
-                            HushOS Drive keeps your photos and documents, and the folders you share
-                            with family or your team. It works like the drive you already use,
-                            except everything is locked on your device first. We can’t open it.
-                            Neither can anyone else.
-                        </Lede>
-                        <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center">
-                            <StartFree className="w-full sm:w-auto" />
-                            {billingEnabled && (
-                                <TextLink to="/teams" className="max-sm:self-center">
-                                    HushOS for your team
-                                </TextLink>
-                            )}
+                {/*
+                 * The band of Hush blue runs behind the hero and the top half of the screenshots,
+                 * which overlap its edge; the headline scrambles and settles when pointed at.
+                 */}
+                <div className="id-band relative overflow-hidden md:pb-48 lg:pb-64">
+                    {/* dither-kit's ordered-dither wash, rising lighter from the band's foot. */}
+                    <DitherGradient
+                        from={227}
+                        direction="up"
+                        cell={4}
+                        opacity={0.45}
+                        // The band's lower part, behind the screenshots; on phones it reaches the copy, which still reads at 7:1.
+                        className="id-wash pointer-events-none top-[45%]"
+                    />
+                    <section className={cn(container, 'relative pt-10 pb-10 lg:pt-20 lg:pb-16')}>
+                        <div className="flex max-w-[900px] flex-col gap-6">
+                            {/* A plain link, not a pill: the announcement is news, not a badge. */}
+                            <Link
+                                to="/blog/$slug"
+                                params={{ slug: 'hushos-1-0' }}
+                                className="inline-flex w-fit items-center gap-1.5 text-[15px] font-semibold text-primary underline-offset-4 hover:text-primary-hover hover:underline"
+                            >
+                                HushOS 1.0 is out
+                                <ArrowRightIcon className="size-4 shrink-0" aria-hidden="true" />
+                            </Link>
+                            <H1>
+                                <Scramble text="Nobody else can look inside." />
+                            </H1>
+                            {/* Full ink on the band and a short measure: muted text loses to the wash. */}
+                            <Lede className="max-w-[34em] text-foreground">
+                                HushOS Drive works like the drive you already use, except everything
+                                is locked on your device first. We can’t open it. Neither can anyone
+                                else.
+                            </Lede>
+                            <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center">
+                                <StartFree className="w-full sm:w-auto" />
+                                {billingEnabled && (
+                                    <TextLink to="/teams" className="max-sm:self-center">
+                                        HushOS for your team
+                                    </TextLink>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
+                </div>
 
-                <section aria-label="What it looks like" className={container}>
-                    <figure className="flex flex-col gap-4">
+                {/* The screenshots ride up over the band's foot, so the band frames them. */}
+                <section
+                    aria-label="What it looks like"
+                    className={cn(container, 'relative md:-mt-40 lg:-mt-56')}
+                >
+                    <figure className="relative flex flex-col gap-4">
                         {/*
                          * The same folder in the browser and in the two phone apps. The iPhone stands
                          * over the browser's sidebar; the Android phone beside it, overlapping only the
@@ -230,21 +274,24 @@ function LandingPage() {
                                 phoneClassName="w-[44%] max-w-48"
                             />
                         </div>
-                        <figcaption className="max-w-[46.4em] text-[15px] leading-relaxed text-muted-foreground">
-                            Your drive in a browser and in the apps for iPhone and Android. Photos,
-                            PDFs, video and Office files open right there. Deleted things wait in
-                            the trash for 30 days, and replacing a file keeps the one before.
-                        </figcaption>
                     </figure>
                 </section>
 
                 <section className={cn(container, 'py-14 lg:py-24')}>
-                    <div className="grid gap-8 lg:grid-cols-3 lg:gap-12">
+                    <div className="grid gap-8 lg:grid-cols-3 lg:gap-x-12 lg:gap-y-14">
                         {facts.map((fact) => (
-                            <div
-                                key={fact.title}
-                                className="flex flex-col gap-2 border-t border-rule pt-5"
-                            >
+                            <div key={fact.title} className="flex flex-col gap-2">
+                                {/* Each fact is a quiet cover: its word in dots, in the page's own fill. */}
+                                <div className="cover-wipe mb-3 overflow-hidden rounded-md">
+                                    <Cover
+                                        word={fact.art.word}
+                                        tone={fact.art.tone}
+                                        seed={fact.title}
+                                        cols={40}
+                                        rows={12}
+                                        dither
+                                    />
+                                </div>
                                 <h2 className="text-xl leading-snug font-bold text-balance">
                                     {fact.title}
                                 </h2>
@@ -257,38 +304,15 @@ function LandingPage() {
                 </section>
 
                 <section aria-labelledby="how-title" className="bg-muted/60">
-                    <div
-                        className={cn(
-                            container,
-                            'grid gap-8 py-14 lg:grid-cols-[5fr_7fr] lg:gap-16 lg:py-24',
-                        )}
-                    >
-                        <div className="flex flex-col gap-4">
+                    <div className={cn(container, 'py-14 lg:py-24')}>
+                        <LockStory steps={steps}>
                             <H2 id="how-title">How it works</H2>
                             <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
                                 You don’t have to take our word for it. The code is public, and the
                                 security page goes through every step, in plain words first.
                             </p>
                             <TextLink to="/security">How we protect your files</TextLink>
-                        </div>
-                        <ol className="flex flex-col">
-                            {steps.map((step, index) => (
-                                <li
-                                    key={step.title}
-                                    className="grid grid-cols-[28px_1fr] gap-x-5 border-b border-rule py-5 first:pt-0 last:border-b-0 lg:grid-cols-[36px_1fr]"
-                                >
-                                    <span className="pt-0.5 text-lg font-bold text-muted-foreground tabular-nums">
-                                        {index + 1}
-                                    </span>
-                                    <span className="flex flex-col gap-1">
-                                        <span className="text-lg font-bold">{step.title}</span>
-                                        <span className="text-base leading-[1.6] text-pretty text-muted-foreground">
-                                            {step.body}
-                                        </span>
-                                    </span>
-                                </li>
-                            ))}
-                        </ol>
+                        </LockStory>
                     </div>
                 </section>
 
@@ -385,6 +409,6 @@ function LandingPage() {
                 </section>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }

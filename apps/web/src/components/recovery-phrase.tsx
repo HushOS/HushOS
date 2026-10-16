@@ -171,6 +171,7 @@ export function RecoveryPhrase({
         <AuthLayout
             wide
             title={fresh ? 'Your new recovery phrase' : 'Save your recovery kit'}
+            art="24"
             description="These 24 words get you back in if you forget your password. HushOS can’t recover them for you."
         >
             {ready ? (
@@ -304,7 +305,7 @@ export function KitSheet({ email, phrase }: { email: string; phrase: string }) {
                 </div>
                 {/* The same 24 words, for the HushOS apps to scan when you recover there. */}
                 <div className="flex shrink-0 flex-col items-center gap-1">
-                    <QrCode value={phrase} size={112} title="Recovery phrase" />
+                    <QrCode value={phrase} size={112} title="Recovery phrase" kind="recovery" />
                     <span className="text-[11px] text-[#4a5375]">Scan in the HushOS app</span>
                 </div>
             </div>
@@ -360,7 +361,11 @@ function CheckWords({
     const right = (position: number) => picks[position] === words[position - 1];
     const done = questions.every((question) => right(question.position));
     return (
-        <AuthLayout title="Check you saved it" description="Pick the missing words from your kit.">
+        <AuthLayout
+            art="CHECK"
+            title="Check you saved it"
+            description="Pick the missing words from your kit."
+        >
             {error && <AuthNote tone="danger">{error}</AuthNote>}
             {questions.map((question) => {
                 const pick = picks[question.position];

@@ -1,5 +1,15 @@
 import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { container, Faq, H1, H2, Lede, SiteSwitch, TalkToUs, TextLink } from '@/components/site';
+import {
+    container,
+    Faq,
+    H1,
+    H2,
+    Lede,
+    SitePage,
+    SiteSwitch,
+    TalkToUs,
+    TextLink,
+} from '@/components/site';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
     Select,
@@ -274,7 +284,7 @@ function PricingPage() {
         }
     }
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage identity="pricing">
             <SiteHeader />
             <main className="flex-1">
                 <section className={cn(container, 'pt-10 pb-8 lg:pt-20 lg:pb-10')}>
@@ -531,7 +541,7 @@ function PricingPage() {
                 </section>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 

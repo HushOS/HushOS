@@ -1,10 +1,12 @@
 import { cn } from 'cn';
 import { ChevronDownIcon } from 'lucide-react';
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
+import { Cover } from '@/components/cover';
 import { Mdx } from '@/components/mdx';
-import { container, H1, Lede } from '@/components/site';
+import { container, H1, Lede, ReadProgress, SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { formatDate } from '@/lib/content';
+import type { CoverTone } from '@/lib/content';
 import type { MDXComponents } from 'mdx/types';
 
 /*
@@ -22,7 +24,8 @@ export function SecurityPage({
     frontmatter: Record<string, unknown>;
 }) {
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage identity="security">
+            <ReadProgress />
             <SiteHeader />
             <main className="flex-1">
                 <div className={cn(container, 'pt-12 pb-10 sm:pt-16 lg:pt-20 lg:pb-14')}>
@@ -44,7 +47,7 @@ export function SecurityPage({
                 </div>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 
@@ -142,6 +145,87 @@ const sectionClass =
 const headingClass =
     'text-2xl leading-tight font-extrabold tracking-[-0.02em] text-balance sm:text-[28px]';
 
+/*
+ * Each step's cover and what crosses the wire: what never reaches us in a form
+ * we can read, and what we receive instead. The words restate the step's own text; they
+ * claim nothing the step and the design documents do not.
+ */
+const wires: Record<string, { word: string; tone: CoverTone; stays: string; reaches: string }> = {
+    password: {
+        word: 'PROOF',
+        tone: 'quiet',
+        stays: 'Your password, and this device’s own key',
+        reaches:
+            'A proof that you know it, a record that can check that proof, and a name for this device',
+    },
+    keys: {
+        word: 'KEYS',
+        tone: 'quiet',
+        stays: 'Your account key, unlocked',
+        reaches: 'Copies of it, locked by your password and by your recovery phrase',
+    },
+    recovery: {
+        word: '24',
+        tone: 'quiet',
+        stays: 'Your 24 words, readable',
+        reaches:
+            'Your account key locked by the words, the words locked by your account key, and a public key that checks them',
+    },
+    files: {
+        word: 'LOCKED',
+        tone: 'quiet',
+        stays: 'Names, contents and thumbnails, readable',
+        reaches: 'Locked, padded pieces, sent straight to storage',
+    },
+    sharing: {
+        word: 'SHARE',
+        tone: 'quiet',
+        stays: 'The item’s key, unlocked',
+        reaches: 'A copy of that key, locked for one person’s devices',
+    },
+    links: {
+        word: 'LINKS',
+        tone: 'quiet',
+        stays: 'The part after the #. It goes only where you send the link',
+        reaches: 'The rest of the address',
+    },
+    stop: {
+        word: 'STOP',
+        tone: 'quiet',
+        stays: 'The item’s new keys, unlocked',
+        reaches: 'The new keys, locked again for everyone who still has access',
+    },
+    reports: {
+        word: 'REPORT',
+        tone: 'quiet',
+        stays: 'What is in anything nobody reported',
+        reaches:
+            'A reported item’s key, locked to the people who run the service; a folder’s key opens what is in it',
+    },
+};
+
+function Wire({ id }: { id: string }) {
+    const wire = wires[id];
+    if (!wire) return null;
+    return (
+        <div className="mt-5 mb-6 flex flex-col gap-4">
+            <div className="cover-wipe overflow-hidden rounded-md" aria-hidden="true">
+                <Cover word={wire.word} tone={wire.tone} seed={id} cols={76} rows={12} dither />
+            </div>
+            <dl className="grid gap-4 text-[15px] sm:grid-cols-2 sm:gap-6">
+                <div className="flex flex-col gap-1 border-t border-rule pt-3">
+                    <dt className="font-mono text-xs text-muted-foreground">Never reaches us</dt>
+                    <dd className="leading-snug font-semibold">{wire.stays}</dd>
+                </div>
+                <div className="flex flex-col gap-1 border-t border-rule pt-3">
+                    <dt className="font-mono text-xs text-muted-foreground">What reaches us</dt>
+                    <dd className="leading-snug font-semibold">{wire.reaches}</dd>
+                </div>
+            </dl>
+        </div>
+    );
+}
+
 /* One numbered step: a plain account, then its exact terms. */
 export function Step({
     id,
@@ -157,9 +241,10 @@ export function Step({
     return (
         <section id={id} aria-labelledby={`${id}-title`} className={sectionClass}>
             <h2 id={`${id}-title`} className={cn(headingClass, 'flex gap-3')}>
-                <span className="text-muted-foreground tabular-nums">{n}</span>
+                <span className="step-number tabular-nums">{n}</span>
                 <span>{title}</span>
             </h2>
+            <Wire id={id} />
             <div className="text-[17px] leading-[1.65] text-pretty">{children}</div>
         </section>
     );

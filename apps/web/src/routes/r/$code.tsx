@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
+import { SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
 import { formatQuota } from '@/lib/format';
@@ -36,7 +37,7 @@ function InvitePage() {
     const { code } = Route.useParams();
     const { hasSession } = Route.useRouteContext();
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage>
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
@@ -139,6 +140,6 @@ function InvitePage() {
                 </section>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }

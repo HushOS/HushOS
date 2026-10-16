@@ -121,6 +121,7 @@ function CompleteForm({ enrollment }: { enrollment: { email: string } }) {
     return (
         <AuthLayout
             title="Set up your account"
+            art="READY"
             description={
                 <>
                     Your email is confirmed:{' '}

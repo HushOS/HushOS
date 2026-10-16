@@ -2,7 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { Shot } from '@/components/screenshot';
-import { container, H1, H2, Lede, StartFree, TalkToUs, TextLink } from '@/components/site';
+import {
+    container,
+    H1,
+    H2,
+    Lede,
+    SitePage,
+    StartFree,
+    TalkToUs,
+    TextLink,
+} from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { catalogueQueryOptions } from '@/lib/queries';
 import { pageSocialMeta, publicOrigin, salesContactQueryOptions } from '@/lib/social';
@@ -80,7 +89,7 @@ function TeamsPage() {
     const action = (className: string) =>
         contact ? <TalkToUs className={className} /> : <StartFree className={className} />;
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage identity="teams">
             <SiteHeader />
             <main className="flex-1">
                 <section className={cn(container, 'pt-10 pb-10 lg:pt-20 lg:pb-16')}>
@@ -183,6 +192,6 @@ function TeamsPage() {
                 </section>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }

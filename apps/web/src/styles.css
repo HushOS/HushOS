@@ -3,6 +3,7 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
 @import '@hushos/tokens/tokens.css';
+@import './identities.css';
 
 /*
  * Local Arial resized to Geist's metrics, so the swap when Geist arrives moves nothing: one face

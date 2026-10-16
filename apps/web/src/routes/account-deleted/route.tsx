@@ -8,6 +8,7 @@ export const Route = createFileRoute('/account-deleted')({
     component: () => (
         <AuthLayout
             title="Your account is deleted"
+            art="BYE"
             description="Your files, shares, links and account are gone from HushOS. This can’t be undone."
         >
             <AuthActions

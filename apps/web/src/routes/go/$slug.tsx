@@ -3,6 +3,7 @@ import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-ro
 import { ArrowRightIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { PendingLabel } from '@/components/motion';
+import { SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { Button } from '@/components/ui/button';
 import { localeHintQueryOptions } from '@/lib/billing';
@@ -135,7 +136,7 @@ function OfferPage() {
         }
     }
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage>
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-16 px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
@@ -379,6 +380,6 @@ function OfferPage() {
                 )}
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }

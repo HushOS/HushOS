@@ -7,6 +7,7 @@ lede: What happens to a file from the moment you add it, in plain words. Each st
 ---
 
 import { Body, Contents, Exact, Section, Step, Terms } from '../components/security-page';
+import { LinkAnatomy, PaddingDemo, ServerView } from '../components/security-demos';
 import { TextLink } from '../components/site';
 
 export const contents = {
@@ -227,6 +228,8 @@ Each action needs your current password through a fresh OPAQUE exchange, revokes
 
 Your device locks each file, and its name, type and modified time, before any of it leaves. Each file is padded before it is locked, so from a locked copy our servers learn only roughly how large the file is, to within a few percent. The locked pieces go straight from your device to storage; our app server never handles them. Thumbnails are made on your device and locked inside the file itself. Downloads come back the same way and are unlocked on your device, and previews fetch only the parts they need.
 
+<PaddingDemo />
+
 <Exact>
 
 Every folder and file in Drive has its own key, wrapped under its parent’s key; the root folder’s key is wrapped under the workspace key. A file’s key locks its details and wraps a separate content key for each version of the file. The server holds a tree of ids and envelopes.
@@ -366,6 +369,8 @@ Because the server serves public keys, a dishonest server could substitute one o
 
 The secret part of a link sits after the # in the address, which browsers never send to a server. If you add a password, it is needed too, and we can’t tell whether there is one. Links can end on a date up to a year away, and you can turn one off at any time. Anyone with the link opens it in their own browser, without an account.
 
+<LinkAnatomy />
+
 <Exact>
 
 A link is a share without a recipient. The node key is sealed under a key derived from the link’s secret and, if you set one, a password stretched with Argon2id on the visitor’s device. The server holds the sealed box and a hash of the link’s path; it can open nothing.
@@ -451,6 +456,8 @@ An operator opens a report under their own identity. Which operators a report is
 </Step>
 
 <Section id="sees" title={contents.sees}>
+
+<ServerView />
 
 <Terms
     rows={[

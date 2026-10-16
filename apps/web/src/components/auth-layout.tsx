@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Brand } from '@/components/brand';
+import { Cover } from '@/components/cover';
 
 /*
  * The pages for getting in: the mark at the top left, one card in the middle
@@ -21,6 +22,7 @@ export function AuthLayout({
     description,
     icon,
     wide = false,
+    art = 'HUSH',
     children,
     footer,
 }: {
@@ -30,46 +32,65 @@ export function AuthLayout({
     icon?: ReactNode;
     /* For the 24 words. */
     wide?: boolean;
+    /* The word the panel beside the card spells in dots on a wide screen: the step's own. */
+    art?: string;
     children?: ReactNode;
     footer?: ReactNode;
 }) {
+    // A row, not a grid: when high contrast hides the panel, the card takes the whole width.
     return (
-        <div className="flex min-h-svh flex-col bg-background">
-            <header className="flex h-16 shrink-0 items-center px-5 sm:px-7">
-                <Brand />
-            </header>
-            <main className="flex flex-1 flex-col items-center px-4 pt-4 pb-12 sm:justify-center sm:pt-0">
-                <section
-                    aria-labelledby="auth-title"
-                    className={cn(
-                        'flex w-full flex-col gap-5 rounded-2xl border border-rule bg-card p-6 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-400 ease-out-expo sm:p-8',
-                        wide ? 'max-w-[600px]' : 'max-w-[420px]',
-                    )}
-                >
-                    {icon && (
-                        <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground [&_svg]:size-6">
-                            {icon}
-                        </span>
-                    )}
-                    <div className="flex flex-col gap-1.5">
-                        <h1
-                            id="auth-title"
-                            className="text-[26px] leading-[1.15] font-extrabold tracking-[-0.03em] text-balance"
-                        >
-                            {title}
-                        </h1>
-                        {description && (
-                            <p className="text-[15px] leading-snug text-pretty text-muted-foreground">
-                                {description}
-                            </p>
+        <div className="flex min-h-svh bg-background">
+            <div className="flex min-h-svh min-w-0 flex-1 flex-col">
+                <header className="flex h-16 shrink-0 items-center px-5 sm:px-7">
+                    <Brand />
+                </header>
+                <main className="flex flex-1 flex-col items-center px-4 pt-4 pb-12 sm:justify-center sm:pt-0">
+                    <section
+                        aria-labelledby="auth-title"
+                        className={cn(
+                            'flex w-full flex-col gap-5 rounded-2xl border border-rule bg-card p-6 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-400 ease-out-expo sm:p-8',
+                            wide ? 'max-w-[600px]' : 'max-w-[420px]',
                         )}
-                    </div>
-                    {children}
-                </section>
-                {footer && (
-                    <div className="mt-4 text-center text-sm text-muted-foreground">{footer}</div>
-                )}
-            </main>
+                    >
+                        {icon && (
+                            <span className="flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground [&_svg]:size-6">
+                                {icon}
+                            </span>
+                        )}
+                        <div className="flex flex-col gap-1.5">
+                            <h1
+                                id="auth-title"
+                                className="text-[26px] leading-[1.15] font-extrabold tracking-[-0.03em] text-balance"
+                            >
+                                {title}
+                            </h1>
+                            {description && (
+                                <p className="text-[15px] leading-snug text-pretty text-muted-foreground">
+                                    {description}
+                                </p>
+                            )}
+                        </div>
+                        {children}
+                    </section>
+                    {footer && (
+                        <div className="mt-4 text-center text-sm text-muted-foreground">
+                            {footer}
+                        </div>
+                    )}
+                </main>
+            </div>
+            {/*
+             * The dot-matrix panel (DESIGN.md → Dither): Hush blue, the step's word, a dithered
+             * wash at its foot. Decoration only, so wide screens alone, and none in high contrast.
+             * It fills its column by cropping the art's sides, so it shows only on screens wide
+             * enough for their height to keep a five-letter word whole (identities.css).
+             */}
+            <aside
+                aria-hidden="true"
+                className="dither-panel sticky top-0 hidden h-svh shrink-0 basis-[38%] lg:block"
+            >
+                <Cover word={art} tone="blue" seed={art} cols={40} rows={64} dither fill />
+            </aside>
         </div>
     );
 }

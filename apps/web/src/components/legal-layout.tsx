@@ -3,7 +3,7 @@ import { createContext, useContext, type ComponentType, type ReactNode } from 'r
 import type { Operator } from '@/lib/social';
 import { Mdx } from '@/components/mdx';
 import { Contents } from '@/components/security-page';
-import { container, H1, Lede } from '@/components/site';
+import { container, H1, Lede, ReadProgress, SitePage, type Identity } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { formatDate } from '@/lib/content';
 
@@ -19,6 +19,8 @@ export function ReadingPage({
     title,
     summary,
     headings = [],
+    identity,
+    banner,
     children,
 }: {
     eyebrow: ReactNode;
@@ -26,11 +28,16 @@ export function ReadingPage({
     summary?: string;
     /* The document's sections; two or more get a contents list, as on the security page. */
     headings?: Heading[];
+    /* The page's look over the shared spine; none keeps plain Alpine, as the legal pages do. */
+    identity?: Identity;
+    /* Drawn across the page between the heading and the text, such as a post's cover. */
+    banner?: ReactNode;
     children: ReactNode;
 }) {
     const contents = headings.length >= 2;
     return (
-        <div className="flex min-h-svh flex-col bg-card">
+        <SitePage identity={identity}>
+            <ReadProgress />
             <SiteHeader />
             <main className="flex-1">
                 <div className={cn(container, 'pt-12 pb-10 sm:pt-16 lg:pt-20 lg:pb-14')}>
@@ -40,6 +47,7 @@ export function ReadingPage({
                         {summary && <Lede>{summary}</Lede>}
                     </div>
                 </div>
+                {banner && <div className={cn(container, 'pb-10 lg:pb-14')}>{banner}</div>}
                 <div
                     className={cn(
                         container,
@@ -61,7 +69,7 @@ export function ReadingPage({
                 </div>
             </main>
             <SiteFooter />
-        </div>
+        </SitePage>
     );
 }
 
@@ -91,11 +99,17 @@ export function LegalLayout({
     frontmatter,
     headings,
     operator = null,
+    identity,
+    banner,
 }: {
     document: ComponentType;
     frontmatter: Record<string, unknown>;
     headings?: Heading[];
     operator?: Operator;
+    /* About wears one; the legal pages stay plain. */
+    identity?: Identity;
+    /* Drawn between the heading and the text, as on About. */
+    banner?: ReactNode;
 }) {
     const updated = String(frontmatter.updated);
     return (
@@ -105,6 +119,8 @@ export function LegalLayout({
                 title={String(frontmatter.title)}
                 summary={String(frontmatter.summary)}
                 headings={headings}
+                identity={identity}
+                banner={banner}
             >
                 <Mdx document={document} />
             </ReadingPage>

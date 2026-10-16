@@ -5,7 +5,12 @@ export type PostMeta = {
     /* Among posts of the same day, lower comes first. */
     order?: number;
     author: string;
+    /* The word a post's cover spells in dots, and the ink it is printed in (see Cover). */
+    cover?: string;
+    tone?: CoverTone;
 };
+
+export type CoverTone = 'quiet' | 'lime' | 'sun' | 'sage' | 'blue' | 'orange' | 'mint' | 'graphite';
 
 /* The frontmatter of every post, for lists, cards and the sitemap; bodies are in `postBodies`. */
 const modules = import.meta.glob<{ frontmatter: PostMeta }>('../content/blog/*.mdx', {

@@ -131,11 +131,14 @@ export function Note({ title, children }: { title?: string; children: ReactNode 
 
 export function Mdx({
     document: Document,
+    components,
 }: {
     document: ComponentType<{ components?: MDXComponents }>;
+    /* Overrides for one kind of page, such as the blog's heading links. */
+    components?: MDXComponents;
 }) {
     return (
-        <MDXProvider components={mdxComponents}>
+        <MDXProvider components={components ? { ...mdxComponents, ...components } : mdxComponents}>
             <Document />
         </MDXProvider>
     );

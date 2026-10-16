@@ -100,6 +100,7 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
         <AuthLayout
             wide
             title={choosing ? 'Use your recovery kit' : 'Choose a new password'}
+            art="KEYS"
             description={
                 choosing
                     ? 'Your email is confirmed. Your kit shows the account is yours; then you choose a new password.'

@@ -1,0 +1,360 @@
+/*
+ * The public site's identities. Every marketing page keeps the same spine (the
+ * header, the footer, the logo, Geist and the one primary action) and wears its
+ * own ground, ink and motif: the home page is sealed in Hush blue, the blog is
+ * an engineer's notebook, About is a letter, Security is a blueprint, Pricing is
+ * bright and Teams is an office. The app under /app, the auth pages, shared
+ * links and the legal pages wear no identity. See DESIGN.md → Dither.
+ *
+ * A page opts in with `data-identity` on its outermost element (SitePage). The
+ * roles shadcn reads are pointed at the identity's own colours; each value is a
+ * light-dark() pair, so one rule serves both schemes. High contrast, asked for
+ * here or by the computer, skips every identity and keeps Alpine's AAA colours.
+ */
+
+/* light-dark() follows color-scheme: the chosen scheme, or the computer's when none is chosen. */
+:root:not(.light, .dark) [data-site] {
+    color-scheme: light dark;
+}
+
+@media not (prefers-contrast: more) {
+    /*
+     * The shared base: in the dark every public page sits on the tokens' near-black
+     * ground (not the raised surface), with the identity's accents on it. A page
+     * without an identity (legal, support, comparisons) is otherwise plain Alpine.
+     */
+    :root:not(.hc) [data-site] {
+        /* Read from the tokens, so a token change reaches every page without a copy here. */
+        --id-ground: light-dark(var(--surface), var(--ground));
+        --id-raised: var(--surface);
+        --id-ink: var(--ink);
+        --id-ink-muted: var(--ink-muted);
+        --id-quiet: light-dark(var(--ground), color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: var(--rule);
+        --background: var(--id-ground);
+        --desk: var(--id-ground);
+        --card: var(--id-ground);
+        --popover: var(--id-raised);
+        --foreground: var(--id-ink);
+        --card-foreground: var(--id-ink);
+        --popover-foreground: var(--id-ink);
+        --muted: var(--id-quiet);
+        --muted-foreground: var(--id-ink-muted);
+        --border: var(--id-rule);
+        --secondary: var(--id-ink);
+        --secondary-foreground: var(--id-ground);
+        color: var(--id-ink);
+    }
+
+    /*
+     * `--rule` is set one level down: the identities read the token's `--rule` for their
+     * dark half, so setting it on this same element would be a cycle, and a cycle makes
+     * every hairline fall back to the text colour.
+     */
+    :root:not(.hc) [data-site] > * {
+        --rule: var(--id-rule);
+    }
+
+    /* Below, each identity names its light colours; its dark ones are the tokens' black. */
+
+    /* Sealed: white and Hush blue, the hero a band of the brand colour. */
+    :root:not(.hc) [data-identity='home'] {
+        --id-band: light-dark(#2c428e, #1b2552);
+        --id-on-band: light-dark(#ffffff, #eef1fc);
+        --id-on-band-muted: light-dark(#c9d3f5, #aab6e6);
+        --id-cipher: light-dark(#2c428e, #aab8f4);
+    }
+
+    /* Notebook: cool paper, mono for everything small, covers in five inks. */
+    :root:not(.hc) [data-identity='blog'] {
+        --id-ground: light-dark(#e8e9ed, var(--ground));
+        --id-raised: light-dark(#f4f5f7, var(--surface));
+        --id-ink: light-dark(#15171c, var(--ink));
+        --id-ink-muted: light-dark(#4b505c, var(--ink-muted));
+        --id-quiet: light-dark(#dcdee3, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#c9ccd4, var(--rule));
+        --id-hover: light-dark(#d6f5c3, #1d3312);
+    }
+
+    /* Letter: warm paper and brown-black ink, set larger. */
+    :root:not(.hc) [data-identity='about'] {
+        --id-ground: light-dark(#f6f1e8, var(--ground));
+        --id-raised: light-dark(#fffcf6, var(--surface));
+        --id-ink: light-dark(#231e17, var(--ink));
+        --id-ink-muted: light-dark(#5f5545, var(--ink-muted));
+        --id-quiet: light-dark(#ece4d6, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#ddd3c2, var(--rule));
+        --id-lamp: light-dark(#ffd66b, #e8b94a);
+        --id-on-lamp: #231e17;
+    }
+
+    /* Blueprint: navy lines on pale blue, or pale lines on midnight. */
+    :root:not(.hc) [data-identity='security'] {
+        --id-ground: light-dark(#eaeef8, var(--ground));
+        --id-raised: light-dark(#f7f9fd, var(--surface));
+        --id-ink: light-dark(#0f1b3a, var(--ink));
+        --id-ink-muted: light-dark(#46557a, var(--ink-muted));
+        --id-quiet: light-dark(#dde3f2, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#c3cce3, var(--rule));
+        --id-wire: light-dark(#2c428e, #aab8f4);
+    }
+
+    /* Bright: a lavender ground. */
+    :root:not(.hc) [data-identity='pricing'] {
+        --id-ground: light-dark(#f1efff, var(--ground));
+        --id-raised: light-dark(#ffffff, var(--surface));
+        --id-ink: light-dark(#17203a, var(--ink));
+        --id-ink-muted: light-dark(#565c7a, var(--ink-muted));
+        --id-quiet: light-dark(#e5e1fb, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#d6d1f2, var(--rule));
+    }
+
+    /* Office: sage ground, calm and squared away. */
+    :root:not(.hc) [data-identity='teams'] {
+        --id-ground: light-dark(#eef3f0, var(--ground));
+        --id-raised: light-dark(#ffffff, var(--surface));
+        --id-ink: light-dark(#16211c, var(--ink));
+        --id-ink-muted: light-dark(#4c5c54, var(--ink-muted));
+        --id-quiet: light-dark(#e1e9e4, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#cbd8d0, var(--rule));
+    }
+}
+
+/* ── Home ─────────────────────────────────────────────────────────────── */
+
+/* The hero band: white on Hush blue. In high contrast it stays the plain surface. */
+@media not (prefers-contrast: more) {
+    :root:not(.hc) [data-identity='home'] .id-band {
+        background: var(--id-band);
+        color: var(--id-on-band);
+        --foreground: var(--id-on-band);
+        --muted-foreground: var(--id-on-band-muted);
+        --primary: light-dark(#ffffff, #aab8f4);
+        --primary-hover: light-dark(#e4e9fb, #bcc7f8);
+        --primary-foreground: light-dark(#2c428e, #121833);
+        --ring: light-dark(#ffffff, #eef1fc);
+    }
+}
+
+/* The band's dithered wash goes with the band: none in high contrast. */
+@media (prefers-contrast: more) {
+    .id-wash,
+    .dither-panel {
+        display: none !important;
+    }
+    .house-note {
+        opacity: 1;
+    }
+    .post-preview {
+        box-shadow: none;
+        outline: 1px solid var(--foreground);
+    }
+}
+.hc .id-wash,
+.hc .dither-panel {
+    display: none !important;
+}
+.hc .house-note {
+    opacity: 1;
+}
+.hc .post-preview {
+    box-shadow: none;
+    outline: 1px solid var(--foreground);
+}
+
+/*
+ * The auth panel crops the art's sides to fill a tall column. Under 5:4 (a tablet held
+ * upright, a square window) a five-letter word would lose its outer letters, so the
+ * card has the page to itself instead.
+ */
+@media (max-aspect-ratio: 5/4) {
+    .dither-panel {
+        display: none !important;
+    }
+}
+
+/* A character of a scrambled word: same width as it settles, so nothing reflows. */
+.scramble-glyph {
+    display: inline-block;
+    white-space: pre;
+}
+.scramble-glyph[data-locked] {
+    text-align: center;
+    opacity: 0.6;
+}
+
+/* ── Blog ─────────────────────────────────────────────────────────────── */
+
+/* Small things in mono: dates, authors, the index's column heads. */
+[data-identity='blog'] .id-meta {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+}
+
+/* Covers wipe open as they scroll in; ones already on screen are simply there. */
+@supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+        .cover-wipe {
+            position: relative;
+            overflow: hidden;
+        }
+        .cover-wipe::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--muted);
+            transform-origin: top;
+            animation: cover-wipe linear both;
+            animation-timeline: view();
+            animation-range: entry 10% entry 90%;
+        }
+    }
+}
+@keyframes cover-wipe {
+    from {
+        transform: scaleY(1);
+    }
+    to {
+        transform: scaleY(0);
+    }
+}
+
+/* The noise around a cover's word flickers while the pointer is on it, as if it were being read. */
+@media (prefers-reduced-motion: no-preference) {
+    .group:hover .cover-noise,
+    .group:focus-visible .cover-noise {
+        animation: cover-flicker 0.9s steps(3) infinite;
+        animation-delay: var(--delay);
+    }
+}
+@keyframes cover-flicker {
+    0%,
+    100% {
+        opacity: var(--alpha);
+    }
+    50% {
+        opacity: 0;
+    }
+}
+
+/* The index's preview: a cover that follows the row under the pointer. */
+.post-preview {
+    position: fixed;
+    z-index: 40;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.96);
+    transition:
+        opacity 0.2s var(--ease-out-soft),
+        transform 0.3s var(--ease-out-expo);
+    box-shadow: 0 12px 40px rgb(0 0 0 / 0.2);
+}
+.post-preview[data-shown] {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+}
+@media (hover: none) {
+    .post-preview {
+        display: none;
+    }
+}
+
+/* How far through the post you are: a hairline under the header, driven by the scroll itself. */
+.read-progress {
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 40;
+    height: 2px;
+    background: var(--primary);
+    transform: scaleX(0);
+    transform-origin: left;
+    pointer-events: none;
+}
+@supports (animation-timeline: scroll()) {
+    .read-progress {
+        animation: read-progress linear both;
+        animation-timeline: scroll(root);
+    }
+}
+@keyframes read-progress {
+    to {
+        transform: scaleX(1);
+    }
+}
+
+/* A heading's own link, shown beside it on hover or focus. */
+[data-identity='blog'] article h2 {
+    position: relative;
+}
+.heading-anchor {
+    position: absolute;
+    /* Beside the first line, however the heading wraps. */
+    top: 0.1em;
+    left: -1.1em;
+    padding-right: 0.25em;
+    color: var(--muted-foreground);
+    opacity: 0;
+    text-decoration: none;
+    transition: opacity 0.15s var(--ease-out-soft);
+}
+h2:hover > .heading-anchor,
+.heading-anchor:focus-visible {
+    opacity: 1;
+}
+@media (hover: none) {
+    .heading-anchor {
+        display: none;
+    }
+}
+
+/* ── About ────────────────────────────────────────────────────────────── */
+
+/* Read like a letter: larger type, more air, a first line set bigger. */
+[data-identity='about'] article {
+    font-size: 19px;
+    line-height: 1.7;
+}
+[data-identity='about'] article > p:first-of-type {
+    font-size: 23px;
+    line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+/* The house: Drive's room is lit, the rooms still to come are drawn in pencil. */
+.house-room {
+    cursor: default;
+    transition:
+        fill 0.2s var(--ease-out-soft),
+        stroke 0.2s var(--ease-out-soft);
+}
+.house-room[data-lit] {
+    fill: var(--id-lamp, var(--tint));
+}
+.house-room:not([data-lit]) {
+    fill: transparent;
+    stroke-dasharray: 5 5;
+}
+/* The rooms' notes are quieter than their names; in high contrast they are not. */
+.house-note {
+    opacity: 0.7;
+}
+.house-room:not([data-lit]):hover {
+    fill: var(--muted);
+}
+
+/* ── Security ─────────────────────────────────────────────────────────── */
+
+/* Blueprint step numbers: big, mono, in the wire's colour. */
+[data-identity='security'] .step-number {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--id-wire, var(--primary));
+}
+
+/* ── Sliders ────────────────────────────────────────────────────────── */
+
+.fits-range {
+    accent-color: var(--primary);
+}
