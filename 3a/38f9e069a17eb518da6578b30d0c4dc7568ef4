@@ -1,0 +1,23 @@
+DESIGN.md
+  s_a965107c48ca30::t_309bf89fb30da0 341
+apps/web/src/components/drive/share-dialog.tsx
+  s_a965107c48ca30::t_b7c68a81226834 763-767,866-868
+apps/web/src/components/qr-code.tsx
+  s_a965107c48ca30::t_ed7da3e7389025 104,111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a38f9e069a17eb518da6578b30d0c4dc7568ef4",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
