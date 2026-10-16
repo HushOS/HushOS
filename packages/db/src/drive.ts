@@ -2962,6 +2962,17 @@ export type CreateShare = {
 };
 
 /*
+ * A share or link sealed on a node moves the node's own change sequence to the
+ * one its write drew: a rotation that read the node before it names the old
+ * one and is refused (`stale` on the walk, `root-moved` on a group's roster
+ * rotation), instead of revoking the new grant as one it did not re-seal
+ * (rotateNodeIn). Devices re-read the node, as for any change to it.
+ */
+async function sealedOnNode(tx: Tx, nodeId: string, changeSeq: number) {
+    await tx.update(driveNodes).set({ changeSeq }).where(eq(driveNodes.id, nodeId));
+}
+
+/*
  * Shares a node with an account. The envelope must be sealed under the node's
  * current key epoch; a live share to the same person is replaced (a new role
  * or a fresh seal), never duplicated. Refused for a node in the trash.
@@ -2970,13 +2981,14 @@ export async function createShare(input: CreateShare) {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
-        await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
         if (chain.trashed) return { status: 'trashed' as const };
         if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
         if (input.granteeUserId === input.granterUserId) return { status: 'self' as const };
+        await sealedOnNode(tx, input.nodeId, changeSeq);
         const [existing] = await tx
             .select({ id: driveShares.id })
             .from(driveShares)
@@ -3160,7 +3172,7 @@ export async function resealShare(input: {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
-        await requireStillWriter(tx, input.workspaceId, input.granterUserId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const [share] = await tx
             .select({
                 id: driveShares.id,
@@ -3181,6 +3193,7 @@ export async function resealShare(input: {
         const chain = await walk(tx, share.nodeId);
         if (!chain || chain.purged) return { status: 'not-found' as const };
         if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
+        await sealedOnNode(tx, share.nodeId, changeSeq);
         await tx
             .update(driveShares)
             .set({
@@ -3265,7 +3278,9 @@ export type CreateLink = {
 /* A new link on a live node, sealed under the node's current key epoch. Several links per node are fine. */
 export async function createLink(input: CreateLink) {
     return db.transaction(async (tx) => {
-        await requireStillWriter(tx, input.workspaceId, input.granterUserId);
+        // The workspace lock a rotation batch takes too: in a personal workspace as well, a link
+        // made on one device and a rotation applied on another are ordered, never interleaved.
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -3273,6 +3288,7 @@ export async function createLink(input: CreateLink) {
         if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
         const [row] = await tx.insert(driveLinks).values(input).onConflictDoNothing().returning();
         if (!row) return { status: 'conflict' as const };
+        await sealedOnNode(tx, input.nodeId, changeSeq);
         return { status: 'ok' as const, link: row };
     });
 }
@@ -3340,6 +3356,8 @@ export async function updateLink(input: {
     expiresAt?: Date | null;
 }) {
     return db.transaction(async (tx) => {
+        // A new seal takes the workspace lock first, as a revocation and a rotation batch do.
+        const changeSeq = input.seal ? await nextChangeSeq(tx, input.workspaceId) : null;
         const [link] = await tx
             .select({ id: driveLinks.id, nodeId: driveLinks.nodeId })
             .from(driveLinks)
@@ -3355,6 +3373,7 @@ export async function updateLink(input: {
         const chain = await walk(tx, link.nodeId);
         if (!chain || chain.purged) return { status: 'not-found' as const };
         if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
+        if (changeSeq !== null) await sealedOnNode(tx, link.nodeId, changeSeq);
         const [row] = await tx
             .update(driveLinks)
             .set({
