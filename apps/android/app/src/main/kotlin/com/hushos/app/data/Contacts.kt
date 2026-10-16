@@ -108,6 +108,12 @@ data class ContactPin(
      * never clears another client's.
      */
     val resealShares: Boolean = false,
+    /*
+     * The group the pin was trusted through ("Trust as Acme does"), the web's `trustedVia`: the group's word for these
+     * keys, not a words check. Kept when the pin follows a succession, cleared when the words are compared again. Group
+     * verdicts ask the successor's consent of links from such a pin, and no member is admitted from one.
+     */
+    val trustedVia: String? = null,
 ) {
     /*
      * Whether the words were compared over all four keys: a version 3 pin whose stored fingerprint is the version 3 one
@@ -128,6 +134,8 @@ data class ContactPin(
         if (previousSigningKeys.isEmpty()) json.remove("previousSigningKeys") else json.put("previousSigningKeys", JSONArray(previousSigningKeys))
         if (keysReplacedAt == null) json.remove("keysReplacedAt") else json.put("keysReplacedAt", keysReplacedAt)
         if (resealShares) json.put("resealShares", true)
+        // Known here: a words check (no origin) clears a group's; a followed pin carries it on.
+        if (trustedVia == null) json.remove("trustedVia") else json.put("trustedVia", trustedVia)
         return json
     }
 
@@ -141,6 +149,8 @@ data class ContactPin(
             json.optJSONArray("previousSigningKeys")?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).ifEmpty { null } } }.orEmpty(),
             if (json.isNull("keysReplacedAt")) null else json.optString("keysReplacedAt").ifEmpty { null },
             json.optBoolean("resealShares", false),
+            // An empty origin stays empty, for the core to refuse, never read as a words check.
+            if (!json.has("trustedVia") || json.isNull("trustedVia")) null else json.optString("trustedVia"),
         )
 
         /*
@@ -249,6 +259,8 @@ fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<Succes
         previousSigningKeys = previousKeysAfter(pin, links, start, served.signingPublicKey),
         keysReplacedAt = now,
         resealShares = true,
+        // Followed from a pin trusted through a group: still that group's word, as on the web.
+        trustedVia = pin.trustedVia,
     )
 }
 

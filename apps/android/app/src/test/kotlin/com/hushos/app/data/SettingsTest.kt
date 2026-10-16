@@ -38,6 +38,23 @@ class SettingsTest {
     }
 
     @Test
+    fun aGroupsWordOnAPinIsReadKeptWhenFollowedAndClearedByAWordsCheck() {
+        val group = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+        val settings = Settings.parse(document.replace("\"kemPublicKeyHash\":null", "\"kemPublicKeyHash\":null,\"trustedVia\":\"$group\""), 4uL)
+        val held = settings.contacts.getValue("u-1")
+        assertEquals(group, held.trustedVia)
+        // A followed pin carries the origin on.
+        settings.pin(held.copy(keysReplacedAt = "2026-10-03T00:00:00Z"))
+        assertEquals(group, roundTrip(settings).contacts.getValue("u-1").trustedVia)
+        // A words check writes a pin with no origin: the group's word is gone.
+        settings.pin(pin("u-1", "Ada"))
+        assertFalse(JSONObject(settings.text()).getJSONObject("contacts").getJSONObject("u-1").has("trustedVia"))
+        // An empty origin stays empty, for the core to refuse: never read as a words check.
+        val empty = Settings.parse(document.replace("\"kemPublicKeyHash\":null", "\"kemPublicKeyHash\":null,\"trustedVia\":\"\""), 4uL)
+        assertEquals("", empty.contacts.getValue("u-1").trustedVia)
+    }
+
+    @Test
     fun repinningKeepsThePinsOwnUnknownFieldsAndTakesTheNewKeys() {
         val settings = Settings.parse(document, 4uL)
         settings.pin(pin("u-1", "Ada").copy(signingPublicKey = "sig-new", fingerprint = "f-new"))

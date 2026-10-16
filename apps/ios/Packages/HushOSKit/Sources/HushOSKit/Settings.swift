@@ -123,6 +123,8 @@ struct Settings {
         raw["previousSigningKeys"] = pin.previousSigningKeys
         raw["keysReplacedAt"] = pin.keysReplacedAt
         if pin.resealShares == true { raw["resealShares"] = true }
+        // Known here: a words check (no origin) clears a group's; a followed pin carries it on.
+        if let via = pin.trustedVia { raw["trustedVia"] = via } else { raw.removeValue(forKey: "trustedVia") }
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }

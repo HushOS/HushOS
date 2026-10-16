@@ -50,6 +50,13 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
      * written only when set, so a save from here never clears another client's.
      */
     public var resealShares: Bool? = nil
+    /*
+     * The group the pin was trusted through ("Trust as Acme does"), the web's `trustedVia`: the
+     * group's word for these keys, not a words check. Kept when the pin follows a succession,
+     * cleared when the words are compared again. Group verdicts ask the successor's consent of links
+     * from such a pin, and no member is admitted from one (docs/groups-design.md 2.8).
+     */
+    public var trustedVia: String? = nil
     public var id: String { userId }
 }
 

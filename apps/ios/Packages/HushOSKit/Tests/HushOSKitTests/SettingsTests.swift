@@ -47,6 +47,24 @@ struct SettingsDocumentTests {
         #expect(try Settings(json: try settings.json(), version: 5).contacts["ana"]?.mlDsaPublicKeyHash == "ml-dsa-digest")
     }
 
+    @Test func aGroupsWordOnAPinIsReadKeptWhenFollowedAndClearedByAWordsCheck() throws {
+        let group = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+        var settings = try Settings(
+            json: written.replacingOccurrences(of: #""kemPublicKeyHash":null"#, with: #""kemPublicKeyHash":null,"trustedVia":"\#(group)""#),
+            version: 1)
+        var pin = try #require(settings.contacts["ana"])
+        #expect(pin.trustedVia == group)
+        // A followed pin carries the origin on (set here as follow sets it).
+        pin.keysReplacedAt = "2026-10-03T00:00:00Z"
+        settings.setPin(pin)
+        #expect(try Settings(json: try settings.json(), version: 1).contacts["ana"]?.trustedVia == group)
+        // A words check writes a pin with no origin: the group's word is gone.
+        settings.setPin(ContactPin(userId: "ana", email: "ana@example.com", name: "Ana", encryptionPublicKey: "e", signingPublicKey: "s",
+                                   fingerprint: "f", pinnedAt: "2026-10-04T00:00:00Z", kemPublicKeyHash: nil))
+        let ana = try #require((try reread(settings)["contacts"] as? [String: Any])?["ana"] as? [String: Any])
+        #expect(ana["trustedVia"] == nil)
+    }
+
     @Test func pinningAgainWithoutAPostQuantumKeyClearsTheOldDigest() throws {
         // Writing null, not leaving the field out: a merge would otherwise keep the old digest.
         var settings = try Settings(json: written.replacingOccurrences(of: #""kemPublicKeyHash":null"#, with: #""kemPublicKeyHash":"old""#), version: 1)
