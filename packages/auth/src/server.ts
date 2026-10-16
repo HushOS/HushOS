@@ -18,9 +18,15 @@ import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
 import { adminRepository, authRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
-import { sendShareEmail, sendVerificationEmail } from '@hushos/emails/server';
+import {
+    sendSecurityNotice,
+    sendShareEmail,
+    sendVerificationEmail,
+    type SecurityNoticeKind,
+} from '@hushos/emails/server';
 import { ready, server, client } from '@hushos/crypto/server';
 import { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
+import { boundAttemptHolds, type BoundPurpose } from './bound-attempt';
 
 import {
     ENVELOPE_VERSION,
@@ -37,7 +43,7 @@ import {
     TOKEN_PATTERN,
 } from './tokens';
 
-export { AuthError } from './tokens';
+export { AuthError, type AuthErrorCode } from './tokens';
 export { SECURITY_CHANGE_IDENTITY_BYTES, SECURITY_CHANGE_REST_BYTES } from './limits';
 
 /*
@@ -138,6 +144,78 @@ async function limitEmail(kind: 'register' | 'recover-email' | 'recover-start', 
 async function limitPasswordAttempts(key: string) {
     if (!(await authRepository.consumeRateLimit(hash(key), 10, 15 * 60_000)))
         throw new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+}
+
+/*
+ * A signed-in session proving the password again (removing devices, a security change,
+ * deleting the account) is limited per session first, so another session on the account,
+ * an intruder's, can spend only its own ten and never starve the owner's; the account's
+ * ceiling of thirty only bounds guessing across sessions, which needs the password to open.
+ * Starts that never finish are counted: a wrong password fails on the device, so the server
+ * sees only those, and past five in an hour the account's email hears of it.
+ */
+const UNFINISHED_LIMIT = 5;
+async function limitBoundAttempts(binding: { userId: string; sessionTokenHash: Buffer }) {
+    const tooMany = () => new AuthError('Too many attempts. Please try again in 15 minutes.', 429);
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:security:session:${binding.sessionTokenHash.toString('hex')}`),
+            10,
+            15 * 60_000,
+        ))
+    )
+        throw tooMany();
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:security:${binding.userId}`),
+            30,
+            15 * 60_000,
+        ))
+    )
+        throw tooMany();
+    const withinUnfinished = await authRepository.consumeRateLimit(
+        hash(`auth:security:unfinished:${binding.userId}`),
+        UNFINISHED_LIMIT,
+        60 * 60_000,
+    );
+    // Once per hour at most, however long the guessing goes on.
+    if (
+        !withinUnfinished &&
+        (await authRepository.consumeRateLimit(
+            hash(`auth:security:unfinished-noticed:${binding.userId}`),
+            1,
+            60 * 60_000,
+        ))
+    )
+        void notifyDevices(binding.userId, 'password-attempts').catch(() => {});
+}
+
+/*
+ * Consumes a password proof a signed-in session made (`boundAttemptHolds` has every check)
+ * and throws `failure` unless it holds. A proof that holds takes its start off the
+ * unfinished count.
+ */
+async function consumeBoundAttempt(
+    purpose: BoundPurpose,
+    user: { id: string; credentialVersion: number },
+    sessionToken: string,
+    proof: { attemptToken: string; finishLoginRequest: string },
+    failure: () => AuthError,
+) {
+    if (!TOKEN_PATTERN.test(proof.attemptToken)) throw failure();
+    const attempt = await authRepository.consumeLoginAttempt(hash(proof.attemptToken));
+    const holds = await boundAttemptHolds(
+        attempt,
+        {
+            purpose,
+            userId: user.id,
+            credentialVersion: user.credentialVersion,
+            sessionTokenHash: hash(sessionToken),
+        },
+        proof.finishLoginRequest,
+    );
+    if (!holds) throw failure();
+    await authRepository.releaseRateLimit(hash(`auth:security:unfinished:${user.id}`));
 }
 
 const INTENT_VALUE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -346,13 +424,16 @@ async function assertCredentialsMatchSetup() {
 export async function startLogin(
     email: string,
     startLoginRequest: string,
-    binding?: { purpose: SecurityAction | 'delete'; sessionTokenHash: Buffer; userId: string },
+    binding?: {
+        purpose: SecurityAction | 'delete' | 'devices';
+        sessionTokenHash: Buffer;
+        userId: string;
+    },
     address = 'unknown',
 ) {
     const normalizedEmail = normalizeEmail(email);
-    await limitPasswordAttempts(
-        binding ? `auth:security:${binding.userId}` : `auth:login:${normalizedEmail}:${address}`,
-    );
+    if (binding) await limitBoundAttempts(binding);
+    else await limitPasswordAttempts(`auth:login:${normalizedEmail}:${address}`);
     await assertCredentialsMatchSetup();
     const credential = await authRepository.findCredential(normalizedEmail);
     await ready;
@@ -368,7 +449,10 @@ export async function startLogin(
             identifiers: OPAQUE_IDENTIFIERS,
         });
     } catch {
-        throw new AuthError('Unable to sign in. Check your email and password.', 401);
+        // A signed-in session's malformed request is not a lost session: 400, so no client signs out over it.
+        throw binding
+            ? new AuthError('Your password couldn’t be checked. Try again.', 400)
+            : new AuthError('Unable to sign in. Check your email and password.', 401);
     }
     const attemptToken = randomToken();
     await authRepository.createLoginAttempt({
@@ -391,11 +475,16 @@ export async function startLogin(
 /*
  * Completes a sign-in and opens a session. `previousSessionToken` is the session the
  * browser still holds, if any, so the repository can retire it in the same step.
+ * `device` is a device key's proof for this attempt (docs/devices-design.md): a
+ * valid one brings the device back to its own row; anything else makes a new
+ * device and never fails the sign-in. `newDevice` says whether that new device
+ * came in with the password alone, which is what the sign-in notice is for.
  */
 export async function finishLogin(
     attemptToken: string,
     finishLoginRequest: string,
     previousSessionToken: string | null = null,
+    device?: { id: string; signature: string },
 ) {
     const failure = () => new AuthError('Unable to sign in. Check your email and password.', 401);
     if (!TOKEN_PATTERN.test(attemptToken)) throw failure();
@@ -424,12 +513,18 @@ export async function finishLogin(
         previousSessionToken && TOKEN_PATTERN.test(previousSessionToken)
             ? previousSessionToken
             : null;
+    const signature = device ? decodeSignature(device.signature) : null;
     const result = await authRepository.createSession({
         userId: attempt.userId,
         credentialVersion: attempt.credentialVersion,
         tokenHash: hash(token),
         previousTokenHash: previousToken ? hash(previousToken) : null,
         expiresAt: new Date(Date.now() + SESSION_IDLE_SECONDS * 1000),
+        // The attempt's digest is its stored token hash: the statement names that.
+        device:
+            device && signature
+                ? { id: device.id, signature, attemptDigest: hash(attemptToken) }
+                : undefined,
     });
     if (!result) throw failure();
     if ('suspended' in result)
@@ -445,23 +540,68 @@ export async function finishLogin(
             wrappingNonce: key.wrappingNonce.toString('base64url'),
             encryptedKey: key.encryptedKey.toString('base64url'),
         },
+        device: {
+            id: result.device.id,
+            attached: result.device.attached,
+            registered: result.device.registered,
+        },
+        newDevice: result.device.created === 'password',
         sessionToken: token,
     };
 }
 
+/* A device proof's 64 bytes, or null for anything else: a malformed proof is no proof, not a failure. */
+function decodeSignature(value: string) {
+    const bytes = Buffer.from(value, 'base64url');
+    return bytes.length === 64 && bytes.toString('base64url') === value ? bytes : null;
+}
+
 /* The user behind a session token, or null when the token is missing, malformed, or expired. */
 export async function getSessionUser(sessionToken: string | null) {
+    return (await getSession(sessionToken))?.user ?? null;
+}
+
+/* The session behind a token with its device, or null. */
+export async function getSession(sessionToken: string | null) {
     if (!sessionToken || !TOKEN_PATTERN.test(sessionToken)) return null;
-    return authRepository.getSessionUser(hash(sessionToken), {
+    return authRepository.getSession(hash(sessionToken), {
         idleSeconds: SESSION_IDLE_SECONDS,
         maxSeconds: SESSION_MAX_SECONDS,
     });
+}
+
+/*
+ * What `/auth/session` answers: the user and the session's device, or no user,
+ * and then whether this token's device was removed (in the last week), so the
+ * device can clear what it kept.
+ */
+export async function sessionState(sessionToken: string | null) {
+    const session = await getSession(sessionToken);
+    if (session) return { user: session.user, device: session.device };
+    const removed =
+        sessionToken !== null &&
+        TOKEN_PATTERN.test(sessionToken) &&
+        (await authRepository.wasRemoved(hash(sessionToken)));
+    return removed
+        ? { user: null, device: null, removed: true as const }
+        : { user: null, device: null };
 }
 
 async function requireSession(sessionToken: string | null, message: string) {
     const user = await getSessionUser(sessionToken);
     if (!sessionToken || !user) throw new AuthError(message, 401);
     return { user, token: sessionToken };
+}
+
+/*
+ * A removed device that finished clearing what it kept lets go of its cookie. Only a token
+ * that has no live session and was removed qualifies: a browser where someone signed in again
+ * meanwhile presents the new cookie, which this leaves alone (sign-out would end that session).
+ */
+export async function mayForgetSession(sessionToken: string | null) {
+    if (!sessionToken || !TOKEN_PATTERN.test(sessionToken)) return false;
+    if (await getSession(sessionToken)) return false;
+    return authRepository.wasRemoved(hash(sessionToken));
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1018,10 +1158,258 @@ export async function updateProfile(sessionToken: string | null, input: { name: 
     return { user: { ...updated, credentialVersion: user.credentialVersion } };
 }
 
-/* Ends the session behind the token, if there is one. Clearing the cookie is the caller's job. */
+/*
+ * Signing out: the session ends and its device is removed with it, so this
+ * browser or phone keeps nothing tied to the account and the next sign-in here
+ * is a new device. Clearing the cookie is the caller's job.
+ */
 export async function logout(sessionToken: string | null) {
     if (sessionToken && TOKEN_PATTERN.test(sessionToken))
-        await authRepository.deleteSession(hash(sessionToken));
+        await authRepository.signOutDevice(hash(sessionToken));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Devices                                                                    */
+/* ------------------------------------------------------------------------- */
+
+const HOUR_MS = 60 * 60 * 1000;
+const toHour = (date: Date) =>
+    new Date(Math.floor(date.getTime() / HOUR_MS) * HOUR_MS).toISOString();
+const DEVICE_NAME = /^[\p{L}\p{M}\p{N} '’()._·-]+$/u;
+export const DEVICE_NAME_MAX = 40;
+
+/*
+ * A device's name as it is stored: trimmed, NFC, 1 to 40 characters of
+ * letters, marks, numbers, spaces and a little punctuation. Control and format
+ * characters (bidi overrides among them) are refused, so a name cannot read
+ * backwards in the list or pass for another.
+ */
+export function normalizeDeviceName(value: string) {
+    const name = value.trim().replace(/\s+/gu, ' ').normalize('NFC');
+    const length = Array.from(name).length;
+    if (length < 1 || length > DEVICE_NAME_MAX || !DEVICE_NAME.test(name))
+        throw new AuthError(
+            `Use a name of up to ${DEVICE_NAME_MAX} letters, numbers and spaces.`,
+            400,
+        );
+    return name;
+}
+
+async function requireDeviceSession(sessionToken: string | null) {
+    const session = await getSession(sessionToken);
+    if (!sessionToken || !session) throw new AuthError('Sign in to see your devices.', 401);
+    return { ...session, token: sessionToken };
+}
+
+async function limitDeviceNames(userId: string) {
+    if (
+        !(await authRepository.consumeRateLimit(
+            hash(`auth:device-name:${userId}`),
+            20,
+            60 * 60_000,
+        ))
+    )
+        throw new AuthError('Too many changes to device names. Try again later.', 429);
+}
+
+type DeviceRow = NonNullable<Awaited<ReturnType<typeof authRepository.renameDevice>>> & {
+    current: boolean;
+    signedIn: boolean;
+};
+function encodeDevice(row: DeviceRow) {
+    return {
+        id: row.id,
+        kind: row.kind,
+        name: row.name,
+        approvedBy: row.approvedBy,
+        approvedByDeviceId: row.approvedByDeviceId,
+        // Both to the hour: every session on the account reads this list, and minutes would say
+        // when the owner added a device or is awake to anyone signed in as them.
+        createdAt: toHour(row.createdAt),
+        lastSeenAt: toHour(row.lastSeenAt),
+        current: row.current,
+        signedIn: row.signedIn,
+    };
+}
+
+/* The account's devices, the one asking first. */
+export async function listDevices(sessionToken: string | null) {
+    const { user, device } = await requireDeviceSession(sessionToken);
+    const rows = await authRepository.listDevices(user.id, device.id);
+    return { devices: rows.map(encodeDevice) };
+}
+
+/*
+ * The session's device describes itself, once: its kind, its name, and its
+ * signing key when the client could make one. A key is 32 bytes, base64url.
+ */
+export async function registerDevice(
+    sessionToken: string | null,
+    input: { kind: 'web' | 'ios' | 'android'; name: string; signingPublicKey?: string },
+) {
+    // Not under the rename budget: once per device, and the per-address limit already applies.
+    // An intruder spending that budget must not stop the owner's devices getting their keys.
+    const { token } = await requireDeviceSession(sessionToken);
+    const name = normalizeDeviceName(input.name);
+    let key: Buffer | null = null;
+    if (input.signingPublicKey !== undefined) {
+        key = Buffer.from(input.signingPublicKey, 'base64url');
+        if (key.length !== 32 || key.toString('base64url') !== input.signingPublicKey)
+            throw new AuthError('This device key is not one HushOS can use.', 400);
+    }
+    const result = await authRepository.registerDevice({
+        sessionTokenHash: hash(token),
+        kind: input.kind,
+        name,
+        signingPublicKey: key,
+    });
+    switch (result.status) {
+        case 'ok':
+            return { device: encodeDevice(result.device) };
+        case 'session':
+            throw new AuthError('Sign in to see your devices.', 401);
+        case 'registered':
+            throw new AuthError('This device is already set up.', 409, { code: 'registered' });
+        case 'key-in-use':
+            throw new AuthError('Another of your devices uses this key. Make a new one.', 409, {
+                code: 'key-in-use',
+            });
+    }
+}
+
+/* Any of the account's devices, renamed from any of them. */
+export async function renameDevice(
+    sessionToken: string | null,
+    deviceId: string,
+    input: { name: string },
+) {
+    const { user, device } = await requireDeviceSession(sessionToken);
+    await limitDeviceNames(user.id);
+    const row = await authRepository.renameDevice({
+        userId: user.id,
+        deviceId,
+        name: normalizeDeviceName(input.name),
+    });
+    // Another account's device, a revoked one and one that never existed are the same answer.
+    if (!row) throw new AuthError('This device isn’t on your account.', 404);
+    const listed = (await authRepository.listDevices(user.id, device.id)).find(
+        (entry) => entry.id === row.id,
+    );
+    return {
+        device: encodeDevice(listed ?? { ...row, current: row.id === device.id, signedIn: false }),
+    };
+}
+
+/*
+ * Removing devices asks for the password again, through the same one-use OPAQUE
+ * exchange account deletion uses, bound to this session and tagged `devices`: a
+ * session cookie alone (a browser left locked, a stolen cookie) must not be able
+ * to sign every other device out and have them clear what they kept. Code running
+ * in the page itself (a hostile extension, a script injected into HushOS) can read
+ * the password as it is typed, and is out of scope here as everywhere on the web.
+ * Step 2 adds a removal signed by the account's identity, which a removed device
+ * checks itself.
+ */
+export async function startDeviceRemoval(sessionToken: string | null, startLoginRequest: string) {
+    const { user, token } = await requireDeviceSession(sessionToken);
+    return startLogin(user.email, startLoginRequest, {
+        purpose: 'devices',
+        sessionTokenHash: hash(token),
+        userId: user.id,
+    });
+}
+
+export type DeviceRemovalProof = { attemptToken: string; finishLoginRequest: string };
+
+async function checkDeviceRemoval(
+    user: { id: string; credentialVersion: number },
+    token: string,
+    proof: DeviceRemovalProof,
+) {
+    await consumeBoundAttempt(
+        'devices',
+        user,
+        token,
+        proof,
+        () => new AuthError('That password isn’t right. Check it and try again.', 403),
+    );
+}
+
+/*
+ * Removes one of the account's other devices: it is signed out at once and
+ * needs the password to sign in again. Not the device asking; that is signing out.
+ */
+export async function removeDevice(
+    sessionToken: string | null,
+    deviceId: string,
+    proof: DeviceRemovalProof,
+) {
+    const { user, token } = await requireDeviceSession(sessionToken);
+    await checkDeviceRemoval(user, token, proof);
+    const result = await authRepository.revokeDevice({
+        userId: user.id,
+        deviceId,
+        sessionTokenHash: hash(token),
+    });
+    switch (result.status) {
+        case 'ok':
+            return { userId: user.id, removed: result.removed };
+        case 'session':
+            throw new AuthError('Sign in to see your devices.', 401);
+        case 'missing':
+            throw new AuthError('This device isn’t on your account.', 404);
+        case 'current':
+            throw new AuthError('This is the device you’re using. Sign out instead.', 409, {
+                code: 'current',
+            });
+    }
+}
+
+/* Removes every device of the account but the one asking. */
+export async function removeOtherDevices(sessionToken: string | null, proof: DeviceRemovalProof) {
+    const { user, token } = await requireDeviceSession(sessionToken);
+    await checkDeviceRemoval(user, token, proof);
+    const result = await authRepository.revokeOtherDevices({
+        userId: user.id,
+        sessionTokenHash: hash(token),
+    });
+    if (result.status !== 'ok') throw new AuthError('Sign in to see your devices.', 401);
+    return { userId: user.id, removed: result.removed };
+}
+
+const noticeTime = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC',
+});
+
+/*
+ * A security notice about the account's devices, by email. It cannot be turned
+ * off, but it is bounded: past ten an hour for one account, notices are dropped
+ * and the action they describe still happens. Never the device's name, address
+ * or browser. Callers send it after the action, and a mail failure is theirs to
+ * log; the action already happened.
+ */
+export async function notifyDevices(
+    userId: string,
+    kind: SecurityNoticeKind,
+    count?: number,
+    at: Date = new Date(),
+) {
+    if (!(await authRepository.consumeRateLimit(hash(`auth:notice:${userId}`), 10, 60 * 60_000)))
+        return;
+    const user = await authRepository.getUserById(userId);
+    if (!user) return;
+    await sendSecurityNotice(user.email, {
+        kind,
+        when: `${noticeTime.format(at)} UTC`,
+        count,
+        accountUrl: new URL('/app/account#devices', authEnv.APP_ORIGIN).href,
+    });
 }
 
 function decodeRecovery(input: RecoveryEnvelope, expectedVersion: number, keyVersion = 1) {
@@ -1355,28 +1743,7 @@ export async function finishAccountDeletion(
     );
     const failure = () =>
         new AuthError('Could not delete your account. Check your password and try again.');
-    if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();
-    const attempt = await authRepository.consumeLoginAttempt(hash(input.attemptToken));
-    if (
-        !attempt ||
-        attempt.purpose !== 'delete' ||
-        attempt.userId !== user.id ||
-        attempt.credentialVersion !== user.credentialVersion ||
-        !attempt.sessionTokenHash?.equals(hash(token)) ||
-        attempt.expiresAt.getTime() <= Date.now() ||
-        attempt.profileVersion !== OPAQUE_PROFILE_VERSION
-    )
-        throw failure();
-    await ready;
-    try {
-        server.finishLogin({
-            serverLoginState: attempt.serverState,
-            finishLoginRequest: input.finishLoginRequest,
-            identifiers: OPAQUE_IDENTIFIERS,
-        });
-    } catch {
-        throw failure();
-    }
+    await consumeBoundAttempt('delete', user, token, input, failure);
     // Anything billed to the account stops before the account goes; an outage there
     // leaves the account in place rather than a subscription without an owner.
     await beforeDelete?.(user.id);
@@ -1501,25 +1868,9 @@ export async function finishSecurityChange(
     );
     const failure = () =>
         new AuthError('Account security could not be changed. Sign in again and retry.', 409);
-    if (!TOKEN_PATTERN.test(input.attemptToken)) throw failure();
-    const attempt = await authRepository.consumeLoginAttempt(hash(input.attemptToken));
-    if (
-        !attempt ||
-        attempt.purpose !== input.action ||
-        attempt.userId !== user.id ||
-        attempt.credentialVersion !== user.credentialVersion ||
-        !attempt.sessionTokenHash?.equals(hash(token)) ||
-        attempt.expiresAt.getTime() <= Date.now() ||
-        attempt.profileVersion !== OPAQUE_PROFILE_VERSION
-    )
-        throw failure();
-    await ready;
+    await consumeBoundAttempt(input.action, user, token, input, failure);
+    // The replacement registration record must parse before anything is stored.
     try {
-        server.finishLogin({
-            serverLoginState: attempt.serverState,
-            finishLoginRequest: input.finishLoginRequest,
-            identifiers: OPAQUE_IDENTIFIERS,
-        });
         const { startLoginRequest } = client.startLogin({ password: randomToken() });
         server.startLogin({
             serverSetup: await serverSetup(),

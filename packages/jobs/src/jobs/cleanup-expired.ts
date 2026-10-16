@@ -5,7 +5,9 @@ import type { JobPayloads, queues } from '../client';
 
 /*
  * Deletes expired auth rows (enrollments, login and recovery attempts, sessions,
- * rate-limit buckets) in bounded batches until each table is clean. Runs on a
+ * rate-limit buckets, removed devices' tokens) and devices that can never come
+ * back, revokes keyed devices idle for 90 days, and deletes revoked devices 90
+ * days on, in bounded batches until each table is clean. Runs on a
  * schedule and once at worker start, so a backlog after downtime never lands on
  * a user's request. Each run is one wide event.
  */

@@ -13,15 +13,41 @@ import type { AuthApi } from './api';
 import type { CryptoTransport, RequestOptions } from './crypto-transport';
 import { createAuthStore } from './store';
 import { withStorageEvents } from './with-storage-events';
-import { DeviceStorageTimeout, type DeviceKeyStore } from './device-storage';
+import {
+    createDeviceSigningKey,
+    emailDigest,
+    signDeviceSession,
+} from '@hushos/crypto/device-identity';
+import {
+    DeviceStorageTimeout,
+    type DeviceIdentityStore,
+    type DeviceKeyStore,
+    type StoredDeviceIdentity,
+} from './device-storage';
 import type { RestoreStep } from './store';
-import type { SessionUser, SignupIntent } from './protocol';
+import type { AuthUser, DeviceKind, SessionDevice, SessionUser, SignupIntent } from './protocol';
 import type { WorkerRequests, WorkerResults } from './worker';
+
+/*
+ * The device key and what this device says about itself (docs/devices-design.md,
+ * step 1). Without `identities`, sign-in makes a new device every time; without
+ * `describeDevice`, the device never registers. `onRemoved` runs when the server
+ * says this device was removed, after the auth client cleared its own storage,
+ * for the app to clear the rest (Drive's mirror and stashes).
+ */
+export type AuthClientOptions = {
+    identities?: DeviceIdentityStore;
+    describeDevice?: () => { kind: DeviceKind; name: string };
+    onRemoved?: () => Promise<void> | void;
+};
+
+const REMOVED_NOTICE = 'hushos-device-removed';
 
 export function createAuthClient(
     createTransport: () => CryptoTransport,
     deviceKeys: DeviceKeyStore,
     api: AuthApi,
+    { identities, describeDevice, onRemoved }: AuthClientOptions = {},
 ) {
     let transport: CryptoTransport | undefined;
     let epoch = 0;
@@ -140,14 +166,158 @@ export function createAuthClient(
             }
         }
     }
+    /* The same retry as the device key above: WebKit's keychain wrap fails now and then. */
+    async function saveIdentity(identity: StoredDeviceIdentity) {
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await identities!.save(identity);
+            } catch (error) {
+                const clone = (error as { name?: unknown } | null)?.name === 'DataCloneError';
+                if (!clone || attempt >= 3) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+            }
+        }
+    }
+    /*
+     * This device's proof for the sign-in `attemptToken` names, when its stored key
+     * was made for the account being signed in to. A key made for another email stays
+     * quiet: a browser two people share never tells the server that one person's
+     * device is now signing in as the other.
+     */
+    async function deviceProof(email: string, attemptToken: string) {
+        if (!identities) return undefined;
+        try {
+            const stored = await identities.load();
+            if (!stored || stored.emailHash !== (await emailDigest(email))) return undefined;
+            const signature = await signDeviceSession(stored.privateKey, {
+                userId: stored.userId,
+                deviceId: stored.deviceId,
+                attemptToken,
+            });
+            return { id: stored.deviceId, signature };
+        } catch {
+            // No key, or storage that did not answer: the sign-in goes on as a new device.
+            return undefined;
+        }
+    }
+    /*
+     * Storage the browser may evict under pressure would lose the device key, and the next sign-in
+     * would be a new device with a notice. Asked only where the browser decides without asking the
+     * person (Firefox would prompt, unexplained): when the permission is already settled.
+     */
+    async function keepStorage() {
+        try {
+            const status = await navigator.permissions?.query({
+                name: 'persistent-storage' as PermissionName,
+            });
+            if (status && status.state !== 'prompt') await navigator.storage?.persist?.();
+        } catch {
+            /* No permission or storage manager here: nothing to do. */
+        }
+    }
+    /* One device registration at a time across this browser's tabs, so two cannot register two keys. */
+    function withDeviceLock<T>(action: () => Promise<T>): Promise<T> {
+        const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+        return locks?.request ? (locks.request('hushos-device', action) as Promise<T>) : action();
+    }
+    let ensuring: Promise<void> | undefined;
+    /*
+     * Makes sure the session's device has described itself: a session from before
+     * devices, or a sign-in that made a new device, registers its kind, its name and a
+     * new device key. Never in the way of the person: failures are left for the next visit.
+     */
+    function ensureDevice(user: Pick<AuthUser, 'id' | 'email'>, known?: SessionDevice) {
+        if (!identities || !describeDevice || known?.registered) return Promise.resolve();
+        ensuring ??= withDeviceLock(async () => {
+            // Read again under the lock: another tab may have registered meanwhile.
+            const device = (await readSession()).device;
+            if (!device || device.registered) return;
+            const key = await createDeviceSigningKey();
+            const { device: registered } = await api.registerDevice({
+                ...describeDevice(),
+                ...(key ? { signingPublicKey: key.publicKey } : {}),
+            });
+            if (key) {
+                await saveIdentity({
+                    userId: user.id,
+                    emailHash: await emailDigest(user.email),
+                    deviceId: registered.id,
+                    privateKey: key.privateKey,
+                    publicKey: key.publicKey,
+                });
+                void keepStorage();
+            }
+            // Without a key this device cannot come back to its row; a stale key would only mislead.
+            else await identities.clear().catch(() => {});
+        }).finally(() => {
+            ensuring = undefined;
+        });
+        return ensuring;
+    }
+    /*
+     * The server said this device was removed: the saved unlock, the device key that opened it
+     * and the device's own key go, and the app clears the rest (Drive's mirror and stashes). One
+     * wipe at a time, in this tab (a sign-in started meanwhile is refused until it ends) and across
+     * tabs (the device lock). Before every step that deletes, the server must still say removed:
+     * someone may have signed in again in another tab, and the cookie is shared. Only a finished
+     * wipe is acknowledged, which lets go of the cookie; anything cut short is tried again at the
+     * next check. Whatever the person kept here may already be copied elsewhere: housekeeping,
+     * not a guarantee.
+     */
+    async function forgetRemovedDevice() {
+        await exclusive(() =>
+            withDeviceLock(async () => {
+                const stillRemoved = async () => {
+                    const now = await api.session();
+                    if (now.user || !now.removed)
+                        throw new Error('Signed in again since; nothing is cleared.');
+                };
+                lock();
+                broadcastLock();
+                try {
+                    sessionStorage.setItem(REMOVED_NOTICE, '1');
+                } catch {
+                    /* The sign-in page just won't say why. */
+                }
+                await stillRemoved();
+                // The store writes nothing until it has loaded (see store.ts); on a page that never
+                // restored (the sign-in page a removed browser lands on) the cleared state would be lost.
+                await store.persist.rehydrate();
+                store.setState({
+                    device: null,
+                    lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
+                });
+                await onRemoved?.();
+                await stillRemoved();
+                await deviceKeys.clear();
+                await stillRemoved();
+                await identities?.clear();
+                await stillRemoved();
+                await api.forgetSession();
+            }),
+        );
+    }
+    async function readSession() {
+        const result = await api.session();
+        // Not while a sign-in or a security change owns the worker: the next check will do it.
+        if (!result.user && result.removed && !busy) await forgetRemovedDevice().catch(() => {});
+        return result;
+    }
     async function login(email: string, password: string) {
         const loginEpoch = epoch;
         const start = await rpc('loginStart', { password });
         const challenge = await api.loginStart({ email, ...start });
         const finish = await rpc('loginFinish', challenge);
+        const device = await deviceProof(email, challenge.attemptToken);
         // A lock here has already dropped the export key; do not create a session for it.
         if (epoch !== loginEpoch) throw new Error('Your account was locked. Please sign in again.');
-        const result = await api.loginFinish({ attemptToken: challenge.attemptToken, ...finish });
+        const result = await api.loginFinish({
+            attemptToken: challenge.attemptToken,
+            ...finish,
+            ...(device ? { device } : {}),
+        });
+        // A device the proof did not bring back registers itself; never in the way of signing in.
+        void ensureDevice(result.user, result.device).catch(() => {});
         try {
             await rpc('unlock', { userId: result.user.id, envelope: result.envelope });
         } catch {
@@ -235,6 +405,26 @@ export function createAuthClient(
             busy = false;
         }
     }
+    /*
+     * Proves the password once more (an OPAQUE exchange bound to this session) and hands the
+     * finished exchange to `action`. Its own worker operations: sign-in's would drop the open
+     * account, and a wrong password here is a refusal that keeps this browser unlocked.
+     */
+    async function withPassword<T>(
+        password: string,
+        action: (proof: { attemptToken: string; finishLoginRequest: string }) => Promise<T>,
+    ) {
+        try {
+            const start = await rpc('reauthStart', { password });
+            const challenge = await api.devicesReauth(start);
+            const finish = await rpc('reauthFinish', challenge);
+            return await action({ attemptToken: challenge.attemptToken, ...finish });
+        } finally {
+            // A server that refused the start (429, a lost session) leaves the password in the
+            // worker otherwise, until the next lock.
+            await rpc('reauthCancel', {}).catch(() => {});
+        }
+    }
     return {
         store,
         isAuthenticating: () => busy,
@@ -276,7 +466,7 @@ export function createAuthClient(
                     let sessionUser: SessionUser | null;
                     step('session');
                     try {
-                        sessionUser = options.validated ? user : (await api.session()).user;
+                        sessionUser = options.validated ? user : (await readSession()).user;
                     } catch {
                         // Offline or a flaky connection: the bundle may be fine. Keep it and
                         // let the next focus or session check try again.
@@ -361,7 +551,10 @@ export function createAuthClient(
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });
                 broadcastLock();
-                await deviceKeys.clear().catch(() => {});
+                await Promise.all([
+                    deviceKeys.clear().catch(() => {}),
+                    identities?.clear().catch(() => {}),
+                ]);
             }),
         recoveryBackup: async (user: SessionUser) => {
             if (store.getState().unlockedUserId !== user.id)
@@ -458,7 +651,7 @@ export function createAuthClient(
                 if (!committed) {
                     let live: SessionUser | null = null;
                     try {
-                        live = (await api.session()).user;
+                        live = (await readSession()).user;
                     } catch {
                         /* Unknown either way. */
                     }
@@ -475,7 +668,24 @@ export function createAuthClient(
                     return { signedIn: false, uncertain: false };
                 }
             }),
-        session: () => api.session(),
+        session: () => readSession(),
+        /* Whether this tab cleared a removed device; said once, on the sign-in page. */
+        takeRemovedNotice() {
+            try {
+                const removed = sessionStorage.getItem(REMOVED_NOTICE) === '1';
+                sessionStorage.removeItem(REMOVED_NOTICE);
+                return removed;
+            } catch {
+                return false;
+            }
+        },
+        ensureDevice: (user: Pick<AuthUser, 'id' | 'email'>) => ensureDevice(user),
+        devices: () => api.devices(),
+        renameDevice: (id: string, name: string) => api.renameDevice(id, name),
+        removeDevice: (id: string, password: string) =>
+            withPassword(password, (proof) => api.removeDevice(id, proof)),
+        removeOtherDevices: (password: string) =>
+            withPassword(password, (proof) => api.removeOtherDevices(proof)),
         updateProfile: (name: string) => api.updateProfile(name),
         login: (email: string, password: string) => exclusive(() => login(email, password)),
         register: (email: string, name: string, password: string) =>
@@ -490,13 +700,19 @@ export function createAuthClient(
                     throw new Error('Your account was created. Please sign in to unlock it.');
                 }
             }),
+        // Signing out removes this device on the server; its key goes here too, so the next
+        // sign-in in this browser is a new device.
         logout: () =>
             exclusive(async () => {
                 listen();
                 lock();
                 broadcastLock();
                 store.setState({ device: null });
-                await Promise.all([deviceKeys.clear().catch(() => {}), api.logout()]);
+                await Promise.all([
+                    deviceKeys.clear().catch(() => {}),
+                    identities?.clear().catch(() => {}),
+                    api.logout(),
+                ]);
                 store.setState({
                     lockRevision: Math.max(Date.now(), store.getState().lockRevision + 1),
                 });

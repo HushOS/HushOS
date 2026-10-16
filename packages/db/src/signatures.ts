@@ -145,6 +145,28 @@ export function keysStatement(input: {
 }
 
 /*
+ * What a device signs to come back to its own row at sign-in
+ * (docs/devices-design.md, step 1): the account, the device, and the digest of
+ * the sign-in attempt's token, the SHA-256 of its UTF-8 bytes (which is the
+ * attempt's stored token hash). The attempt is consumed before anything is
+ * checked, so a signature is good for exactly one sign-in. Signed with the
+ * device's own Ed25519 key, never the identity's.
+ */
+export function deviceSessionStatement(input: {
+    userId: string;
+    deviceId: string;
+    attemptDigest: Uint8Array;
+}) {
+    return statement([
+        'hushos/device/session',
+        1,
+        input.userId.toLowerCase(),
+        input.deviceId.toLowerCase(),
+        Buffer.from(input.attemptDigest).toString('base64url'),
+    ]);
+}
+
+/*
  * Whether `signature` is both halves of a hybrid signature by `keys` over
  * `message`: Ed25519 under the signing key, then ML-DSA-65 under the
  * identity context. The caller knows from context that the statement is a

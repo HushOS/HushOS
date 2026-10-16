@@ -140,6 +140,15 @@ export type CryptoRequests = {
     registerFinish: { registrationResponse: string; userId: string; profileVersion: number };
     loginStart: { password: string };
     loginFinish: { loginResponse: string; profileVersion: number };
+    /*
+     * Proving the password again while unlocked (removing a device): an OPAQUE login
+     * kept apart from sign-in's, so the open account stays open, and a wrong password
+     * is a refusal that keeps the session, not a reset.
+     */
+    reauthStart: { password: string };
+    reauthFinish: { loginResponse: string; profileVersion: number };
+    /* Forgets a re-authentication's password and state, finished or not. */
+    reauthCancel: Record<string, never>;
     unlock: { userId: string; envelope: AccountKeyEnvelope };
     /*
      * Identity: opens the X25519 private key under the unlocked account and keeps
@@ -678,6 +687,9 @@ export type CryptoResults = {
     };
     loginStart: { startLoginRequest: string };
     loginFinish: { finishLoginRequest: string };
+    reauthStart: { startLoginRequest: string };
+    reauthFinish: { finishLoginRequest: string };
+    reauthCancel: { ok: true };
     unlock: { userId: string };
     identityOpen: {
         keyVersion: number;
@@ -798,6 +810,9 @@ export function createCryptoSession() {
     let state = '';
     let phase: 'idle' | 'register' | 'login' | 'unlock' = 'idle';
     let exportKey = '';
+    // The re-authentication's own OPAQUE state: never the sign-in's, never the root's.
+    let reauthPassword = '';
+    let reauthState = '';
     let accountKey: Uint8Array<ArrayBuffer> | undefined;
     let unlockedUserId: string | null = null;
     // Drive keys, opened on demand and kept for the session; every one dies with a lock.
@@ -1396,6 +1411,8 @@ export function createCryptoSession() {
         security.reset();
         accountKeyVersion = 1;
         password = '';
+        reauthPassword = '';
+        reauthState = '';
         state = '';
         exportKey = '';
         phase = 'idle';
@@ -1623,6 +1640,41 @@ export function createCryptoSession() {
                     throw new CryptoError('Unable to sign in. Check your email and password.');
                 exportKey = result.exportKey;
                 phase = 'unlock';
+                return { finishLoginRequest: result.finishLoginRequest };
+            }
+            case 'reauthStart': {
+                try {
+                    reauthPassword = normalizePassword(message.input.password);
+                } catch (error) {
+                    throw new RefusedError(
+                        error instanceof Error ? error.message : 'Enter your password.',
+                    );
+                }
+                const result = client.startLogin({ password: reauthPassword });
+                reauthState = result.clientLoginState;
+                return { startLoginRequest: result.startLoginRequest };
+            }
+            case 'reauthCancel': {
+                reauthPassword = '';
+                reauthState = '';
+                return { ok: true };
+            }
+            case 'reauthFinish': {
+                checkProfile(message.input.profileVersion);
+                const [password, state] = [reauthPassword, reauthState];
+                reauthPassword = '';
+                reauthState = '';
+                if (!state) throw new RefusedError('Enter your password again.');
+                const result = client.finishLogin({
+                    password,
+                    clientLoginState: state,
+                    loginResponse: message.input.loginResponse,
+                    identifiers: OPAQUE_IDENTIFIERS,
+                    keyStretching: KEY_STRETCHING,
+                });
+                if (!result)
+                    throw new RefusedError('That password isn’t right. Check it and try again.');
+                // The export key is not needed and not kept: this proves the password, nothing more.
                 return { finishLoginRequest: result.finishLoginRequest };
             }
             case 'identityOpen': {

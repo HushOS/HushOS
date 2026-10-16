@@ -6,7 +6,7 @@ import {
     type SearchSchemaInput,
 } from '@tanstack/react-router';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
@@ -68,6 +68,16 @@ function LoginPage() {
     const { securityChanged, redirect: returnTo } = Route.useSearch();
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    // A browser that lands here because its device was removed from the account (the
+    // server rendered this page without a session) asks once: the auth client then clears
+    // what this browser kept for that account.
+    const [removed, setRemoved] = useState(false);
+    useEffect(() => {
+        void authClient
+            .session()
+            .catch(() => {})
+            .finally(() => setRemoved(authClient.takeRemovedNotice()));
+    }, []);
     const form = useForm({
         defaultValues: { email: '', password: '' },
         validationLogic: revalidateLogic(),
@@ -136,6 +146,9 @@ function LoginPage() {
                         <AuthNote tone={notice.tone} title={notice.title}>
                             {notice.text}
                         </AuthNote>
+                    )}
+                    {removed && !notice && (
+                        <AuthNote>This browser was removed from your account.</AuthNote>
                     )}
                     {error && <AuthNote tone="danger">{error}</AuthNote>}
                     <form.Field name="email">

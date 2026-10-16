@@ -41,7 +41,14 @@ export async function unwrap<R extends { data: unknown; error: unknown }>(pendin
             typeof (value as { message?: unknown }).message === 'string'
                 ? (value as { message: string }).message
                 : 'Please try again.';
-        throw new Error(message);
+        // A refusal's code, when the server gave one (`current`, `registered`): for callers that act on it.
+        const code =
+            value &&
+            typeof value === 'object' &&
+            typeof (value as { code?: unknown }).code === 'string'
+                ? (value as { code: string }).code
+                : undefined;
+        throw Object.assign(new Error(message), code ? { code } : {});
     }
     return data as NonNullable<R['data']>;
 }

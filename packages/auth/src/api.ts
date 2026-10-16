@@ -8,7 +8,15 @@ import type { SettingsEnvelope } from '@hushos/crypto/contacts';
 export type { ContactPin, Settings, SettingsEnvelope } from '@hushos/crypto/contacts';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
 import type { RecoveryEnvelope } from '@hushos/crypto/recovery';
-import type { AccountKeyEnvelope, AuthUser, SessionUser, SignupIntent } from './protocol';
+import type {
+    AccountDevice,
+    AccountKeyEnvelope,
+    AuthUser,
+    DeviceKind,
+    SessionDevice,
+    SessionUser,
+    SignupIntent,
+} from './protocol';
 
 /*
  * What the auth client needs from the server, as a contract the app implements.
@@ -22,6 +30,8 @@ export type LoginChallenge = {
     loginResponse: string;
     profileVersion: number;
 };
+/* The finished password exchange a device removal carries. */
+export type DeviceRemovalProof = { attemptToken: string; finishLoginRequest: string };
 export type RegistrationChallenge = {
     registrationResponse: string;
     userId: string;
@@ -162,11 +172,41 @@ export interface AuthApi {
         input: { name: string } & CryptoResults['registerFinish'],
     ): Promise<{ user: AuthUser }>;
     loginStart(input: { email: string; startLoginRequest: string }): Promise<LoginChallenge>;
+    /*
+     * `device`: a device key's proof for this attempt. The reply says which
+     * device the session is on, whether the proof brought it back (`attached`),
+     * and whether that device has described itself yet (`registered`).
+     */
     loginFinish(input: {
         attemptToken: string;
         finishLoginRequest: string;
-    }): Promise<{ user: AuthUser; envelope: AccountKeyEnvelope }>;
-    session(): Promise<{ user: SessionUser | null }>;
+        device?: { id: string; signature: string };
+    }): Promise<{
+        user: AuthUser;
+        envelope: AccountKeyEnvelope;
+        device: SessionDevice & { attached: boolean };
+    }>;
+    /* No user: `removed` when this session ended because its device was removed. */
+    session(): Promise<{
+        user: SessionUser | null;
+        device: SessionDevice | null;
+        removed?: boolean;
+    }>;
+    /* After a removed device cleared what it kept: drops the cookie, only if it is still the removed one. */
+    forgetSession(): Promise<{ forgotten: boolean }>;
+    devices(): Promise<{ devices: AccountDevice[] }>;
+    /* Once per device; 409 `registered` after that. The key is 32 bytes, base64url. */
+    registerDevice(input: {
+        kind: DeviceKind;
+        name: string;
+        signingPublicKey?: string;
+    }): Promise<{ device: AccountDevice }>;
+    renameDevice(id: string, name: string): Promise<{ device: AccountDevice }>;
+    /* Removing devices asks for the password: this starts the exchange, bound to the session. */
+    devicesReauth(input: { startLoginRequest: string }): Promise<LoginChallenge>;
+    /* 409 `current` for the device asking: sign out instead. 403 for a wrong password. */
+    removeDevice(id: string, proof: DeviceRemovalProof): Promise<{ removed: number }>;
+    removeOtherDevices(proof: DeviceRemovalProof): Promise<{ removed: number }>;
     logout(): Promise<unknown>;
     setup(): Promise<{ missing: AccountSetup | null }>;
     initialize(input: CryptoResults['initialize']): Promise<unknown>;

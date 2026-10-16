@@ -102,6 +102,9 @@ function AppLayout() {
     useEffect(() => {
         let active = true;
         const current = latestUser.current;
+        // A session from before devices, or one whose registration failed, describes its device
+        // now (docs/devices-design.md); never in the way of the page.
+        void authClient.ensureDevice(current).catch(() => {});
         void authClient
             .restore(current, { validated: true })
             .then(() => authClient.initializeAccount(current))

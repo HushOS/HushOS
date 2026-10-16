@@ -10,11 +10,19 @@ import { forgetReturn } from '@/lib/return-to';
  * loads on demand, so a page that never opened it does not pull it in here.
  */
 export async function forgetDevice() {
+    await clearDevice().catch(() => {});
+}
+
+/*
+ * The same, failing when any part did not clear: a removed device acknowledges its removal
+ * (and lets go of the cookie) only once this resolved, so a blocked store is tried again.
+ */
+export async function clearDevice() {
     forgetReturn();
     await Promise.all([
         import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
         import('@/lib/drive').then(({ driveClient }) => driveClient.forgetMirror()),
-    ]).catch(() => {});
+    ]);
 }
 
 /* Signing out of this browser: whatever the device cleanup does, the session and device key go. */
