@@ -1,0 +1,24 @@
+compose.yaml
+  s_0f740f9ced1ebd::t_d675c13c0d3fc0 129
+  s_0f740f9ced1ebd::t_952eeacd56c064 175-176
+  s_0f740f9ced1ebd::t_df9efad9ca51fa 81-83
+.env.example
+  s_0f740f9ced1ebd::t_6bc273b7f94abe 79-80
+  s_0f740f9ced1ebd::t_05ff2eaf455797 89-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8fcfa053161a74932f0b247a89986dd81c046aac",
+  "prompts": {},
+  "sessions": {
+    "s_0f740f9ced1ebd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "73e4cb3b-4eca-4778-a49d-88f364149d43",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
