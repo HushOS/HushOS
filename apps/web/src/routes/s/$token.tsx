@@ -5,6 +5,7 @@ import { FileMark } from '@/components/drive/file-mark';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { Spinner } from '@/components/motion';
 import { Brand } from '@/components/brand';
+import { Cover } from '@/components/cover';
 import { SiteFooter } from '@/components/site-header';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -113,44 +114,111 @@ function LinkPage() {
     });
     const [opened, setOpened] = useState<Opened | null>(null);
     useEffect(() => () => setActiveLink(null), []);
+    const { hasSession } = useRouteContext({ from: '__root__' });
 
+    // A row, as on the sign-up pages: until the link opens, a dotted panel sits beside it.
     return (
-        <div className="flex min-h-dvh flex-col">
-            <LinkHeader />
-            <main className="flex flex-1 flex-col">
-                {secret === undefined || (meta.isPending && secret) ? (
-                    <Opening />
-                ) : secret === null ? (
-                    <MissingKey />
-                ) : meta.isError ? (
-                    <Card
-                        icon={<Link2OffIcon className="size-6" aria-hidden="true" />}
-                        tone="quiet"
-                    >
-                        <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
-                            This link no longer works
-                        </h1>
-                        <p className="text-sm text-muted-foreground">
-                            Whoever shared it turned it off, or it reached its end date. Ask them
-                            for a new link.
-                        </p>
-                    </Card>
-                ) : opened ? (
-                    <LinkContents opened={opened} />
-                ) : (
-                    <Unlock
-                        token={token}
-                        secret={secret}
-                        hasPassword={meta.data!.link.hasPassword}
-                        onOpened={(result) => {
-                            setActiveLink({ token, workspaceId: result.link.workspaceId });
-                            setOpened(result);
-                        }}
-                    />
-                )}
-            </main>
-            <SiteFooter />
+        <div className="flex min-h-dvh">
+            <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
+                <LinkHeader />
+                <main className="flex flex-1 flex-col">
+                    {secret === undefined || (meta.isPending && secret) ? (
+                        <Opening />
+                    ) : secret === null ? (
+                        <MissingKey />
+                    ) : meta.isError ? (
+                        <Card
+                            icon={<Link2OffIcon className="size-6" aria-hidden="true" />}
+                            tone="quiet"
+                        >
+                            <h1 className="text-[22px] font-extrabold tracking-[-0.02em]">
+                                This link no longer works
+                            </h1>
+                            <p className="text-sm text-muted-foreground">
+                                Whoever shared it turned it off, or it reached its end date. Ask
+                                them for a new link.
+                            </p>
+                        </Card>
+                    ) : opened ? (
+                        <>
+                            <LinkContents opened={opened} />
+                            {!hasSession && <NewHere />}
+                        </>
+                    ) : (
+                        <Unlock
+                            token={token}
+                            secret={secret}
+                            hasPassword={meta.data!.link.hasPassword}
+                            onOpened={(result) => {
+                                setActiveLink({ token, workspaceId: result.link.workspaceId });
+                                setOpened(result);
+                            }}
+                        />
+                    )}
+                </main>
+                <SiteFooter />
+            </div>
+            {/*
+             * The sign-in pages' panel (DESIGN.md → Dither) while the link waits for its
+             * password, the one step a person stays on; a link without one opens straight
+             * away, and a panel there would only flash. Hidden in high contrast and under 5:4.
+             */}
+            {!opened && meta.data?.link.hasPassword && secret && (
+                <aside
+                    aria-hidden="true"
+                    className="dither-panel sticky top-0 hidden h-svh shrink-0 basis-[38%] lg:block"
+                >
+                    <Cover word="OPEN" tone="blue" seed="shared" cols={40} rows={64} dither fill />
+                </aside>
+            )}
         </div>
+    );
+}
+
+/*
+ * Under an opened link, for someone without an account: what HushOS is, in a
+ * line, and the way in. Never above the files, and nothing about who shared them.
+ */
+function NewHere() {
+    return (
+        <section
+            aria-labelledby="new-here-title"
+            className="mx-auto w-full max-w-5xl px-4 pb-12 sm:px-8"
+        >
+            <div className="flex flex-col gap-5 rounded-2xl border border-rule bg-card p-5 sm:flex-row sm:items-center sm:p-6">
+                <div
+                    className="w-28 shrink-0 overflow-hidden rounded-lg max-sm:hidden"
+                    aria-hidden="true"
+                >
+                    <Cover word="HUSH" tone="blue" seed="new-here" cols={24} rows={16} dither />
+                </div>
+                <div className="flex flex-1 flex-col gap-1">
+                    <h2 id="new-here-title" className="text-[17px] font-bold">
+                        New to HushOS?
+                    </h2>
+                    <p className="text-sm leading-relaxed text-pretty text-muted-foreground">
+                        It’s private storage that works like the drive you already use. This was
+                        locked on a device before it reached us. The key is in the link, with its
+                        password if it has one, so we can’t open it unless someone reports it.
+                    </p>
+                </div>
+                {/* Back to this link after signing up, key and all, as Sign in does. */}
+                <Link
+                    to="/register"
+                    // Outline: Download is this page's one blue action.
+                    className={buttonVariants({ variant: 'outline', className: 'shrink-0' })}
+                    onClick={() =>
+                        rememberReturn(
+                            window.location.pathname +
+                                window.location.search +
+                                window.location.hash,
+                        )
+                    }
+                >
+                    Create an account
+                </Link>
+            </div>
+        </section>
     );
 }
 

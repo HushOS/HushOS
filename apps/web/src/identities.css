@@ -3,8 +3,10 @@
  * header, the footer, the logo, Geist and the one primary action) and wears its
  * own ground, ink and motif: the home page is sealed in Hush blue, the blog is
  * an engineer's notebook, About is a letter, Security is a blueprint, Pricing is
- * bright and Teams is an office. The app under /app, the auth pages, shared
- * links and the legal pages wear no identity. See DESIGN.md → Dither.
+ * bright, Teams is an office, an offer (/go) is a voucher, an invite (/r) is a
+ * card with a seat kept for you and a comparison (/vs) is a scoreboard. The app
+ * under /app, the auth pages and the legal pages wear no identity; a shared link
+ * asking for its password has the auth pages' panel. See DESIGN.md → Dither.
  *
  * A page opts in with `data-identity` on its outermost element (SitePage). The
  * roles shadcn reads are pointed at the identity's own colours; each value is a
@@ -21,7 +23,7 @@
     /*
      * The shared base: in the dark every public page sits on the tokens' near-black
      * ground (not the raised surface), with the identity's accents on it. A page
-     * without an identity (legal, support, comparisons) is otherwise plain Alpine.
+     * without an identity (legal, support) is otherwise plain Alpine.
      */
     :root:not(.hc) [data-site] {
         /* Read from the tokens, so a token change reaches every page without a copy here. */
@@ -117,6 +119,36 @@
         --id-ink-muted: light-dark(#4c5c54, var(--ink-muted));
         --id-quiet: light-dark(#e1e9e4, color-mix(in oklab, var(--ink) 7%, var(--surface)));
         --id-rule: light-dark(#cbd8d0, var(--rule));
+    }
+
+    /* Voucher: pale lime, the colour of the offer's ticket. */
+    :root:not(.hc) [data-identity='offer'] {
+        --id-ground: light-dark(#f4f7e4, var(--ground));
+        --id-raised: light-dark(#ffffff, var(--surface));
+        --id-ink: light-dark(#1a1f12, var(--ink));
+        --id-ink-muted: light-dark(#545b44, var(--ink-muted));
+        --id-quiet: light-dark(#e8edcf, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#d5dcb5, var(--rule));
+    }
+
+    /* Invitation: warm peach, a card someone sent you. */
+    :root:not(.hc) [data-identity='invite'] {
+        --id-ground: light-dark(#fbf0ea, var(--ground));
+        --id-raised: light-dark(#fffaf7, var(--surface));
+        --id-ink: light-dark(#2a1a14, var(--ink));
+        --id-ink-muted: light-dark(#684f44, var(--ink-muted));
+        --id-quiet: light-dark(#f3e2d8, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#ead3c6, var(--rule));
+    }
+
+    /* Scoreboard: cool aqua, two sides of one table. */
+    :root:not(.hc) [data-identity='compare'] {
+        --id-ground: light-dark(#e9f5f7, var(--ground));
+        --id-raised: light-dark(#ffffff, var(--surface));
+        --id-ink: light-dark(#10232a, var(--ink));
+        --id-ink-muted: light-dark(#475f68, var(--ink-muted));
+        --id-quiet: light-dark(#d8ecf0, color-mix(in oklab, var(--ink) 7%, var(--surface)));
+        --id-rule: light-dark(#c2dfe5, var(--rule));
     }
 }
 
@@ -366,4 +398,45 @@ h2:hover > .heading-anchor,
 
 .fits-range {
     accent-color: var(--primary);
+}
+
+/* ── Offer ────────────────────────────────────────────────────────────── */
+
+/*
+ * The offer's ticket: art on top, the terms below, and a perforation between
+ * them with a notch bitten out of each side. The notches are the page's own
+ * ground with the ticket's rule drawn round them, so they read as cut-outs.
+ */
+.ticket-tear {
+    position: relative;
+    border-top: 2px dashed var(--rule);
+}
+.ticket-tear::before,
+.ticket-tear::after {
+    content: '';
+    position: absolute;
+    /* From the padding box, under the 2px dashes: -12px centres the circle on them. */
+    top: -12px;
+    width: 22px;
+    height: 22px;
+    border-radius: 9999px;
+    /* The page's own paint in every mode (`bg-card`), high contrast included. */
+    background: var(--card);
+    border: 1px solid var(--rule);
+}
+.ticket-tear::before {
+    left: -12px;
+    clip-path: inset(0 0 0 50%);
+}
+.ticket-tear::after {
+    right: -12px;
+    clip-path: inset(0 50% 0 0);
+}
+
+/* ── Invite ───────────────────────────────────────────────────────────── */
+
+/* The seat kept for you: an empty place beside the inviter's avatar. */
+.invite-seat {
+    border: 2px dashed color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+    color: var(--muted-foreground);
 }

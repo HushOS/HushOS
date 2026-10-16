@@ -18,7 +18,16 @@ import { salesContactQueryOptions } from '@/lib/social';
  * and DESIGN.md → Dither). A page without one is plain Alpine, on the ground rather than
  * the raised surface in the dark.
  */
-export type Identity = 'home' | 'blog' | 'about' | 'security' | 'pricing' | 'teams';
+export type Identity =
+    | 'home'
+    | 'blog'
+    | 'about'
+    | 'security'
+    | 'pricing'
+    | 'teams'
+    | 'offer'
+    | 'invite'
+    | 'compare';
 
 /* A public page's outermost element: the full-height column, in its identity's colours. */
 export function SitePage({ identity, children }: { identity?: Identity; children: ReactNode }) {

@@ -1,5 +1,6 @@
 import { createFileRoute, Link, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
+import { Cover } from '@/components/cover';
 import { container, H1, H2, Lede, SitePage, StartFree } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import { type Answer, type Comparison, comparisons, findComparison } from '@/lib/compare';
@@ -45,10 +46,15 @@ function ComparePage() {
     const { comparison } = Route.useLoaderData();
     const others = comparisons.filter((entry) => entry.slug !== comparison.slug);
     return (
-        <SitePage>
+        <SitePage identity="compare">
             <SiteHeader />
             <main className="flex-1">
-                <header className={cn(container, 'pt-10 pb-10 lg:pt-20 lg:pb-14')}>
+                <header
+                    className={cn(
+                        container,
+                        'grid items-center gap-10 pt-10 pb-10 lg:grid-cols-[minmax(0,1fr)_320px] lg:pt-20 lg:pb-14',
+                    )}
+                >
                     <div className="flex max-w-[760px] flex-col gap-5">
                         <p className="text-[15px] text-muted-foreground">
                             Checked against {comparison.maker}’s own pages on{' '}
@@ -58,6 +64,17 @@ function ComparePage() {
                         </p>
                         <H1 className="lg:text-[56px]">HushOS and {comparison.name}</H1>
                         <Lede>{comparison.summary}</Lede>
+                    </div>
+                    {/* The comparison's cover, as on its social card; decoration, so wide screens only. */}
+                    <div className="hidden overflow-hidden rounded-xl lg:block">
+                        <Cover
+                            word="VS"
+                            tone="mint"
+                            seed={comparison.slug}
+                            cols={32}
+                            rows={24}
+                            dither
+                        />
                     </div>
                 </header>
 

@@ -50,8 +50,14 @@ export const getOfferLandingServerFn = createServerFn()
 /* "20%" or "$5.00": the size of a discount, for a headline. */
 export function discountAmount(input: DiscountTerms | { percentOff: number }) {
     return 'type' in input && input.type === 'fixed'
-        ? formatMoney(input.amount, input.currency)
+        ? // A fixed locale, so the server and every browser write it alike: "$5", "€5", "£5", not en-GB's "US$5".
+          formatMoney(input.amount, input.currency, 'en-US')
         : `${input.percentOff}%`;
+}
+
+/* An offer's ticket word, in the dot font: "20%", or "OFF" for a fixed amount, whose currency sign the font lacks. */
+export function ticketWord(terms: DiscountTerms) {
+    return terms.type === 'percentage' ? `${terms.percentOff}%` : 'OFF';
 }
 
 /* A discount's shape in words: "20% off, forever" or "$5.00 off your first 3 months". */

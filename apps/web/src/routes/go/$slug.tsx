@@ -2,10 +2,11 @@ import type { Plan } from '@hushos/billing/api';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { Cover } from '@/components/cover';
 import { PendingLabel } from '@/components/motion';
 import { SitePage } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { localeHintQueryOptions } from '@/lib/billing';
 import { billingApi } from '@/lib/billing-api';
 import { pickCurrency } from '@/lib/currency';
@@ -17,10 +18,11 @@ import {
     discountAmount,
     discounted,
     getOfferLandingServerFn,
+    ticketWord,
 } from '@/lib/growth';
 import { growthApi } from '@/lib/growth-api';
 import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
-import { publicOrigin } from '@/lib/social';
+import { cardMeta, publicOrigin } from '@/lib/social';
 
 /* Yearly first and named as the pricing page names them, in the prices and the buttons alike. */
 const periods = ['year', 'month'] as const;
@@ -45,7 +47,7 @@ export const Route = createFileRoute('/go/$slug')({
             available: currencies,
             fallback: currencies[0] ?? 'usd',
         });
-        return { origin: publicOrigin(), landing, currency };
+        return { origin: publicOrigin(), landing, currency, slug: params.slug };
     },
     headers: () => ({ 'Cache-Control': 'private, no-store' }),
     head: ({ loaderData }) =>
@@ -66,6 +68,16 @@ export const Route = createFileRoute('/go/$slug')({
                                   : `${describeDiscount(loaderData.landing.terms)} on HushOS, private storage that is simple to use.`,
                       },
                       { name: 'robots', content: 'noindex' },
+                      // A creator's offer has its own card; a Polar code shares the fixed one.
+                      ...cardMeta({
+                          origin: loaderData.origin,
+                          card:
+                              loaderData.landing.kind === 'affiliate'
+                                  ? `go-${loaderData.slug}`
+                                  : 'offer',
+                          title: `${discountAmount(loaderData.landing.terms)} off HushOS`,
+                          description: `${describeDiscount(loaderData.landing.terms)}. Private storage that is simple to use.`,
+                      }),
                   ],
               }
             : {},
@@ -96,6 +108,8 @@ function OfferPage() {
         : 'Every paid plan';
     const ends = landing.endsAt
         ? new Date(landing.endsAt).toLocaleDateString('en-GB', {
+              // As the server writes it, wherever the browser is.
+              timeZone: 'UTC',
               day: 'numeric',
               month: 'long',
               year: 'numeric',
@@ -136,7 +150,7 @@ function OfferPage() {
         }
     }
     return (
-        <SitePage>
+        <SitePage identity="offer">
             <SiteHeader />
             <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-16 px-4 py-12 sm:px-8 sm:py-20">
                 <section className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16">
@@ -157,21 +171,21 @@ function OfferPage() {
                         </p>
                         <div className="flex flex-wrap gap-3">
                             {hasSession ? (
-                                <Button
-                                    render={<Link to="." hash="plans" />}
-                                    nativeButton={false}
-                                    size="lg"
+                                <Link
+                                    to="."
+                                    hash="plans"
+                                    className={buttonVariants({ size: 'lg' })}
                                 >
                                     Pick a plan <ArrowRightIcon aria-hidden="true" />
-                                </Button>
+                                </Link>
                             ) : (
-                                <Button
-                                    render={<Link to="/register" search={{ ref: landing.code }} />}
-                                    nativeButton={false}
-                                    size="lg"
+                                <Link
+                                    to="/register"
+                                    search={{ ref: landing.code }}
+                                    className={buttonVariants({ size: 'lg' })}
                                 >
                                     Create your account <ArrowRightIcon aria-hidden="true" />
-                                </Button>
+                                </Link>
                             )}
                         </div>
                         {hasSession && (
@@ -184,29 +198,47 @@ function OfferPage() {
                             </p>
                         )}
                     </div>
-                    <aside className="rounded-xl border border-rule px-6 py-6">
-                        <p className="eyebrow text-muted-foreground">The offer</p>
-                        <dl className="mt-2 text-sm">
-                            {[
-                                ['Code', landing.code],
-                                ['Discount', offer],
-                                ['Applies to', appliesTo],
-                                ...(ends ? [['Ends', ends]] : []),
-                                ['Free to start', formatQuota(landing.catalogue.freeQuotaBytes)],
-                            ].map(([key, value]) => (
-                                <div
-                                    key={key}
-                                    className="flex justify-between gap-6 border-b border-dotted border-rule py-2.5 last:border-b-0"
-                                >
-                                    <dt className="text-muted-foreground">{key}</dt>
-                                    <dd
-                                        className={`text-right ${key === 'Code' ? 'font-mono' : ''}`}
+                    {/* A ticket: the discount in dots, a perforation, then the terms (identities.css). */}
+                    <aside className="rounded-xl border border-rule bg-[var(--id-raised,var(--card))]">
+                        <div className="overflow-hidden rounded-t-[11px]">
+                            <Cover
+                                word={ticketWord(landing.terms)}
+                                tone="lime"
+                                seed={landing.code}
+                                // Wide enough for "20%" at twice the dot size, with room for the wash below.
+                                cols={44}
+                                rows={26}
+                                dither
+                            />
+                        </div>
+                        <div className="ticket-tear" />
+                        <div className="px-6 pt-5 pb-6">
+                            <p className="eyebrow text-muted-foreground">The offer</p>
+                            <dl className="mt-2 text-sm">
+                                {[
+                                    ['Code', landing.code],
+                                    ['Discount', offer],
+                                    ['Applies to', appliesTo],
+                                    ...(ends ? [['Ends', ends]] : []),
+                                    [
+                                        'Free to start',
+                                        formatQuota(landing.catalogue.freeQuotaBytes),
+                                    ],
+                                ].map(([key, value]) => (
+                                    <div
+                                        key={key}
+                                        className="flex justify-between gap-6 border-b border-dotted border-rule py-2.5 last:border-b-0"
                                     >
-                                        {value}
-                                    </dd>
-                                </div>
-                            ))}
-                        </dl>
+                                        <dt className="text-muted-foreground">{key}</dt>
+                                        <dd
+                                            className={`text-right ${key === 'Code' ? 'font-mono' : ''}`}
+                                        >
+                                            {value}
+                                        </dd>
+                                    </div>
+                                ))}
+                            </dl>
+                        </div>
                     </aside>
                 </section>
 
@@ -231,23 +263,20 @@ function OfferPage() {
                                     </p>
                                 </div>
                                 {hasSession ? (
-                                    <Button
-                                        variant="outline"
-                                        render={<Link to="/app/drive" />}
-                                        nativeButton={false}
+                                    <Link
+                                        to="/app/drive"
+                                        className={buttonVariants({ variant: 'outline' })}
                                     >
                                         Go to Drive
-                                    </Button>
+                                    </Link>
                                 ) : (
-                                    <Button
-                                        variant="outline"
-                                        render={
-                                            <Link to="/register" search={{ ref: landing.code }} />
-                                        }
-                                        nativeButton={false}
+                                    <Link
+                                        to="/register"
+                                        search={{ ref: landing.code }}
+                                        className={buttonVariants({ variant: 'outline' })}
                                     >
                                         Start free
-                                    </Button>
+                                    </Link>
                                 )}
                             </article>
                             {tiers.map((tier) => (
@@ -341,23 +370,22 @@ function OfferPage() {
                                                 );
                                             })
                                         ) : (
-                                            <Button
-                                                render={
-                                                    <Link
-                                                        to="/register"
-                                                        search={{
-                                                            ref: landing.code,
-                                                            plan: (tier.year ?? tier.month)?.id,
-                                                        }}
-                                                    />
-                                                }
-                                                nativeButton={false}
-                                                variant={tier.recommended ? 'default' : 'outline'}
-                                                className="w-full justify-between"
+                                            <Link
+                                                to="/register"
+                                                search={{
+                                                    ref: landing.code,
+                                                    plan: (tier.year ?? tier.month)?.id,
+                                                }}
+                                                className={buttonVariants({
+                                                    variant: tier.recommended
+                                                        ? 'default'
+                                                        : 'outline',
+                                                    className: 'w-full justify-between',
+                                                })}
                                             >
                                                 Start with this plan
                                                 <ArrowRightIcon aria-hidden="true" />
-                                            </Button>
+                                            </Link>
                                         )}
                                     </div>
                                 </article>

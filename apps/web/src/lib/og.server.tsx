@@ -5,13 +5,17 @@ import { fromJsx } from 'takumi-js/helpers/jsx';
 import { prepareImages } from 'takumi-js/helpers';
 import { CoverArt } from '@/components/cover';
 import { Logo } from '@/components/logo';
+import { getAffiliateOffer } from '@hushos/billing/growth';
 import { comparisons } from '@/lib/compare';
 import { formatDate, posts, type CoverTone } from '@/lib/content';
+import { describeDiscount, discountAmount, ticketWord } from '@/lib/growth';
 
 /*
  * The social card for each public page, drawn on the server with Takumi from
  * fixed public copy: this site's own titles and summaries, never anything a
- * person typed. A page asks for `/og/<key>.jpg`; an unknown key is a 404.
+ * visitor typed. The one exception is a creator's offer card, which carries the
+ * name the operator gave the creator, as its page does. A page asks for
+ * `/og/<key>.jpg`; an unknown key is a 404.
  */
 
 /*
@@ -80,6 +84,23 @@ const fixed: Record<string, Card> = {
         ground: '#ffffff',
         art: { word: 'DRIVE', tone: 'blue' },
     },
+    // Every invite gets this one card: it names nobody, the inviter included.
+    invite: {
+        title: 'You’re invited\nto HushOS.',
+        // Neutral: the card cannot know whether this server gives a bonus.
+        description: 'Join HushOS through the link. Private storage, simple to use.',
+        label: 'HushOS · An invitation',
+        ground: '#fbf0ea',
+        art: { word: 'INVITE', tone: 'orange' },
+    },
+    // A discount code made at Polar: one card for all, since only Polar knows its terms.
+    offer: {
+        title: 'An offer on\nHushOS.',
+        description: 'A discount on private storage that is simple to use.',
+        label: 'HushOS · Offer',
+        ground: '#f4f7e4',
+        art: { word: 'OFFER', tone: 'lime' },
+    },
     // Every shared link gets this one card: nothing about what is behind it.
     shared: {
         title: 'Someone shared\nsomething with you.',
@@ -122,7 +143,7 @@ export function cardFor(key: string): Card | null {
                   title: `HushOS vs\n${entry.name}`,
                   description: shorten(entry.summary, 150),
                   label: 'HushOS · Compared',
-                  ground: '#ffffff',
+                  ground: '#e9f5f7',
                   art: { word: 'VS', tone: 'mint' },
               }
             : null;
@@ -146,14 +167,46 @@ export function cardFor(key: string): Card | null {
     return null;
 }
 
-const rendered = new Map<string, Promise<Uint8Array>>();
+/*
+ * A creator's offer card, from the database only (a Polar code has the fixed
+ * `offer` card): a live creator, so a paused one has no card. Returns the card
+ * and a cache key that changes with the terms and the name, so an edited offer
+ * draws afresh.
+ */
+async function offerCard(key: string): Promise<{ card: Card; cacheKey: string } | null> {
+    if (!key.startsWith('go-')) return null;
+    const landing = await getAffiliateOffer(key.slice(3));
+    if (!landing) return null;
+    const amount = discountAmount(landing.terms);
+    return {
+        cacheKey: `go:${landing.code}:${amount}:${describeDiscount(landing.terms)}:${landing.name}`,
+        card: {
+            title: `${amount} off\nHushOS.`,
+            description: `${describeDiscount(landing.terms)}. Private storage, simple to use.`,
+            label: shorten(`HushOS · Offer · ${landing.name}`, 60),
+            ground: '#f4f7e4',
+            art: { word: ticketWord(landing.terms), tone: 'lime' },
+        },
+    };
+}
 
-// Only fixed public copy. A crawler never receives private filenames, keys, or share tokens.
+const rendered = new Map<string, Promise<Uint8Array>>();
+// Offers come and go and change their terms; their drawings are capped, oldest out first.
+const OFFER_CARDS = 64;
+
+// Only fixed public copy and an offer's own terms. A crawler never receives private filenames, keys, or share tokens.
 export async function socialImage(key: string) {
-    const card = cardFor(key);
+    const fixedCard = cardFor(key);
+    const offer = fixedCard ? null : await offerCard(key);
+    const card = fixedCard ?? offer?.card;
     if (!card) return new Response('Not found', { status: 404 });
-    let image = rendered.get(key);
+    const cacheKey = offer?.cacheKey ?? key;
+    let image = rendered.get(cacheKey);
     if (!image) {
+        if (offer) {
+            const offers = [...rendered.keys()].filter((entry) => entry.startsWith('go:'));
+            if (offers.length >= OFFER_CARDS) rendered.delete(offers[0]!);
+        }
         // A title the copy did not break by hand wraps by itself; long ones set smaller.
         const long = Math.max(...card.title.split('\n').map((line) => line.length)) > 16;
         image = fromJsx(
@@ -253,15 +306,18 @@ export async function socialImage(key: string) {
             })
             .then((value) => new Uint8Array(value))
             .catch((error) => {
-                rendered.delete(key);
+                rendered.delete(cacheKey);
                 throw error;
             });
-        rendered.set(key, image);
+        rendered.set(cacheKey, image);
     }
     return new Response(new Uint8Array(await image), {
         headers: {
             'Content-Type': 'image/jpeg',
-            'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+            // An offer can end or change, so its card is kept an hour rather than a day.
+            'Cache-Control': offer
+                ? 'public, max-age=3600'
+                : 'public, max-age=86400, stale-while-revalidate=604800',
             'X-Content-Type-Options': 'nosniff',
         },
     });
