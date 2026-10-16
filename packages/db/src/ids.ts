@@ -12,11 +12,17 @@ import { createHash } from 'node:crypto';
  */
 
 export type IdKind = 'node' | 'version' | 'object' | 'link' | 'report';
+/*
+ * Groups' two kinds, kept apart from IdKind, which Drive takes as exactly its
+ * five: a `group` id is scoped to the account that creates it, and a
+ * `workspace` id (a group's area) to its group.
+ */
+export type GroupIdKind = 'group' | 'workspace';
 export const ID_SEED_BYTES = 16;
 const SEED = /^[A-Za-z0-9_-]{22}$/;
 
 /* The id `seed` derives for `kind` in `scopeId`, or null when the seed is not 16 canonical bytes. */
-export function scopedId(kind: IdKind, scopeId: string, seed: string): string | null {
+export function scopedId(kind: IdKind | GroupIdKind, scopeId: string, seed: string): string | null {
     if (!SEED.test(seed)) return null;
     const bytes = Buffer.from(seed, 'base64url');
     if (bytes.length !== ID_SEED_BYTES || bytes.toString('base64url') !== seed) return null;
@@ -32,7 +38,7 @@ export function scopedId(kind: IdKind, scopeId: string, seed: string): string | 
 
 /* Whether `id` is the one `seed` derives for `kind` in `scopeId`; a missing seed never is. */
 export function madeFor(
-    kind: IdKind,
+    kind: IdKind | GroupIdKind,
     scopeId: string,
     id: string,
     seed: string | null | undefined,

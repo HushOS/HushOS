@@ -8,6 +8,8 @@ import type { IdentityEnvelope } from '@hushos/crypto/identity';
 
 /* Ed25519 then ML-DSA-65: a person's hybrid signature (docs/identity-pq-design.md). */
 const HYBRID_SIGNATURE_BYTES = 3373;
+/* A succession's consent: the old identity's hybrid signature, then the new one's. */
+const SUCCESSION_CONSENT_BYTES = 2 * HYBRID_SIGNATURE_BYTES;
 import { SETTINGS_MAX_BYTES, SETTINGS_PAD_STEP } from '@hushos/crypto/contacts';
 import {
     verifyRecoveryReset,
@@ -16,7 +18,7 @@ import {
 } from '@hushos/crypto/recovery';
 import { authEnv } from '@hushos/env/auth';
 import { createHash, randomBytes } from 'node:crypto';
-import { adminRepository, authRepository } from '@hushos/db';
+import { adminRepository, authRepository, groupsRepository } from '@hushos/db';
 import type { SignupIntent } from '@hushos/db/schema';
 import {
     sendSecurityNotice,
@@ -730,7 +732,7 @@ export async function upgradeIdentity(
  */
 export async function succeedIdentity(
     sessionToken: string | null,
-    input: { identity: IdentityEnvelope; signature: string },
+    input: { identity: IdentityEnvelope; signature: string; consent?: string },
 ) {
     const { user, token } = await requireSession(sessionToken, 'Sign in to replace your keys.');
     const decoded = decodeIdentity(input.identity, input.identity.keyVersion, user.id, {
@@ -742,6 +744,11 @@ export async function succeedIdentity(
         sessionTokenHash: hash(token),
         identity: decoded as authRepository.IdentityV2,
         signature: decodeField(input.signature, HYBRID_SIGNATURE_BYTES),
+        // Optional until the 1c release requires it (docs/groups-server.md 5); checked when sent.
+        consent:
+            input.consent === undefined
+                ? null
+                : decodeField(input.consent, SUCCESSION_CONSENT_BYTES),
     });
     switch (result.status) {
         case 'ok':
@@ -834,6 +841,9 @@ export async function contactSuccession(
                           newMlDsaPublicKey: b64(link.newMlDsaPublicKey),
                           newKemPublicKey: b64(link.newKemPublicKey),
                           signature: b64(link.signature),
+                          // The successor's consent, which the group walk asks of links from a
+                          // member's first keys; null on links made without it.
+                          consent: link.consent ? b64(link.consent) : null,
                       },
                   ]
                 : [],
@@ -1721,11 +1731,26 @@ function decodeIdentity(
     return identity;
 }
 
+/*
+ * A group's only `billing` holder, or its last `members` holder with others
+ * active, hands over before their account can go. Asked before the password
+ * ceremony and again before billing stops, so a refusal never follows a
+ * cancelled plan except in the narrow race the repository answers below.
+ */
+async function refuseWhileHoldingGroups(userId: string) {
+    if ((await groupsRepository.deletionBlockers(userId)).length > 0)
+        throw new AuthError(
+            'You organise a family group. Hand it over to another member, or leave it, before deleting your account.',
+            409,
+        );
+}
+
 export async function startAccountDeletion(sessionToken: string | null, startLoginRequest: string) {
     const { user, token } = await requireSession(
         sessionToken,
         'Sign in before deleting your account.',
     );
+    await refuseWhileHoldingGroups(user.id);
     return startLogin(user.email, startLoginRequest, {
         purpose: 'delete',
         sessionTokenHash: hash(token),
@@ -1743,18 +1768,27 @@ export async function finishAccountDeletion(
     );
     const failure = () =>
         new AuthError('Could not delete your account. Check your password and try again.');
+    await refuseWhileHoldingGroups(user.id);
     await consumeBoundAttempt('delete', user, token, input, failure);
     // Anything billed to the account stops before the account goes; an outage there
     // leaves the account in place rather than a subscription without an owner.
     await beforeDelete?.(user.id);
-    if (
-        !(await authRepository.deleteAccount({
-            userId: user.id,
-            credentialVersion: user.credentialVersion,
-            sessionTokenHash: hash(token),
-        }))
-    )
-        throw failure();
+    const deleted = await authRepository.deleteAccount({
+        userId: user.id,
+        credentialVersion: user.credentialVersion,
+        sessionTokenHash: hash(token),
+    });
+    // Another holder left between the check above and here (docs/groups-server.md 3). Billing
+    // has already stopped; say so rather than pretend nothing happened.
+    const stopped = beforeDelete ? 'Your plan was stopped, but your' : 'Your';
+    if (deleted === 'group-holder')
+        throw new AuthError(
+            `${stopped} account was not deleted: another member left your family group just now, so you organise it again. Hand it over or leave it, then delete your account.`,
+            409,
+        );
+    if (deleted === 'unavailable')
+        throw new AuthError(`${stopped} account could not be deleted just now. Try again.`, 503);
+    if (!deleted) throw failure();
     return { success: true };
 }
 

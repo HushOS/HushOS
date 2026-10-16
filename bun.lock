@@ -34,6 +34,7 @@
         "@hushos/db": "workspace:*",
         "@hushos/drive": "workspace:*",
         "@hushos/env": "workspace:*",
+        "@hushos/groups": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@hushos/shared": "workspace:*",
         "@hushos/tokens": "workspace:*",
@@ -228,6 +229,25 @@
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
         "typescript": "7.0.2",
+      },
+    },
+    "packages/groups": {
+      "name": "@hushos/groups",
+      "dependencies": {
+        "@hushos/crypto": "workspace:*",
+        "@hushos/db": "workspace:*",
+        "@hushos/drive": "workspace:*",
+        "@hushos/emails": "workspace:*",
+        "@hushos/env": "workspace:*",
+      },
+      "devDependencies": {
+        "@hushos/config": "workspace:*",
+        "@types/bun": "1.4.2",
+        "drizzle-orm": "1.0.0-rc.4",
+        "libsodium-wrappers": "0.8.4",
+        "pg": "^8.16.3",
+        "typescript": "7.0.2",
+        "vitest": "^5.0.0",
       },
     },
     "packages/jobs": {
@@ -483,6 +503,8 @@
     "@hushos/emails": ["@hushos/emails@workspace:packages/emails"],
 
     "@hushos/env": ["@hushos/env@workspace:packages/env"],
+
+    "@hushos/groups": ["@hushos/groups@workspace:packages/groups"],
 
     "@hushos/jobs": ["@hushos/jobs@workspace:packages/jobs"],
 

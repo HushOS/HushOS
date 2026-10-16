@@ -80,6 +80,7 @@ const safeAuthFields = new Set([
     'duration',
     'durationMs',
     'auth',
+    'group',
     'failure',
 ]);
 const authActions = new Set([
@@ -172,6 +173,45 @@ function privatePage(path: string) {
     if (knownPages.has(path)) return path;
     return pagePatterns.find(([pattern]) => pattern.test(path))?.[1] ?? '/private/unknown';
 }
+/*
+ * Group routes by pattern (docs/groups-server.md 4, "Logs"): group, account,
+ * area and invitation ids in a path would write the social graph into every
+ * drained log, so only the pattern is kept, under `group.action`.
+ */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const groupActions: [RegExp, string][] = (
+    [
+        ['groups', 'groups'],
+        ['groups/:id', `groups/${UUID}`],
+        ['groups/:id/rosters', `groups/${UUID}/rosters`],
+        ['groups/:id/identities', `groups/${UUID}/identities`],
+        ['groups/:id/key-seal', `groups/${UUID}/key-seal`],
+        ['groups/:id/key-seals', `groups/${UUID}/key-seals`],
+        ['groups/:id/key-successions', `groups/${UUID}/key-successions`],
+        ['groups/:id/invitations', `groups/${UUID}/invitations`],
+        ['groups/:id/invitations/:invitationId', `groups/${UUID}/invitations/${UUID}`],
+        ['groups/:id/pending', `groups/${UUID}/pending`],
+        ['groups/:id/members/:userId', `groups/${UUID}/members/${UUID}`],
+        ['groups/:id/members/:userId/admit', `groups/${UUID}/members/${UUID}/admit`],
+        ['groups/:id/members/:userId/remove', `groups/${UUID}/members/${UUID}/remove`],
+        ['groups/:id/members/:userId/decline', `groups/${UUID}/members/${UUID}/decline`],
+        ['groups/:id/members/:userId/hold', `groups/${UUID}/members/${UUID}/hold`],
+        ['groups/:id/leave', `groups/${UUID}/leave`],
+        ['groups/:id/areas', `groups/${UUID}/areas`],
+        ['groups/:id/areas/:workspaceId/grants', `groups/${UUID}/areas/${UUID}/grants`],
+        ['groups/:id/areas/:workspaceId/self-grant', `groups/${UUID}/areas/${UUID}/self-grant`],
+        ['groups/:id/areas/:workspaceId/rotations', `groups/${UUID}/areas/${UUID}/rotations`],
+        ['invitations/open', 'invitations/open'],
+        ['invitations/accept', 'invitations/accept'],
+    ] as const
+).map(([action, pattern]) => [new RegExp(`^${pattern}$`, 'i'), action]);
+const groupActionNames = new Set(groupActions.map(([, action]) => action));
+/* A group route's action, from its path under /api/; 'unknown' for anything else. */
+export function groupLogAction(pathname: string) {
+    const path = pathname.replace(/^\/api\//, '').replace(/\/+$/, '');
+    return groupActions.find(([pattern]) => pattern.test(path))?.[1] ?? 'unknown';
+}
+
 export function authLogAction(pathname: string) {
     // A contact's succession chain names the account in its path, a device its id: both
     // are stable identifiers, logged as the pattern.
@@ -220,7 +260,7 @@ export function redactAuthenticationEvent(event: WideEvent) {
         routePath(typeof event.path === 'string' ? (event.path.split(/[?#]/)[0] ?? '') : ''),
     );
     const privateRoute =
-        /^\/(api\/auth(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$)|setup(?:\/|$))/.test(
+        /^\/(api\/auth(?:\/|$)|api\/groups(?:\/|$)|api\/invitations(?:\/|$)|app(?:\/|$)|register(?:\/|$)|recover(?:\/|$)|login(?:\/|$)|setup(?:\/|$))/.test(
             path,
         );
     event.path = path;
@@ -229,7 +269,25 @@ export function redactAuthenticationEvent(event: WideEvent) {
     // A failure on a private page keeps its class and code, so the operator still sees what broke.
     if (event.failure) event.failure = sanitizeFailure(event.failure);
     if (path.startsWith('/api/auth/')) event.path = `/api/auth/${authLogAction(path)}`;
+    else if (path.startsWith('/api/groups') || path.startsWith('/api/invitations'))
+        event.path = `/api/${groupLogAction(path)}`;
     else event.path = privatePage(path);
+    const group = event.group;
+    if (group && typeof group === 'object') {
+        const value = group as Record<string, unknown>;
+        event.group = {
+            action:
+                typeof value.action === 'string' && groupActionNames.has(value.action)
+                    ? value.action
+                    : 'unknown',
+            outcome:
+                value.outcome === 'success' ||
+                value.outcome === 'rejected' ||
+                value.outcome === 'unavailable'
+                    ? value.outcome
+                    : 'unknown',
+        };
+    } else delete event.group;
     const auth = event.auth;
     if (auth && typeof auth === 'object') {
         const value = auth as Record<string, unknown>;

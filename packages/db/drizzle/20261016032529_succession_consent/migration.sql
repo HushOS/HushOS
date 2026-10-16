@@ -1,0 +1,2 @@
+ALTER TABLE "account_identity_history" ADD COLUMN "succession_consent" bytea;--> statement-breakpoint
+ALTER TABLE "account_identity_history" ADD CONSTRAINT "account_identity_history_consent_valid" CHECK ("succession_consent" is null or ("version" = 2 and octet_length("succession_consent") = 6746));

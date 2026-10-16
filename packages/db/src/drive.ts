@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import { db } from './client';
+import { holdsWorkspace } from './membership';
 import { heldObjectCondition } from './reports';
 import { openShareCursor, sealShareCursor } from './share-cursor';
 import {
@@ -20,6 +21,8 @@ import {
     driveSweeps,
     driveUploads,
     fileVersions,
+    groupHolds,
+    groupMemberships,
     personalWorkspaces,
     storageEntitlements,
     users,
@@ -189,15 +192,136 @@ export async function activeRotation(tx: Tx | typeof db, workspaceId: string) {
     return row ?? null;
 }
 
-/* Locks the workspace row and takes the next change sequence number. */
-export async function nextChangeSeq(tx: Tx, workspaceId: string) {
+/*
+ * Locks the workspace row and takes the next change sequence number. With the
+ * writer named, a group area also checks, under that lock, that they may
+ * still write there (requireStillWriter).
+ */
+export async function nextChangeSeq(
+    tx: Tx,
+    workspaceId: string,
+    writer?: string,
+    /* A roster's own Drive writes (its area rotations): membership checked, holds not. */
+    options: { roster?: boolean } = {},
+) {
     const [row] = await tx
         .update(workspaces)
         .set({ changeSeq: sql`${workspaces.changeSeq} + 1` })
         .where(eq(workspaces.id, workspaceId))
-        .returning({ changeSeq: workspaces.changeSeq });
+        .returning({ changeSeq: workspaces.changeSeq, groupId: workspaces.groupId });
     if (!row) throw new Error('Workspace not found.');
+    // The row is locked by the update: a personal workspace (no group) needs nothing more.
+    if (writer) await requireStillWriter(tx, workspaceId, writer, row.groupId, options);
     return row.changeSeq;
+}
+
+/*
+ * Whether the account may start a subtree rotation here: anyone who owns a
+ * personal workspace; in a group area only an active `members` holder, since
+ * a group's area keys move only through its rosters (docs/groups-server.md
+ * 8), and a rotation someone else started and left would otherwise stall
+ * every roster that rotates the area.
+ */
+export async function mayStartRotation(userId: string, workspaceId: string) {
+    const [row] = await db
+        .select({
+            ownerKind: workspaces.ownerKind,
+            roles: groupMemberships.roles,
+            state: groupMemberships.state,
+        })
+        .from(workspaces)
+        .leftJoin(
+            groupMemberships,
+            and(
+                eq(groupMemberships.groupId, workspaces.groupId),
+                eq(groupMemberships.userId, userId),
+            ),
+        )
+        .where(eq(workspaces.id, workspaceId));
+    if (!row) return false;
+    if (row.ownerKind === 'personal') return true;
+    return row.state === 'active' && (row.roles ?? []).includes('members');
+}
+
+/*
+ * A write in a group area its writer may no longer make: their access ended after the
+ * Drive domain checked it (`ended`), or a holder holds them ahead of a removal (`held`).
+ */
+export class AccessEndedError extends Error {
+    constructor(readonly reason: 'ended' | 'held' = 'ended') {
+        super(reason === 'held' ? 'Writes here are paused.' : 'Access to this workspace ended.');
+        this.name = 'AccessEndedError';
+    }
+}
+
+/*
+ * Inside a Drive write, after the workspace row is locked: in a group area,
+ * the writer must still be a member (membership.ts) or hold a live editor
+ * share there. The Drive domain checked access before the write's
+ * transaction; a departure takes the same row lock (lockAreas) and revokes
+ * the person's key and shares to them in one transaction, so this check,
+ * under the lock, sees it either fully or not at all. Without it a removal
+ * committing in between would let one write (a share or link that escapes the
+ * revocation, say) land after it. A writer a holder holds ahead of their
+ * removal (group_holds) is refused too, so they cannot keep moving the area's
+ * epochs past the remover's rotation. Personal workspaces take nothing more.
+ */
+export async function requireStillWriter(
+    tx: Tx,
+    workspaceId: string,
+    writer: string,
+    /* The area's group, when the caller already holds the workspace row locked (null: personal). */
+    locked?: string | null,
+    /*
+     * A roster's own writes skip the hold: holders are equal peers who race on rosters, and a
+     * target who holds their remover must not be able to block the removal's rotation.
+     */
+    options: { roster?: boolean } = {},
+) {
+    let groupId = locked;
+    if (groupId === undefined) {
+        // A personal workspace takes no lock and no wait here: only its owner writes there.
+        const [kind] = await tx
+            .select({ groupId: workspaces.groupId })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId));
+        if (!kind?.groupId) return;
+        // A group area's row under a share lock, which a departure's lock on it waits for.
+        await tx
+            .select({ id: workspaces.id })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .for('share');
+        groupId = kind.groupId;
+    }
+    if (!groupId) return;
+    const [held] = options.roster
+        ? []
+        : await tx
+              .select({ userId: groupHolds.userId })
+              .from(groupHolds)
+              .where(
+                  and(
+                      eq(groupHolds.groupId, groupId),
+                      eq(groupHolds.userId, writer),
+                      gt(groupHolds.expiresAt, sql`now()`),
+                  ),
+              );
+    if (held) throw new AccessEndedError('held');
+    if (await holdsWorkspace(tx, writer, workspaceId)) return;
+    const [share] = await tx
+        .select({ id: driveShares.id })
+        .from(driveShares)
+        .where(
+            and(
+                eq(driveShares.workspaceId, workspaceId),
+                eq(driveShares.granteeUserId, writer),
+                eq(driveShares.role, 'editor'),
+                isNull(driveShares.revokedAt),
+            ),
+        )
+        .limit(1);
+    if (!share) throw new AccessEndedError();
 }
 
 /*
@@ -205,16 +329,20 @@ export async function nextChangeSeq(tx: Tx, workspaceId: string) {
  * was given; an epoch a client never uses is a gap, and gaps are harmless because
  * the counter only has to exceed every epoch a node has ever carried.
  */
-export async function allocateKeyEpochs(workspaceId: string, count: number) {
+/* With the writer named, a group area refuses a writer who is held or no longer in it. */
+export async function allocateKeyEpochs(workspaceId: string, count: number, writer?: string) {
     if (!Number.isInteger(count) || count < 1 || count > 10_000)
         throw new Error('Invalid epoch count.');
-    const [row] = await db
-        .update(workspaces)
-        .set({ keyEpochSeq: sql`${workspaces.keyEpochSeq} + ${count}` })
-        .where(eq(workspaces.id, workspaceId))
-        .returning({ keyEpochSeq: workspaces.keyEpochSeq });
-    if (!row) return null;
-    return { from: row.keyEpochSeq - count + 1, to: row.keyEpochSeq };
+    return db.transaction(async (tx) => {
+        const [row] = await tx
+            .update(workspaces)
+            .set({ keyEpochSeq: sql`${workspaces.keyEpochSeq} + ${count}` })
+            .where(eq(workspaces.id, workspaceId))
+            .returning({ keyEpochSeq: workspaces.keyEpochSeq, groupId: workspaces.groupId });
+        if (!row) return null;
+        if (writer) await requireStillWriter(tx, workspaceId, writer, row.groupId);
+        return { from: row.keyEpochSeq - count + 1, to: row.keyEpochSeq };
+    });
 }
 
 async function epochWasAllocated(tx: Tx, workspaceId: string, keyEpoch: number) {
@@ -436,12 +564,13 @@ export async function getPersonalWorkspace(userId: string) {
     };
 }
 
+/*
+ * Whether the person holds the workspace's key and may use it: their own
+ * personal workspace, or an area of a group they are an active member of
+ * (membership.ts, the one definition Drive's authorization also uses).
+ */
 export async function isMember(userId: string, workspaceId: string) {
-    const [row] = await db
-        .select({ userId: workspaceKeys.userId })
-        .from(workspaceKeys)
-        .where(and(eq(workspaceKeys.workspaceId, workspaceId), eq(workspaceKeys.userId, userId)));
-    return row !== undefined;
+    return holdsWorkspace(db, userId, workspaceId);
 }
 
 export type NodeEnvelopes = {
@@ -457,40 +586,44 @@ export type NodeEnvelopes = {
  * The root: created once, in the request that stores its envelope. Its parent key
  * is the workspace key, so `parentKeyEpoch` is the workspace key's own version.
  */
-export async function createRoot(input: {
+export type CreateRootInput = {
     workspaceId: string;
     userId: string;
     id: string;
     envelopes: NodeEnvelopes;
-}) {
-    return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
-        const [existing] = await tx
-            .select({ id: driveNodes.id })
-            .from(driveNodes)
-            .where(and(eq(driveNodes.workspaceId, input.workspaceId), isNull(driveNodes.parentId)));
-        if (existing)
-            return { status: 'exists' as const, root: (await selectNodes(tx, [existing.id]))[0]! };
-        if (!(await epochWasAllocated(tx, input.workspaceId, input.envelopes.keyEpoch)))
-            return { status: 'stale' as const };
-        if (
-            !(await signedBy(tx, input.userId, [
-                metadataSigned(input.workspaceId, input.id, 'folder', 1, input.envelopes),
-            ]))
-        )
-            return { status: 'bad-signature' as const };
-        await tx.insert(driveNodes).values({
-            id: input.id,
-            workspaceId: input.workspaceId,
-            parentId: null,
-            kind: 'folder',
-            ...input.envelopes,
-            metadataSignerId: input.userId,
-            createdBy: input.userId,
-            changeSeq,
-        });
-        return { status: 'created' as const, root: (await selectNodes(tx, [input.id]))[0]! };
+};
+export async function createRoot(input: CreateRootInput) {
+    return db.transaction((tx) => createRootIn(tx, input));
+}
+
+/* createRoot inside a caller's transaction: a group area's root lands with the area itself. */
+export async function createRootIn(tx: Tx, input: CreateRootInput) {
+    const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
+    const [existing] = await tx
+        .select({ id: driveNodes.id })
+        .from(driveNodes)
+        .where(and(eq(driveNodes.workspaceId, input.workspaceId), isNull(driveNodes.parentId)));
+    if (existing)
+        return { status: 'exists' as const, root: (await selectNodes(tx, [existing.id]))[0]! };
+    if (!(await epochWasAllocated(tx, input.workspaceId, input.envelopes.keyEpoch)))
+        return { status: 'stale' as const };
+    if (
+        !(await signedBy(tx, input.userId, [
+            metadataSigned(input.workspaceId, input.id, 'folder', 1, input.envelopes),
+        ]))
+    )
+        return { status: 'bad-signature' as const };
+    await tx.insert(driveNodes).values({
+        id: input.id,
+        workspaceId: input.workspaceId,
+        parentId: null,
+        kind: 'folder',
+        ...input.envelopes,
+        metadataSignerId: input.userId,
+        createdBy: input.userId,
+        changeSeq,
     });
+    return { status: 'created' as const, root: (await selectNodes(tx, [input.id]))[0]! };
 }
 
 /*
@@ -582,7 +715,7 @@ export async function createFolders(input: {
     folders: (NewFolder & { parentId: string })[];
 }) {
     return transactionKeeping(['created'], async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
         // Every folder's signature first: a batch lands whole or not at all.
         if (
             !(await signedBy(
@@ -680,7 +813,7 @@ export async function renameNode(input: {
     metadataSignature: Buffer;
 }) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -731,13 +864,15 @@ export async function renameNode(input: {
  */
 export async function moveNode(input: {
     workspaceId: string;
+    /* The account writing: in a group area, checked again under the lock. */
+    writer?: string;
     nodeId: string;
     parentId: string;
     parentKeyEpoch: number;
     keyEnvelope: Buffer;
 }) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -811,9 +946,9 @@ export async function moveNode(input: {
     });
 }
 
-export async function trashNode(input: { workspaceId: string; nodeId: string }) {
+export async function trashNode(input: { workspaceId: string; nodeId: string; writer?: string }) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -874,11 +1009,13 @@ export async function removeNodeIn(tx: Tx, input: { workspaceId: string; nodeId:
 
 export async function restoreNode(input: {
     workspaceId: string;
+    /* The account writing: in a group area, checked again under the lock. */
+    writer?: string;
     nodeId: string;
     toRoot?: { parentKeyEpoch: number; keyEnvelope: Buffer };
 }) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -1106,7 +1243,7 @@ export type UploadBegin = {
 
 export async function beginUpload(input: UploadBegin) {
     return transactionKeeping(['ok'], async (tx) => {
-        await nextChangeSeq(tx, input.workspaceId);
+        await nextChangeSeq(tx, input.workspaceId, input.userId);
         let keyEpoch: number;
         let expectedVersionId: string | null = null;
         let ancestors: Ancestor[] = [];
@@ -1289,9 +1426,14 @@ export async function getUpload(workspaceId: string, uploadId: string): Promise<
     return (row as UploadRow | undefined) ?? null;
 }
 
-/* Step one of complete: open -> completing. A repeat while completing is allowed (a retry). */
-export async function startCompleting(workspaceId: string, uploadId: string) {
+/*
+ * Step one of complete: open -> completing. A repeat while completing is allowed (a retry).
+ * With the writer named, a group area re-checks under the area's lock that they may still
+ * write there; the area row first, as finishCompleting takes it, then the upload.
+ */
+export async function startCompleting(workspaceId: string, uploadId: string, writer?: string) {
     return db.transaction(async (tx) => {
+        if (writer) await requireStillWriter(tx, workspaceId, writer);
         const [upload] = await tx
             .select(uploadColumns)
             .from(driveUploads)
@@ -1366,9 +1508,10 @@ export async function finishCompleting(
     workspaceId: string,
     uploadId: string,
     storedSize: bigint | null,
+    writer?: string,
 ) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, workspaceId);
+        const changeSeq = await nextChangeSeq(tx, workspaceId, writer);
         const [upload] = await tx
             .select(uploadColumns)
             .from(driveUploads)
@@ -1523,9 +1666,14 @@ export type AttachInput = {
  * which overwrites nothing. Every envelope's epoch is checked against the tree as
  * it is now, never against what begin saw.
  */
-export async function attachUpload(workspaceId: string, uploadId: string, input: AttachInput) {
+export async function attachUpload(
+    workspaceId: string,
+    uploadId: string,
+    input: AttachInput,
+    writer?: string,
+) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, workspaceId);
+        const changeSeq = await nextChangeSeq(tx, workspaceId, writer);
         const [upload] = await tx
             .select(uploadColumns)
             .from(driveUploads)
@@ -1815,7 +1963,7 @@ export type CopyFile = {
  */
 export async function copyFile(input: CopyFile) {
     return transactionKeeping(['ok'], async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.userId);
         const source = await walk(tx, input.sourceNodeId);
         if (
             !source ||
@@ -1970,9 +2118,9 @@ export async function listVersions(workspaceId: string, nodeId: string) {
  * the earlier version, so nothing is purged and no bytes move. Refused for a
  * version that is not the file's superseded one, and for a file in the trash.
  */
-export async function restoreVersion(workspaceId: string, versionId: string) {
+export async function restoreVersion(workspaceId: string, versionId: string, writer?: string) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, workspaceId);
+        const changeSeq = await nextChangeSeq(tx, workspaceId, writer);
         const [row] = await tx
             .select({
                 nodeId: fileVersions.nodeId,
@@ -2019,9 +2167,9 @@ export async function restoreVersion(workspaceId: string, versionId: string) {
 }
 
 /* Discards a file's earlier version now, giving its bytes back; the current version is never touched. */
-export async function discardVersion(workspaceId: string, versionId: string) {
+export async function discardVersion(workspaceId: string, versionId: string, writer?: string) {
     return db.transaction(async (tx) => {
-        await nextChangeSeq(tx, workspaceId);
+        await nextChangeSeq(tx, workspaceId, writer);
         const [version] = (await tx
             .select({
                 id: fileVersions.id,
@@ -2160,9 +2308,9 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
  * trash root past retention. The node itself must carry `trashed_at`; anything
  * merely inside a trashed folder goes with that folder.
  */
-export async function purgeNode(input: { workspaceId: string; nodeId: string }) {
+export async function purgeNode(input: { workspaceId: string; nodeId: string; writer?: string }) {
     return db.transaction(async (tx) => {
-        const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+        const changeSeq = await nextChangeSeq(tx, input.workspaceId, input.writer);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -2205,11 +2353,11 @@ async function liveTrashRoots(workspaceId: string, limit: number) {
  * own transactions, and the caller learns how many remain, so a trash holding
  * a hundred thousand roots is drained by repeated requests rather than one.
  */
-export async function emptyTrash(workspaceId: string, limit = 100) {
+export async function emptyTrash(workspaceId: string, limit = 100, writer?: string) {
     const roots = await liveTrashRoots(workspaceId, limit);
     let purged = 0;
     for (const root of roots) {
-        const result = await purgeNode({ workspaceId, nodeId: root });
+        const result = await purgeNode({ workspaceId, nodeId: root, writer });
         if (result.status === 'ok') purged++;
     }
     // Bounded like the batch itself: the caller only needs zero or not.
@@ -2677,21 +2825,13 @@ export function atLeast(role: Role, needed: Role) {
 }
 
 /*
- * Authorization is the walk: a member of the workspace owns everything in it;
+ * Authorization is the walk: a member of the workspace (membership.ts) owns everything in it;
  * anyone else needs a live share on the node or an ancestor, and the nearest
  * one sets the role. No access and no node are the same answer.
  */
 async function accessFor(tx: Tx, userId: string, chain: Walk): Promise<Access | null> {
-    const [member] = await tx
-        .select({ userId: workspaceKeys.userId })
-        .from(workspaceKeys)
-        .where(
-            and(
-                eq(workspaceKeys.workspaceId, chain.node.workspace_id),
-                eq(workspaceKeys.userId, userId),
-            ),
-        );
-    if (member) return { role: 'owner', shareId: null, shareRootId: null };
+    if (await holdsWorkspace(tx, userId, chain.node.workspace_id))
+        return { role: 'owner', shareId: null, shareRootId: null };
     // Nearest first: the node, its parent, and so on up to the root.
     const ids = [chain.node.id, ...chain.ancestors.map((a) => a.id).reverse()];
     const shares = await tx
@@ -2830,7 +2970,7 @@ export async function createShare(input: CreateShare) {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
-        await nextChangeSeq(tx, input.workspaceId);
+        await nextChangeSeq(tx, input.workspaceId, input.granterUserId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -3020,6 +3160,7 @@ export async function resealShare(input: {
     if (input.shareEnvelope.length !== SHARE_ENVELOPE_BYTES)
         return { status: 'unsupported' as const };
     return db.transaction(async (tx) => {
+        await requireStillWriter(tx, input.workspaceId, input.granterUserId);
         const [share] = await tx
             .select({
                 id: driveShares.id,
@@ -3089,6 +3230,7 @@ export type CreateLink = {
 /* A new link on a live node, sealed under the node's current key epoch. Several links per node are fine. */
 export async function createLink(input: CreateLink) {
     return db.transaction(async (tx) => {
+        await requireStillWriter(tx, input.workspaceId, input.granterUserId);
         const chain = await walk(tx, input.nodeId);
         if (!chain || chain.node.workspace_id !== input.workspaceId || chain.purged)
             return { status: 'not-found' as const };
@@ -3553,8 +3695,11 @@ export async function putWorkspaceDocument(input: {
     kind: string;
     version: number; // the version the client saw; 0 for none
     envelope: Buffer;
+    /* With the writer named, a group area re-checks under its lock that they may still write. */
+    writer?: string;
 }) {
     return db.transaction(async (tx) => {
+        if (input.writer) await requireStillWriter(tx, input.workspaceId, input.writer);
         const columns = {
             kind: workspaceDocuments.kind,
             version: workspaceDocuments.version,

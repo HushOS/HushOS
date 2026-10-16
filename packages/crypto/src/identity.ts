@@ -707,9 +707,11 @@ export function publicIdentity(envelope: IdentityEnvelope) {
 /*
  * `signature` is the old identity's hybrid signature over the version 2
  * statement, what personal pins follow. `consent`, on links made from this
- * release on, is two hybrid signatures over the version 3 statement, the old
- * identity's then the new identity's (6746 bytes, base64url): the successor's
- * consent, without which the group core follows no link.
+ * release on, is two hybrid signatures over the consent statement
+ * (successionConsentStatement: its own domain, version 1, the role, then the
+ * version 2 fields), the old identity's as "old" then the new identity's as
+ * "new" (6746 bytes, base64url): the successor's consent, which the group core
+ * asks of links from a member's first keys up to their entry's keys.
  */
 export type SuccessionLink = Omit<SuccessionStatement, 'userId'> & {
     signature: string;

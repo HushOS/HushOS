@@ -93,7 +93,7 @@ export function versionStatement(input: VersionStatementInput, form: StatementFo
  * names them; the KEM key only by its digest. Signed with the old identity's
  * hybrid signature.
  */
-export function successionStatement(input: {
+export type SuccessionStatementInput = {
     userId: string;
     oldKeyVersion: number;
     newKeyVersion: number;
@@ -104,11 +104,55 @@ export function successionStatement(input: {
     newSigningPublicKey: Uint8Array;
     newMlDsaPublicKey: Uint8Array;
     newKemPublicKey: Uint8Array;
-}) {
+};
+export function successionStatement(input: SuccessionStatementInput) {
+    return successionFields(['hushos/identity/succession', 2], input);
+}
+
+/*
+ * The successor's consent to a succession (docs/identity-pq-design.md,
+ * "Successor consent"): its own domain, version 1, the role, then the version
+ * 2 statement's fields in the same order. The old identity signs it as "old"
+ * and the new identity as "new"; the domain keeps either from standing for the
+ * version 2 signature, and the role keeps one half from standing for the other.
+ */
+export type ConsentRole = 'old' | 'new';
+export const SUCCESSION_CONSENT_BYTES = 2 * HYBRID_SIGNATURE_BYTES;
+export function successionConsentStatement(input: SuccessionStatementInput, role: ConsentRole) {
+    return successionFields(['hushos/identity/succession-consent', 1, role], input);
+}
+
+/*
+ * Whether `consent` is both halves: the old keys' hybrid signature over the
+ * "old" statement, then the new keys' over the "new" one, each under the keys
+ * the link itself names.
+ */
+export function successionConsentHolds(input: SuccessionStatementInput, consent: Uint8Array) {
+    return (
+        consent.length === SUCCESSION_CONSENT_BYTES &&
+        verifyHybrid(
+            {
+                signingPublicKey: input.oldSigningPublicKey,
+                mlDsaPublicKey: input.oldMlDsaPublicKey,
+            },
+            successionConsentStatement(input, 'old'),
+            consent.subarray(0, HYBRID_SIGNATURE_BYTES),
+        ) &&
+        verifyHybrid(
+            {
+                signingPublicKey: input.newSigningPublicKey,
+                mlDsaPublicKey: input.newMlDsaPublicKey,
+            },
+            successionConsentStatement(input, 'new'),
+            consent.subarray(HYBRID_SIGNATURE_BYTES),
+        )
+    );
+}
+
+function successionFields(head: (string | number)[], input: SuccessionStatementInput) {
     const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
     return statement([
-        'hushos/identity/succession',
-        2,
+        ...head,
         input.userId.toLowerCase(),
         input.oldKeyVersion,
         input.newKeyVersion,

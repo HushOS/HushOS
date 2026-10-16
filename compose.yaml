@@ -123,6 +123,11 @@ services:
             STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY:-}
             STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
             DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
+            GROUPS_ENABLED: ${GROUPS_ENABLED:-false}
+            GROUP_SEAT_LIMIT_DEFAULT: ${GROUP_SEAT_LIMIT_DEFAULT:-6}
+            GROUP_AREA_QUOTA_BYTES: ${GROUP_AREA_QUOTA_BYTES:-10737418240}
+            GROUP_AREA_LIMIT: ${GROUP_AREA_LIMIT:-10}
+            GROUP_OWNED_LIMIT: ${GROUP_OWNED_LIMIT:-3}
         depends_on:
             migrate:
                 condition: service_completed_successfully

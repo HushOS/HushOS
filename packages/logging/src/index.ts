@@ -5,6 +5,7 @@ export {
     loggingOptions,
     redactAuthenticationEvent,
     authLogAction,
+    groupLogAction,
     sanitizeFailure,
     type Failure,
     initProcessLogger,

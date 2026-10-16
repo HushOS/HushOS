@@ -11,7 +11,7 @@ import * as schema from './schema';
  */
 
 /* The newest migration this build knows; `readiness.test.ts` keeps it honest. */
-export const LATEST_MIGRATION = '20261016013230_devices';
+export const LATEST_MIGRATION = '20261016081643_group_tables';
 
 /* Every application table, in name order. */
 export const APP_TABLES = Object.values(schema)
@@ -56,7 +56,7 @@ export async function missingTablePrivileges(role?: string) {
 }
 
 /* The SQLSTATE of a Postgres error, through the query wrapper that carries it. */
-function pgCode(error: unknown): string | undefined {
+export function pgCode(error: unknown): string | undefined {
     for (
         let current = error, depth = 0;
         current && typeof current === 'object' && depth < 3;
