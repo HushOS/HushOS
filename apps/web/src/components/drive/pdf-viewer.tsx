@@ -6,7 +6,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Notice, Opening } from '@/components/drive/viewer-parts';
 import { Button } from '@/components/ui/button';
 import { PasswordInput } from '@/components/password-input';
-import { pdfAssetOptions, preloadPdfAssets } from '@/lib/pdf-assets';
+import { pdfAssetOptions, pdfAssetsReady } from '@/lib/pdf-assets';
 import { PREVIEW_LIMITS, readAll, type ReadProgress, rememberPreview } from '@/lib/previews';
 import '@/components/drive/pdf-viewer.css';
 
@@ -42,7 +42,7 @@ export async function preloadPdf() {
     await loadPdfjs();
     const { default: workerUrl } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
     await fetch(workerUrl, { cache: 'force-cache' }).then((response) => response.arrayBuffer());
-    await preloadPdfAssets(window.location.origin);
+    await pdfAssetsReady();
 }
 
 const MAX_RENDER_SCALE = 2;
@@ -76,6 +76,9 @@ export function PdfViewer({
         let loading: PDFDocumentLoadingTask | null = null;
         void (async () => {
             try {
+                // All of pdf.js's assets before it reads, so what it fetches cannot describe
+                // the file; fetched while the file is read and decrypted.
+                const assetsReady = pdfAssetsReady();
                 const pdfjs = await loadPdfjs();
                 let data = source instanceof Uint8Array ? source : null;
                 if (
@@ -106,6 +109,8 @@ export function PdfViewer({
                             .catch(() => this.abort());
                     }
                 }
+                await assetsReady;
+                if (!active) return;
                 const assets = pdfAssetOptions(window.location.origin);
                 // pdf.js moves the buffer to its worker, so the remembered copy stays here.
                 const task = data
