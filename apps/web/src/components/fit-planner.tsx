@@ -1,5 +1,5 @@
 import { cn } from 'cn';
-import { useEffect, useId, useState } from 'react';
+import { type ReactNode, useEffect, useId, useState } from 'react';
 import { TextLink } from '@/components/site';
 import { formatQuota } from '@/lib/format';
 
@@ -9,6 +9,7 @@ import { formatQuota } from '@/lib/format';
  * showing how full that plan would be. The sizes are typical, not measured, and
  * the page says so; the plans and their sizes are the catalogue's own. A plan
  * fits with a tenth to spare, because versions, Trash and thumbnails count too.
+ * The plan it names carries its own button, the one its card on the page has.
  */
 
 const MB = 1024 * 1024;
@@ -20,7 +21,14 @@ const VIDEO_HOUR = 4 * GB;
 const DOCUMENT = 0.5 * MB;
 const HEADROOM = 0.9;
 
-export type FitPlan = { name: string; quotaBytes: number };
+export type FitPlan = {
+    key: string;
+    name: string;
+    quotaBytes: number;
+    action?: ReactNode;
+    /* What the button charges, beside it, since the planner shows no prices of its own. */
+    note?: string;
+};
 
 const count = new Intl.NumberFormat('en-GB');
 
@@ -101,6 +109,19 @@ function Fill({ share }: { share: number }) {
     );
 }
 
+/* The answer's button and, under it, what it charges. */
+function PlanAction({ plan }: { plan: FitPlan }) {
+    if (!plan.action) return null;
+    return (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+            {plan.action}
+            {plan.note && (
+                <span className="text-sm text-muted-foreground tabular-nums">{plan.note}</span>
+            )}
+        </div>
+    );
+}
+
 /* What a screen reader hears: the answer, once the sliders have been still for a moment. */
 function useSettled(text: string) {
     const [settled, setSettled] = useState(text);
@@ -111,7 +132,14 @@ function useSettled(text: string) {
     return settled;
 }
 
-export function FitPlanner({ plans }: { plans: FitPlan[] }) {
+export function FitPlanner({
+    plans,
+    error = null,
+}: {
+    plans: FitPlan[];
+    /* A checkout that failed from here, shown only while the answer is still that plan. */
+    error?: { key: string; message: string } | null;
+}) {
     const [photos, setPhotos] = useState(8_000);
     const [hours, setHours] = useState(5);
     const [documents, setDocuments] = useState(2_000);
@@ -204,6 +232,7 @@ export function FitPlanner({ plans }: { plans: FitPlan[] }) {
                                 {amount} of {quota(fits.quotaBytes)}, with room left for versions
                                 and Trash.
                             </p>
+                            <PlanAction plan={fits} />
                         </>
                     ) : tight ? (
                         <>
@@ -215,6 +244,7 @@ export function FitPlanner({ plans }: { plans: FitPlan[] }) {
                                 {amount} of {quota(tight.quotaBytes)}, with little room left for
                                 versions and Trash.
                             </p>
+                            <PlanAction plan={tight} />
                         </>
                     ) : (
                         <>
@@ -229,6 +259,14 @@ export function FitPlanner({ plans }: { plans: FitPlan[] }) {
                                 Read the self-hosting guide
                             </TextLink>
                         </>
+                    )}
+                    {error && error.key === (fits ?? tight)?.key && (
+                        <p
+                            role="alert"
+                            className="rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"
+                        >
+                            {error.message}
+                        </p>
                     )}
                 </div>
             </div>

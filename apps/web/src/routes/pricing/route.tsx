@@ -32,7 +32,7 @@ import {
 } from '@/lib/queries';
 import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
 import type { Plan } from '@hushos/billing/api';
-import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
+import { currenciesOf, priceOf, tiersOf, type Tier } from '@/lib/plans';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { cn } from 'cn';
@@ -198,6 +198,8 @@ function cheapest(plans: Plan[], currency: string) {
 }
 
 type Interval = 'month' | 'year';
+/* Where a plan's button sits: on its card, or under the planner's answer. */
+type Place = 'card' | 'planner';
 type Audience = 'personal' | 'business';
 
 const included = [
@@ -264,13 +266,21 @@ function PricingPage() {
     // on the billing page. Paying subscribers go there for the confirmation step.
     const [starting, setStarting] = useState<string | null>(null);
     const [checkoutError, setCheckoutError] = useState('');
+    // Where the checkout was started, so a failure shows beside the button that was pressed.
+    const [startedFrom, setStartedFrom] = useState<Place>('card');
+    // The tier whose checkout failed, so the planner shows the error only while it names that tier.
+    const [failedTier, setFailedTier] = useState<string | null>(null);
     // Back from Polar's checkout restores this page with `starting` still set.
     usePageRestored(() => {
         setStarting(null);
         setCheckoutError('');
+        setFailedTier(null);
+        setStartedFrom('card');
     });
-    async function startCheckout(plan: Plan) {
+    async function startCheckout(plan: Plan, place: Place, tierKey: string) {
         setStarting(plan.id);
+        setStartedFrom(place);
+        setFailedTier(null);
         setCheckoutError('');
         try {
             const { url } = await billingApi.checkout(plan.id, currency);
@@ -281,8 +291,88 @@ function PricingPage() {
             void navigate({ to: '/app/billing' });
         } catch (error) {
             setCheckoutError(authError(error));
+            setFailedTier(tierKey);
             setStarting(null);
         }
+    }
+    /*
+     * What choosing a plan does, the same from its card and from the planner's
+     * answer: Free (null) or a tier, priced at the interval chosen above. On a
+     * card the recommended plan leads; in the planner the plan it names does.
+     */
+    function planAction(tier: Tier | null, place: Place) {
+        const size = 'lg' as const;
+        const width = place === 'card' ? 'w-full' : 'w-full sm:w-fit';
+        // The plan already held is a disabled button, not a link that still follows on Enter.
+        const held = (
+            <Button variant="outline" size={size} className={width} disabled>
+                Your plan
+            </Button>
+        );
+        if (!tier) {
+            if (onFree) return held;
+            return (
+                <Link
+                    to={hasSession ? '/app/drive' : '/register'}
+                    className={buttonVariants({
+                        size,
+                        // Primary in the planner only for a newcomer; a subscriber is not sold Free.
+                        variant: place === 'planner' && !hasSession ? 'default' : 'outline',
+                        className: width,
+                    })}
+                >
+                    {hasSession ? 'Go to Drive' : 'Start free'}
+                </Link>
+            );
+        }
+        const plan = tier[interval] ?? tier.month ?? tier.year;
+        if (!plan) return null;
+        if (live?.productId === plan.id) return held;
+        /*
+         * On a card the recommended plan leads. Under the planner its answer leads too,
+         * except when that answer is the recommended plan: its card already has the blue
+         * button, and the two can be on screen together. A subscriber is never led.
+         */
+        const lead = place === 'planner' ? !live && !tier.recommended : tier.recommended;
+        const label = !hasSession
+            ? `Start with ${tier.name}`
+            : live
+              ? `Switch to ${tier.name}`
+              : `Choose ${tier.name}`;
+        return onFree ? (
+            <Button
+                variant={lead ? 'default' : 'outline'}
+                size={size}
+                className={width}
+                disabled={starting !== null}
+                onClick={() => void startCheckout(plan, place, tier.key)}
+            >
+                {starting === plan.id && startedFrom === place ? 'Opening checkout…' : label}
+            </Button>
+        ) : (
+            <Link
+                to={hasSession ? '/app/billing' : '/register'}
+                search={{ plan: plan.id }}
+                className={buttonVariants({
+                    size,
+                    variant: lead ? 'default' : 'outline',
+                    className: width,
+                })}
+            >
+                {label}
+            </Link>
+        );
+    }
+    /* What the planner's button will charge, at the interval chosen above the cards. */
+    function priceNote(tier: Tier | null) {
+        // Free's note is for a newcomer; to a subscriber it would read as a pitch to downgrade.
+        if (!tier) return hasSession ? '' : 'No card needed.';
+        const plan = tier[interval] ?? tier.month ?? tier.year;
+        if (!plan) return '';
+        const price = amount(plan);
+        return plan.interval === 'year'
+            ? `${money(Math.round(price.amount / 12), price.currency)} a month, billed ${money(price.amount, price.currency)} yearly.`
+            : `${money(price.amount, price.currency)} a month, billed monthly.`;
     }
     return (
         <SitePage identity="pricing">
@@ -372,7 +462,7 @@ function PricingPage() {
                             </div>
                         )}
                     </div>
-                    {checkoutError && (
+                    {checkoutError && startedFrom === 'card' && (
                         <p
                             role="alert"
                             className="mb-4 rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"
@@ -391,40 +481,13 @@ function PricingPage() {
                                     blurb="To try it, or for the few things that matter most."
                                     price={money(0)}
                                     note="No card needed."
-                                    action={
-                                        <Link
-                                            to={hasSession ? '/app/drive' : '/register'}
-                                            aria-disabled={onFree || undefined}
-                                            className={buttonVariants({
-                                                size: 'lg',
-                                                variant: 'outline',
-                                                className: cn(
-                                                    'w-full',
-                                                    onFree && 'pointer-events-none opacity-60',
-                                                ),
-                                            })}
-                                        >
-                                            {onFree
-                                                ? 'Your plan'
-                                                : hasSession
-                                                  ? 'Go to Drive'
-                                                  : 'Start free'}
-                                        </Link>
-                                    }
+                                    action={planAction(null, 'card')}
                                 />
                                 {tiers.map((tier) => {
                                     const plan = tier[interval] ?? tier.month ?? tier.year;
                                     if (!plan) return null;
                                     const yearly = tier.year ? amount(tier.year) : null;
                                     const price = amount(plan);
-                                    const current = live?.productId === plan.id;
-                                    const label = !hasSession
-                                        ? `Start with ${tier.name}`
-                                        : current
-                                          ? 'Your plan'
-                                          : live
-                                            ? `Switch to ${tier.name}`
-                                            : `Choose ${tier.name}`;
                                     return (
                                         <PlanCard
                                             key={tier.key}
@@ -447,47 +510,7 @@ function PricingPage() {
                                                       ? `Billed monthly. ${money(yearly.amount, yearly.currency)} a year if you pay yearly.`
                                                       : 'Billed monthly.'
                                             }
-                                            action={
-                                                onFree ? (
-                                                    <Button
-                                                        variant={
-                                                            tier.recommended ? 'default' : 'outline'
-                                                        }
-                                                        size="lg"
-                                                        className="w-full"
-                                                        disabled={starting !== null}
-                                                        onClick={() => void startCheckout(plan)}
-                                                    >
-                                                        {starting === plan.id
-                                                            ? 'Opening checkout…'
-                                                            : label}
-                                                    </Button>
-                                                ) : (
-                                                    <Link
-                                                        to={
-                                                            hasSession
-                                                                ? '/app/billing'
-                                                                : '/register'
-                                                        }
-                                                        search={{ plan: plan.id }}
-                                                        aria-disabled={current || undefined}
-                                                        className={buttonVariants({
-                                                            size: 'lg',
-                                                            variant:
-                                                                tier.recommended && !current
-                                                                    ? 'default'
-                                                                    : 'outline',
-                                                            className: cn(
-                                                                'w-full',
-                                                                current &&
-                                                                    'pointer-events-none opacity-60',
-                                                            ),
-                                                        })}
-                                                    >
-                                                        {label}
-                                                    </Link>
-                                                )
-                                            }
+                                            action={planAction(tier, 'card')}
                                         />
                                     );
                                 })}
@@ -533,12 +556,26 @@ function PricingPage() {
                     <div className={container}>
                         <FitPlanner
                             plans={[
-                                { name: 'Free', quotaBytes: Number(catalogue.freeQuotaBytes) },
+                                {
+                                    key: 'free',
+                                    name: 'Free',
+                                    quotaBytes: Number(catalogue.freeQuotaBytes),
+                                    action: planAction(null, 'planner'),
+                                    note: priceNote(null),
+                                },
                                 ...tiers.map((tier) => ({
+                                    key: tier.key,
                                     name: tier.name,
                                     quotaBytes: Number(tier.quotaBytes),
+                                    action: planAction(tier, 'planner'),
+                                    note: priceNote(tier),
                                 })),
                             ]}
+                            error={
+                                startedFrom === 'planner' && failedTier && checkoutError
+                                    ? { key: failedTier, message: checkoutError }
+                                    : null
+                            }
                         />
                     </div>
                 )}
