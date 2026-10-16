@@ -66,6 +66,12 @@ export const groups = pgTable(
         // The version 1 group key: the anchor of the server's own acceptance of the chain.
         firstEd25519PublicKey: bytea('first_ed25519_public_key').notNull(),
         firstMlDsaPublicKey: bytea('first_ml_dsa_public_key').notNull(),
+        /*
+         * SHA-256 of the creation call as it landed (route 1's body, canonical JSON), so
+         * an identical resend is answered as a replay before anything that can change
+         * since is checked. Null for groups created before it was kept.
+         */
+        creationDigest: bytea('creation_digest'),
         // The head of the chain, a projection of the latest roster and succession.
         rosterVersion: integer('roster_version').notNull(),
         rosterDigest: bytea('roster_digest').notNull(),
@@ -91,6 +97,10 @@ export const groups = pgTable(
         check(
             'groups_first_keys_valid',
             sql`octet_length(${table.firstEd25519PublicKey}) = 32 and octet_length(${table.firstMlDsaPublicKey}) = 1952`,
+        ),
+        check(
+            'groups_creation_digest_valid',
+            sql`${table.creationDigest} is null or octet_length(${table.creationDigest}) = 32`,
         ),
         check(
             'groups_head_valid',

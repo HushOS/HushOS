@@ -1040,6 +1040,8 @@ export async function createGroup(input: {
     cache: unknown;
     /* The most live groups one account may have created (GROUP_OWNED_LIMIT). */
     ownedLimit?: number;
+    /* SHA-256 of the creation call, kept so an identical resend is a replay (route 1). */
+    creationDigest?: Buffer;
 }): Promise<CreateResult> {
     const digest = statementDigest(input.roster.statement);
     const replay = async (): Promise<CreateResult> => {
@@ -1112,6 +1114,7 @@ export async function createGroup(input: {
                         creatorUserId: input.creatorUserId,
                         firstEd25519PublicKey: input.firstEd25519PublicKey,
                         firstMlDsaPublicKey: input.firstMlDsaPublicKey,
+                        creationDigest: input.creationDigest ?? null,
                         rosterVersion: 1,
                         rosterDigest: digest,
                         groupKeyVersion: 1,

@@ -15,6 +15,7 @@ import {
     scopedId,
 } from '@hushos/db';
 import { areaKeyCommitment } from '../../crypto/src/area-keys';
+import { history } from '../../crypto/src/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountIdentityHistory,
@@ -35,6 +36,7 @@ import {
 import { closeDatabase, resetDatabase } from '../../db/test/helpers';
 import {
     ADDRESS,
+    ORGANIZER,
     accepted,
     b64,
     admitted,
@@ -204,6 +206,67 @@ describe('creating a family', () => {
         };
         expect((await refusal(groups.createGroup(other.userId, forged))).code).toBe('invalid');
         expect(await rosterCount(second.groupId)).toBe(1);
+    });
+});
+
+describe('a resent creation (F7)', () => {
+    test("lands, and its identical resend is a replay after the creator replaced their identity and spent the day's creations", async () => {
+        const fam = await family();
+        await succeedIdentity(fam.organizer);
+        const bucket = createHash('sha256')
+            .update(`groups:create:user:${fam.organizer.userId}`)
+            .digest();
+        for (let i = 0; i < 4; i += 1) await authRepository.consumeRateLimit(bucket, 5, 86_400_000);
+        const resent = await groups.createGroup(fam.organizer.userId, fam.body);
+        expect(resent).toMatchObject({
+            replayed: true,
+            group: { id: fam.groupId, rosterVersion: 1, revision: 1 },
+        });
+        expect(await rosterCount(fam.groupId)).toBe(1);
+    });
+
+    test('a different first roster for a stored id is refused and changes nothing', async () => {
+        const fam = await family();
+        const stored = (await groupsRepository.getRoster(fam.groupId, 1))!.digest;
+        const who = await succeedIdentity(fam.organizer);
+        // The same id and seed, a first roster signed by the creator's new identity.
+        const alt = await history('family', {
+            groupId: fam.groupId,
+            areas: fam.h.statements[0]!.areas,
+        });
+        const first = await alt.roster(who, [who.entry(ORGANIZER)]);
+        const at = { rosterVersion: 1, rosterDigest: await rosterDigest(first.statement) };
+        const body = {
+            ...fam.body,
+            roster: wire(first),
+            keySeal: { envelope: (await sealWire(fam.groupId, who, who, at, 1)).envelope },
+            area: {
+                ...fam.body.area,
+                grant: {
+                    envelope: (await grantWire(fam.groupId, fam.areaId, 1, who, who, at)).envelope,
+                },
+            },
+        };
+        expect(await refusal(groups.createGroup(fam.organizer.userId, body))).toMatchObject({
+            code: 'exists',
+            status: 409,
+        });
+        expect(await rosterCount(fam.groupId)).toBe(1);
+        expect((await groupsRepository.getRoster(fam.groupId, 1))!.digest.equals(stored)).toBe(
+            true,
+        );
+    });
+
+    test('the same bytes from anyone but the creator are refused, a member of the group included', async () => {
+        const fam = await family();
+        const holder = await member();
+        await admitted(fam, holder, ['members']);
+        const stranger = await member();
+        for (const other of [holder, stranger])
+            expect(await refusal(groups.createGroup(other.userId, fam.body))).toMatchObject({
+                code: 'invalid',
+                status: 400,
+            });
     });
 });
 
