@@ -1,0 +1,95 @@
+apps/web/src/lib/contacts.ts
+  s_c56e31c87cddde::t_5abd90655799e1 519-520
+apps/web/src/lib/server-imports.test.ts
+  s_c56e31c87cddde::t_c228c3d89c8a97 1-36
+package.json
+  s_c56e31c87cddde::t_ad02bbfc458cc7 22-23
+packages/crypto/package.json
+  s_c56e31c87cddde::t_51f4e57e491cd7 22-25,30-31
+packages/crypto/scripts/core-fixtures.ts
+  s_c56e31c87cddde::t_7d0f2a5b7c07fa 643
+packages/crypto/scripts/group-fixtures.ts
+  s_c56e31c87cddde::t_37ad84a5f64f5c 1-313
+packages/crypto/src/__fixtures__/core-groups.json
+  s_c56e31c87cddde::t_6304151e73df55 1-23491
+packages/crypto/src/__fixtures__/core.json
+  s_c56e31c87cddde::t_d53d9d4299b4ce 3,6,9-10,12-13,16,19-20,22-23,26,29-30,33-36,42,44-46,49,54,56-59,61-63,66,68-70,72-73,75,77,173-174,176-178,180-181,668-670,672-673,675-678,684,688-689,691-692,694-695,697,704-705,707,712,716-717,719-720,722-723,725,730,739-740,742-744,748,752-753,755-756,758-759,761,764,772,776-777,779-780,782-783,785,788,795,797-799,801,804-805,807-808,813-820,824,827,829-830,833-836,838-840,843,845-847,849-850,852,855-858,860-863,868-869,871,873,875-876,878-879,883-884,888,890-891,893-894,898-899,901-902,904-907,911-914,918-919,922,924-927,930-933,941-942,944-946,948-950,953-954,956-958,960-962,966,968-969,972-973,975-976,980-983,985-987,990,992-994,996-997,999,1002-1003,1005-1007,1009-1011,1013-1014,1018-1021,1023-1026,1031-1032,1034,1037-1040,1045-1046,1048,1051-1054,1056-1058,1061,1063-1065,1067-1068,1070,1073-1076,1078-1080,1083,1085-1087,1089-1090,1092,1094
+packages/crypto/src/accepted.ts
+  s_c56e31c87cddde::t_62a1f0be89662b 1-58
+packages/crypto/src/area-keys.ts
+  s_c56e31c87cddde::t_4a738bfe6509fb 1-42
+packages/crypto/src/canonical.ts
+  s_c56e31c87cddde::t_c017795e2472be 1-133
+packages/crypto/src/contacts.ts
+  s_c56e31c87cddde::t_d5cab6493e3a84 4,60-69,87-92
+packages/crypto/src/fingerprint.ts
+  s_c56e31c87cddde::t_13bf2b70168dc3 98-126
+packages/crypto/src/group-fixtures.test.ts
+  s_c56e31c87cddde::t_3589adb97b83f0 1-406
+packages/crypto/src/group-testkit.ts
+  s_c56e31c87cddde::t_e0370c0a6d7d2b 1-3930
+packages/crypto/src/group-trust-server.ts
+  s_c56e31c87cddde::t_acff89b1f6dc37 1-49
+packages/crypto/src/group-trust.test.ts
+  s_c56e31c87cddde::t_58d639dfef358f 1-3033
+packages/crypto/src/group-trust.ts
+  s_c56e31c87cddde::t_1c71782259ad71 1-2039
+packages/crypto/src/groups.test.ts
+  s_c56e31c87cddde::t_3d7276aee30d06 1-1863
+packages/crypto/src/groups.ts
+  s_c56e31c87cddde::t_0283478a6648d3 1-1156
+packages/crypto/src/identity.ts
+  s_c56e31c87cddde::t_1dbd7483832c63 17,194-197,257,707-720,763,774-827,868-873
+packages/crypto/src/ids.ts
+  s_c56e31c87cddde::t_8dc2af5415b407 17-20,24-25,27-35,48-49,51,67,71-93
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_dbe714ad631f30 30,34-57
+packages/crypto/src/keys.ts
+  s_c56e31c87cddde::t_b97b6e0ac799e6 5-9
+packages/crypto/src/pins.test.ts
+  s_c56e31c87cddde::t_6bb99f1fc29a7b 3-4,107-147
+packages/crypto/src/pins.ts
+  s_c56e31c87cddde::t_c271839aad186b 1-2,61-123
+packages/crypto/src/pq.ts
+  s_c56e31c87cddde::t_fc294979e01cf0 65-69
+packages/crypto/src/sealing.ts
+  s_c56e31c87cddde::t_a8a1b2f092e9e0 1-206
+packages/crypto/src/security.test.ts
+  s_c56e31c87cddde::t_635592e1467a84 117-133
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_92df26290d0260 704
+packages/crypto/src/shares.ts
+  s_c56e31c87cddde::t_84ae423c2333a0 2,9-17,77-86,101,120
+packages/crypto/src/signatures.test.ts
+  s_c56e31c87cddde::t_720a1a9ae51725 280-292
+packages/crypto/src/signatures.ts
+  s_c56e31c87cddde::t_37db6a1d3ad979 116-121,164,321-348,355-356
+packages/crypto/src/succession.test.ts
+  s_c56e31c87cddde::t_d8c4aa992905f7 11,13,22-28,159-236,320-323
+packages/crypto/src/succession-path.ts
+  s_6751f013b0c951::t_f0ca9c350ad9e9 1-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "11d15d7aa7d7bddd580204c6ccbf6ff66cbcf94f",
+  "prompts": {},
+  "sessions": {
+    "s_6751f013b0c951": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a475969eaf36d603f",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
