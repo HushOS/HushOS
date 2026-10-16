@@ -5,7 +5,13 @@ import { useEffect, useState } from 'react';
 import { NewKeyDialog } from '@/components/account-dialogs';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
-import { downloadKit, KitSheet, PhraseGrid, useRecoveryBackup } from '@/components/recovery-phrase';
+import {
+    downloadKit,
+    KitSheet,
+    PhraseGrid,
+    PhraseQr,
+    useRecoveryBackup,
+} from '@/components/recovery-phrase';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { UnlockDevice } from '@/components/unlock-device';
@@ -86,7 +92,7 @@ function RecoveryKeyPage() {
                                 {error}
                             </p>
                         )}
-                        <div className="flex flex-wrap gap-2">
+                        <PhraseQr phrase={backup.phrase}>
                             <Button variant="outline" onClick={() => downloadKit(user, backup)}>
                                 <DownloadIcon />
                                 Download kit
@@ -99,7 +105,7 @@ function RecoveryKeyPage() {
                                 <CopyIcon />
                                 {copied ? 'Copied' : 'Copy words'}
                             </Button>
-                        </div>
+                        </PhraseQr>
                         {!backup.confirmed && (
                             <div className="flex flex-col gap-3 rounded-xl bg-warning-soft px-4 py-3.5">
                                 <label

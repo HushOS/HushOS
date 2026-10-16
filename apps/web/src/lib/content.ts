@@ -12,6 +12,9 @@ export type PostMeta = {
 
 export type CoverTone = 'quiet' | 'lime' | 'sun' | 'sage' | 'blue' | 'orange' | 'mint' | 'graphite';
 
+/* Tones for paper only (the printed recovery kit): never a post's or a card's. */
+export type PrintTone = 'paper';
+
 /* The frontmatter of every post, for lists, cards and the sitemap; bodies are in `postBodies`. */
 const modules = import.meta.glob<{ frontmatter: PostMeta }>('../content/blog/*.mdx', {
     eager: true,

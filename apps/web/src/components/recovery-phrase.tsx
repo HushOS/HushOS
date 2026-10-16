@@ -2,15 +2,17 @@ import type { SessionUser } from '@hushos/auth/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { CopyIcon, DownloadIcon, PrinterIcon } from 'lucide-react';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { CopyIcon, DownloadIcon, PrinterIcon, QrCodeIcon } from 'lucide-react';
+import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import { AuthLayout, AuthNote } from '@/components/auth-layout';
 import { LogoBadge } from '@/components/brand';
+import { Cover } from '@/components/cover';
 import { QrCode } from '@/components/qr-code';
 import { Spinner } from '@/components/motion';
 import { returnTarget } from '@/lib/return-to';
+import { saveBlob } from '@/lib/save-file';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { UnlockDevice } from '@/components/unlock-device';
@@ -56,12 +58,7 @@ type Backup = NonNullable<ReturnType<typeof useRecoveryBackup>['backup']>;
 /* The kit as a text file, downloaded. */
 export function downloadKit(user: SessionUser, backup: Backup) {
     const content = kitText({ email: user.email, id: user.id }, backup.phrase, backup.recovery);
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'hushos-recovery-kit.txt';
-    anchor.click();
-    URL.revokeObjectURL(url);
+    saveBlob(new Blob([content], { type: 'text/plain;charset=utf-8' }), 'hushos-recovery-kit.txt');
     cue('success', { volume: 0.4 });
 }
 
@@ -186,7 +183,7 @@ export function RecoveryPhrase({
                     {error && <AuthNote tone="danger">{error}</AuthNote>}
                     <PhraseGrid phrase={backup.phrase} />
                     <KitSheet email={user.email} phrase={backup.phrase} />
-                    <div className="flex flex-wrap gap-2">
+                    <PhraseQr phrase={backup.phrase}>
                         <Button variant="outline" onClick={download}>
                             <DownloadIcon />
                             Download kit
@@ -199,7 +196,7 @@ export function RecoveryPhrase({
                             <CopyIcon />
                             {copied ? 'Copied' : 'Copy words'}
                         </Button>
-                    </div>
+                    </PhraseQr>
                     {!confirmed || setup ? (
                         <>
                             {!confirmed && (
@@ -255,6 +252,58 @@ export function RecoveryPhrase({
 }
 
 /*
+ * The kit's code on screen, for recovering in the phone app straight from this
+ * page. Hidden until asked for: the code is the 24 words, readable by any camera
+ * that sees it. Square modules, as on paper; it is the one code that has to scan.
+ */
+export function PhraseQr({ phrase, children }: { phrase: string; children: ReactNode }) {
+    const [open, setOpen] = useState(false);
+    const panel = useId();
+    // Hidden again when the tab is, so a tab left open never shows it in a later screen share.
+    useEffect(() => {
+        if (!open) return;
+        const hide = () => {
+            if (document.visibilityState === 'hidden') setOpen(false);
+        };
+        document.addEventListener('visibilitychange', hide);
+        return () => document.removeEventListener('visibilitychange', hide);
+    }, [open]);
+    // The kit's other actions come first, in one row with this toggle; the code opens under them.
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+                {children}
+                <Button
+                    variant="ghost"
+                    aria-expanded={open}
+                    aria-controls={panel}
+                    onClick={() => setOpen((value) => !value)}
+                >
+                    <QrCodeIcon />
+                    {open ? 'Hide QR code' : 'Show QR code'}
+                </Button>
+            </div>
+            {open && (
+                <div
+                    id={panel}
+                    className="flex w-fit flex-col items-center gap-2 rounded-xl bg-muted p-4"
+                >
+                    {/* White under the code in either theme, so a camera reads it. */}
+                    <div className="rounded-md bg-white p-2">
+                        {/* Three whole pixels a module (about 200 to 240px for 24 words), so a phone camera reads it off a screen. */}
+                        <QrCode value={phrase} cell={3} title="Recovery phrase" kind="recovery" />
+                    </div>
+                    <p className="max-w-[20rem] text-center text-[13px] text-muted-foreground">
+                        To recover in the HushOS app, scan this when it asks for your kit. Like the
+                        words, it opens your account for anyone who can also get into your email.
+                    </p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/*
  * The kit on paper: shown only when printing, the same one page from every
  * page that offers Print. The words, the account, and what to do with it.
  */
@@ -284,7 +333,7 @@ export function KitSheet({ email, phrase }: { email: string; phrase: string }) {
     return createPortal(
         <div
             data-print
-            className="hidden flex-col gap-7 font-sans text-[#141a33] [print-color-adjust:exact] print:flex"
+            className="hidden flex-col gap-6 font-sans text-[#141a33] [print-color-adjust:exact] print:flex"
         >
             <div className="flex items-center justify-between border-b-2 border-[#2c428e] pb-4">
                 <div className="flex items-center gap-3">
@@ -299,13 +348,28 @@ export function KitSheet({ email, phrase }: { email: string; phrase: string }) {
                 <span className="text-xs text-[#4a5375]">Made {madeOn}</span>
             </div>
             <div className="flex items-end justify-between gap-6">
-                <div className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold text-[#4a5375]">Account</span>
-                    <span className="text-base font-semibold">{email}</span>
+                <div className="flex min-w-0 flex-1 flex-col gap-3">
+                    {/*
+                     * Dither (DESIGN.md): the kit's word in blue dots on the paper, a wash at
+                     * its foot, in the room beside the code, so the kit stays one page on A4
+                     * and US Letter with a print dialog's own margins.
+                     */}
+                    <Cover
+                        word="RECOVERY"
+                        tone="paper"
+                        seed="recovery-kit"
+                        cols={104}
+                        rows={20}
+                        dither
+                    />
+                    <div className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold text-[#4a5375]">Account</span>
+                        <span className="text-base font-semibold">{email}</span>
+                    </div>
                 </div>
                 {/* The same 24 words, for the HushOS apps to scan when you recover there. */}
                 <div className="flex shrink-0 flex-col items-center gap-1">
-                    <QrCode value={phrase} size={112} title="Recovery phrase" kind="recovery" />
+                    <QrCode value={phrase} size={128} title="Recovery phrase" kind="recovery" />
                     <span className="text-[11px] text-[#4a5375]">Scan in the HushOS app</span>
                 </div>
             </div>
