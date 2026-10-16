@@ -144,6 +144,66 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
+    # Families (groups 1c) on a server that serves them: the suite above runs with them off (the
+    # default), where families.spec.ts checks they stay hidden. One runner, one spec file.
+    e2e-families:
+        name: Browser tests (families)
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.2
+            - run: bun install --frozen-lockfile
+            - name: Local infrastructure (Postgres, Mailpit, Garage) and environment, families on
+              run: |
+                  bun run setup
+                  echo 'GROUPS_ENABLED=true' >> .env
+                  bun run infra:up
+            - name: Apply migrations
+              run: bun run db:migrate
+            - name: Install Chromium for Playwright
+              run: bunx playwright install --with-deps chromium
+            - name: Start the dev server, again if it never listens
+              run: |
+                  mkdir -p scratchpad
+                  for attempt in 1 2 3; do
+                      setsid bash -c 'exec bun run dev >> scratchpad/e2e-server.log 2>&1' &
+                      pid=$!
+                      for i in $(seq 1 40); do
+                          if curl -sf -o /dev/null http://localhost:5173; then echo "listening on attempt $attempt"; exit 0; fi
+                          sleep 3
+                      done
+                      echo "attempt $attempt: no answer in 120 s, starting again"
+                      kill -- -"$pid" 2>/dev/null || true
+                      pkill -f 'vite --strictPort' || true
+                      sleep 3
+                  done
+                  echo "the dev server never listened"
+                  exit 1
+              env:
+                  TRUSTED_PROXY_HEADER: x-forwarded-for
+                  TURBO_LOG_ORDER: stream
+            # GROUPS_ENABLED reaches the spec from .env too: with it on, a server that says
+            # families are off fails the run instead of skipping it.
+            - name: Run the families suite against the dev server
+              run: bun run e2e -- --project=chromium e2e/families.spec.ts
+              env:
+                  TURBO_LOG_ORDER: stream
+            - name: Show the end of the server log
+              if: failure()
+              run: tail -n 60 scratchpad/e2e-server.log || true
+            - name: Keep traces of failures and the server log
+              if: failure() || hashFiles('test-results/**/trace.zip') != ''
+              uses: actions/upload-artifact@v4
+              with:
+                  name: playwright-traces-families-${{ github.run_attempt }}
+                  path: |
+                      test-results
+                      scratchpad/e2e-server.log
+                  retention-days: 7
+
     # WebKit on macOS, the build Safari ships. Linux has only WebKitGTK, which crashed
     # pages mid sign-up and differs in drag and drop, so its results said little about
     # Safari. macOS runners have no Docker: the infrastructure runs natively. It does

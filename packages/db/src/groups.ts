@@ -1990,7 +1990,7 @@ export async function openInvitation(tokenHash: Buffer) {
         .select({
             invitation: groupInvitations,
             group: { id: groups.id, kind: groups.kind, name: groups.name },
-            inviter: { id: users.id, name: users.name },
+            inviter: { id: users.id, name: users.name, email: users.email },
         })
         .from(groupInvitations)
         .innerJoin(groups, eq(groups.id, groupInvitations.groupId))
@@ -2269,6 +2269,7 @@ export async function listMembers(groupId: string) {
         .select({
             userId: groupMemberships.userId,
             name: users.name,
+            email: users.email,
             state: groupMemberships.state,
             roles: groupMemberships.roles,
         })

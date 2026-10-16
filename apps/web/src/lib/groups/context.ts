@@ -31,6 +31,8 @@ export type GroupOperation =
     | 'groupDrop'
     | 'groupGrants'
     | 'groupForget'
+    /* A committed roster's join code, shown again to the person letting someone in. */
+    | 'groupJoinCode'
     | 'groupStoreSeal'
     | 'groupStoreOpen'
     | 'identityConsent'

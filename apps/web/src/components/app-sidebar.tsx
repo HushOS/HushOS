@@ -37,8 +37,10 @@ import {
     TagIcon,
     Trash2Icon,
     ContactIcon,
+    UsersIcon,
 } from 'lucide-react';
 import { useEffect } from 'react';
+import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families';
 
 export type NavItem = {
     to:
@@ -48,6 +50,7 @@ export type NavItem = {
         | '/app/shared'
         | '/app/account'
         | '/app/people'
+        | '/app/families'
         | '/app/tags'
         | '/app/billing'
         | '/app/recovery-key'
@@ -59,6 +62,8 @@ export type NavItem = {
     icon: typeof FolderIcon;
     active: (pathname: string) => boolean;
     billing?: boolean;
+    /* Shown only when the server serves families (`/drive/capabilities`). */
+    groups?: boolean;
 };
 const under = (prefix: string) => (pathname: string) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -87,6 +92,13 @@ export const organise: NavItem[] = [
         label: 'People you share with',
         icon: ContactIcon,
         active: under('/app/people'),
+    },
+    {
+        to: '/app/families',
+        label: 'Families',
+        icon: UsersIcon,
+        active: (pathname) => pathname === '/app/families' || pathname === '/app/families/',
+        groups: true,
     },
 ];
 export const operator: NavItem[] = [
@@ -211,13 +223,15 @@ function NavGroup({
     items,
     pathname,
     small = false,
+    className,
 }: {
     items: NavItem[];
     pathname: string;
     small?: boolean;
+    className?: string;
 }) {
     return (
-        <SidebarGroupContent>
+        <SidebarGroupContent className={className}>
             <SidebarMenu className="gap-0.5">
                 {items.map((entry) => (
                     <SidebarMenuItem key={entry.to}>
@@ -237,6 +251,46 @@ function NavGroup({
     );
 }
 
+/*
+ * Each family the account is in, as one row under My files (decision D1), named after the
+ * family. Until the family spaces arrive (plan step 6) a row opens the family's page; one
+ * you accepted but are not in yet opens the join screen.
+ */
+function FamilyRows({ userId, pathname }: { userId: string; pathname: string }) {
+    const enabled = useGroupsEnabled();
+    const { data: families } = useQuery({ ...familiesQueryOptions(userId), enabled });
+    if (!enabled || !families || families.length === 0) return null;
+    return (
+        <SidebarMenu className="mt-0.5 gap-0.5">
+            {families.map((family) => {
+                const base = `/app/families/${family.id}`;
+                return (
+                    <SidebarMenuItem key={family.id}>
+                        <SidebarMenuButton
+                            render={
+                                <Link
+                                    to={
+                                        family.state === 'accepted'
+                                            ? '/app/families/$groupId/join'
+                                            : '/app/families/$groupId'
+                                    }
+                                    params={{ groupId: family.id }}
+                                />
+                            }
+                            isActive={pathname === base || pathname.startsWith(`${base}/`)}
+                            tooltip={family.name}
+                            className={cn(item, collapsed)}
+                        >
+                            <UsersIcon aria-hidden="true" />
+                            <span className="truncate">{family.name}</span>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                );
+            })}
+        </SidebarMenu>
+    );
+}
+
 export function AppSidebar({
     user,
 }: {
@@ -246,6 +300,7 @@ export function AppSidebar({
     const { state, setOpenMobile } = useSidebar();
     const router = useRouter();
     const billing = useBillingEnabled();
+    const groups = useGroupsEnabled();
     useEffect(
         () => router.subscribe('onBeforeNavigate', () => setOpenMobile(false)),
         [router, setOpenMobile],
@@ -262,10 +317,16 @@ export function AppSidebar({
             </SidebarHeader>
             <SidebarContent className="gap-5 px-4 pt-5 group-data-[collapsible=icon]:px-2">
                 <SidebarGroup className={group}>
-                    <NavGroup items={workspace} pathname={pathname} />
+                    <NavGroup items={workspace.slice(0, 2)} pathname={pathname} />
+                    <FamilyRows userId={user.id} pathname={pathname} />
+                    <NavGroup items={workspace.slice(2)} pathname={pathname} className="mt-0.5" />
                 </SidebarGroup>
                 <SidebarGroup className={group}>
-                    <NavGroup items={organise} pathname={pathname} small />
+                    <NavGroup
+                        items={organise.filter((entry) => !entry.groups || groups)}
+                        pathname={pathname}
+                        small
+                    />
                 </SidebarGroup>
                 {user.role === 'admin' && (
                     <SidebarGroup className="border-t border-rule p-0 pt-4">

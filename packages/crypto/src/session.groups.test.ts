@@ -592,6 +592,35 @@ describe('who may vouch for a family’s first keys', () => {
         ).rejects.toThrow(/already checked this family/);
     });
 
+    test('settings that opened never give way to none: a server answering none cannot reopen joining (D7)', async () => {
+        const f = await family();
+        const { bob, groupId, server } = f;
+        const madeUp = (await groupKeyPair(newGroupSeed())).publicKey;
+        // A device of Bob's with only the settings pin: it opened settings holding it.
+        const fresh = await bob.device();
+        // The server then answers "no settings", or a version 1 document (which opens as none).
+        await expect(fresh.call('settingsOpen', { userId: BOB, envelope: null })).rejects.toThrow(
+            /older settings/,
+        );
+        await expect(
+            fresh.call('settingsOpen', {
+                userId: BOB,
+                envelope: { ...bob.settings.envelope!, version: 1 },
+            }),
+        ).rejects.toThrow(/older settings/);
+        // The pin is still a mark: joining vouches for nothing, and other first keys are refused.
+        await expect(
+            fresh.call('groupAccept', {
+                userId: BOB,
+                groupId,
+                served: { ...server.served(), firstKeys: madeUp },
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: null },
+            }),
+        ).rejects.toThrow(/not the group keys whose words were checked/);
+    });
+
     test('with no mark and no vouching nothing is accepted, and joining before the code gives a view only', async () => {
         const f = await family();
         const carol = await account(CAROL);
@@ -617,6 +646,46 @@ describe('who may vouch for a family’s first keys', () => {
                 joining: { joinMark: null },
             }),
         ).rejects.toThrow(/Open your settings first/);
+        // A new account has no settings stored: reading none is a reading, for that account only.
+        await expect(bare.call('settingsOpen', { userId: ALICE, envelope: null })).rejects.toThrow(
+            /Unlock your account first/,
+        );
+        await expect(
+            bare.call('groupAccept', {
+                userId: CAROL,
+                groupId: f.groupId,
+                served: f.server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: null },
+            }),
+        ).rejects.toThrow(/Open your settings first/);
+        // A version 1 document is not "no settings": acceptance still has no settings to go on.
+        await bare.call('settingsOpen', {
+            userId: CAROL,
+            envelope: { ...carol.settings.envelope!, version: 1 },
+        });
+        await expect(
+            bare.call('groupAccept', {
+                userId: CAROL,
+                groupId: f.groupId,
+                served: f.server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: null },
+            }),
+        ).rejects.toThrow(/Open your settings first/);
+        await bare.call('settingsOpen', { userId: CAROL, envelope: null });
+        await expect(
+            bare.call('groupAccept', {
+                userId: CAROL,
+                groupId: f.groupId,
+                served: f.server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: null },
+            }),
+        ).resolves.toMatchObject({ status: 'accepted', record: null, pin: null });
         const words = await accept({ joining: { joinMark: null } });
         expect(words).toMatchObject({ status: 'accepted', record: null, pin: null });
         // A view, not a chain: nothing opens, stages, trusts or shows a code through it.

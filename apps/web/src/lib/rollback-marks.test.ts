@@ -4,7 +4,11 @@ import {
     identitySeen,
     identityVersionSeen,
     rememberIdentitySeen,
+    rememberSettingsDocumentSeen,
     rememberSettingsSeen,
+    settingsDocumentRolledBack,
+    settingsDocumentSeen,
+    settingsNoneTrusted,
     settingsSeen,
 } from './rollback-marks';
 
@@ -18,6 +22,27 @@ const SAM = '0f6d6c1e-2a49-4d8b-9b1a-4b3f4b8c1d02';
 
 describe('rollback marks', () => {
     beforeEach(() => window.localStorage.clear());
+
+    test('once a settings document opened here, none or a version 1 document is an older copy', () => {
+        expect(settingsDocumentSeen(MAYA)).toBe(false);
+        expect(settingsDocumentRolledBack('none', settingsDocumentSeen(MAYA))).toBe(false);
+        rememberSettingsDocumentSeen(MAYA);
+        expect(settingsDocumentSeen(MAYA)).toBe(true);
+        expect(settingsDocumentSeen(SAM)).toBe(false);
+        expect(settingsDocumentRolledBack('none', true)).toBe(true);
+        expect(settingsDocumentRolledBack(1, true)).toBe(true);
+        expect(settingsDocumentRolledBack(2, true)).toBe(false);
+    });
+
+    test('"no settings" is a reading only for a brand-new account on a device that has seen nothing', () => {
+        expect(settingsNoneTrusted(0, 0, false)).toBe(true);
+        // None served at a sequence above 0: a version 1 document, or settings withheld.
+        expect(settingsNoneTrusted(3, 3, false)).toBe(false);
+        expect(settingsNoneTrusted(4, 0, false)).toBe(false);
+        // This device saw a sequence or a document before.
+        expect(settingsNoneTrusted(0, 2, false)).toBe(false);
+        expect(settingsNoneTrusted(0, 0, true)).toBe(false);
+    });
 
     test('the settings mark is never lowered', () => {
         rememberSettingsSeen(MAYA, 5);

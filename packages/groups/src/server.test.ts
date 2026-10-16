@@ -787,6 +787,44 @@ describe('who reads what', () => {
         );
     });
 
+    test('route 3 names only the members a caller may know, with addresses for active members only', async () => {
+        const fam = await family();
+        const plain = await member();
+        await admitted(fam, plain);
+        const former = await member();
+        await admitted(fam, former);
+        await groups.leave(former.userId, fam.groupId);
+        const waiting = await member();
+        await accepted(fam, waiting);
+        const rows = async (who: Member) =>
+            (await groups.getGroup(who.userId, fam.groupId)).members
+                .map((m) => [m.userId, m.state, m.email] as const)
+                .sort((a, b) => a[0].localeCompare(b[0]));
+        const sorted = (list: (readonly [string, string, string | null])[]) =>
+            [...list].sort((a, b) => a[0].localeCompare(b[0]));
+        // Who manages the family sees everyone, but an address only beside an active member.
+        expect(await rows(fam.organizer)).toEqual(
+            sorted([
+                [fam.organizer.userId, 'active', fam.organizer.email],
+                [plain.userId, 'active', plain.email],
+                [former.userId, 'left', null],
+                [waiting.userId, 'accepted', null],
+            ]),
+        );
+        // A member who doesn't manage it: never who left.
+        expect(await rows(plain)).toEqual(
+            sorted([
+                [fam.organizer.userId, 'active', fam.organizer.email],
+                [plain.userId, 'active', plain.email],
+                [waiting.userId, 'accepted', null],
+            ]),
+        );
+        // Someone who only accepted: who manages the family, and nobody else.
+        expect(await rows(waiting)).toEqual([
+            [fam.organizer.userId, 'active', fam.organizer.email],
+        ]);
+    });
+
     test('spaces list the group area with the account’s grant and self-grant', async () => {
         const fam = await family();
         const [space] = await groups.spaces(fam.organizer.userId);

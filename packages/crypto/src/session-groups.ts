@@ -1022,7 +1022,12 @@ export function createGroupSession(host: GroupHost) {
      */
     const rootSeenAt = new Map<string, number>();
     /* The group pins in the settings this worker last opened or sealed: the only settings marks taken. */
-    let settingsPins: { userId: string; pins: Record<string, GroupPin> } | null = null;
+    let settingsPins: {
+        userId: string;
+        pins: Record<string, GroupPin>;
+        /* Whether they came from a settings document that opened, not from "none". */
+        opened: boolean;
+    } | null = null;
     /* The session's succession verification cache (groupWriterTrust's `verified`). */
     const verified = new Map<string, boolean>();
 
@@ -1086,8 +1091,30 @@ export function createGroupSession(host: GroupHost) {
         if (!isArea(workspaceId)) return;
         rootSeenAt.set(workspaceId, parentKeyEpoch);
     }
+    /*
+     * Within one unlock, settings that opened never give way to none (or to a
+     * version 1 document, which opens as none): a server answering so would
+     * drop the family pins, and with them the marks that keep a family from
+     * being joined again onto another history (decision D7). The client keeps
+     * the same rule across unlocks (its settings document mark).
+     */
     function useSettings(userId: string, settings: { groups?: Record<string, GroupPin> } | null) {
-        settingsPins = { userId, pins: { ...settings?.groups } };
+        if (settings === null) refuseDowngrade(userId);
+        settingsPins = { userId, pins: { ...settings?.groups }, opened: settings !== null };
+    }
+    function refuseDowngrade(userId: string) {
+        if (settingsPins?.userId === userId && settingsPins.opened)
+            throw new CryptoError(
+                'The server sent older settings than this device has opened, so nothing was changed.',
+            );
+    }
+    /*
+     * A version 1 document: it opens nowhere, and is not "no settings" either
+     * (the account has something stored), so it gives acceptance no marks at
+     * all, and after settings that opened it is a rollback.
+     */
+    function legacySettings(userId: string) {
+        refuseDowngrade(userId);
     }
     function commit(chain: AcceptedRosters) {
         chains.set(chain.groupId, chain);
@@ -2815,6 +2842,7 @@ export function createGroupSession(host: GroupHost) {
         requireWritable,
         rootSeen,
         useSettings,
+        legacySettings,
         isArea,
         rotationJudge,
         forget,

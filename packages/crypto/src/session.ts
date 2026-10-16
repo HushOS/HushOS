@@ -224,7 +224,8 @@ type BaseRequests = {
      */
     settingsKeyCreate: { userId: string };
     settingsKeyOpen: { userId: string; settingsKey: SettingsKeyEnvelope };
-    settingsOpen: { userId: string; envelope: SettingsEnvelope };
+    /* `envelope` null: the account has no settings stored yet (a new account), read as none. */
+    settingsOpen: { userId: string; envelope: SettingsEnvelope | null };
     settingsSeal: { userId: string; settingsVersion: number; settings: Settings };
     /*
      * Shares. Seal wraps an open node key to a contact's identity keys in share
@@ -2168,10 +2169,20 @@ export function createCryptoSession() {
             }
             case 'settingsOpen': {
                 const { userId, envelope } = message.input;
+                // None stored: this account's settings are empty, so it holds no group pins. Only
+                // the unlocked account's own reading says so; acceptance takes them as its marks.
+                if (envelope === null) {
+                    if (!accountKey || unlockedUserId !== userId)
+                        throw new CryptoError('Unlock your account first.');
+                    groups.useSettings(userId, null);
+                    return { settings: null };
+                }
                 const ownSettingsKey = settingsKey?.userId === userId ? settingsKey.key : null;
                 const settings = await openSettings(ownSettingsKey, userId, envelope);
                 // The group pins acceptance takes as marks: only from settings this worker opened.
-                groups.useSettings(userId, settings);
+                // A version 1 document (null here) is not a reading of "no settings".
+                if (envelope.version !== 2) groups.legacySettings(userId);
+                else groups.useSettings(userId, settings);
                 return { settings };
             }
             case 'settingsSeal': {
