@@ -436,12 +436,12 @@ export type AcceptInput = {
     mlDsaKeys: Record<string, string>;
     me: { userId: string; identities: ServedKeys[] };
     cache: GroupChainCache | null;
-    /* The mark the join flow's words check gave a newcomer (2.4, milestone 1c), if any. */
+    /* The join code a newcomer compared with the admitting admin's screen (2.4, 3.2), if any. */
     joinMark?: JoinMark | null;
 };
 
 /*
- * What a newcomer's join words check fixes about the roster that admitted
+ * What a newcomer's join code comparison fixes about the roster that admitted
  * them: its version and a twelve-word code (joinCode, 132 bits) over its
  * digest, the group key it is under and that key's version. Acceptance holds
  * it as one of the person's marks: the verified chain must pass through a
@@ -544,7 +544,7 @@ const NO_HOLDER = 'A member list keeps an active member who holds the group key.
 const NOT_MEMBER = 'This is not signed by the member it names.';
 const NOT_GROUP_SIGNED = 'This roster is not signed by the group key.';
 const NO_SUCCESSION = 'A group key succession is missing.';
-const NOT_CHECKED = 'These are not the group keys whose words were checked.';
+const NOT_CHECKED = 'These are not the group keys this person checked.';
 const NOT_BY_OLD_KEY = 'This group key succession is not signed by the key it replaces.';
 const NOT_TIED = 'This group key succession is not tied to a roster on the member list.';
 const OUT_OF_ORDER = 'This group key succession is out of order.';
@@ -1096,7 +1096,7 @@ async function accept(input: Accepting) {
         if (served !== firstMarks[0]!.digest) throw new CryptoError(NOT_CHECKED);
     } else if (!input.firstKeysChecked)
         throw new CryptoError(
-            'These group keys have not been checked: compare the group’s words first.',
+            'These group keys have not been checked: compare the join code first.',
         );
 
     // (2) The chain: from the latest roster served, linked by digest down to the cache or to 1.

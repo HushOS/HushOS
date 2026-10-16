@@ -302,7 +302,7 @@ pub enum MarkSource {
     Served,
 }
 
-/// What a newcomer's join words check fixes about the roster that admitted
+/// What a newcomer's join code comparison fixes about the roster that admitted
 /// them (2.4, milestone 1c): its version and a twelve-word code
 /// ([`join_code`], 132 bits) over its digest, the group key it is under and
 /// that key's version. Acceptance holds it as one of the person's marks: the
@@ -632,7 +632,7 @@ const NOT_MEMBER: &str = "This is not signed by the member it names.";
 const NOT_GROUP_SIGNED: &str = "This roster is not signed by the group key.";
 const NO_SUCCESSION: &str = "A group key succession is missing.";
 const NOT_NEW_KEY: &str = "This group key succession does not replace the key with a new one.";
-const NOT_CHECKED: &str = "These are not the group keys whose words were checked.";
+const NOT_CHECKED: &str = "These are not the group keys this person checked.";
 const NOT_BY_OLD_KEY: &str = "This group key succession is not signed by the key it replaces.";
 const NOT_TIED: &str = "This group key succession is not tied to a roster on the member list.";
 const OUT_OF_ORDER: &str = "This group key succession is out of order.";
@@ -1175,8 +1175,8 @@ pub fn accept_rosters(
     )
 }
 
-/// `accept_rosters` with the newcomer's join mark ([`JoinMark`]), the one the
-/// join flow's words check gave them, held as one of their marks.
+/// `accept_rosters` with the newcomer's join mark ([`JoinMark`]): the join code
+/// they compared with the admitting admin's screen, held as one of their marks.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::too_many_arguments)]
 pub fn accept_rosters_joining(
@@ -1329,9 +1329,7 @@ fn accept(
             }
         }
         None if !first_keys_checked => {
-            return Err(
-                input("These group keys have not been checked: compare the group’s words first.").into()
-            )
+            return Err(input("These group keys have not been checked: compare the join code first.").into())
         }
         None => {}
     }
@@ -3095,7 +3093,7 @@ mod tests {
                             ..Over::default()
                         },
                     ),
-                    "not the group keys whose words were checked",
+                    "not the group keys this person checked",
                 );
             }
         }
@@ -4276,7 +4274,7 @@ mod tests {
                 &f,
                 Over { cache: Some(cache), rosters: Some(rest), first: Some(other_key()), ..Over::default() },
             ),
-            "not the group keys whose words were checked",
+            "not the group keys this person checked",
         );
         // A cache through 4, given nothing to extend it with: it alone must hold together.
         let four = accepted(newcomer(&f, Over::default())).cache.clone();

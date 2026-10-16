@@ -4,13 +4,15 @@ import { describe, expect, test } from 'vitest';
 
 /*
  * F1 (docs/groups-design.md 2.4, "With no marks at all"): a device with no
- * mark accepts a family's member list only over first keys the person just
- * checked, and exactly two places may say so. The join flow passes `joining`
- * to groupAccept, and only lib/groups/join.ts may; the creator's first
- * acceptance passes `creating`, and only the outbox's creation entry may,
- * through lib/groups/sync.ts. The worker refuses either once any mark exists,
- * but on a fresh device nothing else stands between a server's made-up group
- * key and the person's trust: so any other module naming either is a defect.
+ * mark accepts a family's member list only with the join code the person
+ * compared with the admin's screen, or over keys its own seed made, and
+ * exactly two places may say so. The join flow passes `joining` (with that
+ * code) to groupAccept, and only lib/groups/join.ts may, once the person said
+ * "They match"; the creator's first acceptance passes `creating`, and only the
+ * outbox's creation entry may, through lib/groups/sync.ts. The worker refuses
+ * `creating` once any mark exists, but on a fresh device nothing else stands
+ * between a server's made-up group key and the person's trust: so any other
+ * module naming either is a defect.
  *
  * Comments are left out: what is scanned is code that names the field (as a
  * key, a shorthand property, a quoted name or an assignment), and, beside it,
@@ -20,7 +22,7 @@ import { describe, expect, test } from 'vitest';
 const ROOT = join(import.meta.dirname, '..', '..');
 /* Each field, where it is scanned, and the only modules that may name it there. */
 const ALLOWED: Record<string, { under: string; only: string[] }> = {
-    // Anywhere in the app: nothing but the join flow ever says the words were just checked.
+    // Anywhere in the app: nothing but the join flow ever hands over a compared join code.
     joining: { under: '', only: ['lib/groups/join.ts'] },
     // The UI says "creating" of folders; within the families layer only the creation path may.
     creating: { under: 'lib/groups/', only: ['lib/groups/outbox.ts', 'lib/groups/sync.ts'] },

@@ -2,8 +2,15 @@ import { describe, expect, test } from 'vitest';
 import type { ContactPin, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';
 import { createDeviceKey, rememberAccountKey } from './device';
 import { fingerprint, hexBytes, keyDigest } from './fingerprint';
-import type { GroupChainCache } from './group-trust';
-import { groupKeyPair, newGroupSeed, parseRoster, rosterDigest, type GroupRole } from './groups';
+import type { GroupChainCache, JoinMark } from './group-trust';
+import {
+    groupKeyPair,
+    newGroupSeed,
+    parseRoster,
+    rosterDigest,
+    signGroup,
+    type GroupRole,
+} from './groups';
 import {
     createIdentity,
     publicIdentity,
@@ -294,7 +301,7 @@ async function family(bobRoles: GroupRole[] = []) {
     await alice.call('groupDrop', { outboxId: admit.outboxId });
     server.store(admit.body);
     await sync(alice, marks.alice);
-    await sync(bob, marks.bob, { joining: { joinMark: admit.joinCode } });
+    await sync(bob, marks.bob, { joining: { joinMark: admit.joinCode! } });
     const bobGrant = admit.body.grants!.find((grant) => grant.granteeUserId === BOB)!;
     const bobOpened = await bob.call('groupOpenArea', {
         groupId,
@@ -548,13 +555,13 @@ describe('who may vouch for a family’s first keys', () => {
                 record,
                 checkedAt: CHECKED,
                 joining: {
-                    joinMark:
-                        over.code === null
-                            ? null
-                            : {
-                                  rosterVersion: admit.joinCode!.rosterVersion,
-                                  code: over.code ?? admit.joinCode!.code,
-                              },
+                    // A mark-less join is refused at run time; the type never allows one.
+                    joinMark: (over.code === null
+                        ? null
+                        : {
+                              rosterVersion: admit.joinCode!.rosterVersion,
+                              code: over.code ?? admit.joinCode!.code,
+                          }) as JoinMark,
                 },
             });
         // The record and the pin hold, and the right code with them: accepted.
@@ -569,16 +576,17 @@ describe('who may vouch for a family’s first keys', () => {
         // A fresh device with only the settings pin: made-up first keys are refused, never vouched for.
         const fresh = await bob.device();
         await expect(join(fresh, null, { firstKeys: madeUp })).rejects.toThrow(
-            /not the group keys whose words were checked/,
+            /not the group keys this person checked/,
         );
         await expect(join(fresh, null)).resolves.toMatchObject({ status: 'accepted' });
         // Without the pin and the record, a chain this session committed vouches for nothing either.
         delete bob.settings.groups[groupId];
         await saveSettings(fresh);
         await loadSettings(fresh);
-        // With no code yet, joining does not vouch for the served keys on a device that has
-        // checked the family (its committed chain): the words step gives no view over them.
-        await expect(join(fresh, null, { code: null })).rejects.toThrow();
+        // With no code, joining is refused outright: there is no joining before the code.
+        await expect(join(fresh, null, { code: null })).rejects.toThrow(
+            /Compare the join code first/,
+        );
         // Creation's vouching is refused wherever marks exist.
         await expect(
             f.alice.call('groupAccept', {
@@ -608,20 +616,18 @@ describe('who may vouch for a family’s first keys', () => {
                 envelope: { ...bob.settings.envelope!, version: 1 },
             }),
         ).rejects.toThrow(/older settings/);
-        // The pin is still a mark: joining vouches for nothing, and other first keys are refused.
+        // The pin is still a mark: no join code is worked out over other first keys.
         await expect(
-            fresh.call('groupAccept', {
+            fresh.call('groupJoinPreview', {
                 userId: BOB,
                 groupId,
                 served: { ...server.served(), firstKeys: madeUp },
                 record: null,
-                checkedAt: CHECKED,
-                joining: { joinMark: null },
             }),
-        ).rejects.toThrow(/not the group keys whose words were checked/);
+        ).rejects.toThrow(/not the group keys this person checked/);
     });
 
-    test('with no mark and no vouching nothing is accepted, and joining before the code gives a view only', async () => {
+    test('with no mark nothing is accepted without the join code, and the preview works out the code from settings it opened only', async () => {
         const f = await family();
         const carol = await account(CAROL);
         const accept = (extra: Partial<CryptoRequests['groupAccept']> = {}) =>
@@ -633,84 +639,35 @@ describe('who may vouch for a family’s first keys', () => {
                 checkedAt: CHECKED,
                 ...extra,
             });
-        await expect(accept()).rejects.toThrow(/compare the group’s words/);
-        // The worker takes settings marks only from settings it opened itself.
-        const bare = await bareDevice(carol);
-        await expect(
-            bare.call('groupAccept', {
+        await expect(accept()).rejects.toThrow(/compare the join code first/);
+        await expect(accept({ joining: { joinMark: null as never } })).rejects.toThrow(
+            /Compare the join code first/,
+        );
+        const preview = (who: { call: Call }) =>
+            who.call('groupJoinPreview', {
                 userId: CAROL,
                 groupId: f.groupId,
                 served: f.server.served(),
                 record: null,
-                checkedAt: CHECKED,
-                joining: { joinMark: null },
-            }),
-        ).rejects.toThrow(/Open your settings first/);
+            });
+        // The worker takes settings marks only from settings it opened itself.
+        const bare = await bareDevice(carol);
+        await expect(preview(bare)).rejects.toThrow(/Open your settings first/);
         // A new account has no settings stored: reading none is a reading, for that account only.
         await expect(bare.call('settingsOpen', { userId: ALICE, envelope: null })).rejects.toThrow(
             /Unlock your account first/,
         );
-        await expect(
-            bare.call('groupAccept', {
-                userId: CAROL,
-                groupId: f.groupId,
-                served: f.server.served(),
-                record: null,
-                checkedAt: CHECKED,
-                joining: { joinMark: null },
-            }),
-        ).rejects.toThrow(/Open your settings first/);
-        // A version 1 document is not "no settings": acceptance still has no settings to go on.
+        await expect(preview(bare)).rejects.toThrow(/Open your settings first/);
+        // A version 1 document is not "no settings": the preview still has no settings to go on.
         await bare.call('settingsOpen', {
             userId: CAROL,
             envelope: { ...carol.settings.envelope!, version: 1 },
         });
-        await expect(
-            bare.call('groupAccept', {
-                userId: CAROL,
-                groupId: f.groupId,
-                served: f.server.served(),
-                record: null,
-                checkedAt: CHECKED,
-                joining: { joinMark: null },
-            }),
-        ).rejects.toThrow(/Open your settings first/);
+        await expect(preview(bare)).rejects.toThrow(/Open your settings first/);
         await bare.call('settingsOpen', { userId: CAROL, envelope: null });
-        await expect(
-            bare.call('groupAccept', {
-                userId: CAROL,
-                groupId: f.groupId,
-                served: f.server.served(),
-                record: null,
-                checkedAt: CHECKED,
-                joining: { joinMark: null },
-            }),
-        ).resolves.toMatchObject({ status: 'accepted', record: null, pin: null });
-        const words = await accept({ joining: { joinMark: null } });
-        expect(words).toMatchObject({ status: 'accepted', record: null, pin: null });
-        // A view, not a chain: nothing opens, stages, trusts or shows a code through it.
-        const { area, groupId } = f;
-        await expect(
-            carol.call('groupOpenArea', {
-                groupId,
-                workspaceId: f.ws,
-                idSeed: area.idSeed,
-                servedVersion: 1,
-                grant: null,
-                selfGrant: null,
-            }),
-        ).rejects.toThrow(/Check the family’s member list first/);
-        await expect(
-            carol.call('groupTrustAs', {
-                groupId,
-                userId: BOB,
-                served: f.bob.served,
-                contact: { email: 'b@example.com', name: 'Bob', pinnedAt: CHECKED },
-            }),
-        ).rejects.toThrow(/Check the family’s member list first/);
-        await expect(carol.call('groupJoinCode', { groupId, version: 2 })).rejects.toThrow(
-            /Check the family’s member list first/,
-        );
+        // Carol is on no member list yet: nothing to compare.
+        await expect(preview(bare)).resolves.toEqual({ status: 'not-admitted' });
+        await expect(preview(carol)).resolves.toEqual({ status: 'not-admitted' });
     });
 
     test('committed but not yet pinned: after a reload the outbox entry’s seed vouches for the keys it made, and only those', async () => {
@@ -743,7 +700,7 @@ describe('who may vouch for a family’s first keys', () => {
         ).resolves.toMatchObject({ status: 'accepted', dropped: [created.outboxId] });
         // The server stored the call; the device reloaded before writing its record and pin.
         const reloaded = await alice.device();
-        await expect(accept(reloaded, {})).rejects.toThrow(/compare the group’s words/);
+        await expect(accept(reloaded, {})).rejects.toThrow(/compare the join code first/);
         await expect(
             accept(reloaded, { creating: { stagedEnvelope: other.stagedEnvelope } }),
         ).rejects.toThrow(/could not be opened/);
@@ -766,6 +723,342 @@ describe('who may vouch for a family’s first keys', () => {
     });
 });
 
+describe('the join code a newcomer compares (groupJoinPreview)', () => {
+    /* Alice signs Carol's admission on top of the committed chain (version 2, Bob a member). */
+    async function admitCarol(f: Family, carol: Account, roles: GroupRole[] = []) {
+        const staged = await f.alice.call('groupStage', {
+            groupId: f.groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'admit',
+                userId: CAROL,
+                pin: await pinOf(carol),
+                served: carol.served,
+                roles,
+            },
+            kems: { [BOB]: f.bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
+        });
+        if (staged.outboxId === null) throw new Error('nothing staged');
+        await f.alice.call('groupDrop', { outboxId: staged.outboxId });
+        return staged;
+    }
+    const previewOf = (
+        f: Family,
+        who: { call: Call },
+        userId: string,
+        record: string | null = null,
+    ) =>
+        who.call('groupJoinPreview', {
+            userId,
+            groupId: f.groupId,
+            served: f.server.served(),
+            record,
+        });
+
+    test('it is the code of the roster that let the newcomer in, as the admin’s screen shows it, and nothing is kept', async () => {
+        const f = await family();
+        const { alice, groupId, server, marks } = f;
+        const carol = await account(CAROL);
+        await expect(previewOf(f, carol, CAROL)).resolves.toEqual({ status: 'not-admitted' });
+        const admitted = await admitCarol(f, carol);
+        server.store(admitted.body);
+        await f.sync(alice, marks.alice);
+        // The head moves on after the admission: the code is still the admitting roster's.
+        const later = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 3,
+            op: { kind: 'area', name: 'Photos' },
+            kems: { [BOB]: f.bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
+        });
+        if (later.outboxId === null) throw new Error('nothing staged');
+        await alice.call('groupDrop', { outboxId: later.outboxId });
+        server.store(later.body);
+        await f.sync(alice, marks.alice);
+        const shown = await previewOf(f, carol, CAROL);
+        expect(shown).toEqual({ status: 'code', rosterVersion: 3, code: admitted.joinCode!.code });
+        // Alice's screen works out the same code from her committed chain.
+        await expect(
+            alice.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
+        ).resolves.toEqual({ rosterVersion: 3, code: admitted.joinCode!.code, pinMatches: null });
+        // With Alice's pin of Carol: her entry on that roster is the pinned keys; Bob's pin is not.
+        await expect(
+            alice.call('groupJoinCode', {
+                groupId,
+                userId: CAROL,
+                rosters: server.rosters,
+                pin: await pinOf(carol),
+            }),
+        ).resolves.toMatchObject({ pinMatches: true });
+        await expect(
+            alice.call('groupJoinCode', {
+                groupId,
+                userId: CAROL,
+                rosters: server.rosters,
+                pin: { ...(await pinOf(f.bob)), userId: CAROL },
+            }),
+        ).resolves.toMatchObject({ pinMatches: false });
+        // Nothing was committed or marked on Carol's side: no chain and no fork to forget, and
+        // nothing opens, trusts or shows a code through what the preview verified.
+        await expect(carol.call('groupForget', { groupId })).resolves.toEqual({ forgotten: false });
+        await expect(
+            carol.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
+        ).rejects.toThrow(/Check the family’s member list first/);
+        await expect(
+            carol.call('groupOpenArea', {
+                groupId,
+                workspaceId: f.ws,
+                idSeed: f.area.idSeed,
+                servedVersion: 1,
+                grant: null,
+                selfGrant: null,
+            }),
+        ).rejects.toThrow(/Check the family’s member list first/);
+        const accept = (extra: Partial<CryptoRequests['groupAccept']> = {}) =>
+            carol.call('groupAccept', {
+                userId: CAROL,
+                groupId,
+                served: server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                ...extra,
+            });
+        await expect(accept()).rejects.toThrow(/compare the join code first/);
+        // Carol says the codes match: accepted, with the code as her mark.
+        if (shown.status !== 'code') throw new Error(shown.status);
+        await expect(
+            accept({
+                joining: { joinMark: { rosterVersion: shown.rosterVersion, code: shown.code } },
+            }),
+        ).resolves.toMatchObject({ status: 'accepted', pin: { rosterVersion: 4 } });
+    });
+
+    test('another admission than the one read out gives another code, and the code read out then forks; made-up first keys give none', async () => {
+        const f = await family();
+        const carol = await account(CAROL);
+        const readOut = await admitCarol(f, carol);
+        const stored = await admitCarol(f, carol, ['guardian']);
+        f.server.store(stored.body);
+        const shown = await previewOf(f, carol, CAROL);
+        expect(shown).toEqual({ status: 'code', rosterVersion: 3, code: stored.joinCode!.code });
+        expect(stored.joinCode!.code).not.toEqual(readOut.joinCode!.code);
+        // Acceptance takes only the code the person confirmed: the admin's, which this history
+        // does not pass through.
+        await expect(
+            carol.call('groupAccept', {
+                userId: CAROL,
+                groupId: f.groupId,
+                served: f.server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: readOut.joinCode! },
+            }),
+        ).resolves.toMatchObject({ status: 'fork', fork: { of: 'roster', version: 3 } });
+        // First keys that sign none of the served member lists: no code at all.
+        const other = await account(CAROL);
+        const madeUp = (await groupKeyPair(newGroupSeed())).publicKey;
+        await expect(
+            other.call('groupJoinPreview', {
+                userId: CAROL,
+                groupId: f.groupId,
+                served: { ...f.server.served(), firstKeys: madeUp },
+                record: null,
+            }),
+        ).rejects.toThrow(/not signed by the group key/);
+        await expect(other.call('groupForget', { groupId: f.groupId })).resolves.toEqual({
+            forgotten: false,
+        });
+    });
+
+    test('rosters re-signed under made-up first keys give a code that is not Alice’s, and her code then forks', async () => {
+        const f = await family();
+        const { alice, groupId, server, marks } = f;
+        const carol = await account(CAROL);
+        const admitted = await admitCarol(f, carol);
+        server.store(admitted.body);
+        await f.sync(alice, marks.alice);
+        const alices = await alice.call('groupJoinCode', {
+            groupId,
+            userId: CAROL,
+            rosters: server.rosters,
+        });
+        // The server's own version 1 keys, every roster group-signed again under them (the
+        // statements name no group key, so they verify).
+        const made = await groupKeyPair(newGroupSeed());
+        const remade = await Promise.all(
+            server.rosters.map(async (roster) => {
+                const signature = await signGroup(decode(roster.statement), made);
+                return {
+                    ...roster,
+                    signature: {
+                        ed25519: encode(signature.ed25519),
+                        mlDsa: encode(signature.mlDsa),
+                    },
+                };
+            }),
+        );
+        const served = { ...server.served(), firstKeys: made.publicKey, rosters: remade };
+        const shown = await carol.call('groupJoinPreview', {
+            userId: CAROL,
+            groupId,
+            served,
+            record: null,
+        });
+        expect(shown).toMatchObject({ status: 'code', rosterVersion: 3 });
+        if (shown.status !== 'code') throw new Error(shown.status);
+        expect(shown.code).not.toEqual(alices.code);
+        expect(alices).toMatchObject({ rosterVersion: 3, code: admitted.joinCode!.code });
+        // Carol's device takes only Alice's code, which this history does not pass through.
+        await expect(
+            carol.call('groupAccept', {
+                userId: CAROL,
+                groupId,
+                served,
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: { rosterVersion: alices.rosterVersion, code: alices.code } },
+            }),
+        ).resolves.toMatchObject({ status: 'fork', fork: { of: 'roster', version: 3 } });
+    });
+
+    test('after a key holder’s removal the admission is under key 2, and both screens and acceptance agree on its code', async () => {
+        const f = await family(['members']);
+        const { alice, groupId, ws, server, marks } = f;
+        const removal = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'remove',
+                userId: BOB,
+                rotations: [
+                    { workspaceId: ws, targetEpoch: 7, root: f.rootInput(), documents: [] },
+                ],
+            },
+            kems: {},
+            writers: [],
+        });
+        if (removal.outboxId === null) throw new Error('nothing staged');
+        expect(removal.body.succession).toBeTruthy();
+        server.store(removal.body);
+        await alice.call('groupDrop', { outboxId: removal.outboxId });
+        await f.sync(alice, marks.alice);
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: f.area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: removal.body.rotations![0]!.selfGrant,
+        });
+        await alice.call('groupOpenSeal', {
+            groupId,
+            seal: { ...removal.body.seals![0]!, sealerUserId: ALICE },
+            sealerMlDsaPublicKey: alice.served.mlDsaPublicKey,
+        });
+        const carol = await account(CAROL);
+        const admitted = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 3,
+            op: {
+                kind: 'admit',
+                userId: CAROL,
+                pin: await pinOf(carol),
+                served: carol.served,
+                roles: [],
+            },
+            kems: { [CAROL]: carol.served.kemPublicKey },
+        });
+        if (admitted.outboxId === null) throw new Error('nothing staged');
+        await alice.call('groupDrop', { outboxId: admitted.outboxId });
+        server.store(admitted.body);
+        await expect(f.sync(alice, marks.alice)).resolves.toMatchObject({
+            view: { rosterVersion: 4, groupKeyVersion: 2 },
+        });
+        const shown = await previewOf(f, carol, CAROL);
+        expect(shown).toEqual({ status: 'code', rosterVersion: 4, code: admitted.joinCode!.code });
+        await expect(
+            alice.call('groupJoinCode', { groupId, userId: CAROL, rosters: server.rosters }),
+        ).resolves.toEqual({ rosterVersion: 4, code: admitted.joinCode!.code, pinMatches: null });
+        if (shown.status !== 'code') throw new Error(shown.status);
+        await expect(
+            carol.call('groupAccept', {
+                userId: CAROL,
+                groupId,
+                served: server.served(),
+                record: null,
+                checkedAt: CHECKED,
+                joining: { joinMark: { rosterVersion: 4, code: shown.code } },
+            }),
+        ).resolves.toMatchObject({ status: 'accepted', view: { groupKeyVersion: 2 } });
+    });
+
+    test('a rejoin: against the settings pin, the code is the roster that let them in again, and another history is a fork the preview leaves unset', async () => {
+        const f = await family();
+        const { alice, bob, groupId, ws, server, marks } = f;
+        const removal = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'remove',
+                userId: BOB,
+                rotations: [
+                    { workspaceId: ws, targetEpoch: 7, root: f.rootInput(), documents: [] },
+                ],
+            },
+            kems: {},
+            writers: [],
+        });
+        if (removal.outboxId === null) throw new Error('nothing staged');
+        server.store(removal.body);
+        await alice.call('groupDrop', { outboxId: removal.outboxId });
+        await f.sync(alice, marks.alice);
+        await alice.call('groupOpenArea', {
+            groupId,
+            workspaceId: ws,
+            idSeed: f.area.idSeed,
+            servedVersion: 2,
+            grant: null,
+            selfGrant: removal.body.rotations![0]!.selfGrant,
+        });
+        const readmit = async (roles: GroupRole[]) => {
+            const staged = await alice.call('groupStage', {
+                groupId,
+                expectedRevision: 3,
+                op: {
+                    kind: 'admit',
+                    userId: BOB,
+                    pin: await pinOf(bob),
+                    served: bob.served,
+                    roles,
+                },
+                kems: { [BOB]: bob.served.kemPublicKey },
+            });
+            if (staged.outboxId === null) throw new Error('nothing staged');
+            await alice.call('groupDrop', { outboxId: staged.outboxId });
+            return staged;
+        };
+        const again = await readmit([]);
+        const rival = await readmit(['guardian']);
+        server.store(again.body);
+        // A device of Bob's with only the settings pin (version 2): the code is version 4's, not 2's.
+        const fresh = await bob.device();
+        const shown = await previewOf(f, fresh, BOB);
+        expect(shown).toEqual({ status: 'code', rosterVersion: 4, code: again.joinCode!.code });
+        await f.sync(fresh, { record: null }, { joining: { joinMark: again.joinCode! } });
+        expect(bob.settings.groups[groupId]).toMatchObject({ rosterVersion: 4 });
+        // The server then serves the rival re-admission at version 4: the pin's history forks.
+        server.rosters[3] = rival.body.roster;
+        const another = await bob.device();
+        await expect(previewOf(f, another, BOB)).resolves.toMatchObject({
+            status: 'fork',
+            fork: { of: 'roster', version: 4 },
+        });
+        // The preview set no fork: nothing to forget.
+        await expect(another.call('groupForget', { groupId })).resolves.toEqual({
+            forgotten: false,
+        });
+    });
+});
+
 describe('staged chains', () => {
     test('a staged roster never becomes a mark, and losing a stale race then re-syncing raises no fork', async () => {
         const f = await family();
@@ -780,9 +1073,14 @@ describe('staged chains', () => {
         const loser = await stage('Photos');
         const winner = await stage('Documents');
         if (loser.outboxId === null || winner.outboxId === null) throw new Error('nothing staged');
-        await expect(alice.call('groupJoinCode', { groupId, version: 3 })).rejects.toThrow(
-            /not on the family’s history/,
-        );
+        // The staged roster is not on the committed chain: served beside it, it is not read.
+        await expect(
+            alice.call('groupJoinCode', {
+                groupId,
+                userId: BOB,
+                rosters: [...server.served().rosters, loser.body.roster],
+            }),
+        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: null });
         const cacheOf = async (record: string) =>
             (
                 (await openDeviceRecord(alice.root, ALICE, groupId, 'chains', record)) as {
@@ -1429,7 +1727,7 @@ describe('group verdicts', () => {
                 record: f.marks.alice.record,
                 checkedAt: CHECKED,
             }),
-        ).rejects.toThrow(/not the group keys whose words were checked/);
+        ).rejects.toThrow(/not the group keys this person checked/);
         await expect(verify(writer({}, f.bob.served))).resolves.toMatchObject({
             metadata: 'unchecked',
         });
@@ -2202,9 +2500,9 @@ describe('the device store and the lock', () => {
             action: 'password',
         });
         await expect(writeAtRoot(LATER)).resolves.toBeTruthy();
-        await expect(alice.call('groupJoinCode', { groupId, version: 2 })).resolves.toEqual({
-            code: f.admit.joinCode!.code,
-        });
+        await expect(
+            alice.call('groupJoinCode', { groupId, userId: BOB, rosters: f.server.rosters }),
+        ).resolves.toEqual({ rosterVersion: 2, code: f.admit.joinCode!.code, pinMatches: null });
     });
 
     test('a lock forgets the chains, seeds, staged secrets and area keys', async () => {

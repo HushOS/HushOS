@@ -6,7 +6,7 @@ import { noticeCopy } from '@/lib/groups/copy';
 const FROM: Record<string, string> = {
     pin: 'your account’s earlier check',
     cache: 'this device’s earlier check',
-    join: 'the join code you typed',
+    join: 'the join code you compared',
     served: 'what the server shows now',
 };
 
@@ -23,7 +23,7 @@ export function ForkAlert({ family, fork }: { family: string; fork: RosterFork }
             <AlertDescription>
                 <p>
                     This device won’t change anything in {family} until it’s sorted. Tell the other
-                    members, and compare the family’s words with one of them.
+                    members, and don’t use this family until you’ve sorted it out together.
                 </p>
                 <details className="mt-2">
                     <summary className="cursor-pointer text-[13px] font-semibold text-foreground">
@@ -55,10 +55,13 @@ export function ForkAlert({ family, fork }: { family: string; fork: RosterFork }
 export function NoticeList({
     notices,
     nameOf,
+    personOf,
 }: {
     notices: readonly GroupNotice[];
     /* The family a notice is about, by its id, when the page knows it. */
     nameOf?: (groupId: string) => string | undefined;
+    /* A person a notice names, by their user id, when the page knows them. */
+    personOf?: (userId: string) => string | undefined;
 }) {
     if (notices.length === 0) return null;
     return (
@@ -66,13 +69,18 @@ export function NoticeList({
             {notices.map((notice, index) => (
                 <Alert
                     key={`${notice.kind}-${index}`}
-                    variant={notice.kind === 'changes-lost' ? 'warning' : 'info'}
+                    variant={
+                        notice.kind === 'changes-lost' || notice.kind === 'admission-dropped'
+                            ? 'warning'
+                            : 'info'
+                    }
                     data-notice={notice.kind}
                 >
                     <AlertDescription>
                         {noticeCopy(
                             notice,
                             'groupId' in notice ? nameOf?.(notice.groupId) : undefined,
+                            personOf,
                         )}
                     </AlertDescription>
                 </Alert>

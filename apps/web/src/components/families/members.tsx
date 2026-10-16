@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { EllipsisIcon, MailIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { RowMenuButton } from '@/components/drive/file-list';
+import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
 import {
     AlertDialog,
@@ -43,6 +44,7 @@ import {
 } from '@/lib/families';
 import { groupsApi } from '@/lib/groups/api';
 import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
+import { memberJoinCode } from '@/lib/groups/join';
 import { stageChange, type StageOutcome } from '@/lib/groups/outbox';
 import { cue } from '@/lib/sounds';
 import { LetInDialog } from './let-in-dialog';
@@ -113,22 +115,26 @@ export function PendingList({
     blocked?: string | null;
 }) {
     const [letting, setLetting] = useState<PendingPerson | null>(null);
-    if (pending.length === 0) return null;
     return (
-        <Section title="Waiting to join">
-            {pending.map((person) => (
-                <Row
-                    key={person.userId}
-                    name={person.name}
-                    seed={person.userId}
-                    data={{ 'data-pending': person.email }}
-                    line={`${person.email} · accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
-                >
-                    <Button variant="outline" onClick={() => setLetting(person)}>
-                        Let them in
-                    </Button>
-                </Row>
-            ))}
+        <>
+            {pending.length > 0 && (
+                <Section title="Waiting to join">
+                    {pending.map((person) => (
+                        <Row
+                            key={person.userId}
+                            name={person.name}
+                            seed={person.userId}
+                            data={{ 'data-pending': person.email }}
+                            line={`${person.email} · accepted ${formatWhen(person.acceptedAt, { lower: true })}`}
+                        >
+                            <Button variant="outline" onClick={() => setLetting(person)}>
+                                Let them in
+                            </Button>
+                        </Row>
+                    ))}
+                </Section>
+            )}
+            {/* Kept open once they're in and off this list: the join code is compared then. */}
             {letting && (
                 <LetInDialog
                     userId={userId}
@@ -141,7 +147,7 @@ export function PendingList({
                     onOpenChange={(open) => !open && setLetting(null)}
                 />
             )}
-        </Section>
+        </>
     );
 }
 
@@ -324,14 +330,6 @@ export function MemberList({
                     userId={userId}
                     groupId={groupId}
                     member={showingCode}
-                    version={
-                        view?.members.some(
-                            (entry) =>
-                                entry.userId === showingCode.userId && entry.status === 'active',
-                        )
-                            ? view.rosterVersion
-                            : null
-                    }
                     onClose={() => setShowingCode(null)}
                 />
             )}
@@ -347,7 +345,7 @@ function stageFailure(staged: StageOutcome, ctx: Parameters<typeof outcomeCopy>[
             ? `${ctx?.family ?? 'The family'}’s member list was shown differently to you.`
             : `Couldn’t check ${ctx?.family ?? 'the family'}. Try again.`;
     if (staged.status === 'nothing') return null;
-    return 'This is waiting for you to finish checking.';
+    return 'An earlier change to this person is still waiting to be sent. Try again from Let them in.';
 }
 
 function RoleConfirm({
@@ -392,35 +390,28 @@ function RoleConfirm({
 }
 
 /*
- * A join code again, for a newcomer whose typed code did not match: the code
- * of the newest member list this device checked. Any member list at or after
- * the one that let them in is a mark that covers it (the newcomer's device
- * then checks the family's history through it), so the newest is used: it
- * needs no version from the server, which a server could pick to cover less,
- * and it is the number the newcomer's screen offers first. Both screens show
- * the number, so the two compare it too.
+ * A member's join code again, for a newcomer comparing it after the "Let
+ * them in" dialog closed: worked out from this device's committed chain for
+ * the member list that let them in, as the newcomer's screen does.
  */
 function JoinCodeDialog({
     userId,
     groupId,
     member,
-    version,
     onClose,
 }: {
     userId: string;
     groupId: string;
     member: FamilyMember;
-    version: number | null;
     onClose: () => void;
 }) {
     const who = firstName(member.name);
     const code = useQuery({
-        queryKey: ['families', userId, 'family', groupId, 'join-code', member.userId, version],
-        queryFn: async () => {
-            if (version === null) throw new Error('Reload the page, then try again.');
-            return (await familyContext(userId).rpc('groupJoinCode', { groupId, version })).code;
-        },
-        staleTime: Infinity,
+        queryKey: ['families', userId, 'family', groupId, 'join-code', member.userId],
+        queryFn: async () =>
+            (await memberJoinCode(familyContext(userId), groupId, member.userId)).code,
+        staleTime: 0,
+        gcTime: 0,
         retry: false,
     });
     return (
@@ -429,20 +420,18 @@ function JoinCodeDialog({
                 <DialogHeader>
                     <DialogTitle>{who}’s join code</DialogTitle>
                     <DialogDescription>
-                        If {who}’s screen says the join code didn’t match, read this to them again.
+                        Read all twelve words to {who}. Two are hidden on {who}’s screen; {who}
+                        types those.
                     </DialogDescription>
                 </DialogHeader>
-                {code.isPending ? null : code.isError ? (
+                {code.isPending ? (
+                    <Spinner className="size-4 text-muted-foreground" />
+                ) : code.isError ? (
                     <p role="alert" className="text-sm text-destructive">
                         {errorCopy(code.error)}
                     </p>
                 ) : (
-                    <div className="flex flex-col gap-3">
-                        <p className="text-[15px] font-semibold">
-                            Join code for member list {version}
-                        </p>
-                        <WordList words={code.data} label="Join code" kind="join-code" />
-                    </div>
+                    <WordList words={code.data} label="Join code" kind="join-code" />
                 )}
             </DialogContent>
         </Dialog>

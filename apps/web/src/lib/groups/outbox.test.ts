@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import {
-    confirmAdmission,
     createFamily,
-    dropAdmission,
+    dropHeldBack,
+    dropKeptAdmission,
+    letIn,
     loadOutbox,
     RESEND_DELAYS_MS,
     resumeOutbox,
     sendChainCall,
     stageChange,
-    waitingAdmission,
     type OutboxEntry,
 } from './outbox';
 import { createMemoryGroupStore, createUnavailableGroupStore } from './store';
@@ -337,52 +337,189 @@ describe('wiping', () => {
 });
 
 describe('admissions', () => {
-    test('wait for the admin’s check: never sent on their own, a reload included, and the same roster after it', async () => {
-        const store = createMemoryGroupStore();
-        const h = harness({ store });
+    const NEWCOMER = 'c0c0c0c0-0000-4000-8000-000000000004';
+    const admit = {
+        kind: 'admit' as const,
+        userId: NEWCOMER,
+        pin: { fingerprint: 'fp-checked' } as never,
+        served: {} as never,
+        roles: [],
+    };
+    /* Synced, with the admin's contact pin of the newcomer at `fingerprint`. */
+    async function checked(h: ReturnType<typeof harness>, fingerprint = 'fp-checked') {
         await synced(h);
-        const newcomer = 'c0c0c0c0-0000-4000-8000-000000000004';
-        const staged = await stageChange(h.ctx, GROUP, {
-            kind: 'admit',
-            userId: newcomer,
-            pin: {} as never,
-            served: {} as never,
-            roles: [],
+        h.settings.doc.contacts = { [NEWCOMER]: { fingerprint } as never };
+    }
+    /* An earlier version's admission, held back until its join code was typed, as it kept them. */
+    async function heldBack(h: ReturnType<typeof harness>, id = 'held-1') {
+        const held = entry({
+            id,
+            route: { kind: 'admit', userId: NEWCOMER },
+            body: rosterBody('held'),
+            state: 'awaiting-check',
         });
-        expect(staged.status).toBe('awaiting-check');
-        expect(h.server.sent).toEqual([]);
-        // Sending it directly does nothing either.
-        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
-        expect(await sendChainCall(h.ctx, staged.entry)).toEqual({ status: 'awaiting-check' });
-        // The tab reloads: the next open sends nothing, and the dialog finds the same roster and code.
-        const reopened = harness({ store });
-        expect((await resumeOutbox(reopened.ctx)).outcomes).toEqual(new Map());
-        expect(reopened.server.sent).toEqual([]);
-        const waiting = await waitingAdmission(reopened.ctx, GROUP, newcomer);
-        expect(waiting?.body).toEqual(staged.entry.body);
-        expect(waiting?.joinCode).toEqual(staged.joinCode);
-        // "Let them in": only now does it go, as it was signed.
-        expect((await confirmAdmission(reopened.ctx, waiting!)).status).toBe('landed');
-        expect(reopened.server.sent).toEqual([
-            { route: 'admit', body: JSON.stringify(staged.entry.body) },
+        await h.store.putOutbox({
+            id,
+            userId: USER,
+            groupId: GROUP,
+            envelope: `sealed:${JSON.stringify(held)}`,
+        });
+        return held;
+    }
+
+    test('“Let them in” signs the admission and sends it there and then, holding the lock', async () => {
+        const h = harness();
+        await checked(h);
+        const outcome = await letIn(h.ctx, GROUP, admit);
+        if (outcome.status !== 'sent') throw new Error(outcome.status);
+        expect(outcome.outcome.status).toBe('landed');
+        expect(h.server.sent).toEqual([
+            { route: 'admit', body: JSON.stringify(outcome.entry.body) },
         ]);
+        expect(h.server.lockHeldAtSend).toEqual([true]);
+        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
     });
 
-    test('a stale admission is dropped and goes back to the join code, never resent', async () => {
-        const h = harness();
-        await synced(h);
-        const staged = await stageChange(h.ctx, GROUP, {
-            kind: 'admit',
-            userId: 'c0c0c0c0-0000-4000-8000-000000000004',
-            pin: {} as never,
-            served: {} as never,
-            roles: [],
+    test('a send with no answer is kept, and the next “Let them in” sends those bytes again rather than signing anew', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        await checked(first);
+        first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        const kept = await letIn(first.ctx, GROUP, admit);
+        if (kept.status !== 'sent') throw new Error(kept.status);
+        expect(kept.outcome.status).toBe('pending');
+        const again = harness({ store });
+        await checked(again);
+        const resent = await letIn(again.ctx, GROUP, admit);
+        expect(resent).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        expect(again.calls('groupStage')).toEqual([]);
+        expect(again.server.sent.map((at) => at.body)).toEqual([JSON.stringify(kept.entry.body)]);
+    });
+
+    test('a kept admission sealed to keys the admin no longer holds as checked is never resent; dropped knowingly, a new one is signed', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        await checked(first);
+        first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        const kept = await letIn(first.ctx, GROUP, admit);
+        if (kept.status !== 'sent') throw new Error(kept.status);
+        expect(kept.entry.admits).toEqual({ userId: NEWCOMER, fingerprint: 'fp-checked' });
+        // The newcomer's account changed; the admin checked their new words.
+        const again = harness({ store });
+        await checked(again, 'fp-new');
+        const rechecked = { ...admit, pin: { fingerprint: 'fp-new' } as never };
+        const refused = await letIn(again.ctx, GROUP, rechecked);
+        expect(refused).toEqual({ status: 'kept-other-keys', entry: kept.entry });
+        expect(again.server.sent).toEqual([]);
+        expect(again.calls('groupStage')).toEqual([]);
+        await dropKeptAdmission(again.ctx, kept.entry);
+        expect(await store.outbox(USER, GROUP)).toEqual([]);
+        const fresh = await letIn(again.ctx, GROUP, rechecked);
+        expect(fresh).toMatchObject({
+            status: 'sent',
+            entry: { admits: { fingerprint: 'fp-new' } },
+            outcome: { status: 'landed' },
         });
-        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
+        expect(again.calls('groupStage')).toHaveLength(1);
+    });
+
+    test('a kept admission from before its keys were recorded is never resent by “Let them in” either', async () => {
+        const h = harness();
+        await checked(h);
+        const old = entry({ id: 'old-admit', route: { kind: 'admit', userId: NEWCOMER } });
+        await h.store.putOutbox({
+            id: 'old-admit',
+            userId: USER,
+            groupId: GROUP,
+            envelope: `sealed:${JSON.stringify(old)}`,
+        });
+        expect(await letIn(h.ctx, GROUP, admit)).toMatchObject({ status: 'kept-other-keys' });
+        expect(h.server.sent).toEqual([]);
+    });
+
+    test('a kept admission whose keys the admin re-checked is never sent by a page open or a sync either', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        await checked(first);
+        first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        const kept = await letIn(first.ctx, GROUP, admit);
+        if (kept.status !== 'sent') throw new Error(kept.status);
+        expect(kept.outcome.status).toBe('pending');
+        const sentBefore = first.server.sent.length;
+        // The newcomer's account changed and the admin checked the new words, in another tab.
+        const reopened = harness({ store });
+        await checked(reopened, 'fp-new');
+        expect((await resumeOutbox(reopened.ctx)).outcomes.get(kept.entry.id)).toEqual({
+            status: 'other-keys',
+        });
+        await syncGroup(reopened.ctx, GROUP);
+        expect(reopened.server.sent).toEqual([]);
+        expect(first.server.sent).toHaveLength(sentBefore);
+        // Held, not dropped: "Let them in" names it and offers to drop it.
+        expect((await store.outbox(USER, GROUP)).map((row) => row.id)).toEqual([kept.entry.id]);
+        // With the pin gone altogether, still never sent.
+        reopened.settings.doc.contacts = {};
+        expect(await sendChainCall(reopened.ctx, kept.entry)).toEqual({ status: 'other-keys' });
+        expect(reopened.server.sent).toEqual([]);
+    });
+
+    test('a stale answer drops the admission and syncs, and the next “Let them in” signs it over the new head', async () => {
+        const h = harness();
+        await checked(h);
         h.server.script.push(refusal(409, 'stale'));
-        expect((await confirmAdmission(h.ctx, staged.entry)).status).toBe('stale');
+        const lost = await letIn(h.ctx, GROUP, admit);
+        expect(lost).toMatchObject({ status: 'sent', outcome: { status: 'stale' } });
         expect(h.server.sent).toHaveLength(1);
         expect((await loadOutbox(h.ctx, GROUP)).entries).toEqual([]);
+        h.server.head = 6;
+        await checked(h);
+        const resigned = await letIn(h.ctx, GROUP, admit);
+        expect(resigned).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        expect(h.calls('groupStage')).toHaveLength(2);
+        expect(h.server.sent).toHaveLength(2);
+    });
+
+    test('an earlier version’s held-back admission is never sent; the family page drops it and names the person', async () => {
+        const store = createMemoryGroupStore();
+        const h = harness({ store });
+        await checked(h);
+        const held = await heldBack(h);
+        expect(await sendChainCall(h.ctx, held)).toEqual({ status: 'awaiting-check' });
+        // Neither an open nor a sync sends it, or drops it unseen.
+        expect((await resumeOutbox(h.ctx)).outcomes).toEqual(new Map());
+        await syncGroup(h.ctx, GROUP);
+        expect(h.server.sent).toEqual([]);
+        expect(await store.outbox(USER, GROUP)).toHaveLength(1);
+        // The family page: dropped, with the person to let in again.
+        expect(await dropHeldBack(h.ctx, GROUP)).toEqual([
+            { kind: 'admission-dropped', groupId: GROUP, userId: NEWCOMER },
+        ]);
+        expect(h.calls('groupDrop')).toEqual([{ outboxId: 'held-1' }]);
+        expect(await store.outbox(USER, GROUP)).toEqual([]);
+        expect(h.server.sent).toEqual([]);
+        // Said once: nothing is left to say it again.
+        expect(await dropHeldBack(h.ctx, GROUP)).toEqual([]);
+    });
+
+    test('the family page drops only held-back admissions: a kept send stays to go again', async () => {
+        const store = createMemoryGroupStore();
+        const h = harness({ store });
+        await checked(h);
+        h.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        await sendChainCall(h.ctx, entry({ id: 'call-2' }));
+        expect(await dropHeldBack(h.ctx, GROUP)).toEqual([]);
+        expect((await store.outbox(USER, GROUP)).map((row) => row.id)).toEqual(['call-2']);
+    });
+
+    test('“Let them in” drops a held-back admission for the person and signs a new one, never sending the old bytes', async () => {
+        const h = harness();
+        await checked(h);
+        const held = await heldBack(h);
+        const outcome = await letIn(h.ctx, GROUP, admit);
+        if (outcome.status !== 'sent') throw new Error(outcome.status);
+        expect(outcome.outcome.status).toBe('landed');
+        expect(h.server.sent.map((at) => at.body)).not.toContain(JSON.stringify(held.body));
+        expect(h.calls('groupDrop')).toContainEqual({ outboxId: 'held-1' });
     });
 });
 
@@ -541,23 +678,6 @@ describe('review round 1', () => {
             code: 'group-limit',
         });
         expect(await store.outbox(USER)).toEqual([]);
-    });
-
-    test('“Let them in” after another tab’s “Not now” sends nothing and writes nothing back', async () => {
-        const h = harness();
-        await synced(h);
-        const staged = await stageChange(h.ctx, GROUP, {
-            kind: 'admit',
-            userId: 'c0c0c0c0-0000-4000-8000-000000000004',
-            pin: {} as never,
-            served: {} as never,
-            roles: [],
-        });
-        if (staged.status !== 'awaiting-check') throw new Error('unreachable');
-        await dropAdmission(h.ctx, staged.entry);
-        expect(await confirmAdmission(h.ctx, staged.entry)).toEqual({ status: 'dropped' });
-        expect(h.server.sent).toEqual([]);
-        expect(await h.store.outbox(USER, GROUP)).toEqual([]);
     });
 
     test('a sync first resends the family’s waiting call, so one that landed elsewhere is let go of', async () => {

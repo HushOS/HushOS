@@ -39,9 +39,13 @@ import {
  * and the change is rebuilt on top of the new one or not at all. `not-member`
  * is the only answer that wipes the family from this device.
  *
- * An admission waits as `awaiting-check` until the admin confirmed the words
- * and the join code: nothing sends it on its own, a reload included. One tab
- * at a time writes a family's member list (the Web Lock in context.ts).
+ * An admission is signed and sent when the admin presses "Let them in"
+ * (letIn), after checking the newcomer's twelve words; the join code is
+ * compared once it has landed, over the stored roster. An entry `awaiting-check`
+ * is an earlier version's admission held back until its join code was typed:
+ * nothing sends one, ever; the family page drops it (nothing of it reached the
+ * server) and says so, and the admin lets the person in again. One tab at a time writes a
+ * family's member list (the Web Lock in context.ts).
  */
 
 export type ChainRoute =
@@ -66,13 +70,25 @@ export type OutboxEntry = {
      * not yet written this device's record and the settings pin. The seed in
      * `stagedEnvelope` is what lets that acceptance vouch for the first keys,
      * so the entry stays until both are written (design 2.4, "Creation").
+     * `awaiting-check`: an earlier version's unsent admission, never sent and
+     * dropped by the family page (dropHeldBack).
      */
     state: 'awaiting-check' | 'ready' | 'committed';
     attempts: number;
-    /* An admission's join code, over the staged roster: shown again after a reload. */
+    /*
+     * An admission's join code over the staged roster. Never shown: the admin's
+     * screen works the code out from the committed chain once the call landed.
+     */
     joinCode: { rosterVersion: number; code: string[] } | null;
     /* What the person should hear once the call lands (documents that went on empty). */
     notices?: GroupNotice[];
+    /*
+     * An admission's newcomer keys as the admin checked them: the fingerprint
+     * (over all four keys) of the contact pin the entry was built from. A kept
+     * admission is resent by "Let them in" only while the admin's pin still
+     * has this fingerprint. Absent on entries from before it was kept.
+     */
+    admits?: { userId: string; fingerprint: string };
 };
 
 export type SendOutcome =
@@ -91,10 +107,14 @@ export type SendOutcome =
     | { status: 'refused'; code: string; message: string; data: unknown }
     /* Unknown outcome, or a fix this device cannot make now: kept, the same bytes go again later. */
     | { status: 'pending'; reason: string }
-    /* An admission still waiting for the words and join code to be confirmed. */
+    /* An earlier version's held-back admission: never sent. */
     | { status: 'awaiting-check' }
-    /* The admission was dropped or changed meanwhile (another tab's "Not now"): nothing sent. */
-    | { status: 'dropped' }
+    /*
+     * An admission sealed to other keys than the admin's contact pin of the
+     * person names now (or kept before its keys were recorded): held, never
+     * sent from any path; "Let them in" offers to drop it.
+     */
+    | { status: 'other-keys' }
     /* `not-member`: the family is gone from this device. */
     | { status: 'wiped' };
 
@@ -411,6 +431,15 @@ async function sendLocked(
     mode: SendMode = {},
 ): Promise<SendOutcome> {
     if (entry.state === 'awaiting-check') return { status: 'awaiting-check' };
+    // An admission goes only to the keys the admin's pin of the person holds now: resent after
+    // their account changed and was checked again, it would grant the family's folders to the
+    // old keys. Checked here, so a page open, a sync and "Let them in" all obey it.
+    if (entry.route.kind === 'admit') {
+        const { settings } = await ctx.settings.read();
+        const pin = settings.contacts?.[entry.route.userId];
+        if (!entry.admits || !pin || pin.fingerprint !== entry.admits.fingerprint)
+            return { status: 'other-keys' };
+    }
     // Kept before anything leaves this device: a send that dies midway is resent, never re-signed.
     await persist(ctx, entry);
     if (entry.state === 'committed') return finishCreation(ctx, entry);
@@ -542,8 +571,8 @@ async function refused(
 
 /*
  * Sends one outbox entry under the group's write lock, acting on every
- * answer as the table above says. An entry awaiting the admin's check is
- * never sent from here: confirmAdmission flips it first.
+ * answer as the table above says. An earlier version's admission awaiting
+ * its check is never sent.
  */
 export function sendChainCall(ctx: GroupContext, entry: OutboxEntry): Promise<SendOutcome> {
     return ctx.lock(entry.groupId, () => sendLocked(ctx, entry));
@@ -551,8 +580,8 @@ export function sendChainCall(ctx: GroupContext, entry: OutboxEntry): Promise<Se
 
 /*
  * At every open: whatever the outbox holds is sent again as it is, and a
- * creation committed but not yet pinned is finished. Admissions awaiting
- * their check stay for the admin's dialog.
+ * creation committed but not yet pinned is finished. An earlier version's
+ * admission awaiting its check is never sent; the family page drops it.
  */
 export async function resumeOutbox(ctx: GroupContext) {
     const outcomes = new Map<string, SendOutcome>();
@@ -565,12 +594,29 @@ export async function resumeOutbox(ctx: GroupContext) {
 }
 
 /*
+ * The family page, at each open: an earlier version's admissions held back
+ * until their join code was typed are dropped, never sent (nothing of them
+ * reached the server), each with a notice naming the person, who is let in
+ * again. Only here, so the page that can name them is the one that says so.
+ */
+export async function dropHeldBack(ctx: GroupContext, groupId: string): Promise<GroupNotice[]> {
+    const notices: GroupNotice[] = [];
+    for (const entry of (await loadOutbox(ctx, groupId)).entries) {
+        if (entry.state !== 'awaiting-check' || entry.route.kind !== 'admit') continue;
+        const { userId } = entry.route;
+        await ctx.lock(groupId, () => discard(ctx, entry));
+        notices.push({ kind: 'admission-dropped', groupId, userId });
+    }
+    return notices;
+}
+
+/*
  * From a sync, under its lock and before it accepts: this group's ready calls
  * go once more as they were signed. A call another tab or an earlier attempt
  * landed answers as a replay and is dropped here, staged chain and all, so
  * acceptance never meets this device's own staged roster among the served
- * ones it has not let go of. Creations and admissions awaiting their check
- * are left to resumeOutbox and the admin's dialog.
+ * ones it has not let go of. Creations are left to resumeOutbox, and an
+ * earlier version's held-back admission is never sent.
  */
 export async function flushOutbox(ctx: GroupContext, groupId: string) {
     const { entries, notices } = await loadOutbox(ctx, groupId);
@@ -628,21 +674,20 @@ export async function createFamily(ctx: GroupContext, name: string, areaName?: s
 
 export type StageOutcome =
     | { status: 'sent'; entry: OutboxEntry; outcome: SendOutcome; needsCheck: string[] }
-    | {
-          status: 'awaiting-check';
-          entry: OutboxEntry;
-          joinCode: OutboxEntry['joinCode'];
-          needsCheck: string[];
-      }
+    /*
+     * A kept admission (sent before, no answer yet) sealed to other keys than
+     * the admin's pin of the person names now (they changed, and were checked
+     * again): never resent from here. dropKeptAdmission, then letIn again.
+     */
+    | { status: 'kept-other-keys'; entry: OutboxEntry }
     /* Nothing to sign (a fold-in where no chain reaches the served keys). */
     | { status: 'nothing'; needsCheck: string[] }
     | { status: 'not-synced'; sync: SyncResult };
 
 /*
- * Stages one change on the committed chain and keeps it, then sends it, or,
- * for an admission, leaves it awaiting the admin's check. The family is
- * synced first under the same lock, so the call builds on the head the
- * server has.
+ * Stages one change on the committed chain, keeps it, then sends it. The
+ * family is synced first under the same lock, so the call builds on the head
+ * the server has.
  */
 export function stageChange(
     ctx: GroupContext,
@@ -650,94 +695,110 @@ export function stageChange(
     op: GroupStageOp,
     options: { writers?: GroupWriter[] } = {},
 ): Promise<StageOutcome> {
+    return ctx.lock(groupId, () => stageLocked(ctx, groupId, op, options));
+}
+
+async function stageLocked(
+    ctx: GroupContext,
+    groupId: string,
+    op: GroupStageOp,
+    options: { writers?: GroupWriter[] },
+): Promise<StageOutcome> {
+    const sync = await syncLocked(ctx, groupId);
+    if (sync.status !== 'accepted') return { status: 'not-synced', sync };
+    const detail = await ctx.api.group(groupId);
+    if (detail.head.version !== sync.view.rosterVersion) return { status: 'not-synced', sync };
+    await openGroupKey(ctx, groupId);
+    const identities = await fetchIdentities(ctx, groupId);
+    const kems: Record<string, string> = {};
+    for (const [userId, member] of identities)
+        if (member.identity) kems[userId] = member.identity.kemPublicKey;
+    const staged: CryptoResults['groupStage'] = await ctx.rpc('groupStage', {
+        groupId,
+        expectedRevision: detail.head.revision,
+        op,
+        kems,
+        ...(options.writers ? { writers: options.writers } : {}),
+    });
+    if (staged.outboxId === null) return { status: 'nothing', needsCheck: staged.needsCheck };
+    const checked = await refetchReplaced(ctx, groupId, staged.stagedEnvelope, staged);
+    if (signedPart(checked.body) !== signedPart(staged.body))
+        throw new Error('A rebuilt change must keep its member list.');
+    const entry: OutboxEntry = {
+        v: 1,
+        id: staged.outboxId,
+        groupId,
+        route: ROUTES[op.kind](op),
+        body: checked.body,
+        stagedEnvelope: staged.stagedEnvelope,
+        state: 'ready',
+        attempts: 0,
+        joinCode: staged.joinCode,
+        notices: cleared(checked.replaced),
+        ...(op.kind === 'admit'
+            ? { admits: { userId: op.userId, fingerprint: op.pin.fingerprint } }
+            : {}),
+    };
+    return {
+        status: 'sent',
+        entry,
+        outcome: await sendLocked(ctx, entry),
+        needsCheck: staged.needsCheck,
+    };
+}
+
+/*
+ * "Let them in", once the admin checked the newcomer's twelve words: an
+ * admission this device already keeps for them (sent before, with no answer
+ * yet) goes again as it was signed, as every kept call does; otherwise one is
+ * staged on the committed chain and sent, unless it was sealed to other keys
+ * than the admin's pin of them names now (`kept-other-keys`). An earlier
+ * version's held-back admission for them is dropped first, never sent. A `stale` answer has
+ * dropped the call and synced: the caller lets them in again, over the new
+ * head.
+ */
+export function letIn(
+    ctx: GroupContext,
+    groupId: string,
+    op: Extract<GroupStageOp, { kind: 'admit' }>,
+): Promise<StageOutcome> {
     return ctx.lock(groupId, async () => {
-        const sync = await syncLocked(ctx, groupId);
-        if (sync.status !== 'accepted') return { status: 'not-synced', sync };
-        const detail = await ctx.api.group(groupId);
-        if (detail.head.version !== sync.view.rosterVersion) return { status: 'not-synced', sync };
-        await openGroupKey(ctx, groupId);
-        const identities = await fetchIdentities(ctx, groupId);
-        const kems: Record<string, string> = {};
-        for (const [userId, member] of identities)
-            if (member.identity) kems[userId] = member.identity.kemPublicKey;
-        const staged: CryptoResults['groupStage'] = await ctx.rpc('groupStage', {
-            groupId,
-            expectedRevision: detail.head.revision,
-            op,
-            kems,
-            ...(options.writers ? { writers: options.writers } : {}),
-        });
-        if (staged.outboxId === null) return { status: 'nothing', needsCheck: staged.needsCheck };
-        const checked = await refetchReplaced(ctx, groupId, staged.stagedEnvelope, staged);
-        if (signedPart(checked.body) !== signedPart(staged.body))
-            throw new Error('A rebuilt change must keep its member list.');
-        const entry: OutboxEntry = {
-            v: 1,
-            id: staged.outboxId,
-            groupId,
-            route: ROUTES[op.kind](op),
-            body: checked.body,
-            stagedEnvelope: staged.stagedEnvelope,
-            state: op.kind === 'admit' ? 'awaiting-check' : 'ready',
-            attempts: 0,
-            joinCode: staged.joinCode,
-            notices: cleared(checked.replaced),
-        };
-        await persist(ctx, entry);
-        if (entry.state === 'awaiting-check')
+        const kept = (await loadOutbox(ctx, groupId)).entries.filter(
+            (entry) => entry.route.kind === 'admit' && entry.route.userId === op.userId,
+        );
+        for (const entry of kept) {
+            if (entry.state === 'awaiting-check') {
+                await discard(ctx, entry);
+                continue;
+            }
+            // Sealed to keys the admin no longer holds as checked: resending would grant the
+            // family's folders to them. The admin drops it first, knowingly.
+            if (entry.admits?.fingerprint !== op.pin.fingerprint)
+                return { status: 'kept-other-keys' as const, entry };
             return {
-                status: 'awaiting-check',
+                status: 'sent' as const,
                 entry,
-                joinCode: entry.joinCode,
-                needsCheck: staged.needsCheck,
+                outcome: await sendLocked(ctx, entry),
+                needsCheck: [],
             };
-        return {
-            status: 'sent',
-            entry,
-            outcome: await sendLocked(ctx, entry),
-            needsCheck: staged.needsCheck,
-        };
+        }
+        return stageLocked(ctx, groupId, op, {});
     });
 }
 
-/* The admission waiting for this person's check, after a reload: the same roster and join code. */
-export async function waitingAdmission(ctx: GroupContext, groupId: string, userId: string) {
-    return (
-        (await loadOutbox(ctx, groupId)).entries.find(
-            (entry) =>
-                entry.state === 'awaiting-check' &&
-                entry.route.kind === 'admit' &&
-                entry.route.userId === userId,
-        ) ?? null
-    );
-}
-
-/* "Let them in": the admin confirmed the words and the join code; only now does the admission go. */
-export async function confirmAdmission(
-    ctx: GroupContext,
-    entry: OutboxEntry,
-): Promise<SendOutcome> {
-    if (entry.state !== 'awaiting-check' || entry.route.kind !== 'admit')
-        throw new Error('This is not an admission waiting for its check.');
+/*
+ * A kept admission the admin chose to drop (`kept-other-keys`), read again
+ * under the lock so only that very entry goes. The caller makes sure the
+ * person is still waiting to join (route 4 lists them), so it never landed:
+ * a call the server stored would have let them in.
+ */
+export function dropKeptAdmission(ctx: GroupContext, entry: OutboxEntry) {
     return ctx.lock(entry.groupId, async () => {
-        // Read again under the lock: another tab may have dropped it ("Not now"), or a stale
-        // answer may have; what the dialog holds is never written back and sent.
         const current = (await loadOutbox(ctx, entry.groupId)).entries.find(
             (at) => at.id === entry.id,
         );
-        if (
-            !current ||
-            current.state !== 'awaiting-check' ||
-            canonical(current.body) !== canonical(entry.body)
-        )
-            return { status: 'dropped' };
-        return sendLocked(ctx, { ...current, state: 'ready' });
+        if (current?.route.kind === 'admit') await discard(ctx, current);
     });
-}
-
-/* "Not now", or a check that failed: the unsent admission and its keys are dropped. */
-export function dropAdmission(ctx: GroupContext, entry: OutboxEntry) {
-    return ctx.lock(entry.groupId, () => discard(ctx, entry));
 }
 
 /*

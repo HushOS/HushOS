@@ -22,8 +22,9 @@ import type { GroupStore } from './store';
 /* The worker operations this layer calls. */
 export type GroupOperation =
     | 'groupCreate'
-    | 'groupWords'
     | 'groupAccept'
+    /* The join code a newcomer compares, over what route 5 serves: nothing kept. */
+    | 'groupJoinPreview'
     | 'groupOpenSeal'
     | 'groupOpenArea'
     | 'groupStage'
@@ -31,7 +32,7 @@ export type GroupOperation =
     | 'groupDrop'
     | 'groupGrants'
     | 'groupForget'
-    /* A committed roster's join code, shown again to the person letting someone in. */
+    /* A member's join code over the committed chain, read to them by the person letting them in. */
     | 'groupJoinCode'
     | 'groupStoreSeal'
     | 'groupStoreOpen'
@@ -52,7 +53,9 @@ export type GroupNotice =
     /* This device's saved check did not open (a master-key rotation): checked again from version 1. */
     | { kind: 'record-reset'; groupId: string }
     /* Changes that had not reached the server did not open on this device and were dropped. */
-    | { kind: 'changes-lost'; groupId: string; count: number };
+    | { kind: 'changes-lost'; groupId: string; count: number }
+    /* An earlier version's held-back admission of this person, never sent, was dropped. */
+    | { kind: 'admission-dropped'; groupId: string; userId: string };
 
 export type GroupSettings = LoadedSettings['settings'] & { groups?: Record<string, GroupPin> };
 

@@ -164,17 +164,23 @@ export function outcomeCopy(outcome: SendOutcome, ctx: CopyContext = {}): string
         case 'pending':
             return 'HushOS couldn’t reach the server. This device keeps the change and sends it when it can.';
         case 'awaiting-check':
-            return 'This is waiting for you to finish checking.';
-        case 'dropped':
-            return 'This was changed in another tab. Start again.';
+            return 'This wasn’t sent. Start again.';
+        case 'other-keys':
+            return 'This was for keys you no longer have as checked, so it wasn’t sent. Let them in again.';
         case 'wiped':
             return 'You’re not in this family any more.';
     }
 }
 
 /* The data layer's notices, worded. Folder names are sealed, so a folder is "a family folder". */
-export function noticeCopy(notice: GroupNotice, family = 'the family') {
+export function noticeCopy(
+    notice: GroupNotice,
+    family = 'the family',
+    person: (userId: string) => string | undefined = () => undefined,
+) {
     switch (notice.kind) {
+        case 'admission-dropped':
+            return `An earlier admission of ${person(notice.userId) ?? 'someone waiting to join'} wasn’t sent; let them in again.`;
         case 'record-reset':
             return `This device’s saved check of ${family} couldn’t be opened, so HushOS checked the family again from the start.`;
         case 'changes-lost':

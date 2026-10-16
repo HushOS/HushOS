@@ -1,15 +1,12 @@
-import type { GroupPublicKey, GroupRole } from '@hushos/crypto';
-import { digest } from '@hushos/crypto/signatures';
-import { publicKeyBytes } from '@hushos/auth/client';
+import type { GroupRole } from '@hushos/crypto';
 import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
 import { useStore } from 'zustand';
 import { authClient } from '@/lib/auth-client';
-import { readSettingsForFamilies } from '@/lib/contacts';
 import { driveApi } from '@/lib/drive-api';
 import { groupsApi, type GroupDetail, type GroupSummary } from '@/lib/groups/api';
 import { groupContext } from '@/lib/groups/client';
-import type { GroupContext, GroupNotice, GroupSettings } from '@/lib/groups/context';
-import { resumeOutbox } from '@/lib/groups/outbox';
+import type { GroupContext, GroupNotice } from '@/lib/groups/context';
+import { dropHeldBack, resumeOutbox } from '@/lib/groups/outbox';
 import { syncAll, syncGroup, type SyncResult } from '@/lib/groups/sync';
 
 /*
@@ -161,9 +158,11 @@ export function useFamilySync(userId: string, groupId: string, summary: GroupSum
         queryKey: familyKeys.familySync(userId, groupId, signature ?? ''),
         queryFn: async () => {
             const ctx = familyContext(userId);
+            const dropped = await dropHeldBack(ctx, groupId);
             const resumed = await resumeOutbox(ctx);
             const result = await syncGroup(ctx, groupId, { state: summary?.state });
             const notices = [
+                ...dropped,
                 ...resumed.notices.filter(
                     (notice) => !('groupId' in notice) || notice.groupId === groupId,
                 ),
@@ -203,34 +202,6 @@ export function withRole(roles: readonly GroupRole[], role: GroupRole, on: boole
     if (on) set.add(role);
     else set.delete(role);
     return (['billing', 'guardian', 'members'] as GroupRole[]).filter((at) => set.has(at));
-}
-
-/*
- * The family's twelve words for someone who already holds a mark (a manager
- * letting someone in): over the first keys route 5 serves, but only when they
- * are the ones this account's settings pin fixed. A server that serves other
- * first keys to the manager than it pinned gets no words shown, so the two
- * screens can never be made to match by the server alone.
- */
-export async function pinnedFamilyWords(userId: string, groupId: string) {
-    const ctx = familyContext(userId);
-    const [{ settings }, page] = await Promise.all([
-        readSettingsForFamilies(userId) as Promise<{ settings: GroupSettings }>,
-        groupsApi.rosters(groupId, 0),
-    ]);
-    const pin = settings.groups?.[groupId];
-    if (!pin) throw new Error('This family isn’t checked on your account yet. Reload the page.');
-    const firstKeys: GroupPublicKey = page.firstKeys;
-    const mlDsaDigest = await digest(publicKeyBytes(firstKeys.mlDsaPublicKey));
-    if (
-        firstKeys.ed25519PublicKey !== pin.firstEd25519PublicKey ||
-        mlDsaDigest !== pin.firstMlDsaPublicKeyDigest
-    )
-        throw new Error(
-            'HushOS showed this family’s keys differently from the ones you checked. Don’t let anyone in until that’s sorted.',
-        );
-    const { words } = await ctx.rpc('groupWords', { groupId, firstKeys });
-    return words;
 }
 
 /* The member names route 3 gives, by user id: first names for sentences. */
