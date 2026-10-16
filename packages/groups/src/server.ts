@@ -1094,6 +1094,38 @@ function groupName(name: string) {
     return trimmed;
 }
 
+/* JSON with every object's keys sorted: the same call always gives the same text. */
+function canonicalJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+    if (value !== null && typeof value === 'object')
+        // An undefined value is left out, as JSON.stringify leaves it out: absent, not null.
+        return `{${Object.keys(value)
+            .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+            .sort()
+            .map(
+                (key) =>
+                    `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+            )
+            .join(',')}}`;
+    return JSON.stringify(value) ?? 'null';
+}
+
+/*
+ * F7 on route 1: a resend of a creation that landed (the very call stored,
+ * byte for byte, from its creator, still an active member) is a replay,
+ * answered before anything that can change after it landed is checked: the
+ * creator's current identity (replaced on another device), their seals' key
+ * versions, the rate limits. It was checked when it was stored, and nothing is
+ * written now. Anything else, a different call for a stored id or the same
+ * call from someone else, takes the full path and its refusals.
+ */
+async function storedCreation(userId: string, groupId: string, digest: Buffer) {
+    const found = await groupsRepository.getGroupFor(groupId, userId);
+    if (!found || found.group.creatorUserId !== userId || found.membership.state !== 'active')
+        return null;
+    return found.group.creationDigest?.equals(digest) ? found.group : null;
+}
+
 /* Route 1: a new family, its first roster, the creator's seal, and its first area with its root. */
 export async function createGroup(userId: string, body: CreateGroupBody) {
     if (body.kind !== 'family')
@@ -1102,6 +1134,9 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
             'Company groups are not available on this server yet.',
             409,
         );
+    const creationDigest = createHash('sha256').update(canonicalJson(body)).digest();
+    const stored = await storedCreation(userId, body.id, creationDigest);
+    if (stored) return { group: groupView(stored), replayed: true };
     await limit(`groups:create:user:${userId}`, 5, DAY);
     await limit('groups:create:global', 1000, 60 * 60 * 1000);
     const name = groupName(body.name);
@@ -1214,6 +1249,7 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
         grants,
         cache: storedRecord(chain),
         ownedLimit: groupsEnv.GROUP_OWNED_LIMIT,
+        creationDigest,
     });
     switch (result.status) {
         case 'group-limit':

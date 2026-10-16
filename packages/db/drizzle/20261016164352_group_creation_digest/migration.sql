@@ -1,0 +1,2 @@
+ALTER TABLE "groups" ADD COLUMN "creation_digest" bytea;--> statement-breakpoint
+ALTER TABLE "groups" ADD CONSTRAINT "groups_creation_digest_valid" CHECK ("creation_digest" is null or octet_length("creation_digest") = 32);
