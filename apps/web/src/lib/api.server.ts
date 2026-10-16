@@ -568,6 +568,8 @@ const rotationSchema = t.Object({
     toVersion: versionSchema,
     targetEpoch: epochSchema,
     root: rotatedNodeSchema,
+    // The root's old key under the new area key (docs/groups-server.md 8).
+    previousRootKeyEnvelope: keyEnvelopeSchema,
     selfGrant: workspaceKeySchema,
 });
 const rosterCallFields = {
@@ -849,6 +851,24 @@ export const apiApp = new Elysia({ prefix: '/api' })
         ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             return auth.succeedIdentity(sessionToken, body);
+        },
+    )
+    // Consent for an earlier succession that was made without it: stored only where none is.
+    .post(
+        '/auth/identity/succession/consent',
+        {
+            body: t.Object({
+                oldKeyVersion: t.Integer({ minimum: 1, maximum: 2147483646 }),
+                consent: t.String({
+                    minLength: 8995,
+                    maxLength: 8995,
+                    pattern: '^[A-Za-z0-9_-]+$',
+                }),
+            }),
+        },
+        ({ request, sessionToken, body }) => {
+            guardAuthMutation(request);
+            return auth.backfillSuccessionConsent(sessionToken, body);
         },
     )
     .get('/auth/identity/history', ({ sessionToken, set }) => {
@@ -2466,6 +2486,24 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         body,
                     ),
             )
+            // Route 28: a holder repairs the root's previous envelope while the area's rotation runs.
+            .put(
+                '/groups/:id/areas/:workspaceId/previous-root',
+                {
+                    params: areaParams,
+                    body: t.Object({
+                        rotationId: uuidSchema,
+                        previousRootKeyEnvelope: keyEnvelopeSchema,
+                    }),
+                },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.putPreviousRoot(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.workspaceId,
+                        body,
+                    ),
+            )
             .post(
                 '/groups/:id/areas/:workspaceId/rotations',
                 {
@@ -2493,6 +2531,9 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         {
                             workspaceId: personal.workspaceId,
                             workspaceKeyVersion: personal.grant?.workspaceKeyVersion ?? 1,
+                            changeSeq: personal.changeSeq,
+                            root: personal.root,
+                            rotation: personal.rotation,
                             selfGrant: personal.grant,
                         },
                     ],

@@ -25,7 +25,7 @@ import {
 } from '@hushos/crypto/groups';
 import { verifyHybrid } from '@hushos/crypto/signatures';
 import { authRepository, groupsRepository, madeFor } from '@hushos/db';
-import { nodeEnvelopesInput, rotatedNodeInput } from '@hushos/drive/server';
+import { nodeEnvelopesInput, nodeView, rotatedNodeInput } from '@hushos/drive/server';
 import { sendGroupInvitation } from '@hushos/emails/server';
 import { appEnv } from '@hushos/env/app';
 import { groupsEnv } from '@hushos/env/groups';
@@ -626,6 +626,12 @@ function rotationInputs(rotations: readonly RotationWire[]): groupsRepository.Ro
             toVersion: rotation.toVersion,
             targetEpoch: rotation.targetEpoch,
             root: rotatedNodeInput(rotation.root),
+            // The old root key under the new area key: what opens the unrotated rest (option A).
+            previousRootKeyEnvelope: bytes(
+                rotation.previousRootKeyEnvelope,
+                72,
+                'rotation-root-previous',
+            ),
             selfGrant: selfGrantInput(rotation.selfGrant, rotation.workspaceId),
         };
     });
@@ -706,6 +712,12 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw new GroupError(
                 'root-moved',
                 'A folder changed while the keys were being replaced. Try again.',
+                409,
+            );
+        case 'root-mid-rotation':
+            throw new GroupError(
+                'root-mid-rotation',
+                'A shared folder is in the middle of a key change this server cannot account for. Contact the server’s operator.',
                 409,
             );
         case 'rotating':
@@ -1223,10 +1235,24 @@ export async function listGroups(userId: string) {
     };
 }
 
+/* Route 3's `due`: `grants` for every active member, the rest for `members` holders only. */
+export type GroupDue = {
+    grants: { workspaceId: string; userId: string }[];
+    markLeft?: string[];
+    foldIn?: string[];
+    succession?: boolean;
+    rotations?: string[];
+    holds?: { userId: string; heldBy: string | null; expiresAt: string }[];
+};
+
 /*
- * Route 3: the group, its members and seats, and for `members` holders what
- * is due: departures to mark left, members whose identity moved on from
- * their entry (to fold in), a succession, and areas to rotate.
+ * Route 3: the group, its members and seats, and what is due. For every
+ * active member, the grants they could fill (route 22): members owed an
+ * area's current key where the caller holds it, so a gap is closed by whoever
+ * sees it first instead of only surfacing when a holder's roster is refused.
+ * For `members` holders also: departures to mark left, members whose identity
+ * moved on from their entry (to fold in), a succession, areas to rotate and
+ * live holds.
  */
 export async function getGroup(userId: string, groupId: string) {
     const found = await membershipOf(groupId, userId, 'accepted');
@@ -1236,8 +1262,10 @@ export async function getGroup(userId: string, groupId: string) {
         used: await groupsRepository.seatsUsed(groupId),
         limit: group.seatLimit ?? groupsEnv.GROUP_SEAT_LIMIT_DEFAULT,
     };
-    let due: unknown;
-    if (found.membership.state === 'active' && found.membership.roles.includes('members')) {
+    let due: GroupDue | undefined;
+    if (found.membership.state === 'active')
+        due = { grants: await groupsRepository.fillableGrants(groupId, userId) };
+    if (due && found.membership.roles.includes('members')) {
         const head = await groupsRepository.getRoster(groupId, group.rosterVersion);
         const roster = head ? parseRoster(head.statement) : null;
         const active = members.filter((member) => member.state === 'active');
@@ -1250,6 +1278,7 @@ export async function getGroup(userId: string, groupId: string) {
             })
             .map((member) => member.userId);
         due = {
+            ...due,
             markLeft: (await groupsRepository.listDepartures(groupId)).map((d) => d.userId),
             foldIn,
             succession: group.successionDue,
@@ -1319,24 +1348,38 @@ export async function getRosters(
 }
 
 /*
- * Route 6: every active member's identity and succession links (consent
- * included), a page of accounts at a time: what verdicts and seal openers
- * need, which the contacts routes serve only one at a time.
+ * Route 6: the identity and succession links (consent included) of every
+ * entry on the head roster, those marked left among them, in user id order a
+ * page of accounts at a time: what verdicts and seal openers need, which the
+ * contacts routes serve only one at a time. A former member's records still
+ * need their links to tell a retired key from a stranger's; an account that is
+ * gone has no identity and no links (null and []).
  */
 export async function getIdentities(userId: string, groupId: string, after: string | null) {
-    await membershipOf(groupId, userId, 'active');
-    const ids = await groupsRepository.listActiveMemberIds(groupId, after, IDENTITY_PAGE + 1);
+    const found = await membershipOf(groupId, userId, 'active');
+    const head = await groupsRepository.getRoster(groupId, found.group.rosterVersion);
+    if (!head) throw unavailable();
+    const ids = [...new Set(parseRoster(head.statement).members.map((entry) => entry.userId))]
+        .sort()
+        .filter((memberId) => after === null || memberId > after.toLowerCase());
     const page = ids.slice(0, IDENTITY_PAGE);
     const identities = await groupsRepository.identitiesOf(page);
+    const memberships = await groupsRepository.membershipsOf(groupId, page);
     const out = [];
     for (const memberId of page) {
         const current = (identities.get(memberId) ?? []).find((identity) => identity.current);
         const links = (await authRepository.successionChain(memberId, 1)) ?? [];
+        // A former member's links stop where their membership did: keys they made since are
+        // none of the group's business. No departure time on record (they accepted a new
+        // invitation since, or the account is gone): none at all.
+        const membership = memberships.get(memberId);
+        const until = membership?.state === 'active' ? null : (membership?.leftAt ?? new Date(0));
         out.push({
             userId: memberId,
             identity: current ? served(current) : null,
             links: links
                 .filter((link) => link.oldMlDsaPublicKey && link.newMlDsaPublicKey)
+                .filter((link) => until === null || link.replacedAt <= until)
                 .map((link) => ({
                     oldKeyVersion: link.oldKeyVersion,
                     newKeyVersion: link.newKeyVersion,
@@ -1352,7 +1395,7 @@ export async function getIdentities(userId: string, groupId: string, after: stri
                 })),
         });
     }
-    return { identities: out, next: ids.length > IDENTITY_PAGE ? page.at(-1)! : null };
+    return { identities: out, next: ids.length > page.length ? page.at(-1)! : null };
 }
 
 /* Route 7: fold-ins and marking departures left (with the rotations and succession that brings). */
@@ -1823,6 +1866,50 @@ export async function putSelfGrant(
     }
 }
 
+/*
+ * Route 28: a holder replaces the area root's previous envelope (the old root
+ * key under the current area key) while the roster's Drive rotation still
+ * runs, when the one the rotation stored does not open.
+ */
+export async function putPreviousRoot(
+    userId: string,
+    groupId: string,
+    workspaceId: string,
+    input: { rotationId: string; previousRootKeyEnvelope: string },
+) {
+    const result = await groupsRepository.replacePreviousRoot({
+        groupId,
+        workspaceId,
+        userId,
+        rotationId: input.rotationId,
+        envelope: bytes(input.previousRootKeyEnvelope, 72, 'rotation-root-previous'),
+    });
+    switch (result.status) {
+        case 'ok':
+            return { changeSeq: result.changeSeq };
+        case 'not-member':
+            throw notMember();
+        case 'forbidden':
+            throw forbidden();
+        case 'held':
+            throw new GroupError(
+                'held',
+                'Another manager has paused your changes in this group for now.',
+                409,
+            );
+        case 'area':
+            throw invalid('area');
+        case 'not-rotating':
+            throw new GroupError(
+                'not-rotating',
+                'This shared folder’s key change has finished or moved on. Reload and try again.',
+                409,
+            );
+        case 'unavailable':
+            throw unavailable();
+    }
+}
+
 /* Route 24: an area's key rotation, listed on a roster, with the root re-keyed in the same call. */
 export async function rotateArea(
     userId: string,
@@ -1841,8 +1928,12 @@ export async function rotateArea(
 
 /*
  * Route 25's group half: every group the account is active in, with its
- * areas, their seeds and key versions, and the account's newest grant and
- * self-grant to each.
+ * areas: their seeds, key versions and change sequences, their roots (the
+ * node as Drive serves it, whose previous envelope during a rotation is the
+ * old root key under the current area key), the Drive rotation running in
+ * each, and the account's newest grant and self-grant to each. What
+ * /drive/workspace gives for the personal space, so a client opens an area
+ * the same way.
  */
 export async function spaces(userId: string) {
     return (await groupsRepository.spacesFor(userId)).map((space) => ({
@@ -1851,6 +1942,15 @@ export async function spaces(userId: string) {
             workspaceId: area.workspaceId,
             idSeed: area.idSeed,
             workspaceKeyVersion: area.workspaceKeyVersion,
+            changeSeq: area.changeSeq,
+            root: area.root ? nodeView(area.root) : null,
+            rotation: area.rotation
+                ? {
+                      id: area.rotation.id,
+                      nodeId: area.rotation.nodeId,
+                      targetEpoch: area.rotation.targetEpoch,
+                  }
+                : null,
             grant: area.grant
                 ? {
                       workspaceKeyVersion: area.grant.workspaceKeyVersion,

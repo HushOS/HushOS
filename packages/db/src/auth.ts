@@ -1765,6 +1765,78 @@ export async function succeedIdentity(input: {
     });
 }
 
+export type ConsentBackfillResult =
+    /* `stored` is false when the link already had consent: it is never replaced. */
+    | { status: 'ok'; stored: boolean }
+    | { status: 'session' | 'no-link' | 'not-upgraded' | 'bad-signature' };
+
+/*
+ * The successor's consent for one of the account's own earlier successions,
+ * made before clients sent it (docs/groups-server.md 5, the backfill). The
+ * link is the history row at `oldKeyVersion` of the signed-in account, and
+ * the consent must hold for it as /succession checks it: the old identity's
+ * hybrid signature as "old", the new identity's as "new". It is stored only
+ * where the row has none, so a stored consent is never replaced, by anyone; a
+ * second upload that holds answers `stored: false`. Under the account's row
+ * lock, as succeedIdentity and master-key rotations take it, and only for a
+ * current session. Links from a version 1 identity have no ML-DSA keys to
+ * consent with (`not-upgraded`).
+ */
+export async function backfillSuccessionConsent(input: {
+    userId: string;
+    credentialVersion: number;
+    sessionTokenHash: Buffer;
+    oldKeyVersion: number;
+    consent: Buffer;
+}): Promise<ConsentBackfillResult> {
+    return db.transaction(async (tx) => {
+        const [user] = await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, input.userId))
+            .for('update');
+        if (!user || !(await sessionIsCurrent(tx, input))) return { status: 'session' };
+        const [row] = await tx
+            .select()
+            .from(accountIdentityHistory)
+            .where(
+                and(
+                    eq(accountIdentityHistory.userId, user.id),
+                    eq(accountIdentityHistory.keyVersion, input.oldKeyVersion),
+                ),
+            );
+        if (!row) return { status: 'no-link' };
+        if (row.version !== 2 || !row.mlDsaPublicKey || !row.newMlDsaPublicKey)
+            return { status: 'not-upgraded' };
+        const link = {
+            userId: user.id,
+            oldKeyVersion: row.keyVersion,
+            newKeyVersion: row.replacedByKeyVersion,
+            oldEncryptionPublicKey: row.encryptionPublicKey,
+            oldSigningPublicKey: row.signingPublicKey,
+            oldMlDsaPublicKey: row.mlDsaPublicKey,
+            newEncryptionPublicKey: row.newEncryptionPublicKey,
+            newSigningPublicKey: row.newSigningPublicKey,
+            newMlDsaPublicKey: row.newMlDsaPublicKey,
+            newKemPublicKey: row.newKemPublicKey,
+        };
+        // Checked even when consent is stored already: a forged upload is refused, never "fine".
+        if (!successionConsentHolds(link, input.consent)) return { status: 'bad-signature' };
+        const stored = await tx
+            .update(accountIdentityHistory)
+            .set({ successionConsent: input.consent })
+            .where(
+                and(
+                    eq(accountIdentityHistory.userId, user.id),
+                    eq(accountIdentityHistory.keyVersion, input.oldKeyVersion),
+                    isNull(accountIdentityHistory.successionConsent),
+                ),
+            )
+            .returning({ keyVersion: accountIdentityHistory.keyVersion });
+        return { status: 'ok', stored: stored.length > 0 };
+    });
+}
+
 export type UpgradeResult =
     | { status: 'ok' }
     | { status: 'session' | 'no-identity' | 'mismatch' }
@@ -1872,6 +1944,7 @@ export async function successionChain(userId: string, from: number) {
             newKemPublicKey: accountIdentityHistory.newKemPublicKey,
             signature: accountIdentityHistory.successionSignature,
             consent: accountIdentityHistory.successionConsent,
+            replacedAt: accountIdentityHistory.replacedAt,
         })
         .from(accountIdentityHistory)
         .where(

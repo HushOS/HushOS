@@ -203,6 +203,18 @@ describe('small routes', () => {
         expect(response.status).toBe(200);
         expect(seen.handled[0]?.bytes).toBe(SMALL_BODY_BYTES);
     });
+
+    test('the previous-root repair is a small route: one byte past 16 KiB is 413, before the handler', async () => {
+        const path = `groups/${GROUP}/areas/${USER}/previous-root`;
+        const { handle, seen } = setup();
+        expect(
+            (await handle(request('PUT', path, streamed(SMALL_BODY_BYTES + 1).body))).status,
+        ).toBe(413);
+        expect(seen.handled).toEqual([]);
+        expect((await handle(request('PUT', path, streamed(SMALL_BODY_BYTES).body))).status).toBe(
+            200,
+        );
+    });
 });
 
 describe('rate limits', () => {

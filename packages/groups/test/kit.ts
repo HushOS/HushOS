@@ -239,6 +239,7 @@ export async function rotationWire(
                 unsealableLinks: [],
             },
         },
+        previousRootKeyEnvelope: b64(randomBytes(72)),
         selfGrant: selfGrant(workspaceId, fromVersion + 1),
     };
 }

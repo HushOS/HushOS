@@ -23,6 +23,8 @@ export type GroupErrorCode =
     | 'held'
     | 'epoch-stale'
     | 'root-moved'
+    | 'root-mid-rotation'
+    | 'not-rotating'
     | 'area-moved'
     | 'no-seal'
     | 'area-limit'

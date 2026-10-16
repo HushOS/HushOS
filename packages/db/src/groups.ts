@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { and, count, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { db } from './client';
-import { createRootIn, type NodeEnvelopes, type Tx } from './drive';
+import {
+    activeRotation,
+    createRootIn,
+    nextChangeSeq,
+    selectNodes,
+    type NodeEnvelopes,
+    type Tx,
+} from './drive';
 import { madeFor } from './ids';
 import { pgCode } from './readiness';
 import { rotateNodeIn, startRotationIn, type RotatedNodeInput } from './rotations';
@@ -161,6 +168,14 @@ export type AreaInput = {
  * `targetEpoch`, which the rotator drew with allocateKeyEpochs and sealed the
  * root's key under), so a cached root key opens nothing written after it. The
  * rest of the subtree rotates through Drive's rotation batches.
+ *
+ * `previousRootKeyEnvelope` is the root's old key (the one its unrotated
+ * children are still wrapped under) wrapped again under the new area key, at
+ * the root's old key epoch and parent epoch `toVersion` (docs/groups-server.md
+ * 8, "Old area keys during a rotation"). It is stored as the root's previous
+ * envelope, so a member who holds only the current area key (a fresh device,
+ * someone admitted mid-walk) can still open what the walk has not reached.
+ * The removed member already holds that old key, so it tells them nothing.
  */
 export type RotationInput = {
     workspaceId: string;
@@ -168,6 +183,7 @@ export type RotationInput = {
     toVersion: number;
     targetEpoch: number;
     root: RotatedNodeInput;
+    previousRootKeyEnvelope: Buffer;
     selfGrant: SelfGrantInput;
 };
 
@@ -236,7 +252,12 @@ export type ChainResult =
               /* The target epoch the rotator drew is no longer above every node's: redraw it. */
               | 'epoch-stale'
               /* An area root a rotation re-keys changed since it was read: re-read it. */
-              | 'root-moved';
+              | 'root-moved'
+              /*
+               * The area root still carries a previous envelope: a key change is under way that
+               * no running Drive rotation accounts for. Re-read the area; an operator clears it.
+               */
+              | 'root-mid-rotation';
       }
     /*
      * Membership moved under the call (someone left, was declined or deleted
@@ -667,10 +688,15 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
     if (!rotation.root.rotated || rotation.root.parentKeyEpoch !== rotation.toVersion)
         invalid('rotation-root');
     const [root] = await tx
-        .select({ id: driveNodes.id })
+        .select({
+            id: driveNodes.id,
+            keyEpoch: driveNodes.keyEpoch,
+            prevKeyEnvelope: driveNodes.prevKeyEnvelope,
+        })
         .from(driveNodes)
         .where(and(eq(driveNodes.workspaceId, rotation.workspaceId), isNull(driveNodes.parentId)));
     if (!root || root.id !== rotation.root.id) invalid('rotation-root');
+    if (rotation.previousRootKeyEnvelope.length !== 72) invalid('rotation-root-previous');
     /*
      * The rotator's own wrap of the new key first: the Drive writes below check, under
      * the area's lock, that the writer holds the area (requireStillWriter), and a holder
@@ -729,6 +755,13 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
     // The epoch the rotator drew was overtaken (a node was created above it): redraw and resend.
     if (started.status === 'stale') refuse({ status: 'epoch-stale' });
     if (started.status !== 'ok') invalid(`rotation-${started.status}`);
+    /*
+     * A root still carrying a previous envelope is mid-rotation: a run that re-keyed it has
+     * made progress and answered `rotating` above, and a finished one cleared it. Refused
+     * all the same (its own 409, since resending cannot fix it), because overwriting it
+     * below would lose the key its unrotated children are wrapped under.
+     */
+    if (root!.prevKeyEnvelope) refuse({ status: 'root-mid-rotation' });
     // The area moves to the new version first: the root is re-keyed under it.
     await tx
         .update(workspaces)
@@ -748,6 +781,19 @@ async function applyRotation(tx: Tx, groupId: string, uploader: string, rotation
     // The root changed since the rotator read it: re-read, re-seal, resend.
     if (outcome === 'stale') refuse({ status: 'root-moved' });
     if (outcome !== 'ok') invalid(`rotation-root-${outcome}`);
+    /*
+     * The root's previous envelope is its old key under the new area key, not the old
+     * area key the Drive batch kept: a member given only the new version opens it, and
+     * through it every child the walk has not reached (docs/groups-server.md 8).
+     */
+    await tx
+        .update(driveNodes)
+        .set({
+            prevKeyEnvelope: rotation.previousRootKeyEnvelope,
+            prevKeyEpoch: root!.keyEpoch,
+            prevParentKeyEpoch: rotation.toVersion,
+        })
+        .where(eq(driveNodes.id, root!.id));
 }
 
 /*
@@ -2267,6 +2313,25 @@ export async function listActiveMemberIds(groupId: string, after: string | null,
     ).map((row) => row.userId);
 }
 
+/* The memberships of `userIds` in the group, whatever their state: what route 6 bounds links by. */
+export async function membershipsOf(groupId: string, userIds: readonly string[]) {
+    if (userIds.length === 0) return new Map<string, { state: string; leftAt: Date | null }>();
+    const rows = await db
+        .select({
+            userId: groupMemberships.userId,
+            state: groupMemberships.state,
+            leftAt: groupMemberships.leftAt,
+        })
+        .from(groupMemberships)
+        .where(
+            and(
+                eq(groupMemberships.groupId, groupId),
+                inArray(groupMemberships.userId, [...userIds]),
+            ),
+        );
+    return new Map(rows.map((row) => [row.userId, { state: row.state, leftAt: row.leftAt }]));
+}
+
 /* Who accepted and waits to be admitted, with the identity a words check compares. */
 export async function listPending(groupId: string) {
     return db
@@ -2383,78 +2448,211 @@ export async function putSelfGrant(input: {
 }
 
 /*
+ * Replaces an area root's previous envelope while the Drive rotation a
+ * roster started on that root is still running (route 28): the repair for a
+ * previous envelope that does not open, which would otherwise keep everyone
+ * given only the new area key out of the part of the area the walk has not
+ * reached until it finishes. Only an active `members` holder who is not held
+ * may do it, under the group's lock and then the area's (the change sequence
+ * moves, so devices re-read the root); only for the run the caller names,
+ * still running and rooted at the area root; only while the root carries a
+ * previous envelope under the area's current key version (the form a roster
+ * rotation leaves). The envelope's epoch stays: it is the same old root key,
+ * wrapped again. The server cannot tell a good envelope from a bad one, so
+ * this is as open to a hostile holder as the rotation itself.
+ */
+export type PreviousRootResult =
+    | { status: 'ok'; changeSeq: number }
+    | { status: 'not-member' | 'forbidden' | 'held' | 'area' | 'not-rotating' | 'unavailable' };
+export async function replacePreviousRoot(input: {
+    groupId: string;
+    workspaceId: string;
+    userId: string;
+    rotationId: string;
+    envelope: Buffer;
+}): Promise<PreviousRootResult> {
+    if (input.envelope.length !== 72) return { status: 'area' };
+    return answering<PreviousRootResult>(
+        () =>
+            db.transaction(async (tx) => {
+                if (!(await lockGroup(tx, input.groupId))) return { status: 'not-member' as const };
+                const roles = (await activeMembers(tx, input.groupId, [input.userId])).get(
+                    input.userId,
+                );
+                if (!roles) return { status: 'not-member' as const };
+                if (!roles.includes('members')) return { status: 'forbidden' as const };
+                if (await liveHold(tx, input.groupId, input.userId))
+                    return { status: 'held' as const };
+                const [area] = await tx
+                    .select({ version: workspaces.workspaceKeyVersion })
+                    .from(workspaces)
+                    .where(
+                        and(
+                            eq(workspaces.id, input.workspaceId),
+                            eq(workspaces.groupId, input.groupId),
+                        ),
+                    )
+                    .for('no key update');
+                if (!area) return { status: 'area' as const };
+                const running = await activeRotation(tx, input.workspaceId);
+                const [root] = await tx
+                    .select({
+                        id: driveNodes.id,
+                        prevKeyEnvelope: driveNodes.prevKeyEnvelope,
+                        prevParentKeyEpoch: driveNodes.prevParentKeyEpoch,
+                    })
+                    .from(driveNodes)
+                    .where(
+                        and(
+                            eq(driveNodes.workspaceId, input.workspaceId),
+                            isNull(driveNodes.parentId),
+                        ),
+                    )
+                    .for('update');
+                if (
+                    !running ||
+                    running.id !== input.rotationId ||
+                    !root ||
+                    running.nodeId !== root.id ||
+                    !root.prevKeyEnvelope ||
+                    root.prevParentKeyEpoch !== area.version
+                )
+                    return { status: 'not-rotating' as const };
+                const changeSeq = await nextChangeSeq(tx, input.workspaceId);
+                await tx
+                    .update(driveNodes)
+                    .set({ prevKeyEnvelope: input.envelope, changeSeq })
+                    .where(eq(driveNodes.id, root.id));
+                return { status: 'ok' as const, changeSeq };
+            }),
+        async () => ({ status: 'unavailable' as const }),
+    );
+}
+
+/*
  * The account's spaces in groups: each group they are active in, with every
- * area, its seed and current key version, their newest grant to it and their
- * self-grant. The personal space is Drive's own (getPersonalWorkspace).
+ * area, its seed, current key version and change sequence, its root (whose
+ * previous envelope, while a rotation runs, is the old root key under the
+ * current area key), the Drive rotation running in it, their newest grant to
+ * it and their self-grant: what /drive/workspace gives for the personal one
+ * (getPersonalWorkspace), so a client opens an area the same way.
  */
 export async function spacesFor(userId: string) {
-    const memberships = await db
-        .select({ groupId: groups.id, kind: groups.kind, name: groups.name })
-        .from(groupMemberships)
-        .innerJoin(groups, eq(groups.id, groupMemberships.groupId))
-        .where(
-            and(
-                eq(groupMemberships.userId, userId),
-                eq(groupMemberships.state, 'active'),
-                isNull(groups.dissolvedAt),
-            ),
-        )
-        .orderBy(groups.name, groups.id);
-    if (memberships.length === 0) return [];
-    const areas = await db
-        .select({
-            groupId: workspaces.groupId,
-            workspaceId: workspaces.id,
-            idSeed: workspaces.idSeed,
-            workspaceKeyVersion: workspaces.workspaceKeyVersion,
-        })
-        .from(workspaces)
-        .where(
-            inArray(
-                workspaces.groupId,
-                memberships.map((m) => m.groupId),
-            ),
-        )
-        .orderBy(workspaces.createdAt, workspaces.id);
-    const areaIds = areas.map((area) => area.workspaceId);
-    const grants = areaIds.length
-        ? await db
-              .select()
-              .from(areaGrants)
-              .where(
-                  and(
-                      eq(areaGrants.granteeUserId, userId),
-                      inArray(areaGrants.workspaceId, areaIds),
-                  ),
-              )
-              .orderBy(
-                  sql`${areaGrants.workspaceKeyVersion} desc, ${areaGrants.granteeKeyVersion} desc`,
-              )
-        : [];
-    const selfGrants = areaIds.length
-        ? await db
-              .select()
-              .from(workspaceKeys)
-              .where(
-                  and(
-                      eq(workspaceKeys.userId, userId),
-                      inArray(workspaceKeys.workspaceId, areaIds),
-                  ),
-              )
-        : [];
-    return memberships.map((membership) => ({
-        ...membership,
-        areas: areas
-            .filter((area) => area.groupId === membership.groupId)
-            .map((area) => ({
-                workspaceId: area.workspaceId,
-                idSeed: area.idSeed!,
-                workspaceKeyVersion: area.workspaceKeyVersion,
-                grant: grants.find((grant) => grant.workspaceId === area.workspaceId) ?? null,
-                selfGrant:
-                    selfGrants.find((grant) => grant.workspaceId === area.workspaceId) ?? null,
-            })),
-    }));
+    // One snapshot: a rotation landing between the reads would otherwise pair an area's new
+    // key version with its old root, or a root with a rotation that has since finished.
+    return db.transaction(
+        async (tx) => {
+            const memberships = await tx
+                .select({ groupId: groups.id, kind: groups.kind, name: groups.name })
+                .from(groupMemberships)
+                .innerJoin(groups, eq(groups.id, groupMemberships.groupId))
+                .where(
+                    and(
+                        eq(groupMemberships.userId, userId),
+                        eq(groupMemberships.state, 'active'),
+                        isNull(groups.dissolvedAt),
+                    ),
+                )
+                .orderBy(groups.name, groups.id);
+            if (memberships.length === 0) return [];
+            const areas = await tx
+                .select({
+                    groupId: workspaces.groupId,
+                    workspaceId: workspaces.id,
+                    idSeed: workspaces.idSeed,
+                    workspaceKeyVersion: workspaces.workspaceKeyVersion,
+                    changeSeq: workspaces.changeSeq,
+                })
+                .from(workspaces)
+                .where(
+                    inArray(
+                        workspaces.groupId,
+                        memberships.map((m) => m.groupId),
+                    ),
+                )
+                .orderBy(workspaces.createdAt, workspaces.id);
+            const areaIds = areas.map((area) => area.workspaceId);
+            const rootIds = areaIds.length
+                ? await tx
+                      .select({ id: driveNodes.id })
+                      .from(driveNodes)
+                      .where(
+                          and(
+                              inArray(driveNodes.workspaceId, areaIds),
+                              isNull(driveNodes.parentId),
+                              isNull(driveNodes.purgedAt),
+                          ),
+                      )
+                : [];
+            const roots = rootIds.length
+                ? await selectNodes(
+                      tx,
+                      rootIds.map((row) => row.id),
+                  )
+                : [];
+            const running = areaIds.length
+                ? await tx
+                      .select({
+                          id: driveRotations.id,
+                          workspaceId: driveRotations.workspaceId,
+                          nodeId: driveRotations.nodeId,
+                          targetEpoch: driveRotations.targetEpoch,
+                      })
+                      .from(driveRotations)
+                      .where(
+                          and(
+                              inArray(driveRotations.workspaceId, areaIds),
+                              isNull(driveRotations.finishedAt),
+                          ),
+                      )
+                : [];
+            const grants = areaIds.length
+                ? await tx
+                      .select()
+                      .from(areaGrants)
+                      .where(
+                          and(
+                              eq(areaGrants.granteeUserId, userId),
+                              inArray(areaGrants.workspaceId, areaIds),
+                          ),
+                      )
+                      .orderBy(
+                          sql`${areaGrants.workspaceKeyVersion} desc, ${areaGrants.granteeKeyVersion} desc`,
+                      )
+                : [];
+            const selfGrants = areaIds.length
+                ? await tx
+                      .select()
+                      .from(workspaceKeys)
+                      .where(
+                          and(
+                              eq(workspaceKeys.userId, userId),
+                              inArray(workspaceKeys.workspaceId, areaIds),
+                          ),
+                      )
+                : [];
+            return memberships.map((membership) => ({
+                ...membership,
+                areas: areas
+                    .filter((area) => area.groupId === membership.groupId)
+                    .map((area) => ({
+                        workspaceId: area.workspaceId,
+                        idSeed: area.idSeed!,
+                        workspaceKeyVersion: area.workspaceKeyVersion,
+                        changeSeq: area.changeSeq,
+                        root: roots.find((root) => root.workspaceId === area.workspaceId) ?? null,
+                        rotation:
+                            running.find((row) => row.workspaceId === area.workspaceId) ?? null,
+                        grant:
+                            grants.find((grant) => grant.workspaceId === area.workspaceId) ?? null,
+                        selfGrant:
+                            selfGrants.find((grant) => grant.workspaceId === area.workspaceId) ??
+                            null,
+                    })),
+            }));
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
 }
 
 /* The group's areas with their current key versions and roots: what a rotation or removal names. */
@@ -2497,6 +2695,51 @@ export async function missingGrants(groupId: string) {
               where g.workspace_id = w.id
                 and g.workspace_key_version = w.workspace_key_version
                 and g.grantee_user_id = m.user_id
+          )
+        order by w.id, m.user_id
+    `);
+    return result.rows.map((row) => ({ workspaceId: row.workspace_id, userId: row.user_id }));
+}
+
+/*
+ * The gaps `userId` could fill themselves (route 3's `due.grants`): each
+ * (area, other active member) with no grant of the area's current key, in the
+ * areas where `userId` holds that key (a grant at the current version from a
+ * granter still active, which their client accepts, or a self-grant at it),
+ * since a grant is the key sealed by someone who has it. Never a gap of their
+ * own: route 22 refuses a grant to the uploader. "Holds" is the server's word
+ * for it: a grant that opens nothing still counts.
+ */
+export async function fillableGrants(groupId: string, userId: string) {
+    const result = await db.execute<{ workspace_id: string; user_id: string }>(sql`
+        select w.id as workspace_id, m.user_id
+        from ${workspaces} w
+        join ${groupMemberships} m on m.group_id = w.group_id and m.state = 'active'
+        where w.group_id = ${groupId}
+          and m.user_id <> ${userId}
+          and not exists (
+              select 1 from ${areaGrants} g
+              where g.workspace_id = w.id
+                and g.workspace_key_version = w.workspace_key_version
+                and g.grantee_user_id = m.user_id
+          )
+          and (
+              exists (
+                  select 1 from ${areaGrants} own
+                  join ${groupMemberships} granter
+                    on granter.group_id = w.group_id
+                   and granter.user_id = own.granter_user_id
+                   and granter.state = 'active'
+                  where own.workspace_id = w.id
+                    and own.workspace_key_version = w.workspace_key_version
+                    and own.grantee_user_id = ${userId}
+              )
+              or exists (
+                  select 1 from ${workspaceKeys} k
+                  where k.workspace_id = w.id
+                    and k.user_id = ${userId}
+                    and k.workspace_key_version = w.workspace_key_version
+              )
           )
         order by w.id, m.user_id
     `);

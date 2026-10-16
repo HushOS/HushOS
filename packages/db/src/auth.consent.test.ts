@@ -16,7 +16,7 @@ import {
 } from '../test/helpers';
 import * as auth from './auth';
 import { db } from './client';
-import { accountIdentities } from './schema';
+import { accountIdentities, accountIdentityHistory } from './schema';
 import {
     successionConsentHolds,
     successionConsentStatement,
@@ -256,6 +256,141 @@ describe('successor consent on an identity succession', () => {
         expect(after!.encryptedMlDsaSeed!.equals(history.encryptedMlDsaSeed)).toBe(true);
         expect(after!.successionConsent!.equals(made.consent)).toBe(true);
         expect(after!.successionSignature.equals(made.signature)).toBe(true);
+    });
+});
+
+/*
+ * Consent for a succession made before clients sent it (docs/groups-server.md
+ * 5, the backfill route): checked as /succession checks it, under the keys
+ * the stored link names, and stored only where the link has none. A forged
+ * consent stored here would be served to every group member as though it
+ * held; one written over an existing consent would let any device that can
+ * sign for the account replace what the account's history says.
+ */
+describe('consent for an earlier succession', () => {
+    /* An account whose succession from key version 1 landed without consent. */
+    async function consentless(label: string) {
+        const made = await account(label);
+        const link = await successor(made.user.id, made.signer, label);
+        expect(
+            await auth.succeedIdentity({
+                userId: made.user.id,
+                credentialVersion: 1,
+                sessionTokenHash: made.sessionTokenHash,
+                identity: link.identity,
+                signature: link.signature,
+            }),
+        ).toEqual({ status: 'ok', keyVersion: 2 });
+        const backfill = (
+            consent: Buffer,
+            oldKeyVersion = 1,
+            sessionTokenHash = made.sessionTokenHash,
+        ) =>
+            auth.backfillSuccessionConsent({
+                userId: made.user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                oldKeyVersion,
+                consent,
+            });
+        const stored = async () => (await auth.successionChain(made.user.id, 1))![0]!.consent;
+        return { ...made, ...link, backfill, stored };
+    }
+
+    test('is stored once it holds, and a forged one is refused with nothing stored', async () => {
+        const mine = await consentless('backfill-forged');
+        // The same keys consenting to the same link for another account.
+        const otherAccount = { ...mine.link, userId: '22222222-2222-4222-8222-222222222222' };
+        const refused: [string, Buffer][] = [
+            ['a byte flipped in the old half', flip(mine.consent, 1000)],
+            ['a byte flipped in the new half', flip(mine.consent, 3373 + 1000)],
+            ['the halves swapped', Buffer.concat([mine.newHalf, mine.oldHalf])],
+            [
+                'the old keys in both roles',
+                Buffer.concat([
+                    mine.oldHalf,
+                    mine.signer.sign(successionConsentStatement(mine.link, 'new')),
+                ]),
+            ],
+            ['the version 2 signature, doubled', Buffer.concat([mine.signature, mine.signature])],
+            [
+                "another account's consent",
+                Buffer.concat([
+                    mine.signer.sign(successionConsentStatement(otherAccount, 'old')),
+                    mine.next.sign(successionConsentStatement(otherAccount, 'new')),
+                ]),
+            ],
+        ];
+        for (const [, consent] of refused)
+            expect(await mine.backfill(consent)).toEqual({ status: 'bad-signature' });
+        expect(await mine.stored()).toBeNull();
+        // Only a current session uploads it.
+        expect(await mine.backfill(mine.consent, 1, Buffer.alloc(32))).toEqual({
+            status: 'session',
+        });
+        // Only for a link the account has: its current keys replaced nothing yet.
+        expect(await mine.backfill(mine.consent, 2)).toEqual({ status: 'no-link' });
+        expect(await mine.stored()).toBeNull();
+        expect(await mine.backfill(mine.consent)).toEqual({ status: 'ok', stored: true });
+        expect((await mine.stored())!.equals(mine.consent)).toBe(true);
+        // A forged one after it is still refused, not answered as already stored.
+        expect(await mine.backfill(flip(mine.consent, 10))).toEqual({ status: 'bad-signature' });
+    });
+
+    test('never replaces a consent that is stored, and answers a repeat as not stored', async () => {
+        const mine = await consentless('backfill-kept');
+        expect(await mine.backfill(mine.consent)).toEqual({ status: 'ok', stored: true });
+        expect(await mine.backfill(mine.consent)).toEqual({ status: 'ok', stored: false });
+        // Whatever is stored stays, even when the upload holds and differs from it.
+        const earlier = bytes(6746);
+        await db
+            .update(accountIdentityHistory)
+            .set({ successionConsent: earlier })
+            .where(eq(accountIdentityHistory.userId, mine.user.id));
+        expect(await mine.backfill(mine.consent)).toEqual({ status: 'ok', stored: false });
+        expect((await mine.stored())!.equals(earlier)).toBe(true);
+    });
+
+    test('a link from a version 1 identity has no ML-DSA keys to consent with', async () => {
+        // Registered with a version 1 identity, replaced before hybrid signatures existed.
+        const { user } = await registered('backfill-v1@hushos.test');
+        const sessionTokenHash = await signedIn(user.id);
+        const current = (await auth.getIdentity(user.id))!;
+        expect(current.version).toBe(1);
+        const { userId: _userId, ...old } = current;
+        await db.insert(accountIdentityHistory).values({
+            ...old,
+            userId: user.id,
+            replacedByKeyVersion: 2,
+            newEncryptionPublicKey: bytes(32),
+            newSigningPublicKey: bytes(32),
+            newKemPublicKey: bytes(1184),
+            successionSignature: bytes(64),
+        });
+        expect(
+            await auth.backfillSuccessionConsent({
+                userId: user.id,
+                credentialVersion: 1,
+                sessionTokenHash,
+                oldKeyVersion: 1,
+                consent: bytes(6746),
+            }),
+        ).toEqual({ status: 'not-upgraded' });
+        expect((await auth.successionChain(user.id, 1))![0]!.consent).toBeNull();
+    });
+
+    test("touches only the uploader's own history, whoever's consent it carries", async () => {
+        const mine = await consentless('backfill-mine');
+        const theirs = await consentless('backfill-theirs');
+        // Their genuine consent, uploaded from my session, is checked against my link: refused.
+        expect(await mine.backfill(theirs.consent)).toEqual({ status: 'bad-signature' });
+        expect(await mine.stored()).toBeNull();
+        expect(await theirs.stored()).toBeNull();
+        expect(await mine.backfill(mine.consent)).toEqual({ status: 'ok', stored: true });
+        expect(await theirs.stored()).toBeNull();
+        expect(await theirs.backfill(theirs.consent)).toEqual({ status: 'ok', stored: true });
+        expect((await mine.stored())!.equals(mine.consent)).toBe(true);
+        expect((await theirs.stored())!.equals(theirs.consent)).toBe(true);
     });
 });
 

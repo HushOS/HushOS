@@ -109,6 +109,7 @@ const authActions = new Set([
     'identity',
     'identity/upgrade',
     'identity/succession',
+    'identity/succession/consent',
     'identity/history',
     'contacts/lookup',
     'contacts/:userId/succession',
@@ -200,6 +201,10 @@ const groupActions: [RegExp, string][] = (
         ['groups/:id/areas', `groups/${UUID}/areas`],
         ['groups/:id/areas/:workspaceId/grants', `groups/${UUID}/areas/${UUID}/grants`],
         ['groups/:id/areas/:workspaceId/self-grant', `groups/${UUID}/areas/${UUID}/self-grant`],
+        [
+            'groups/:id/areas/:workspaceId/previous-root',
+            `groups/${UUID}/areas/${UUID}/previous-root`,
+        ],
         ['groups/:id/areas/:workspaceId/rotations', `groups/${UUID}/areas/${UUID}/rotations`],
         ['invitations/open', 'invitations/open'],
         ['invitations/accept', 'invitations/accept'],

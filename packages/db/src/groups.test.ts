@@ -1692,6 +1692,8 @@ describe('departures', () => {
         });
         const target = (await drive.allocateKeyEpochs(area, 1))!.from;
         const rootUnderV2 = randomBytes(72);
+        // The root's key at t1, wrapped again under area key version 2 (option A).
+        const rootT1UnderV2 = randomBytes(72);
         const rotationOf = async (): Promise<groups.RotationInput> => {
             const current = await nodeRow(root.id);
             const metadataEnvelope = randomBytes(100);
@@ -1719,6 +1721,7 @@ describe('departures', () => {
                         ),
                     },
                 },
+                previousRootKeyEnvelope: rootT1UnderV2,
                 selfGrant: { ...selfGrant(), workspaceKeyVersion: 2 },
             };
         };
@@ -1745,12 +1748,18 @@ describe('departures', () => {
         ).toBe(true);
         await okHead(await groups.appendChain({ ...call, rotations: [await rotationOf()] }));
         // From server rows alone: the child sits under the root's key at t1, and that key is
-        // still stored, as the root's previous envelope, until the new run finishes.
+        // still stored, as the root's previous envelope, until the new run finishes: wrapped
+        // under area key version 2, so someone given only version 2 opens the child.
         const rootAfter = await nodeRow(root.id);
         const childAfter = await nodeRow(child.id);
-        expect(rootAfter).toMatchObject({ keyEpoch: target, parentKeyEpoch: 2, prevKeyEpoch: t1 });
+        expect(rootAfter).toMatchObject({
+            keyEpoch: target,
+            parentKeyEpoch: 2,
+            prevKeyEpoch: t1,
+            prevParentKeyEpoch: 2,
+        });
         expect(rootAfter.keyEnvelope!.equals(rootUnderV2)).toBe(true);
-        expect(rootAfter.prevKeyEnvelope!.equals(rootUnderT1)).toBe(true);
+        expect(rootAfter.prevKeyEnvelope!.equals(rootT1UnderV2)).toBe(true);
         expect(childAfter).toMatchObject({ keyEpoch: t1, parentKeyEpoch: t1 });
         expect(childAfter.keyEnvelope!.equals(childUnderT1)).toBe(true);
     });
@@ -1764,6 +1773,77 @@ describe('departures', () => {
         expect(await drive.mayStartRotation(leaver.userId, group.areaId)).toBe(false);
         const stranger = await createTestAccount();
         expect(await drive.mayStartRotation(stranger.userId, group.areaId)).toBe(false);
+    });
+
+    test('stopping a share or link in an area marks it due for rotation, whoever stops it, held or not', async () => {
+        const { creator, group, leaver: holder, stayer } = await threeMembers();
+        const outsider = await createTestAccount();
+        await ensureIdentity(outsider.userId);
+        const root = await areaRoot(group, creator.userId);
+        const dueAt = async (workspaceId: string) => (await areaRow(workspaceId)).rotationDueAt;
+        const clear = () =>
+            db
+                .update(workspaces)
+                .set({ rotationDueAt: null })
+                .where(eq(workspaces.id, group.areaId));
+        await clear();
+        // A member without `members`, who may not rotate: the area is due, and holders see it.
+        const memberShare = await shareOf(group, root, stayer.userId, outsider.userId);
+        expect(await drive.revokeShare(group.areaId, memberShare)).not.toBeNull();
+        expect(await dueAt(group.areaId)).not.toBeNull();
+        expect(await groups.listRotationsDue(group.groupId)).toEqual([group.areaId]);
+        // Stopping what is stopped already marks nothing.
+        await clear();
+        expect(await drive.revokeShare(group.areaId, memberShare)).toBeNull();
+        expect(await dueAt(group.areaId)).toBeNull();
+        // A holder too: if their device stops before it rotates, the mark is all that is left.
+        const holderShare = await shareOf(group, root, holder.userId, outsider.userId);
+        // Held ahead of a removal, the holder can still stop a share, and it still marks the area.
+        expect(
+            await groups.placeHold({
+                groupId: group.groupId,
+                holderUserId: creator.userId,
+                userId: holder.userId,
+                minutes: 15,
+            }),
+        ).toMatchObject({ status: 'placed' });
+        expect(await drive.revokeShare(group.areaId, holderShare)).not.toBeNull();
+        expect(await dueAt(group.areaId)).not.toBeNull();
+        // Links the same way, and an earlier mark keeps its time.
+        await clear();
+        const first = await linkOf(group, root, stayer.userId);
+        expect(await drive.revokeLink(group.areaId, first)).not.toBeNull();
+        const since = await dueAt(group.areaId);
+        expect(since).not.toBeNull();
+        const second = await linkOf(group, root, creator.userId);
+        expect(await drive.revokeLink(group.areaId, second)).not.toBeNull();
+        expect(await dueAt(group.areaId)).toEqual(since);
+        // In a personal workspace its owner rotates; nothing is ever marked due.
+        const range = await drive.allocateKeyEpochs(stayer.workspaceId, 1);
+        const own = await signed.createRoot({
+            workspaceId: stayer.workspaceId,
+            userId: stayer.userId,
+            id: randomUUID(),
+            envelopes: {
+                keyEpoch: range!.from,
+                parentKeyEpoch: 1,
+                keyEnvelope: randomBytes(72),
+                metadataEnvelope: randomBytes(100),
+            },
+        });
+        if (own.status !== 'created') throw new Error(own.status);
+        const personal = await drive.createShare({
+            workspaceId: stayer.workspaceId,
+            nodeId: own.root.id,
+            granterUserId: stayer.userId,
+            granteeUserId: outsider.userId,
+            role: 'viewer',
+            keyEpoch: own.root.keyEpoch,
+            shareEnvelope: randomBytes(4565),
+        });
+        if (personal.status !== 'ok') throw new Error(personal.status);
+        expect(await drive.revokeShare(stayer.workspaceId, personal.share.id)).not.toBeNull();
+        expect(await dueAt(stayer.workspaceId)).toBeNull();
     });
 });
 

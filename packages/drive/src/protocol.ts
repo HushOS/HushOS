@@ -67,6 +67,8 @@ export type Capabilities = {
     nameMaxCodePoints: number;
     tombstoneDays: number;
     trashRetentionDays: number;
+    /* Whether the server serves groups (families) at all; absent from servers before 1c. */
+    groups?: boolean;
 };
 
 /* An error a client can act on; the message is shown to the person as is. */
