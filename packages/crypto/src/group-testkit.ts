@@ -1796,6 +1796,54 @@ export async function groupCases(): Promise<GroupCase[]> {
             },
             expected: accepted(3),
         });
+        // Version 1 keys the server made, under the honest code: the same roster bytes with their
+        // signers' signatures, group-signed again by the server's key. The roster statements name
+        // no group key, so only the code holds the first keys: with the join roster under key 1
+        // the code names key 1, and the chain's is the server's, the warning.
+        const made = await groupKeyPair(pattern(64, 150));
+        const remade = async (at: SignedGroupStatement) => ({
+            ...at,
+            signature: await signGroup(at.statement, made),
+        });
+        cases.push({
+            name: 'join-mark-made-up-first-keys',
+            input: {
+                ...joining(mark),
+                firstKeys: made.publicKey,
+                rosters: await Promise.all(h.rosters.map(remade)),
+            },
+            expected: fork('roster', 2),
+        });
+        // After a succession the code names key 2: the server's key 1 reaches it only through a
+        // succession from its key, which a holder must sign. Without one it is refused. (A holder
+        // who signs one can serve such a history: see the threat model.)
+        cases.push({
+            name: 'join-mark-made-up-first-keys-succession',
+            input: {
+                ...fromOne(after),
+                firstKeys: made.publicKey,
+                rosters: [
+                    ...(await Promise.all(after.rosters.slice(0, 2).map(remade))),
+                    after.rosters[2]!,
+                ],
+                successions: [
+                    await signedBy(
+                        groupSuccessionStatement({
+                            ...parseGroupSuccession(after.successions[0]!.statement),
+                            oldEd25519PublicKey: made.publicKey.ed25519PublicKey,
+                            oldMlDsaPublicKey: made.publicKey.mlDsaPublicKey,
+                        }),
+                        made,
+                        null,
+                    ),
+                ],
+                joinMark: {
+                    rosterVersion: 3,
+                    code: await joinCode(atThree, after.keys[1]!.publicKey, 2),
+                },
+            },
+            expected: refused,
+        });
     }
     // r8: key 1, then key 2, then a succession from 2 back to key 1, roster 3 signed under it.
     {
