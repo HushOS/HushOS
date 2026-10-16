@@ -28,7 +28,7 @@ use crate::signatures::{
 use crate::succession_path::{succession_path, SuccessionPath, VerifiedLinks};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -1294,6 +1294,18 @@ const EARLIER_KEY: &str = "This is one of the group’s earlier keys: a rotation
 /// (`check_areas`); this only says so before a holder signs. Keys are wiped
 /// as they are used, and only their commitments are kept.
 pub(crate) fn area_rows(chain: &AcceptedRosters, keys: Vec<AreaKey>) -> CoreResult<Vec<RosterArea>> {
+    rows_after(&chain.area_keys, keys)
+}
+
+/*
+ * The same rows after the commitments `listed` already holds (a chain's
+ * `area_keys`; nothing for roster version 1): `area_rows` and `roster_first`
+ * are its only callers, as the web's rowsAfter.
+ */
+pub(crate) fn rows_after(
+    listed: &HashMap<String, Vec<String>>,
+    keys: Vec<AreaKey>,
+) -> CoreResult<Vec<RosterArea>> {
     let mut areas = HashSet::new();
     for key in &keys {
         uuid(&key.workspace_id, "workspace id")?;
@@ -1301,16 +1313,16 @@ pub(crate) fn area_rows(chain: &AcceptedRosters, keys: Vec<AreaKey>) -> CoreResu
             return Err(input("Invalid roster areas."));
         }
     }
-    let listed: HashSet<&String> = chain.area_keys.values().flatten().collect();
+    let before: HashSet<&String> = listed.values().flatten().collect();
     let mut fresh = HashSet::new();
     let mut rows = vec![];
     for key in keys {
         let workspace_key = Zeroizing::new(key.workspace_key);
         let commitment = area_key_commitment(&workspace_key)?;
-        if listed.contains(&commitment) || !fresh.insert(commitment.clone()) {
+        if before.contains(&commitment) || !fresh.insert(commitment.clone()) {
             return Err(input(EARLIER_KEY));
         }
-        let version = chain.area_keys.get(&key.workspace_id).map_or(0, Vec::len) as u64 + 1;
+        let version = listed.get(&key.workspace_id).map_or(0, Vec::len) as u64 + 1;
         rows.push(RosterArea { workspace_id: key.workspace_id, workspace_key_version: version, commitment });
     }
     rows.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));

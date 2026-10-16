@@ -3637,15 +3637,19 @@ pub fn member_json(m: &RosterMember) -> Value {
     })
 }
 
-pub fn member_of(m: &Value) -> RosterMember {
-    let role = |name: &str| match name {
+fn role_of(name: &str) -> GroupRole {
+    match name {
         "billing" => GroupRole::Billing,
         "data_admin" => GroupRole::DataAdmin,
         "guardian" => GroupRole::Guardian,
         "members" => GroupRole::Members,
         "recovery" => GroupRole::Recovery,
         other => panic!("role {other}"),
-    };
+    }
+}
+
+pub fn member_of(m: &Value) -> RosterMember {
+    let role = role_of;
     RosterMember {
         user_id: s(m, "userId"),
         key_version: n(m, "keyVersion"),
@@ -4917,4 +4921,192 @@ pub fn seal_case_from(v: &Value) -> SealCase {
         claim: (s(&v["claim"], "userId"), n(&v["claim"], "keyVersion")),
         expected: s(v, "expected"),
     }
+}
+
+/*
+ * First rosters both twins must build to the same bytes, or refuse alike
+ * (roster_first, firstRoster): the creator's entry normalized (roles sorted,
+ * since-version 1), rows computed from the keys and sorted, and every rule
+ * acceptance holds roster version 1 to. The web's firstRosterCases, in order.
+ */
+pub struct FirstRosterCase {
+    pub name: String,
+    pub group_id: String,
+    pub kind: GroupKind,
+    pub creator: RosterMember,
+    /* Each area's workspace id and key. */
+    pub area_keys: Vec<(String, Vec<u8>)>,
+}
+
+pub fn first_roster_cases() -> Vec<FirstRosterCase> {
+    let organizer = person(1);
+    let key = |workspace_id: &str, seed: u8| (workspace_id.to_string(), pattern(32, seed));
+    let of = |name: &str, creator: RosterMember, area_keys: Vec<(String, Vec<u8>)>| FirstRosterCase {
+        name: name.into(),
+        group_id: GROUP.into(),
+        kind: GroupKind::Family,
+        creator,
+        area_keys,
+    };
+    let entry = |roles: &[GroupRole]| organizer.entry(roles, 1, MemberStatus::Active);
+    let (billing, members, data_admin) = (GroupRole::Billing, GroupRole::Members, GroupRole::DataAdmin);
+    vec![
+        // Roles out of order and a stale since-version: roster_first sets both.
+        of(
+            "first-roster",
+            RosterMember { roles: vec![members, billing], since_version: 7, ..entry(&[]) },
+            vec![key(AREA, AREA_KEY_SEED)],
+        ),
+        of("first-roster-no-areas", entry(&[billing, members]), vec![]),
+        of(
+            "first-roster-two-areas",
+            entry(&[members]),
+            vec![key(SECOND_AREA, 101), key(AREA, AREA_KEY_SEED)],
+        ),
+        FirstRosterCase {
+            kind: GroupKind::Org,
+            ..of("first-roster-org", entry(&[data_admin, members]), vec![key(AREA, AREA_KEY_SEED)])
+        },
+        of("first-roster-not-holder", entry(&[billing]), vec![key(AREA, AREA_KEY_SEED)]),
+        of(
+            "first-roster-left",
+            organizer.entry(&[members], 1, MemberStatus::Left),
+            vec![key(AREA, AREA_KEY_SEED)],
+        ),
+        of(
+            "first-roster-same-key-twice",
+            entry(&[members]),
+            vec![key(AREA, AREA_KEY_SEED), key(SECOND_AREA, AREA_KEY_SEED)],
+        ),
+        of("first-roster-area-twice", entry(&[members]), vec![key(AREA, AREA_KEY_SEED), key(AREA, 78)]),
+        of("first-roster-org-role-in-family", entry(&[data_admin, members]), vec![]),
+        of("first-roster-short-key", entry(&[members]), vec![(AREA.to_string(), pattern(31, AREA_KEY_SEED))]),
+        FirstRosterCase {
+            group_id: GROUP.to_uppercase(),
+            ..of("first-roster-uppercase-group-id", entry(&[members]), vec![])
+        },
+    ]
+}
+
+/* This twin's first roster for a case: its statement (base64url), or None when refused. */
+pub fn first_roster_verdict(c: &FirstRosterCase) -> Option<String> {
+    let area_keys = c
+        .area_keys
+        .iter()
+        .map(|(workspace_id, key)| AreaKey { workspace_id: workspace_id.clone(), workspace_key: key.clone() })
+        .collect();
+    roster_first(c.group_id.clone(), c.kind, c.creator.clone(), Some(area_keys))
+        .and_then(roster_statement)
+        .ok()
+        .map(|statement| e(&statement))
+}
+
+pub fn first_roster_case_json(c: &FirstRosterCase, expected: &Option<String>) -> Value {
+    json!({
+        "name": c.name,
+        "groupId": c.group_id,
+        "kind": match c.kind { GroupKind::Family => "family", GroupKind::Org => "org" },
+        "creator": member_json(&c.creator),
+        "areaKeys": c.area_keys.iter().map(|(id, key)| json!({ "workspaceId": id, "workspaceKey": e(key) })).collect::<Vec<_>>(),
+        "expected": expected,
+    })
+}
+
+pub fn first_roster_case_from(v: &Value) -> (FirstRosterCase, Option<String>) {
+    (
+        FirstRosterCase {
+            name: s(v, "name"),
+            group_id: s(v, "groupId"),
+            kind: if s(v, "kind") == "family" { GroupKind::Family } else { GroupKind::Org },
+            creator: member_of(&v["creator"]),
+            area_keys: v["areaKeys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|k| (s(k, "workspaceId"), b(k, "workspaceKey")))
+                .collect(),
+        },
+        v["expected"].as_str().map(String::from),
+    )
+}
+
+/*
+ * Own entries both twins must make alike, or refuse (roster_entry_own,
+ * ownRosterEntry): only from an identity whose keys statement holds for the
+ * account. The web's ownEntryCases, in order.
+ */
+pub struct OwnEntryCase {
+    pub name: String,
+    pub user_id: String,
+    pub identity: PublicIdentity,
+    pub roles: Vec<GroupRole>,
+}
+
+pub fn own_entry_cases() -> Vec<OwnEntryCase> {
+    let (organizer, adult, adult2) = (person(1), person(2), person_at(2, 2));
+    let of = |name: &str, user_id: &str, identity: PublicIdentity| OwnEntryCase {
+        name: name.into(),
+        user_id: user_id.into(),
+        identity,
+        roles: vec![GroupRole::Members, GroupRole::Billing],
+    };
+    vec![
+        of("own-entry", &organizer.user_id, organizer.served.clone()),
+        of("own-entry-later-identity", &adult2.user_id, adult2.served.clone()),
+        of("own-entry-other-account", &adult.user_id, organizer.served.clone()),
+        of(
+            "own-entry-kem-swapped",
+            &organizer.user_id,
+            PublicIdentity {
+                kem_public_key: adult.served.kem_public_key.clone(),
+                ..organizer.served.clone()
+            },
+        ),
+        of(
+            "own-entry-another-keys-signature",
+            &organizer.user_id,
+            PublicIdentity {
+                keys_signature: adult.served.keys_signature.clone(),
+                ..organizer.served.clone()
+            },
+        ),
+        // A key version the keys statement never named.
+        of(
+            "own-entry-key-version",
+            &organizer.user_id,
+            PublicIdentity { key_version: 2, ..organizer.served.clone() },
+        ),
+        // The adult's replaced identity: its keys statement still holds, so an entry is made; that it
+        // is not their newest is the signer check's and the creating client's to catch.
+        of("own-entry-earlier-identity", &adult.user_id, adult.served.clone()),
+    ]
+}
+
+/* This twin's own entry for a case, as JSON, or null when refused. */
+pub fn own_entry_verdict(c: &OwnEntryCase) -> Value {
+    roster_entry_own(c.user_id.clone(), c.identity.clone(), c.roles.clone())
+        .map(|entry| member_json(&entry))
+        .unwrap_or(Value::Null)
+}
+
+pub fn own_entry_case_json(c: &OwnEntryCase, expected: &Value) -> Value {
+    json!({
+        "name": c.name,
+        "userId": c.user_id,
+        "identity": served_identity_json(&c.identity),
+        "roles": c.roles.iter().map(|r| role_name(*r)).collect::<Vec<_>>(),
+        "expected": expected,
+    })
+}
+
+pub fn own_entry_case_from(v: &Value) -> (OwnEntryCase, Value) {
+    (
+        OwnEntryCase {
+            name: s(v, "name"),
+            user_id: s(v, "userId"),
+            identity: served_identity_of(&v["identity"]),
+            roles: v["roles"].as_array().unwrap().iter().map(|r| role_of(r.as_str().unwrap())).collect(),
+        },
+        v["expected"].clone(),
+    )
 }

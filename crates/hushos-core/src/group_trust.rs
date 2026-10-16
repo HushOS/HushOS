@@ -8,13 +8,14 @@
 //!   before it, and reports a fork (only on admissible evidence) rather than
 //!   ever picking a side;
 //! - [`roster_check_next`] is every acceptance rule for the roster after an
-//!   accepted chain: [`roster_next`] runs it before a holder signs, and the
-//!   server must run it before storing one;
+//!   accepted chain: [`roster_next`] runs it before a holder signs (and
+//!   [`roster_first`] the rules of roster version 1 before a creator signs),
+//!   and the server must run it before storing one;
 //! - [`group_writer_trust`] and the `group_*_integrity` functions give the
 //!   scoped verdicts: a roster vouches only inside its own group's areas;
 //! - [`roster_entry_new`], [`roster_entry_fold_in`] and [`trust_as_group_does`]
 //!   move keys between personal pins and roster entries only after the checks
-//!   that let them.
+//!   that let them; [`roster_entry_own`] makes a creator's own entry.
 
 use crate::bytes::{decode, encode};
 use crate::canonical::{bytes_of, digest_of, integer, uuid};
@@ -1815,6 +1816,46 @@ pub fn roster_entry_new(
     })
 }
 
+/// The creator's own entry on roster version 1 (`since_version` 1), and for
+/// nothing else: no one pins themselves, so [`roster_entry_new`] does not
+/// apply, and every later change to one's own entry is a fold-in
+/// ([`roster_entry_fold_in`]). `identity` is the account's own current
+/// identity as its device opened it (the public parts of the envelope it
+/// opened with its own account key). Its keys statement must hold under
+/// `user_id`, so the entry names a version 2 identity whose four keys belong
+/// together, the lattice keys by digest; anything else and no entry is made.
+/// It does not prove the identity is the caller's current one (an earlier
+/// identity's statement holds too). Roster version 1's signer signature,
+/// which acceptance checks under the keys this entry names, proves the entry
+/// and the signer are the same identity; that the identity is the account's
+/// newest is the creating client's check (design 3.1: the staged acceptance
+/// with freshly fetched own identities reports no wrong or behind own entry).
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn roster_entry_own(
+    user_id: String,
+    identity: PublicIdentity,
+    roles: Vec<GroupRole>,
+) -> CoreResult<RosterMember> {
+    if !identity_verify_keys(user_id.clone(), identity.clone()) {
+        return Err(input("These are not this account’s keys."));
+    }
+    let ml_dsa = ml_dsa_digest(&identity.ml_dsa_public_key).ok_or_else(|| input("Invalid identity key."))?;
+    let kem = digest(&decode("kemPublicKey", &identity.kem_public_key, Some(KEM_PUBLIC_KEY_BYTES))?);
+    let mut roles = roles;
+    roles.sort();
+    Ok(RosterMember {
+        user_id,
+        key_version: identity.key_version,
+        encryption_public_key: identity.encryption_public_key,
+        signing_public_key: identity.signing_public_key,
+        ml_dsa_public_key_digest: ml_dsa,
+        kem_public_key_digest: kem,
+        status: MemberStatus::Active,
+        roles,
+        since_version: 1,
+    })
+}
+
 /// An entry after folding in: possibly changed, and whether the member needs a check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1875,6 +1916,63 @@ pub fn roster_entry_fold_in(
         changed: true,
         needs_check: false,
     })
+}
+
+/// A group's first roster, for its creator to sign (2.4, 3.1): version 1, no
+/// previous digest, under group key 1, the creator as its only entry and its
+/// signer (roles sorted, `since_version` 1), and a row at version 1 for each
+/// of `area_keys` (computed here, as [`roster_next`] does: a client never
+/// hands in a row of its own making). Refused unless it keeps every rule
+/// acceptance holds roster version 1 to, signatures aside: the creator active
+/// with `Members`, only the kind's roles, no area named twice, no key used
+/// twice, at most 1,024 family areas. So a creator never signs a first roster
+/// that no device, the server included, would take.
+///
+/// ```
+/// use hushos_core::*;
+/// let user_id = "00000001-abcd-4abc-8abc-abcdefabcdef".to_string();
+/// let envelope = identity_create(user_id.clone(), vec![7; 32], 1)?;
+/// let creator = roster_entry_own(user_id, public_identity(envelope)?, vec![GroupRole::Members])?;
+/// let area = AreaKey { workspace_id: "80558a81-8dfc-8914-8447-0417b55e2ec5".into(), workspace_key: vec![77; 32] };
+/// let group_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".to_string();
+/// let roster = roster_first(group_id.clone(), GroupKind::Family, creator.clone(), Some(vec![area]))?;
+/// assert_eq!((roster.roster_version, roster.areas[0].workspace_key_version), (1, 1));
+/// // A creator who cannot sign the next roster makes no group.
+/// let no_holder = RosterMember { roles: vec![GroupRole::Billing], ..creator };
+/// assert!(roster_first(group_id, GroupKind::Family, no_holder, None).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn roster_first(
+    group_id: String,
+    kind: GroupKind,
+    creator: RosterMember,
+    area_keys: Option<Vec<crate::groups::AreaKey>>,
+) -> CoreResult<Roster> {
+    let areas = crate::groups::rows_after(&HashMap::new(), area_keys.unwrap_or_default())?;
+    let mut roles = creator.roles;
+    roles.sort();
+    let roster = Roster {
+        group_id,
+        kind,
+        roster_version: 1,
+        previous_roster_digest: String::new(),
+        group_key_version: 1,
+        signer_user_id: creator.user_id.clone(),
+        members: vec![RosterMember { roles, since_version: 1, ..creator }],
+        areas,
+    };
+    let statement = roster_bytes(&roster)?;
+    // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
+    // is never read: the one placeholder says only that the roster is under key 1.
+    let empty = HashMap::new();
+    let mut state = State::of(&roster.group_id, &empty, None);
+    state.keys.push(GroupPublicKey { ed25519_public_key: String::new(), ml_dsa_public_key: String::new() });
+    match state.roster_rules(&roster, &statement, None, None) {
+        Ok(()) => Ok(roster),
+        Err(Stop::Refused(error)) => Err(error),
+        Err(Stop::Fork(..)) => Err(input(NOT_FOLLOWING)),
+    }
 }
 
 /// The roster after `chain`'s latest, for `signer_user_id` to sign: the next
@@ -2466,8 +2564,8 @@ mod tests {
     use super::*;
     use crate::bytes::{encode, random};
     use crate::groups::tests::{
-        accepted_of, group_seed_at, ml_dsa_keys, reader, History, Person, AREA, GROUP, OTHER_AREA,
-        OTHER_GROUP,
+        accepted_of, group_seed_at, ml_dsa_keys, reader, History, Person, AREA, AREA_KEY, AREA_SEED, GROUP,
+        OTHER_AREA, OTHER_GROUP,
     };
     use crate::groups::{
         group_key_open, group_key_seal, group_public_key, group_sign, roster_member_signer, roster_sign,
@@ -5841,5 +5939,235 @@ mod tests {
             &[],
         );
         assert_eq!(path, SuccessionPath::Path(vec![links[0].clone()]));
+    }
+
+    /* Milestone 1c: creating a group */
+
+    /* Another workspace id, sorting after AREA. */
+    const SECOND_AREA: &str = "a0558a81-8dfc-4914-8447-0417b55e2ec5";
+
+    /* The creator accepting their own group: they made the keys, so the first keys are checked. */
+    fn creator_accepts(creator: &Person, rosters: Vec<SignedGroupStatement>) -> CoreResult<RosterChain> {
+        accept_rosters(
+            GROUP.into(),
+            group_public_key(group_seed_at(1)).unwrap(),
+            true,
+            vec![],
+            rosters,
+            vec![],
+            ml_dsa_keys(&[creator]),
+            OwnIdentities { user_id: creator.user_id.clone(), identities: vec![creator.served_keys()] },
+            None,
+        )
+    }
+
+    fn area_key(workspace_id: &str, key: Vec<u8>) -> crate::groups::AreaKey {
+        crate::groups::AreaKey { workspace_id: workspace_id.into(), workspace_key: key }
+    }
+
+    #[test]
+    fn roster_first_builds_the_roster_1_the_creator_s_own_acceptance_takes_with_the_rows_of_its_keys() {
+        let organizer = Person::new(1);
+        let roles = vec![GroupRole::Members, GroupRole::Billing];
+        let entry = roster_entry_own(organizer.user_id.clone(), organizer.served(), roles.clone()).unwrap();
+        // The test person's entry is built from their keys by another path.
+        assert_eq!(entry, organizer.active(&[GroupRole::Billing, GroupRole::Members]));
+        let roster = roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            RosterMember { roles, since_version: 7, ..entry },
+            Some(vec![area_key(AREA, AREA_KEY.to_vec())]),
+        )
+        .unwrap();
+        // Byte for byte what the test history writes for the same creator and area.
+        let mut h = History::new();
+        h.roster(&organizer, vec![organizer.active(&[GroupRole::Billing, GroupRole::Members])], None);
+        assert_eq!(roster_bytes(&roster).unwrap(), h.rosters[0].statement);
+
+        let signed = roster_sign(roster.clone(), group_seed_at(1), organizer.keys.clone()).unwrap();
+        let chain = accepted(creator_accepts(&organizer, vec![signed]));
+        assert_eq!(chain.roster, roster);
+        assert_eq!(chain.creator_user_id, organizer.user_id);
+        assert!(chain.own_entry_wrong_at.is_empty());
+        assert_eq!(crate::groups::area_write_version(chain.clone(), AREA.into()), Some(1));
+        // The row commits to the key given: a grant of it seals and opens through the chain, and no
+        // other key seals under that version.
+        let ctx = crate::groups::AreaGrantContext {
+            group_id: GROUP.into(),
+            workspace_id: AREA.into(),
+            workspace_key_version: 1,
+            grantee_user_id: organizer.user_id.clone(),
+            grantee_key_version: 1,
+            granter_user_id: organizer.user_id.clone(),
+            roster_version: 1,
+            roster_digest: chain.roster_digest.clone(),
+        };
+        let seal = |key: Vec<u8>| {
+            crate::groups::area_grant_seal(
+                key,
+                ctx.clone(),
+                chain.clone(),
+                AREA_SEED.into(),
+                organizer.kem(),
+                organizer.keys.clone(),
+            )
+        };
+        let opened = crate::groups::area_grant_open(
+            seal(AREA_KEY.to_vec()).unwrap(),
+            ctx.clone(),
+            chain.clone(),
+            AREA_SEED.into(),
+            organizer.ml_dsa(),
+            None,
+            organizer.user_id.clone(),
+            1,
+            organizer.keys.clone(),
+        )
+        .unwrap();
+        assert_eq!(opened, AREA_KEY.to_vec());
+        assert!(seal(vec![78; 32]).unwrap_err().to_string().contains("not the one the group’s member list"));
+    }
+
+    #[test]
+    fn roster_first_sorts_the_rows_takes_no_areas_and_builds_a_company_s_first_roster() {
+        let organizer = Person::new(1);
+        let members = organizer.active(&[GroupRole::Members]);
+        let roster = roster_first(
+            GROUP.into(),
+            GroupKind::Family,
+            members.clone(),
+            Some(vec![area_key(SECOND_AREA, vec![101; 32]), area_key(AREA, AREA_KEY.to_vec())]),
+        )
+        .unwrap();
+        let ids: Vec<_> =
+            roster.areas.iter().map(|row| (row.workspace_id.as_str(), row.workspace_key_version)).collect();
+        assert_eq!(ids, [(AREA, 1), (SECOND_AREA, 1)]);
+        assert_eq!(roster.areas[0].commitment, crate::groups::area_key_commitment(&AREA_KEY).unwrap());
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members, None).unwrap().areas.is_empty());
+        let org = roster_first(
+            GROUP.into(),
+            GroupKind::Org,
+            organizer.active(&[GroupRole::DataAdmin, GroupRole::Members]),
+            None,
+        )
+        .unwrap();
+        let signed = roster_sign(org, group_seed_at(1), organizer.keys.clone()).unwrap();
+        assert_eq!(accepted(creator_accepts(&organizer, vec![signed])).kind, GroupKind::Org);
+    }
+
+    #[test]
+    fn roster_first_refuses_each_first_roster_acceptance_refuses_and_acceptance_refuses_it_signed_by_hand() {
+        let organizer = Person::new(1);
+        let row = |workspace_id: &str, key: u8| crate::groups::RosterArea {
+            workspace_id: workspace_id.into(),
+            workspace_key_version: 1,
+            commitment: crate::groups::area_key_commitment(&[key; 32]).unwrap(),
+        };
+        // Each with its creator and area keys, what roster_first says, then what acceptance says of
+        // the same roster.
+        type Refusal = (&'static str, RosterMember, Vec<(&'static str, u8)>, &'static str, &'static str);
+        let refusals: Vec<Refusal> = vec![
+            (
+                "not a holder",
+                organizer.active(&[GroupRole::Billing]),
+                vec![(AREA, 77)],
+                "holds the group key",
+                "holds the group key",
+            ),
+            (
+                "left",
+                organizer.entry(&[GroupRole::Members], 1, MemberStatus::Left),
+                vec![],
+                "holds the group key",
+                "holds the group key",
+            ),
+            (
+                "one key for two areas",
+                organizer.active(&[GroupRole::Members]),
+                vec![(AREA, 77), (SECOND_AREA, 77)],
+                "earlier keys",
+                "was used before",
+            ),
+        ];
+        for (name, creator, keys, message, accepting) in refusals {
+            let area_keys = keys.iter().map(|(id, key)| area_key(id, vec![*key; 32])).collect();
+            let error =
+                roster_first(GROUP.into(), GroupKind::Family, creator.clone(), Some(area_keys)).unwrap_err();
+            assert!(error.to_string().contains(message), "{name}: {error}");
+            // The same roster, signed as a client that skipped the checks would sign it.
+            let mut h = History::new();
+            h.roster_with(
+                &organizer,
+                vec![creator],
+                None,
+                Some(keys.iter().map(|(id, key)| row(id, *key)).collect()),
+            );
+            match creator_accepts(&organizer, h.rosters.clone()) {
+                Err(error) => assert!(error.to_string().contains(accepting), "{name}: {error}"),
+                other => panic!("{name}: acceptance took it: {other:?}"),
+            }
+        }
+        // What the statement itself cannot carry: an area named twice, a company role in a family,
+        // a key of the wrong length, a group id outside the canonical form.
+        let members = organizer.active(&[GroupRole::Members]);
+        let twice = vec![area_key(AREA, AREA_KEY.to_vec()), area_key(AREA, vec![78; 32])];
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(twice)).is_err());
+        let company = organizer.active(&[GroupRole::DataAdmin, GroupRole::Members]);
+        assert!(roster_first(GROUP.into(), GroupKind::Family, company, None).is_err());
+        let short = vec![area_key(AREA, vec![77; 31])];
+        assert!(roster_first(GROUP.into(), GroupKind::Family, members.clone(), Some(short)).is_err());
+        assert!(roster_first(GROUP.to_uppercase(), GroupKind::Family, members, None).is_err());
+    }
+
+    #[test]
+    fn roster_entry_own_takes_only_an_identity_whose_keys_statement_holds_for_this_account() {
+        let (organizer, adult) = (Person::new(1), Person::new(2));
+        let roles = vec![GroupRole::Members, GroupRole::Billing];
+        assert_eq!(
+            roster_entry_own(organizer.user_id.clone(), organizer.served(), roles.clone()).unwrap(),
+            organizer.entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active)
+        );
+        let (adult2, _) = adult.succeed();
+        assert_eq!(
+            roster_entry_own(adult2.user_id.clone(), adult2.served(), roles.clone()).unwrap(),
+            adult2.entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active)
+        );
+        let refusals = [
+            // The organizer's identity claimed for another account.
+            (adult.user_id.clone(), organizer.served()),
+            // Another KEM key the keys statement never named.
+            (
+                organizer.user_id.clone(),
+                PublicIdentity { kem_public_key: adult.served().kem_public_key, ..organizer.served() },
+            ),
+            // Another identity's keys statement.
+            (
+                organizer.user_id.clone(),
+                PublicIdentity { keys_signature: adult.served().keys_signature, ..organizer.served() },
+            ),
+            // A key version the keys statement never named.
+            (organizer.user_id.clone(), PublicIdentity { key_version: 2, ..organizer.served() }),
+        ];
+        for (user_id, identity) in refusals {
+            let error = roster_entry_own(user_id, identity, roles.clone()).unwrap_err();
+            assert_eq!(error.to_string(), "These are not this account’s keys.");
+        }
+        // An earlier identity's keys statement holds too; the creator signs with their current
+        // keys, so a first roster naming the earlier ones is one no device takes.
+        let earlier = roster_entry_own(adult.user_id.clone(), adult.served(), roles).unwrap();
+        let roster = roster_first(GROUP.into(), GroupKind::Family, earlier, None).unwrap();
+        let signed = roster_sign(roster, group_seed_at(1), adult2.keys.clone()).unwrap();
+        let chain = accept_rosters(
+            GROUP.into(),
+            group_public_key(group_seed_at(1)).unwrap(),
+            true,
+            vec![],
+            vec![signed],
+            vec![],
+            ml_dsa_keys(&[&adult, &adult2]),
+            OwnIdentities { user_id: adult2.user_id.clone(), identities: vec![adult2.served_keys()] },
+            None,
+        );
+        refused(chain, "not signed by the member it names");
     }
 }

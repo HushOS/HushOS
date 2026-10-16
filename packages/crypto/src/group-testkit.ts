@@ -19,6 +19,7 @@ import {
     type AreaGrantContext,
     type GroupKeyPair,
     type GroupKeySealContext,
+    type GroupKind,
     type GroupRole,
     type Roster,
     type RosterArea,
@@ -27,6 +28,8 @@ import {
 } from './groups';
 import {
     acceptRosters,
+    firstRoster,
+    ownRosterEntry,
     joinCode,
     checkNextRoster,
     checkNextSuccession,
@@ -3038,6 +3041,143 @@ export async function foldInCases() {
 
 export async function foldInVerdict(c: Awaited<ReturnType<typeof foldInCases>>[number]) {
     return foldInEntry(c.entry, c.served, c.links, c.rosterVersion);
+}
+
+/*
+ * First rosters both twins must build to the same bytes, or refuse alike
+ * (firstRoster, roster_first): the creator's entry normalized (roles sorted,
+ * sinceVersion 1), rows computed from the keys and sorted, and every rule
+ * acceptance holds roster version 1 to. `expected` is the statement
+ * (base64url), or null for a refusal.
+ */
+export type FirstRosterCase = {
+    name: string;
+    groupId: string;
+    kind: GroupKind;
+    creator: RosterMember;
+    areaKeys: { workspaceId: string; workspaceKey: string }[];
+    expected: string | null;
+};
+
+export async function firstRosterCases(): Promise<Omit<FirstRosterCase, 'expected'>[]> {
+    const organizer = await person(1);
+    const key = (workspaceId: string, seed: number, length = 32) => ({
+        workspaceId,
+        workspaceKey: encode(pattern(length, seed)),
+    });
+    const of = (
+        name: string,
+        creator: RosterMember,
+        areaKeys: { workspaceId: string; workspaceKey: string }[],
+        kind: GroupKind = 'family',
+        groupId = GROUP,
+    ) => ({ name, groupId, kind, creator, areaKeys });
+    return [
+        // Roles out of order and a stale sinceVersion: firstRoster sets both.
+        of('first-roster', { ...organizer.entry(['members', 'billing']), sinceVersion: 7 }, [
+            key(AREA, AREA_KEY_SEED),
+        ]),
+        of('first-roster-no-areas', organizer.entry(['billing', 'members']), []),
+        of('first-roster-two-areas', organizer.entry(['members']), [
+            key(SECOND_AREA, 101),
+            key(AREA, AREA_KEY_SEED),
+        ]),
+        of(
+            'first-roster-org',
+            organizer.entry(['data_admin', 'members']),
+            [key(AREA, AREA_KEY_SEED)],
+            'org',
+        ),
+        of('first-roster-not-holder', organizer.entry(['billing']), [key(AREA, AREA_KEY_SEED)]),
+        of('first-roster-left', organizer.entry(['members'], 1, 'left'), [
+            key(AREA, AREA_KEY_SEED),
+        ]),
+        of('first-roster-same-key-twice', organizer.entry(['members']), [
+            key(AREA, AREA_KEY_SEED),
+            key(SECOND_AREA, AREA_KEY_SEED),
+        ]),
+        of('first-roster-area-twice', organizer.entry(['members']), [
+            key(AREA, AREA_KEY_SEED),
+            key(AREA, 78),
+        ]),
+        of('first-roster-org-role-in-family', organizer.entry(['data_admin', 'members']), []),
+        of('first-roster-short-key', organizer.entry(['members']), [key(AREA, AREA_KEY_SEED, 31)]),
+        of(
+            'first-roster-uppercase-group-id',
+            organizer.entry(['members']),
+            [],
+            'family',
+            GROUP.toUpperCase(),
+        ),
+    ];
+}
+
+/* This twin's first roster for a case: its statement (base64url), or null when refused. */
+export async function firstRosterVerdict(c: Omit<FirstRosterCase, 'expected'>) {
+    try {
+        const roster = await firstRoster(c.groupId, c.creator, {
+            kind: c.kind,
+            areaKeys: c.areaKeys.map((k) => ({
+                workspaceId: k.workspaceId,
+                workspaceKey: decode(k.workspaceKey),
+            })),
+        });
+        return encode(rosterStatement(roster));
+    } catch (error) {
+        if (error instanceof Error && error.name === 'CryptoError') return null;
+        throw error;
+    }
+}
+
+/*
+ * Own entries both twins must make alike, or refuse (ownRosterEntry,
+ * roster_entry_own): only from an identity whose keys statement holds for the
+ * account. `expected` is the entry, or null for a refusal.
+ */
+export type OwnEntryCase = {
+    name: string;
+    userId: string;
+    identity: ServedIdentity;
+    roles: GroupRole[];
+    expected: RosterMember | null;
+};
+
+export async function ownEntryCases(): Promise<Omit<OwnEntryCase, 'expected'>[]> {
+    const [organizer, adult, adult2] = [await person(1), await person(2), await person(2, 2)];
+    const of = (name: string, userId: string, identity: ServedIdentity) => ({
+        name,
+        userId,
+        identity,
+        roles: ['members', 'billing'] as GroupRole[],
+    });
+    return [
+        of('own-entry', organizer.userId, organizer.served),
+        of('own-entry-later-identity', adult2.userId, adult2.served),
+        of('own-entry-other-account', adult.userId, organizer.served),
+        of('own-entry-kem-swapped', organizer.userId, {
+            ...organizer.served,
+            kemPublicKey: adult.served.kemPublicKey,
+        }),
+        of('own-entry-another-keys-signature', organizer.userId, {
+            ...organizer.served,
+            keysSignature: adult.served.keysSignature,
+        }),
+        // A key version the keys statement never named.
+        of('own-entry-key-version', organizer.userId, { ...organizer.served, keyVersion: 2 }),
+        // The adult's replaced identity: its keys statement still holds, so an entry is made; that
+        // it is not their newest is the signer check's and the creating client's to catch.
+        of('own-entry-earlier-identity', adult.userId, adult.served),
+    ];
+}
+
+/* This twin's own entry for a case, or null when refused. */
+export async function ownEntryVerdict(c: Omit<OwnEntryCase, 'expected'>) {
+    try {
+        return await ownRosterEntry(c.userId, c.identity, { roles: c.roles });
+    } catch (error) {
+        if (error instanceof Error && error.name === 'CryptoError') return null;
+        throw error;
+    }
 }
 
 /*

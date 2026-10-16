@@ -6,6 +6,7 @@ import {
     requireStoredOrAccepted,
     STORED_ACCEPTANCE,
 } from './accepted';
+import { rowsAfter } from './area-keys';
 import { bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import {
@@ -67,12 +68,13 @@ import {
  *   other and with it, or it is a fork, the one hard warning;
  * - checkNextRoster and checkNextSuccession are acceptance itself, continued
  *   from an accepted chain by one statement: clients run them before signing
- *   (nextRoster applies the same roster rules), and the server must run them
- *   before storing;
+ *   (nextRoster applies the same roster rules, and firstRoster those of
+ *   roster version 1), and the server must run them before storing;
  * - groupWriterTrust and groupIntegrityOf give the scoped verdicts: a roster
  *   vouches only inside its own group's areas;
  * - newRosterEntry, foldInEntry and trustAsGroupDoes move keys between
- *   personal pins and roster entries only after the checks that let them.
+ *   personal pins and roster entries only after the checks that let them;
+ *   ownRosterEntry makes a creator's own entry.
  * `hushos-core` (group_trust.rs) gives the same answers.
  */
 
@@ -1594,6 +1596,44 @@ export async function newRosterEntry(
 }
 
 /*
+ * The creator's own entry on roster version 1 (`sinceVersion` 1), and for
+ * nothing else: no one pins themselves, so newRosterEntry does not apply, and
+ * every later change to one's own entry is a fold-in (foldInEntry).
+ * `identity` is the account's own current identity as its device opened it
+ * (publicIdentity of the envelope verifyOwnIdentity checked). Its keys
+ * statement must hold under `userId`, so the entry names a version 2 identity
+ * whose four keys belong together, the lattice keys by digest; anything else
+ * and no entry is made. It does not prove the identity is the caller's
+ * current one (an earlier identity's statement holds too). Roster version 1's
+ * signer signature, which acceptance checks under the keys this entry names,
+ * proves the entry and the signer are the same identity; that the identity is
+ * the account's newest is the creating client's check (design 3.1: the staged
+ * acceptance with freshly fetched own identities reports no wrong or behind
+ * own entry).
+ */
+export async function ownRosterEntry(
+    userId: string,
+    identity: ServedIdentity,
+    options: { roles: GroupRole[] },
+): Promise<RosterMember> {
+    if (!(await verifyIdentityKeys(userId, identity)))
+        throw new CryptoError('These are not this account’s keys.');
+    return {
+        userId,
+        keyVersion: identity.keyVersion,
+        encryptionPublicKey: identity.encryptionPublicKey,
+        signingPublicKey: identity.signingPublicKey,
+        mlDsaPublicKeyDigest: await digest(
+            decode(identity.mlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
+        ),
+        kemPublicKeyDigest: await digest(decode(identity.kemPublicKey, 1184)),
+        status: 'active',
+        roles: [...options.roles].sort(),
+        sinceVersion: 1,
+    };
+}
+
+/*
  * An existing entry, folded in before the next roster is signed: unchanged
  * when the served identity is the entry's; moved to the served identity only
  * when its keys statement holds and the member's version 2 succession chain
@@ -1630,6 +1670,55 @@ export async function foldInEntry(
         changed: true,
         needsCheck: false,
     };
+}
+
+/*
+ * A group's first roster, for its creator to sign (2.4, 3.1): version 1, no
+ * previous digest, under group key 1, the creator as its only entry and its
+ * signer (roles sorted, `sinceVersion` 1), and a row at version 1 for each of
+ * `areaKeys` (computed here, as nextRoster does: a client never hands in a
+ * row of its own making). Refused unless it keeps every rule acceptance holds
+ * roster version 1 to, signatures aside: the creator active with `members`,
+ * only the kind's roles, no area named twice, no key used twice, at most
+ * MAX_FAMILY_AREAS areas. So a creator never signs a first roster that no
+ * device, the server included, would take.
+ */
+export async function firstRoster(
+    groupId: string,
+    creator: RosterMember,
+    options: { kind: GroupKind; areaKeys?: AreaKey[] },
+): Promise<Roster> {
+    if (typeof creator !== 'object' || creator === null || !Array.isArray(creator.roles))
+        throw new CryptoError('Invalid roster entry.');
+    const roster: Roster = {
+        groupId,
+        kind: options.kind,
+        rosterVersion: 1,
+        previousRosterDigest: '',
+        groupKeyVersion: 1,
+        signerUserId: creator.userId,
+        members: [
+            {
+                userId: creator.userId,
+                keyVersion: creator.keyVersion,
+                encryptionPublicKey: creator.encryptionPublicKey,
+                signingPublicKey: creator.signingPublicKey,
+                mlDsaPublicKeyDigest: creator.mlDsaPublicKeyDigest,
+                kemPublicKeyDigest: creator.kemPublicKeyDigest,
+                status: creator.status,
+                roles: [...creator.roles].sort(),
+                sinceVersion: 1,
+            },
+        ],
+        areas: await rowsAfter({}, options.areaKeys ?? []),
+    };
+    const statement = rosterStatement(roster);
+    // The very rules acceptance applies to version 1, signatures aside. Unsigned, the group key
+    // is never read: the one placeholder says only that the roster is under key 1.
+    const state = stateOf(uuid(groupId, 'group id'), {}, null);
+    state.keys.push({ ed25519PublicKey: '', mlDsaPublicKey: '' });
+    await rosterRules(state, roster, statement, null, undefined);
+    return roster;
 }
 
 /*

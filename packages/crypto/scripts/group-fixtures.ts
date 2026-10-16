@@ -20,6 +20,10 @@ import {
     statementVerdict,
     foldInCases,
     foldInVerdict,
+    firstRosterCases,
+    firstRosterVerdict,
+    ownEntryCases,
+    ownEntryVerdict,
     groupCases,
     history,
     says,
@@ -262,6 +266,37 @@ for (const c of await foldInCases()) {
     if (expected.changed !== folds[c.name]) throw new Error(`${c.name}: the web folds it wrongly`);
     foldIns.push({ ...c, expected });
 }
+// First rosters to the same bytes, or refused alike; the creator's own entry, only from an
+// identity whose keys statement holds. A refusal the web expects to build is a broken generator.
+const refusedFirst = new Set([
+    'first-roster-not-holder',
+    'first-roster-left',
+    'first-roster-same-key-twice',
+    'first-roster-area-twice',
+    'first-roster-org-role-in-family',
+    'first-roster-short-key',
+    'first-roster-uppercase-group-id',
+]);
+const firstRosters = [];
+for (const c of await firstRosterCases()) {
+    const expected = await firstRosterVerdict(c);
+    if ((expected === null) !== refusedFirst.has(c.name))
+        throw new Error(`${c.name}: the web says ${expected}`);
+    firstRosters.push({ ...c, expected });
+}
+const refusedOwn = new Set([
+    'own-entry-other-account',
+    'own-entry-kem-swapped',
+    'own-entry-another-keys-signature',
+    'own-entry-key-version',
+]);
+const ownEntries = [];
+for (const c of await ownEntryCases()) {
+    const expected = await ownEntryVerdict(c);
+    if ((expected === null) !== refusedOwn.has(c.name))
+        throw new Error(`${c.name}: the web says ${JSON.stringify(expected)}`);
+    ownEntries.push({ ...c, expected });
+}
 
 const out = new URL('../../../crates/hushos-core/fixtures/', import.meta.url);
 await mkdir(out, { recursive: true });
@@ -305,6 +340,8 @@ await writeFile(
             sealerCases: sealers,
             chainCases: chains,
             statementCases: statements,
+            firstRosterCases: firstRosters,
+            ownEntryCases: ownEntries,
         },
         null,
         2,

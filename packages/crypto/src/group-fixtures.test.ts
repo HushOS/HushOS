@@ -31,6 +31,10 @@ import {
     AREA,
     READER,
     foldInVerdict,
+    firstRosterCases,
+    firstRosterVerdict,
+    ownEntryCases,
+    ownEntryVerdict,
     groupCases,
     mlDsaKeysOf,
     pattern,
@@ -44,6 +48,8 @@ import {
     sealerVerdict,
     succeed,
     verdictOf,
+    type FirstRosterCase,
+    type OwnEntryCase,
     type SealCase,
     type SealerCase,
     type Person,
@@ -369,6 +375,22 @@ describe('group records made by the Rust core', () => {
             expect(await verifySuccessionChain(c.userId, c.pinned, c.served, c.links), c.name).toBe(
                 c.expected,
             );
+    });
+
+    it('builds the core’s first rosters to the same bytes, or refuses them, as the core did', async () => {
+        expect(core.firstRosterCases.map((c) => c.name)).toEqual(
+            (await firstRosterCases()).map((c) => c.name),
+        );
+        for (const c of core.firstRosterCases as unknown as FirstRosterCase[])
+            expect(await firstRosterVerdict(c), c.name).toBe(c.expected);
+    });
+
+    it('makes the core’s own entries, or refuses them, as the core did', async () => {
+        expect(core.ownEntryCases.map((c) => c.name)).toEqual(
+            (await ownEntryCases()).map((c) => c.name),
+        );
+        for (const c of core.ownEntryCases as unknown as OwnEntryCase[])
+            expect(await ownEntryVerdict(c), c.name).toEqual(c.expected);
     });
 
     it('parses, or refuses, the core’s raw statements as the core did', () => {
