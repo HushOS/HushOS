@@ -126,6 +126,28 @@ It is signed with the old identity's hybrid signature (3373 bytes); the new iden
 - Each link's old keys equal the previous link's new keys, ML-DSA included, and versions only rise.
 - Each half of each signature verifies under the pinned key or the previous link's new key, never under a key that only the link itself names.
 - The chain ends at the served X25519, Ed25519, ML-DSA and ML-KEM keys; the last link's `sha256(newKemPublicKey)` equals the served ML-KEM key's digest.
+- The chain is every link from the first one at the pin to the end of the list, in the order the server serves them. Links before it are skipped; a link after the chain's end, or the links out of order, and the chain does not hold. A server that appends a junk link can therefore make a real succession read as a changed key (a refusal, never an acceptance). An honest server serves the links oldest first, by key version (`successionChain` in `packages/db`).
+
+The group core (`docs/groups-design.md` 2.8) does not use this verifier. It verifies each link once under the keys the link names, follows the verified links as a graph from a start key set, and treats two verified links leaving one key set as an identity fork (`succession-path.ts`, `succession_path.rs`). Personal pins, Drive and the mobile apps keep the strict verifier above, unchanged.
+
+### Successor consent
+
+The group walk starts at the first keys a member's entry named, and those keys are whatever an admin wrote: a holder can plant keys they hold as a member's first entry. With version 2 links alone, the planted keys could sign a link to the member's real keys and the walk would cross it, so a record or grant made under the planted keys would read as the member's (as a retired key, or as a grant that opens). Version 2 is signed only by the old keys, and the planter holds them.
+
+Every succession made from this release on is therefore co-signed by the new identity too, over a statement of its own domain, with a role tag in each half:
+
+```
+["hushos/identity/succession-consent",1,role,userId,oldKeyVersion,newKeyVersion,
+ oldX25519,oldEd25519,oldMlDsa,newX25519,newEd25519,newMlDsa,sha256(newKemPublicKey)]
+role = "old" | "new"
+```
+
+The fields are version 2's; the domain keeps either signature from standing for the other (and leaves `hushos/identity/succession` version 3 to the restart link the groups docs plan), and the role keeps one identity's half from standing for the other's. The link carries `consent`: the old identity's hybrid signature over role `"old"` followed by the new identity's over role `"new"` (2 × 3373 = 6746 bytes, base64url). `createSuccessor` (web) and `identity_succeed` (Rust core) open the new identity's keys, sign both, and return `consent` beside the version 2 `signature`; `verifySuccessionConsent` and `succession_consent_verify` check each half under the keys the link itself names. That is enough on its own: the old half is the old keys' authority, and the new half is a key the planter does not hold agreeing to the link. The group walk never checks a consented link's version 2 signature, so a link with valid consent and a junk `signature` is followed in a group and refused for a personal pin.
+
+- **Where the group asks for it: only where it buys something.** Consent stops keys planted as a member's first entry from bridging to the real identity, so the group walk asks it of links from the member's first keys up to their entry's keys: in writer verdicts (the first keys' retirement) and in the keys that open seals and grants (`signersThrough`). The personal-pin walk starts at the reader's own anchor, the roster-lag walk and `foldInEntry` at the entry's current keys, where a planter already vouches and could consent to his own successor anyway: there the version 2 signature holds, as it did before (`docs/groups-design.md` 2.8).
+- **Personal pins are unchanged.** `verifySuccessionChain` and `succession_chain_verify` check the version 2 signature as above and ignore `consent`, so every link a shipped client signed keeps holding for contacts, Drive and the mobile apps. They never read the group walk's verification cache: the two accept links on different proofs. `SuccessionLink.consent` is optional in both twins (a uniffi default of `None`), so the Swift and Kotlin callers build unchanged.
+- **Not built yet, and what it costs:** the server stores and serves only the version 2 `signature`, and the clients upload only that. Until the succession route and `account_identity_history` carry `consent`, a link the server serves has none, which matters only for a member whose entry has moved on from their first keys: their pre-entry keys do not read as retired, and seals they made under them do not open through history. Identity changes on the lag, personal pins and fold-ins are unaffected.
+- **Earlier links can gain consent (1c backfill).** A member's client keeps every earlier identity sealed under the root (`identityHistory`), so it can open both ends of each of its own past links and sign their consent after the fact; 1c uploads those with the rest. Only an account whose earlier identities are gone (a restart without a succession) cannot, and its entry needs a words check, as before.
 
 `PinnedKeys` gains the ML-DSA digest in both twins. A version 1 link no longer carries a pin anywhere: an account that replaced its keys before this release is a words check, like everyone else.
 
@@ -139,6 +161,7 @@ The verifier takes the version from context: the statement kind and the route or
 | ---------------------------------------------------------------- | -------------------- | -------------------------------- |
 | KEM binding → `hushos/identity/keys`                             | KEM binding, Ed25519 | keys statement version 1, hybrid |
 | `hushos/identity/succession`                                     | version 1, Ed25519   | version 2, hybrid                |
+| Successor consent → `hushos/identity/succession-consent`         | none                 | hybrid by old and new keys       |
 | `hushos/drive/sig/share`                                         | suite 3, Ed25519     | suite 4, hybrid (below)          |
 | Group key seal, roster, succession, area grant, guardian seal    | not yet built        | hybrid from their version 1      |
 | `hushos/drive/sig/metadata`, `/version`, `…-resealed`, `…-saved` | version 1, Ed25519   | unchanged (section 7)            |
@@ -236,6 +259,11 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
     - a link whose ML-DSA half is valid under any key other than the pinned one, or the previous link's new key, is refused;
     - a chain that starts at the pinned X25519 and Ed25519 keys with a different `oldMlDsa` is refused;
     - a chain that ends at keys other than the served four is refused.
+- **Successor consent:**
+    - a new succession's consent verifies, and fails with no consent, another account, a byte flipped in either half, the halves swapped, or moved onto a link to another identity;
+    - the version 2 signature, alone, doubled or beside the new half, is no consent; nor are the old keys' signatures in both roles, nor the new keys' signature over the "old" role;
+    - the personal chain follows the same link with and without consent (shared case `chain-one-sided`);
+    - the group walk refuses a planted first entry's link without consent, and takes a one-sided link on the lag, a personal pin's walk and a fold-in (`docs/groups-design.md` 2.8).
 - **Signature cache** (with section 7): a cached "verified" is not reused when the server serves a different signing key for the same statement and signature.
 - **Fingerprint:** version 3 words change when any of the four keys changes, ML-KEM included.
 - **Server:** a suite 3 share, a version 1 succession, and any signed write from a version 1 identity are refused.
