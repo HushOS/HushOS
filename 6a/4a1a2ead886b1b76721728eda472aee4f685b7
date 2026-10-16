@@ -1,0 +1,24 @@
+apps/web/src/lib/packet-paths.test.ts
+  s_a965107c48ca30::t_de2d328966de96 1-101
+  s_a965107c48ca30::t_e55c6c44fe46c9 102-114
+apps/web/src/lib/packet-paths.ts
+  s_a965107c48ca30::t_e9e0dcad1635dd 1-116
+apps/web/src/lib/evidence-packet.ts
+  s_a965107c48ca30::t_7e90c1c37d2f3f 6,24-26,59-64,66-68,70-73,81-82,148,158,190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6a4a1a2ead886b1b76721728eda472aee4f685b7",
+  "prompts": {},
+  "sessions": {
+    "s_a965107c48ca30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "093b0af8-f87d-4ae7-ab3c-479f638fcb48",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
