@@ -1,0 +1,79 @@
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_fdac8b4000b9c5 130-131
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_9183660b2648d6 11-12,21,735,747-751,844-846,1734-1747,1753,1771,1776-1791
+packages/crypto/src/identity.ts
+  s_c56e31c87cddde::t_f6c6df7b4e56d0 710-714
+packages/db/drizzle/20261016032459_workspace_owners/migration.sql
+  s_c56e31c87cddde::t_817fa171a86602 1-40
+packages/db/drizzle/20261016032459_workspace_owners/snapshot.json
+  s_c56e31c87cddde::t_a94d093d69aa82 1-9226
+packages/db/drizzle/20261016032529_succession_consent/migration.sql
+  s_c56e31c87cddde::t_1da1ffb588cca9 1-2
+packages/db/drizzle/20261016032529_succession_consent/snapshot.json
+  s_c56e31c87cddde::t_ad0a145edb4f51 1-9246
+packages/db/drizzle/20261016081643_group_tables/migration.sql
+  s_c56e31c87cddde::t_5a9549c92830f4 1-198
+packages/db/drizzle/20261016081643_group_tables/snapshot.json
+  s_c56e31c87cddde::t_033632862627dc 1-11371
+packages/db/src/auth.consent.test.ts
+  s_c56e31c87cddde::t_25f9db44144253 1-371
+packages/db/src/auth.ts
+  s_c56e31c87cddde::t_2f9b9a0cf87e83 19-20,32,167,815-832,1080-1088,1093-1152,1268-1271,1690-1694,1722,1733,1740,1745-1747,1758,1874
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_837836fef90650 3,24-25,195-206,211,213-214,218-326,332-333,336-345,567-571,573,589,594-624,626,718,816,867-868,875,949,951,1012-1013,1018,1246,1429-1434,1436,1511,1514,1669-1674,1676,1966,2121,2123,2170,2172,2311,2313,2356,2360,2828,2833-2834,2973,3163,3233,3698-3699,3702
+packages/db/src/groups.brands.test.ts
+  s_c56e31c87cddde::t_3d69022d91508b 1-56
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_43512d0a4c979c 1-2160
+packages/db/src/groups.ts
+  s_c56e31c87cddde::t_31ede2cd5a3e6a 1-2504
+packages/db/src/ids.test.ts
+  s_c56e31c87cddde::t_da84486968152e 2,29-67
+packages/db/src/ids.ts
+  s_c56e31c87cddde::t_4d777bdae62e3a 15-20,25,41
+packages/db/src/index.ts
+  s_c56e31c87cddde::t_b955e94438ee91 8-9
+packages/db/src/membership.ts
+  s_c56e31c87cddde::t_f8e160d11ab2a0 1-45
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_b19778349c6f60 14,59
+packages/db/src/rotations.ts
+  s_c56e31c87cddde::t_76ebb8c5822676 18,44,48-72,80-88,90-109,232-239,250-256,353,359-580
+packages/db/src/schema/auth.ts
+  s_c56e31c87cddde::t_d6d0bb80025d16 459-467,471-474
+packages/db/src/schema/groups.ts
+  s_c56e31c87cddde::t_d98e5795f2ae78 1-389
+packages/db/src/schema/index.ts
+  s_c56e31c87cddde::t_f3fa930104aaf9 3
+packages/db/src/schema/workspace-keys.ts
+  s_c56e31c87cddde::t_e059d8f22fcf1e 4,14,53-108
+packages/db/src/schema/workspaces.ts
+  s_c56e31c87cddde::t_534c2851c33941 2-16,24-30,45-54,62-76
+packages/db/src/signatures.ts
+  s_c56e31c87cddde::t_42b8e2182421f7 96,107-152,155
+packages/db/test/accounts.ts
+  s_c56e31c87cddde::t_c7f6df492e9fdb 1-136
+packages/db/test/helpers.ts
+  s_c56e31c87cddde::t_1cc040a008e40c 37-40,141-180
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_22d1b2edc54240 426,582,611,629,666,790,807,1004,1022,1296,1326,1406,2371-2373,2382-2384,2444-2497,2502,2512
+packages/jobs/src/jobs/cleanup-expired.ts
+  s_c56e31c87cddde::t_93cb377e19701e 1,10-11,19-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "231c179549790ed2a92729af1f6f40f7d803bf9e",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
