@@ -193,7 +193,7 @@ function LandingPage() {
                  * The band of Hush blue runs behind the hero and the top half of the screenshots,
                  * which overlap its edge; the headline scrambles and settles when pointed at.
                  */}
-                <div className="id-band relative overflow-hidden md:pb-48 lg:pb-64">
+                <div className="id-band relative overflow-hidden pb-24 md:pb-48 lg:pb-64">
                     {/* dither-kit's ordered-dither wash, rising lighter from the band's foot. */}
                     <DitherGradient
                         from={227}
@@ -238,7 +238,7 @@ function LandingPage() {
                 {/* The screenshots ride up over the band's foot, so the band frames them. */}
                 <section
                     aria-label="What it looks like"
-                    className={cn(container, 'relative md:-mt-40 lg:-mt-56')}
+                    className={cn(container, 'relative -mt-20 md:-mt-40 lg:-mt-56')}
                 >
                     <figure className="relative flex flex-col gap-4">
                         {/*
