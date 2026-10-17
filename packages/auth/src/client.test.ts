@@ -30,9 +30,17 @@ Object.defineProperty(globalThis, 'sessionStorage', {
         removeItem: (name: string) => void tabItems.delete(name),
     },
 });
+/* `pagehide` listeners, so a test can leave the page. */
+const pagehide = new Set<() => void>();
 Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { localStorage, addEventListener() {}, removeEventListener() {} },
+    value: {
+        localStorage,
+        addEventListener(type: string, listener: () => void) {
+            if (type === 'pagehide') pagehide.add(listener);
+        },
+        removeEventListener() {},
+    },
 });
 
 const { createAuthClient } = await import('./client');
@@ -232,6 +240,118 @@ describe('the device key at sign-in', () => {
     });
 });
 
+/*
+ * Restoring the saved unlock on a fresh page. Only a verdict on the saved access erases it:
+ * the device key gone, the worker finding the two do not open, or the server saying the
+ * session or device is gone. Anything that merely cuts the restore short keeps it, or a person
+ * who clicks away while Drive opens is asked for the password on the next visit.
+ */
+describe('restoring the saved unlock', () => {
+    const savedDevice = () =>
+        (JSON.parse(items.get('hushos-device-unlock')!) as { state: { device: unknown } }).state
+            .device;
+
+    /*
+     * A transport like the browser's: `restore` waits for the worker, unless `answer` says how
+     * it ends, and a lock rejects what is in flight. `opening` settles once the worker was asked.
+     */
+    function restoreClient(
+        options: {
+            answer?: () => Promise<never>;
+            load?: () => Promise<CryptoKey | null>;
+            session?: () => Promise<unknown>;
+        } = {},
+    ) {
+        items.clear();
+        pagehide.clear();
+        items.set(
+            'hushos-device-unlock',
+            JSON.stringify({ state: { device: bundle, lockRevision: 3 }, version: 1 }),
+        );
+        let asked!: () => void;
+        const opening = new Promise<void>((resolve) => (asked = resolve));
+        const pending = new Set<(error: Error) => void>();
+        const browserLike: CryptoTransport = {
+            request: (operation) => {
+                if (operation !== 'restore') return Promise.resolve({} as never);
+                asked();
+                if (options.answer) return options.answer();
+                return new Promise<never>((_, reject) => pending.add(reject));
+            },
+            lock() {
+                for (const reject of pending) reject(new Error('Your account was locked.'));
+                pending.clear();
+            },
+            onLock() {},
+        };
+        const keys = keyStore([]).store;
+        const auth = createAuthClient(
+            () => browserLike,
+            { ...keys, load: options.load ?? (async () => ({}) as CryptoKey) },
+            { ...api, session: options.session } as unknown as AuthApi,
+        );
+        return { auth, opening };
+    }
+
+    test('leaving the page while the worker opens the key keeps it', async () => {
+        const { auth, opening } = restoreClient();
+        const restoring = auth.restore(user, { validated: true });
+        await opening;
+        for (const leave of pagehide) leave();
+        await restoring;
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+        expect(savedDevice()).toEqual(bundle);
+    });
+
+    test('device storage that fails to answer keeps it', async () => {
+        const { auth } = restoreClient({
+            load: () => Promise.reject(new Error('Device storage is busy in another tab.')),
+        });
+        await auth.restore(user, { validated: true });
+        expect(savedDevice()).toEqual(bundle);
+        expect(auth.store.getState().rememberError).toMatch(/password/);
+    });
+
+    test('a worker that fails without a verdict keeps it', async () => {
+        const { auth } = restoreClient({
+            answer: () => Promise.reject(new Error('Something went wrong on this device.')),
+        });
+        await auth.restore(user, { validated: true });
+        expect(savedDevice()).toEqual(bundle);
+    });
+
+    test('a saved access the worker cannot open with its device key is erased', async () => {
+        const { auth } = restoreClient({
+            answer: () =>
+                Promise.reject(
+                    Object.assign(new Error('The saved account key does not open.'), {
+                        invalid: true,
+                    }),
+                ),
+        });
+        await auth.restore(user, { validated: true });
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+        expect(savedDevice()).toBeNull();
+    });
+
+    test('a device key gone from this browser erases it', async () => {
+        const { auth } = restoreClient({ load: async () => null });
+        await auth.restore(user, { validated: true });
+        expect(savedDevice()).toBeNull();
+    });
+
+    test('a session that ended, or moved to a newer password, erases it', async () => {
+        for (const answer of [
+            { user: null, device: null },
+            { user: { ...user, credentialVersion: 2 }, device: null },
+        ]) {
+            const { auth } = restoreClient({ session: async () => answer });
+            await auth.restore(user);
+            expect(savedDevice()).toBeNull();
+        }
+    });
+});
+
 describe('a device the server says was removed', () => {
     /*
      * `answers`: what the server says at each session check, in order; the last repeats.
@@ -299,6 +419,15 @@ describe('a device the server says was removed', () => {
         expect([seen.forgotten, seen.logouts]).toEqual([1, 0]);
         expect(auth.takeRemovedNotice()).toBe(true);
         expect(auth.takeRemovedNotice()).toBe(false);
+    });
+
+    test('found by a restore, loses the saved unlock and the device key', async () => {
+        const { auth, seen } = removedClient(['removed']);
+        await auth.restore(user);
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+        expect(JSON.parse(items.get('hushos-device-unlock')!).state.device).toBeNull();
+        expect(seen.identity).toBeNull();
+        expect([seen.keys, seen.app, seen.forgotten]).toEqual([1, 1, 1]);
     });
 
     test('a wipe cut short is not acknowledged, so the next check tries again', async () => {
