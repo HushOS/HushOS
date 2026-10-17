@@ -62,8 +62,8 @@ export const driveNodes = pgTable(
          * that envelope alone, wrapped under the current node key; and the re-keyer's
          * signature over the binding. The re-keyer is `metadata_signer`, who sealed the
          * current envelope. The origin signer has no foreign key: a deleted account leaves
-         * its id, so a gone writer reads as someone unknown while the re-keyer still
-         * verifies. All null on a record no rotation re-keyed, and cleared by every write
+         * its id (never null while an origin is kept), so a gone writer reads as
+         * someone unknown while the re-keyer still verifies. All null on a record no rotation re-keyed, and cleared by every write
          * that sets the envelope outside a rotation.
          */
         metadataOriginEnvelope: bytea('metadata_origin_envelope'),
@@ -71,6 +71,14 @@ export const driveNodes = pgTable(
         metadataOriginSignerId: uuid('metadata_origin_signer'),
         metadataOriginSignature: bytea('metadata_origin_signature'),
         metadataRekeySignature: bytea('metadata_rekey_signature'),
+        /*
+         * Evidence that a rotation dropped a kept origin (it did not bind for the rotating
+         * client, or so it said): whose signature it carried and who dropped it, the first
+         * drop since the record was last written. The server cannot check binding, so it keeps
+         * the trace, for Info and in drive_origin_drops. Cleared with the origin.
+         */
+        metadataDroppedSignerId: uuid('metadata_dropped_signer'),
+        metadataOriginDroppedBy: uuid('metadata_origin_dropped_by'),
         currentVersionId: uuid('current_version_id').references(
             (): AnyPgColumn => fileVersions.id,
             { onDelete: 'set null' },
@@ -140,8 +148,12 @@ export const driveNodes = pgTable(
             sql`(${table.metadataSignature} is null and (${table.metadataSignerId} is null or ${table.metadataRekeySignature} is not null)) or (${table.metadataSignature} is not null and octet_length(${table.metadataSignature}) = 64 and ${table.metadataEnvelope} is not null)`,
         ),
         check(
+            'drive_nodes_dropped_valid',
+            sql`(${table.metadataDroppedSignerId} is null) = (${table.metadataOriginDroppedBy} is null)`,
+        ),
+        check(
             'drive_nodes_origin_valid',
-            sql`(${table.metadataOriginEnvelope} is null and ${table.metadataOriginKeyEnvelope} is null and ${table.metadataOriginSignerId} is null and ${table.metadataOriginSignature} is null and ${table.metadataRekeySignature} is null) or (${table.metadataOriginEnvelope} is not null and ${table.metadataOriginKeyEnvelope} is not null and ${table.metadataOriginSignature} is not null and ${table.metadataRekeySignature} is not null and ${table.metadataEnvelope} is not null and octet_length(${table.metadataOriginEnvelope}) between 42 and 4136 and octet_length(${table.metadataOriginKeyEnvelope}) = 72 and octet_length(${table.metadataOriginSignature}) = 64 and octet_length(${table.metadataRekeySignature}) = 64)`,
+            sql`(${table.metadataOriginEnvelope} is null and ${table.metadataOriginKeyEnvelope} is null and ${table.metadataOriginSignerId} is null and ${table.metadataOriginSignature} is null and ${table.metadataRekeySignature} is null) or (${table.metadataOriginEnvelope} is not null and ${table.metadataOriginSignerId} is not null and ${table.metadataOriginKeyEnvelope} is not null and ${table.metadataOriginSignature} is not null and ${table.metadataRekeySignature} is not null and ${table.metadataEnvelope} is not null and octet_length(${table.metadataOriginEnvelope}) between 42 and 4136 and octet_length(${table.metadataOriginKeyEnvelope}) = 72 and octet_length(${table.metadataOriginSignature}) = 64 and octet_length(${table.metadataRekeySignature}) = 64)`,
         ),
         check(
             'drive_nodes_file_has_no_children_marker',
@@ -226,6 +238,9 @@ export const fileVersions = pgTable(
         originSignerId: uuid('origin_signer'),
         originSignature: bytea('origin_signature'),
         rekeySignature: bytea('rekey_signature'),
+        // As on drive_nodes: who signed a dropped origin, and who dropped it.
+        droppedSignerId: uuid('dropped_signer'),
+        originDroppedBy: uuid('origin_dropped_by'),
         status: text().notNull().$type<'pending' | 'ready' | 'purged'>().default('pending'),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
         readyAt: timestamp('ready_at', { withTimezone: true }),
@@ -251,8 +266,47 @@ export const fileVersions = pgTable(
             sql`(${table.signature} is null and (${table.signerId} is null or ${table.rekeySignature} is not null)) or (${table.signature} is not null and octet_length(${table.signature}) = 64 and ${table.contentKeyEnvelope} is not null)`,
         ),
         check(
+            'file_versions_dropped_valid',
+            sql`(${table.droppedSignerId} is null) = (${table.originDroppedBy} is null)`,
+        ),
+        check(
             'file_versions_origin_valid',
-            sql`(${table.originEnvelope} is null and ${table.originKeyEnvelope} is null and ${table.originSignerId} is null and ${table.originSignature} is null and ${table.rekeySignature} is null) or (${table.originEnvelope} is not null and ${table.originKeyEnvelope} is not null and ${table.originSignature} is not null and ${table.rekeySignature} is not null and ${table.contentKeyEnvelope} is not null and octet_length(${table.originEnvelope}) in (72, 84) and octet_length(${table.originEnvelope}) = octet_length(${table.contentKeyEnvelope}) and octet_length(${table.originKeyEnvelope}) = 72 and octet_length(${table.originSignature}) = 64 and octet_length(${table.rekeySignature}) = 64)`,
+            sql`(${table.originEnvelope} is null and ${table.originKeyEnvelope} is null and ${table.originSignerId} is null and ${table.originSignature} is null and ${table.rekeySignature} is null) or (${table.originEnvelope} is not null and ${table.originSignerId} is not null and ${table.originKeyEnvelope} is not null and ${table.originSignature} is not null and ${table.rekeySignature} is not null and ${table.contentKeyEnvelope} is not null and octet_length(${table.originEnvelope}) in (72, 84) and octet_length(${table.originEnvelope}) = octet_length(${table.contentKeyEnvelope}) and octet_length(${table.originKeyEnvelope}) = 72 and octet_length(${table.originSignature}) = 64 and octet_length(${table.rekeySignature}) = 64)`,
+        ),
+    ],
+);
+
+/*
+ * Every origin a rotation dropped (docs/integrity-design.md, "What the server
+ * enforces"): the record, the dropped origin's signer, digest and signature,
+ * who dropped it and at which epoch. Append-only evidence: a rotating member
+ * (or a departing one's poisoned wraps) can make an honest client drop an
+ * origin the server cannot check, so the drop is kept even after the record
+ * is written again. Ids are plain uuids, as an origin's signer is.
+ */
+export const driveOriginDrops = pgTable(
+    'drive_origin_drops',
+    {
+        id: uuid().defaultRandom().primaryKey(),
+        workspaceId: uuid('workspace_id')
+            .notNull()
+            .references(() => workspaces.id, { onDelete: 'cascade' }),
+        nodeId: uuid('node_id').notNull(),
+        // The metadata record at its version, or one version of a file.
+        metadataVersion: integer('metadata_version'),
+        versionId: uuid('version_id'),
+        originSignerId: uuid('origin_signer').notNull(),
+        originDigest: bytea('origin_digest').notNull(),
+        originSignature: bytea('origin_signature').notNull(),
+        droppedBy: uuid('dropped_by').notNull(),
+        targetEpoch: integer('target_epoch').notNull(),
+        droppedAt: timestamp('dropped_at', { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index('drive_origin_drops_node_idx').on(table.workspaceId, table.nodeId),
+        check(
+            'drive_origin_drops_valid',
+            sql`(${table.metadataVersion} is null) <> (${table.versionId} is null) and octet_length(${table.originDigest}) = 32 and octet_length(${table.originSignature}) = 64 and ${table.targetEpoch} >= 1`,
         ),
     ],
 );
@@ -582,6 +636,10 @@ export const driveReportItems = pgTable(
         metadataSignature: bytea('metadata_signature'),
         versionSignerId: uuid('version_signer'),
         versionSignature: bytea('version_signature'),
+        // A re-keyed record's writer (its origin's signer) beside the re-keyer above, so the
+        // evidence keeps who wrote it, not only who last locked it (decision D10, the minimum).
+        metadataOriginSignerId: uuid('metadata_origin_signer'),
+        versionOriginSignerId: uuid('version_origin_signer'),
         evidenceCopiedAt: timestamp('evidence_copied_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     },

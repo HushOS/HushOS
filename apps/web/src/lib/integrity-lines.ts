@@ -1,4 +1,4 @@
-import type { Signer } from '@hushos/drive/api';
+import type { DroppedView, Signer } from '@hushos/drive/api';
 import {
     integrityIssues,
     type IntegrityIssue,
@@ -69,6 +69,23 @@ function memberWords(named: Named, fallback: string) {
 /* "Maya" from "Maya Lindqvist": what a sentence calls someone the second time. */
 function firstName(name: string) {
     return name.trim().split(/\s+/)[0] || name;
+}
+
+/*
+ * Who Info's "Changed by" names for the worst issue: from this person's own
+ * pins and the family's list, as everywhere. A re-key cause names someone
+ * only for a mismatch under the re-keyer's verified signature; any other is
+ * "Not confirmed", whatever the server says.
+ */
+export function changedByWords(issue: IntegrityIssue, names: SignerNames) {
+    if (issue.rekey && !(issue.rekey.cause === 'mismatch' && issue.rekey.rekeyer === 'verified'))
+        return 'Not confirmed';
+    if (issue.integrity === 'unchecked') return 'Not checked';
+    const named = nameSigner(issue.signer, names);
+    if (named.kind === 'you') return 'You';
+    if (named.kind === 'contact') return named.name;
+    if (named.kind === 'member') return named.email ? `${named.name} (${named.email})` : named.name;
+    return issue.signer ? 'Someone you haven’t checked' : 'Unknown';
 }
 
 export type IssueLine = {
@@ -276,56 +293,125 @@ export function markLabel(issues: IntegrityIssue[]) {
  * Who wrote a re-keyed item and who locked it again, as Info says them
  * (decision D5: the re-keyer is said in Info, never as a mark). Only for
  * records whose bytes bound to their writer's; a mismatch or an unconfirmed
- * re-key is the mark's to say. `writtenBy` only when the item verified (an
- * item that did not says who wrote it beside its mark); `replacedBy` by the
- * re-keyer's own verdict, null where the mark says it instead.
+ * re-key is the mark's to say. `writtenBy` only when every record verified
+ * (an item that did not says who wrote it beside its mark): the name's writer
+ * and the content's, each once, labelled when they differ; `replacedBy` one
+ * line per re-keyer verdict, labelled the same way, none where the mark says
+ * it instead.
  */
 export function rekeyedLines(
-    node: { integrity: NodeIntegrity | null },
+    node: {
+        integrity: NodeIntegrity | null;
+        metadataSigner?: Signer | null;
+        currentVersion?: { signer?: Signer | null } | null;
+    },
     names: SignerNames,
-): { writtenBy: string | null; replacedBy: string | null } {
+): { writtenBy: string | null; replacedBy: string[] } {
     const integrity = node.integrity;
-    const none = { writtenBy: null, replacedBy: null };
+    const none = { writtenBy: null, replacedBy: [] };
     if (!integrity?.rekeyed) return none;
-    const records: { verdict: NodeIntegrity['metadata']; note: RekeyNote | null }[] = [
-        { verdict: integrity.metadata, note: integrity.rekeyed.metadata },
+    const records: {
+        label: 'name' | 'content';
+        verdict: NodeIntegrity['metadata'];
+        note: RekeyNote | null;
+        signer: Signer | null;
+    }[] = [
+        {
+            label: 'name',
+            verdict: integrity.metadata,
+            note: integrity.rekeyed.metadata,
+            signer: node.metadataSigner ?? null,
+        },
         ...(integrity.version === null
             ? []
-            : [{ verdict: integrity.version, note: integrity.rekeyed.version }]),
+            : [
+                  {
+                      label: 'content' as const,
+                      verdict: integrity.version,
+                      note: integrity.rekeyed.version,
+                      signer: node.currentVersion?.signer ?? null,
+                  },
+              ]),
     ];
     const bound = records.filter((record) => record.note?.bound === true);
-    const first = bound[0]?.note;
-    if (!first) return none;
+    if (!bound.length) return none;
+    const words = (signer: Signer | null, you: string) => {
+        const who = nameSigner(signer, names);
+        return who.kind === 'you' ? you : who.kind === 'unknown' ? null : memberWords(who, '');
+    };
+    /* One phrase per record, or once when they agree; labelled by what each record holds. */
+    const labelled = (phrases: { label: string; phrase: string | null }[]) => {
+        const present = phrases.filter((entry): entry is { label: string; phrase: string } =>
+            Boolean(entry.phrase),
+        );
+        if (new Set(present.map((entry) => entry.phrase)).size <= 1)
+            return present.slice(0, 1).map((entry) => entry.phrase);
+        return present.map((entry) => `${entry.phrase} (${entry.label})`);
+    };
     const trusted = (verdict: NodeIntegrity['metadata']) =>
         verdict === 'verified' || verdict === 'saved-from-link';
-    const named = (signer: RekeyNote['writer']) => {
-        const who = nameSigner(signer, names);
-        return who.kind === 'you' ? 'You' : who.kind === 'unknown' ? null : memberWords(who, '');
+    // A record no rotation re-keyed is written by its own signer.
+    const writers = records.every((record) => trusted(record.verdict))
+        ? labelled(
+              records.map((record) => ({
+                  label: record.label,
+                  phrase: words(record.note ? record.note.writer : record.signer, 'You'),
+              })),
+          )
+        : [];
+    const replacedBy = labelled(
+        bound.map(({ label, note }) => {
+            const by = words(note!.by, 'you');
+            const phrase: Partial<Record<RekeyNote['integrity'], string | null>> = {
+                verified: by ? `Keys replaced by ${by}` : null,
+                'retired-key': `Keys replaced by ${by ?? 'someone'}, with keys since replaced`,
+                'former-member': `Keys replaced by ${by ?? 'someone'}, who has left ${names.family?.name ?? 'the family'}`,
+                'unknown-signer': 'Keys replaced by someone you haven’t checked',
+                unchecked: 'HushOS couldn’t check who replaced its keys',
+            };
+            return { label, phrase: phrase[note!.integrity] ?? null };
+        }),
+    );
+    return { writtenBy: writers.length ? writers.join(', ') : null, replacedBy };
+}
+
+/*
+ * A dropped origin, as Info says it: a rotation dropped the signature a
+ * record's writer made (its client found the origin did not bind, or said so),
+ * and the server kept who it named and who dropped it. Named from this
+ * person's own pins and the family's list; a line per record, or one when
+ * both say the same.
+ */
+export function droppedLines(
+    node: {
+        metadataOriginDropped?: DroppedView | null;
+        currentVersion?: { originDropped?: DroppedView | null } | null;
+    },
+    names: SignerNames,
+): string[] {
+    const who = (signer: Signer) => {
+        const named = nameSigner(signer, names);
+        return named.kind === 'you'
+            ? 'you'
+            : named.kind === 'unknown'
+              ? 'someone you haven’t checked'
+              : memberWords(named, '');
     };
-    const writtenBy = records.every((record) => trusted(record.verdict))
-        ? named(first.writer)
-        : null;
-    const by = nameSigner(first.by, names);
-    const byWords = by.kind === 'you' ? 'you' : by.kind === 'unknown' ? null : memberWords(by, '');
-    let replacedBy: string | null = null;
-    switch (first.integrity) {
-        case 'verified':
-            replacedBy = byWords ? `Keys replaced by ${byWords}` : null;
-            break;
-        case 'retired-key':
-            replacedBy = `Keys replaced by ${byWords ?? 'someone'}, with keys since replaced`;
-            break;
-        case 'former-member':
-            replacedBy = `Keys replaced by ${byWords ?? 'someone'}, who has left ${names.family?.name ?? 'the family'}`;
-            break;
-        case 'unknown-signer':
-            replacedBy = 'Keys replaced by someone you haven’t checked';
-            break;
-        case 'unchecked':
-            replacedBy = 'HushOS couldn’t check who replaced its keys';
-            break;
-    }
-    return { writtenBy, replacedBy };
+    const line = (dropped: DroppedView, what: string) =>
+        `${what} original signature, by ${who(dropped.signer)}, was dropped by ${who(dropped.by)} when its keys were replaced.`;
+    const metadata = node.metadataOriginDropped ?? null;
+    const version = node.currentVersion?.originDropped ?? null;
+    if (
+        metadata &&
+        version &&
+        metadata.signer.id === version.signer.id &&
+        metadata.by.id === version.by.id
+    )
+        return [line(metadata, 'Its')];
+    return [
+        ...(metadata ? [line(metadata, 'Its')] : []),
+        ...(version ? [line(version, 'This version’s')] : []),
+    ];
 }
 
 /*

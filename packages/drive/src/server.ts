@@ -115,7 +115,11 @@ export type VersionView = {
     signature: string | null;
     /* What a rotation kept of the version's writer, and the re-keyer's signature; null if none did. */
     rekey: RekeyView | null;
+    /* A rotation dropped the version's kept origin: whose signature it carried, and who dropped it. */
+    originDropped: DroppedView | null;
 };
+/* Evidence of a dropped origin (the server cannot check binding): its signer and the dropper. */
+export type DroppedView = { signer: Signer; by: Signer };
 /*
  * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the
  * envelope its writer signed, that writer and their signature, the key that
@@ -161,7 +165,11 @@ export type NodeView = {
     metadataSignature: string | null;
     /* What a rotation kept of the metadata's writer; null if none did. */
     metadataRekey: RekeyView | null;
+    metadataOriginDropped: DroppedView | null;
 };
+function droppedView(signerId: string | null, by: string | null): DroppedView | null {
+    return signerId && by ? { signer: { id: signerId }, by: { id: by } } : null;
+}
 
 /* A record's origin columns as served, or null when no rotation kept one. */
 function rekeyView(origin: {
@@ -223,6 +231,7 @@ function versionView(version: VersionRow | null | undefined): VersionView | null
         signer: version.signer,
         signature: version.signature ? b64(version.signature) : null,
         rekey: versionRekey(version),
+        originDropped: droppedView(version.droppedSignerId, version.originDroppedBy),
     };
 }
 export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null }): NodeView {
@@ -256,6 +265,10 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
             signature: node.metadataOriginSignature,
             rekeySignature: node.metadataRekeySignature,
         }),
+        metadataOriginDropped: droppedView(
+            node.metadataDroppedSignerId,
+            node.metadataOriginDroppedBy,
+        ),
     };
 }
 
@@ -1833,14 +1846,27 @@ async function limitLink(token: string, address: string) {
  * anonymous holder of the URL who wrote the files. `workspaceId` stays: it is
  * bound into every envelope.
  */
-export type VisitorVersionView = Omit<VersionView, 'signer' | 'signature' | 'rekey'>;
+export type VisitorVersionView = Omit<
+    VersionView,
+    'signer' | 'signature' | 'rekey' | 'originDropped'
+>;
 export type VisitorNodeView = Omit<
     NodeView,
-    'metadataSigner' | 'metadataSignature' | 'metadataRekey' | 'currentVersion'
+    | 'metadataSigner'
+    | 'metadataSignature'
+    | 'metadataRekey'
+    | 'metadataOriginDropped'
+    | 'currentVersion'
 > & { currentVersion: VisitorVersionView | null };
 /* A re-keyed record's origin names its writer and carries a signature too: dropped with the rest. */
 function visitorVersion(version: VersionView): VisitorVersionView {
-    const { signer: _signer, signature: _signature, rekey: _rekey, ...rest } = version;
+    const {
+        signer: _signer,
+        signature: _signature,
+        rekey: _rekey,
+        originDropped: _dropped,
+        ...rest
+    } = version;
     return rest;
 }
 function visitorView(node: NodeView): VisitorNodeView {
@@ -1848,6 +1874,7 @@ function visitorView(node: NodeView): VisitorNodeView {
         metadataSigner: _signer,
         metadataSignature: _signature,
         metadataRekey: _rekey,
+        metadataOriginDropped: _dropped,
         currentVersion,
         ...rest
     } = node;
@@ -2043,8 +2070,9 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
                   readyAt: null,
                   signer: item.versionSigner,
                   signature: item.versionSignature ? b64(item.versionSignature) : null,
-                  // Snapshots do not keep origins yet (decision D10, a follow-up).
+                  // Snapshots keep only the origin's signer (in the row), not the origin (D10).
                   rekey: null,
+                  originDropped: null,
               }
             : null;
     return {
@@ -2069,6 +2097,7 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
         metadataSigner: item.metadataSigner,
         metadataSignature: item.metadataSignature ? b64(item.metadataSignature) : null,
         metadataRekey: null,
+        metadataOriginDropped: null,
     };
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);

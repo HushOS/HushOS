@@ -9,6 +9,8 @@ import {
     COULDNT_CHECK,
     REKEY_UNATTESTED,
     REKEY_UNCONFIRMED,
+    changedByWords,
+    droppedLines,
     issueLines,
     markLabel,
     rekeyedLines,
@@ -331,14 +333,14 @@ describe('a re-keyed item', () => {
         // Info names the re-keyer only as such, never as the writer.
         expect(rekeyedLines(node, family)).toEqual({
             writtenBy: null,
-            replacedBy: 'Keys replaced by Maya',
+            replacedBy: ['Keys replaced by Maya'],
         });
     });
 
     test('Info names both people when it verified, and the re-keyer is never a mark of its own', () => {
         expect(rekeyedLines(folder('verified', note()), family)).toEqual({
             writtenBy: 'Sam (sam@example.com)',
-            replacedBy: 'Keys replaced by Maya',
+            replacedBy: ['Keys replaced by Maya'],
         });
         expect(integrityIssues(folder('verified', note()))).toEqual([]);
         // Someone unchecked, or a check that could not run, is said in Info only.
@@ -348,11 +350,11 @@ describe('a re-keyed item', () => {
             rekeyedLines(folder('verified', note({ integrity: 'unknown-signer' })), family),
         ).toEqual({
             writtenBy: 'Sam (sam@example.com)',
-            replacedBy: 'Keys replaced by someone you haven’t checked',
+            replacedBy: ['Keys replaced by someone you haven’t checked'],
         });
-        expect(rekeyedLines(folder('verified', note({ by: { id: ME } })), family).replacedBy).toBe(
-            'Keys replaced by you',
-        );
+        expect(
+            rekeyedLines(folder('verified', note({ by: { id: ME } })), family).replacedBy,
+        ).toEqual(['Keys replaced by you']);
     });
 
     test('“doesn’t match” names the re-keyer only when their verified signature covers it', () => {
@@ -372,8 +374,31 @@ describe('a re-keyed item', () => {
         const node = folder('unchecked', note({ bound: null }));
         expect(lines(node)).toEqual([REKEY_UNCONFIRMED]);
         expect(issueLines(integrityIssues(node), family)[0]!.action).toEqual({ kind: 'retry' });
-        expect(rekeyedLines(node, family)).toEqual({ writtenBy: null, replacedBy: null });
+        expect(rekeyedLines(node, family)).toEqual({ writtenBy: null, replacedBy: [] });
         expect(lines(node)[0]).not.toMatch(/match|Maya|Sam/);
+    });
+
+    test('“Changed by” names the re-keyer only for a mismatch under their verified signature', () => {
+        const changedBy = (rekeyed: RekeyNote, metadata: NodeIntegrity['metadata'] = 'verified') =>
+            integrityIssues(folder(metadata, rekeyed)).map((issue) => ({
+                signer: issue.signer,
+                words: changedByWords(issue, family),
+            }));
+        expect(changedBy(note({ bound: false }), 'bad-signature')).toEqual([
+            { signer: { id: MAYA }, words: 'Maya Lindqvist' },
+        ]);
+        // A mismatch nobody verified, a re-key nobody attested to, one that could not be
+        // confirmed: the server names the re-keyer, Info does not.
+        for (const rekeyed of [
+            note({ bound: false, integrity: 'unknown-signer' }),
+            note({ bound: false, integrity: 'unsigned' }),
+            note({ integrity: 'unsigned' }),
+            note({ integrity: 'key-conflict' }),
+            note({ bound: null }),
+        ])
+            expect(changedBy(rekeyed, rekeyed.bound === true ? 'verified' : 'unchecked')).toEqual([
+                { signer: null, words: 'Not confirmed' },
+            ]);
     });
 
     test('a re-key nobody attested to marks the item, over contents that match, without blaming anyone', () => {
@@ -381,12 +406,76 @@ describe('a re-keyed item', () => {
             const node = folder('verified', note({ integrity }));
             expect(lines(node)).toEqual([REKEY_UNATTESTED]);
             expect(markLabel(integrityIssues(node))).toBe('Unverified');
-            expect(rekeyedLines(node, family).replacedBy).toBeNull();
+            expect(rekeyedLines(node, family).replacedBy).toEqual([]);
         }
         // The writer's own verdict comes first when that did not verify either.
         expect(lines(folder('former-member', note({ integrity: 'unsigned' })))).toEqual([
             'Written by Sam (sam@example.com), who has left Lindqvist family.',
             REKEY_UNATTESTED,
         ]);
+    });
+
+    test('Info names the name’s writer and re-keyer apart from the content’s when they differ', () => {
+        const both = {
+            metadataSigner: { id: MAYA },
+            currentVersion: { signer: { id: ME } },
+            integrity: {
+                metadata: 'verified' as const,
+                version: 'verified' as const,
+                rekeyed: {
+                    metadata: note(),
+                    version: note({ writer: { id: ME }, by: { id: ME } }),
+                },
+            },
+        };
+        expect(rekeyedLines(both, family)).toEqual({
+            writtenBy: 'Sam (sam@example.com) (name), You (content)',
+            replacedBy: ['Keys replaced by Maya (name)', 'Keys replaced by you (content)'],
+        });
+        // The same people on both records: said once, unlabelled.
+        const same = {
+            ...both,
+            integrity: { ...both.integrity, rekeyed: { metadata: note(), version: note() } },
+        };
+        expect(rekeyedLines(same, family)).toEqual({
+            writtenBy: 'Sam (sam@example.com)',
+            replacedBy: ['Keys replaced by Maya'],
+        });
+        // A version uploaded after the rotation is its own uploader's, by its own signer.
+        const newer = {
+            ...both,
+            currentVersion: { signer: { id: ME } },
+            integrity: { ...both.integrity, rekeyed: { metadata: note(), version: null } },
+        };
+        expect(rekeyedLines(newer, family)).toEqual({
+            writtenBy: 'Sam (sam@example.com) (name), You (content)',
+            replacedBy: ['Keys replaced by Maya'],
+        });
+    });
+
+    test('a dropped origin says whose signature went and who dropped it', () => {
+        expect(
+            droppedLines(
+                {
+                    metadataOriginDropped: { signer: { id: SAM }, by: { id: MAYA } },
+                    currentVersion: { originDropped: { signer: { id: SAM }, by: { id: MAYA } } },
+                },
+                family,
+            ),
+        ).toEqual([
+            'Its original signature, by Sam (sam@example.com), was dropped by Maya when its keys were replaced.',
+        ]);
+        expect(
+            droppedLines(
+                {
+                    metadataOriginDropped: null,
+                    currentVersion: { originDropped: { signer: { id: STRANGER }, by: { id: ME } } },
+                },
+                family,
+            ),
+        ).toEqual([
+            'This version’s original signature, by someone you haven’t checked, was dropped by you when its keys were replaced.',
+        ]);
+        expect(droppedLines({ currentVersion: null }, family)).toEqual([]);
     });
 });

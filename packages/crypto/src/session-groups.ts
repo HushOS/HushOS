@@ -665,6 +665,12 @@ export type RecordJudge = (record: {
     statements: () => Promise<StatementForms>;
     signer: string | null;
     signature: string | null;
+    /*
+     * A re-keyed record (a copy's source in a family folder): judged on its
+     * origin's verdict, which is its writer's only when its bytes bind, with
+     * the node's key at its epoch and the re-keyer (the record's signer).
+     */
+    rekeyed?: { record: RekeyedRecord; nodeKey: Uint8Array | null; rekeyer: string | null };
 }) => Promise<SignatureForm | null>;
 
 /* A family folder's rotation: re-keyed records only, nothing judged, so nothing unreadable stops it. */
@@ -1581,7 +1587,15 @@ export function createGroupSession(host: GroupHost) {
      */
     function judgeWith(verdict: ReturnType<typeof verdicts>): RecordJudge {
         return async (record) => {
-            const { integrity } = await verdict(record.statements, record.signer, record.signature);
+            const { integrity } = record.rekeyed
+                ? (
+                      await verdict.rekeyed(
+                          record.rekeyed.record,
+                          record.rekeyed.nodeKey,
+                          record.rekeyed.rekeyer,
+                      )
+                  ).origin
+                : await verdict(record.statements, record.signer, record.signature);
             if (integrity === 'key-conflict' || integrity === 'former-member') return 'resealed';
             return resealForm(integrity as Integrity);
         };

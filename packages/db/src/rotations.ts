@@ -1,9 +1,8 @@
+import { createHash } from 'node:crypto';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     LINK_KDF_VERSION,
-    NO_METADATA_ORIGIN,
-    NO_VERSION_ORIGIN,
     SHARE_ENVELOPE_BYTES,
     activeRotation,
     currentSigningKey,
@@ -33,6 +32,7 @@ import {
     driveLinks,
     driveNodes,
     driveObjects,
+    driveOriginDrops,
     driveRotations,
     driveShares,
     fileVersions,
@@ -428,7 +428,7 @@ type StoredRecord = {
     originSignature: Buffer | null;
 };
 /* What one checked record writes: its signer and legacy signature, and its origin columns. */
-type SignedRecord = {
+export type SignedRecord = {
     signature: Buffer | null;
     origin: {
         envelope: Buffer;
@@ -437,6 +437,8 @@ type SignedRecord = {
         keyEnvelope: Buffer;
         rekeySignature: Buffer;
     } | null;
+    /* The kept origin a legacy re-seal dropped (dropOrigin), recorded as evidence. */
+    dropped: { envelope: Buffer; signerId: string; signature: Buffer } | null;
 };
 
 /*
@@ -450,8 +452,9 @@ type SignedRecord = {
  *   and wrapped key and the target epoch, and verified under the rotating
  *   account's current key;
  * - a legacy signature beside it holds in any form, but claims authorship
- *   (ordinary or saved) only over the rotating account's own origin, and in a
- *   group's area never;
+ *   (ordinary or saved) only over the rotating account's own origin, in the
+ *   very form that origin is signed in under the rotating account's key (a
+ *   re-sealed origin never comes back ordinary), and in a group's area never;
  * - a legacy signature alone, on a row that carries an origin, only with
  *   `dropOrigin` and only re-sealed (decision D9); in a group's area only
  *   re-sealed, and only for a record there is no writer's signature to keep.
@@ -459,24 +462,29 @@ type SignedRecord = {
  * workspaces until native clients read origins) a re-key is refused and the
  * legacy form is taken exactly as before, writing no origin.
  */
-function checkRecord(input: {
+export function checkRotatedRecord(input: {
     stored: StoredRecord;
     sent: RotatedRecordSignatures;
     key: Uint8Array;
     rotator: string;
     inScope: boolean;
     group: boolean;
-    legacy: (signature: Buffer) => SignedStatement;
+    /* The writer statements over an envelope, in the three forms (metadataSigned, versionSigned). */
+    legacy: (envelope: Buffer, signature: Buffer) => SignedStatement;
+    /* The submitted envelope, as `legacy` takes it. */
+    envelope: Buffer;
     rekeyed: (origin: RecordOriginInput) => Buffer;
 }): SignedRecord | 'bad-signature' | 'unsupported' {
     const { stored, sent, key, rotator, group } = input;
-    const legacyForm = sent.signature ? signedForm(key, input.legacy(sent.signature)) : null;
+    const legacyForm = sent.signature
+        ? signedForm(key, input.legacy(input.envelope, sent.signature))
+        : null;
     if (sent.signature && legacyForm === null) return 'bad-signature';
     // Personal workspaces, for now: what shipped clients write, and nothing that leaves an origin.
     if (!input.inScope) {
         if (sent.rekey) return 'unsupported';
         if (!sent.signature || legacyForm === null) return 'bad-signature';
-        return { signature: sent.signature, origin: null };
+        return { signature: sent.signature, origin: null, dropped: null };
     }
     const kept =
         stored.originEnvelope && stored.originSignature
@@ -509,10 +517,14 @@ function checkRecord(input: {
         if (legacyForm !== null && legacyForm !== 'resealed') {
             if (group || origin.signerId.toLowerCase() !== rotator.toLowerCase())
                 return 'unsupported';
+            // Only the form the rotator's own origin holds in: never more than it signed.
+            if (signedForm(key, input.legacy(origin.envelope, origin.signature)) !== legacyForm)
+                return 'unsupported';
         }
         return {
             signature: sent.signature,
             origin: { ...full, rekeySignature: sent.rekey.signature },
+            dropped: null,
         };
     }
     if (!sent.signature || legacyForm === null) return 'bad-signature';
@@ -522,7 +534,15 @@ function checkRecord(input: {
         // A signed record with a named writer is kept, never re-signed in the walker's name.
         if (!kept && stored.signature && stored.signerId) return 'unsupported';
     }
-    return { signature: sent.signature, origin: null };
+    return {
+        signature: sent.signature,
+        origin: null,
+        // The server cannot check binding, so a drop leaves a trace of whose signature went.
+        dropped:
+            kept && kept.signerId
+                ? { envelope: kept.envelope, signerId: kept.signerId, signature: kept.signature }
+                : null,
+    };
 }
 
 /*
@@ -638,6 +658,8 @@ export async function rotateNodeIn(
             originEnvelope: fileVersions.originEnvelope,
             originSignerId: fileVersions.originSignerId,
             originSignature: fileVersions.originSignature,
+            droppedSignerId: fileVersions.droppedSignerId,
+            originDroppedBy: fileVersions.originDroppedBy,
         })
         .from(fileVersions)
         .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
@@ -661,7 +683,7 @@ export async function rotateNodeIn(
         metadataVersion: node.metadataVersion,
         metadataEnvelope: rotated.metadataEnvelope,
     };
-    const metadata = checkRecord({
+    const metadata = checkRotatedRecord({
         stored: {
             envelope: node.metadataEnvelope,
             signerId: node.metadataSignerId,
@@ -679,12 +701,19 @@ export async function rotateNodeIn(
         rotator: input.userId,
         inScope,
         group,
-        legacy: (signature) => metadataSigned(metadataFields, signature),
+        legacy: (envelope, signature) =>
+            metadataSigned({ ...metadataFields, metadataEnvelope: envelope }, signature),
+        envelope: rotated.metadataEnvelope,
         rekeyed: (origin) =>
             metadataRekeyedStatement({ ...metadataFields, keyEpoch: input.targetEpoch }, origin),
     });
     if (typeof metadata === 'string') return metadata;
-    const versions: { id: string; contentKeyEnvelope: Buffer; signed: SignedRecord }[] = [];
+    const versions: {
+        id: string;
+        contentKeyEnvelope: Buffer;
+        signed: SignedRecord;
+        row: (typeof ready)[number];
+    }[] = [];
     for (const version of rotated.versions) {
         const row = ready.find((v) => v.id === version.id)!;
         const fields = {
@@ -695,19 +724,26 @@ export async function rotateNodeIn(
             contentSuite: row.contentSuite,
             contentKeyEnvelope: version.contentKeyEnvelope,
         };
-        const signed = checkRecord({
+        const signed = checkRotatedRecord({
             stored: row,
             sent: version,
             key,
             rotator: input.userId,
             inScope,
             group,
-            legacy: (signature) => versionSigned(fields, signature),
+            legacy: (envelope, signature) =>
+                versionSigned({ ...fields, contentKeyEnvelope: envelope }, signature),
+            envelope: version.contentKeyEnvelope,
             rekeyed: (origin) =>
                 versionRekeyedStatement({ ...fields, keyEpoch: input.targetEpoch }, origin),
         });
         if (typeof signed === 'string') return signed;
-        versions.push({ id: version.id, contentKeyEnvelope: version.contentKeyEnvelope, signed });
+        versions.push({
+            id: version.id,
+            contentKeyEnvelope: version.contentKeyEnvelope,
+            signed,
+            row,
+        });
     }
     await tx
         .update(driveNodes)
@@ -724,15 +760,18 @@ export async function rotateNodeIn(
             // The account rotating sealed the envelope: the re-keyer, whatever else it signed.
             metadataSignerId: input.userId,
             metadataSignature: metadata.signature,
-            ...(metadata.origin
+            metadataOriginEnvelope: metadata.origin?.envelope ?? null,
+            metadataOriginKeyEnvelope: metadata.origin?.keyEnvelope ?? null,
+            metadataOriginSignerId: metadata.origin?.signerId ?? null,
+            metadataOriginSignature: metadata.origin?.signature ?? null,
+            metadataRekeySignature: metadata.origin?.rekeySignature ?? null,
+            // A drop's trace stays with the record until it is written again: the first one counts.
+            ...(metadata.dropped && !node.metadataDroppedSignerId
                 ? {
-                      metadataOriginEnvelope: metadata.origin.envelope,
-                      metadataOriginKeyEnvelope: metadata.origin.keyEnvelope,
-                      metadataOriginSignerId: metadata.origin.signerId,
-                      metadataOriginSignature: metadata.origin.signature,
-                      metadataRekeySignature: metadata.origin.rekeySignature,
+                      metadataDroppedSignerId: metadata.dropped.signerId,
+                      metadataOriginDroppedBy: input.userId,
                   }
-                : NO_METADATA_ORIGIN),
+                : {}),
             changeSeq,
         })
         .where(eq(driveNodes.id, item.id));
@@ -743,17 +782,56 @@ export async function rotateNodeIn(
                 contentKeyEnvelope: version.contentKeyEnvelope,
                 signerId: input.userId,
                 signature: version.signed.signature,
-                ...(version.signed.origin
+                originEnvelope: version.signed.origin?.envelope ?? null,
+                originKeyEnvelope: version.signed.origin?.keyEnvelope ?? null,
+                originSignerId: version.signed.origin?.signerId ?? null,
+                originSignature: version.signed.origin?.signature ?? null,
+                rekeySignature: version.signed.origin?.rekeySignature ?? null,
+                ...(version.signed.dropped && !version.row.droppedSignerId
                     ? {
-                          originEnvelope: version.signed.origin.envelope,
-                          originKeyEnvelope: version.signed.origin.keyEnvelope,
-                          originSignerId: version.signed.origin.signerId,
-                          originSignature: version.signed.origin.signature,
-                          rekeySignature: version.signed.origin.rekeySignature,
+                          droppedSignerId: version.signed.dropped.signerId,
+                          originDroppedBy: input.userId,
                       }
-                    : NO_VERSION_ORIGIN),
+                    : {}),
             })
             .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
+    // Every drop, as evidence that outlives the record: whose signature, which, who, when.
+    const drops = [
+        ...(metadata.dropped
+            ? [
+                  {
+                      dropped: metadata.dropped,
+                      metadataVersion: node.metadataVersion,
+                      versionId: null,
+                  },
+              ]
+            : []),
+        ...versions.flatMap((version) =>
+            version.signed.dropped
+                ? [
+                      {
+                          dropped: version.signed.dropped,
+                          metadataVersion: null,
+                          versionId: version.id,
+                      },
+                  ]
+                : [],
+        ),
+    ];
+    if (drops.length)
+        await tx.insert(driveOriginDrops).values(
+            drops.map((drop) => ({
+                workspaceId: input.workspaceId,
+                nodeId: item.id,
+                metadataVersion: drop.metadataVersion,
+                versionId: drop.versionId,
+                originSignerId: drop.dropped.signerId,
+                originDigest: createHash('sha256').update(drop.dropped.envelope).digest(),
+                originSignature: drop.dropped.signature,
+                droppedBy: input.userId,
+                targetEpoch: input.targetEpoch,
+            })),
+        );
     // Only suite 3 is written; anything else is left unsealed and revoked below.
     for (const share of rotated.shares.filter(
         (entry) => entry.shareEnvelope.length === SHARE_ENVELOPE_BYTES,

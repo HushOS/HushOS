@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
@@ -7,16 +7,26 @@ import {
     createTestIdentity,
     resetDatabase,
     signerFor,
+    signingKeyFromSeed,
 } from '../test/helpers';
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import * as groups from './groups';
 import { scopedId } from './ids';
+import * as reports from './reports';
 import * as rotations from './rotations';
-import { driveNodes, fileVersions, users, workspaceKeys } from './schema';
+import {
+    driveNodes,
+    driveOriginDrops,
+    driveReportItems,
+    fileVersions,
+    users,
+    workspaceKeys,
+} from './schema';
 import {
     metadataRekeyedStatement,
+    metadataSigned,
     metadataStatement,
     versionStatement,
     type StatementForm,
@@ -36,6 +46,7 @@ import {
  */
 
 const MiB = 1024n * 1024n;
+const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest();
 const env = () => randomBytes(72);
 const meta = () => randomBytes(100);
 
@@ -647,6 +658,8 @@ describe('a legacy re-seal of a re-keyed record', () => {
         ).toBe('unsupported');
         expect((await nodeRow(doc.id)).metadataOriginEnvelope).not.toBeNull();
 
+        const kept = await nodeRow(doc.id);
+        const keptVersion = await versionRow(kept.currentVersionId!);
         const dropped = await rotateFile(run, doc.id, { legacy: 'resealed', dropOrigin: true });
         expect(dropped.status).toBe('ok');
         const after = await nodeRow(doc.id);
@@ -654,6 +667,73 @@ describe('a legacy re-seal of a re-keyed record', () => {
         expect(after.metadataRekeySignature).toBeNull();
         expect(after.metadataSignature).not.toBeNull();
         expect((await versionRow(dropped.versionId)).originEnvelope).toBeNull();
+        // Not silently: whose signature went and who dropped it stay on the record, for Info,
+        // and in the evidence table with the dropped origin's digest and signature.
+        expect(after.metadataDroppedSignerId).toBe(writer.userId);
+        expect(after.metadataOriginDroppedBy).toBe(owner.userId);
+        const version = await versionRow(dropped.versionId);
+        expect(version.droppedSignerId).toBe(writer.userId);
+        expect(version.originDroppedBy).toBe(owner.userId);
+        const evidence = await db
+            .select()
+            .from(driveOriginDrops)
+            .where(eq(driveOriginDrops.nodeId, doc.id));
+        expect(
+            evidence.map((row) => ({
+                metadataVersion: row.metadataVersion,
+                versionId: row.versionId,
+                signer: row.originSignerId,
+                by: row.droppedBy,
+                epoch: row.targetEpoch,
+            })),
+        ).toEqual(
+            expect.arrayContaining([
+                {
+                    metadataVersion: kept.metadataVersion,
+                    versionId: null,
+                    signer: writer.userId,
+                    by: owner.userId,
+                    epoch: run.targetEpoch,
+                },
+                {
+                    metadataVersion: null,
+                    versionId: keptVersion.id,
+                    signer: writer.userId,
+                    by: owner.userId,
+                    epoch: run.targetEpoch,
+                },
+            ]),
+        );
+        const metadataDrop = evidence.find((row) => row.versionId === null)!;
+        expect(metadataDrop.originSignature.equals(kept.metadataOriginSignature!)).toBe(true);
+        expect(metadataDrop.originDigest.equals(sha256(kept.metadataOriginEnvelope!))).toBe(true);
+        expect(evidence).toHaveLength(2);
+
+        // A later rotation re-keys the dropped record as its own origin: the trace stays.
+        if (!(await rotations.finishRotation(run))) throw new Error('not finished');
+        const next = await startOn(doc.id);
+        expect((await rotateFile(next, doc.id, { rekey: 'valid' })).status).toBe('ok');
+        expect((await nodeRow(doc.id)).metadataDroppedSignerId).toBe(writer.userId);
+        // A rename replaces the record: its trace goes with it, the evidence row stays.
+        const renamed = await nodeRow(doc.id);
+        expect(
+            (
+                await signed.renameNode({
+                    workspaceId: ws,
+                    userId: owner.userId,
+                    nodeId: doc.id,
+                    keyEpoch: renamed.keyEpoch,
+                    metadataVersion: renamed.metadataVersion,
+                    metadataEnvelope: meta(),
+                })
+            ).status,
+        ).toBe('ok');
+        const afterRename = await nodeRow(doc.id);
+        expect(afterRename.metadataDroppedSignerId).toBeNull();
+        expect(afterRename.metadataOriginDroppedBy).toBeNull();
+        expect(
+            await db.select().from(driveOriginDrops).where(eq(driveOriginDrops.nodeId, doc.id)),
+        ).toHaveLength(2);
     });
 });
 
@@ -761,8 +841,8 @@ describe('the origin columns', () => {
         await refused(set({ metadataOriginEnvelope: randomBytes(4137) }));
         await refused(set({ metadataOriginSignature: randomBytes(63) }));
         await refused(set({ metadataRekeySignature: randomBytes(65) }));
-        // Its writer may be gone (no account to name), the rest staying whole.
-        await set({ metadataOriginSignerId: null });
+        // An origin always names its writer (no foreign key nulls it), and may be 4136 bytes.
+        await refused(set({ metadataOriginSignerId: null }));
         await set({ metadataOriginEnvelope: randomBytes(4136) });
         // A signer with neither a legacy signature nor a re-key signature is refused.
         await refused(
@@ -782,6 +862,7 @@ describe('the origin columns', () => {
         await refused(set({ originEnvelope: randomBytes(72) }));
         await refused(set({ originEnvelope: randomBytes(100) }));
         await refused(set({ originKeyEnvelope: randomBytes(84) }));
+        await refused(set({ originSignerId: null }));
         // Purged with its origin left behind.
         await refused(
             set({
@@ -907,5 +988,121 @@ describe('a personal workspace', () => {
         expect(dropped.status).toBe('ok');
         expect((await nodeRow(doc.id)).metadataOriginEnvelope).toBeNull();
         expect((await versionRow(dropped.versionId)).originEnvelope).toBeNull();
+    });
+});
+
+/*
+ * The legacy signature beside a re-key over the rotator's own origin
+ * (decision D2, the honest form), checked on its own: no workspace takes it
+ * yet (rekeyedFor keeps personal workspaces out, D3 refuses it in group
+ * areas), so this calls the record check directly as a widened scope would.
+ * It may claim no more than the origin's own signature did.
+ */
+describe('a legacy signature beside a re-key over one’s own origin', () => {
+    const ROTATOR = '0b0b0b0b-0000-4000-8000-00000000000b';
+    const fields = {
+        workspaceId: '0a0a0a0a-0000-4000-8000-00000000000a',
+        nodeId: '0c0c0c0c-0000-4000-8000-00000000000c',
+        kind: 'file' as const,
+        metadataVersion: 2,
+    };
+    const key = signingKeyFromSeed(Buffer.alloc(32, 9));
+    const origin = randomBytes(100);
+    const next = randomBytes(100);
+    const check = (originForm: StatementForm, legacy: StatementForm) => {
+        const originSignature = key.sign(
+            metadataStatement({ ...fields, metadataEnvelope: origin }, originForm),
+        );
+        const keyEnvelope = randomBytes(72);
+        return rotations.checkRotatedRecord({
+            // The rotator's own record, no origin kept: it becomes the origin.
+            stored: {
+                envelope: origin,
+                signerId: ROTATOR,
+                signature: originSignature,
+                originEnvelope: null,
+                originSignerId: null,
+                originSignature: null,
+            },
+            sent: {
+                signature: key.sign(
+                    metadataStatement({ ...fields, metadataEnvelope: next }, legacy),
+                ),
+                rekey: {
+                    originKeyEnvelope: keyEnvelope,
+                    signature: key.sign(
+                        metadataRekeyedStatement(
+                            { ...fields, metadataEnvelope: next, keyEpoch: 9 },
+                            {
+                                envelope: origin,
+                                signerId: ROTATOR,
+                                signature: originSignature,
+                                keyEnvelope,
+                            },
+                        ),
+                    ),
+                },
+            },
+            key: key.publicKey,
+            rotator: ROTATOR,
+            inScope: true,
+            group: false,
+            legacy: (envelope, signature) =>
+                metadataSigned({ ...fields, metadataEnvelope: envelope }, signature),
+            envelope: next,
+            rekeyed: (full) =>
+                metadataRekeyedStatement({ ...fields, metadataEnvelope: next, keyEpoch: 9 }, full),
+        });
+    };
+    const status = (result: ReturnType<typeof check>) =>
+        typeof result === 'string' ? result : 'ok';
+
+    test('a re-sealed origin of one’s own (after a drop) never comes back ordinary or saved', () => {
+        expect(status(check('resealed', 'ordinary'))).toBe('unsupported');
+        expect(status(check('resealed', 'saved'))).toBe('unsupported');
+        expect(status(check('resealed', 'resealed'))).toBe('ok');
+    });
+
+    test('an ordinary origin stays ordinary, a saved one saved, and neither turns into the other', () => {
+        expect(status(check('ordinary', 'ordinary'))).toBe('ok');
+        expect(status(check('saved', 'saved'))).toBe('ok');
+        expect(status(check('saved', 'ordinary'))).toBe('unsupported');
+        expect(status(check('ordinary', 'saved'))).toBe('unsupported');
+    });
+});
+
+describe('a report of a re-keyed record', () => {
+    test('snapshots its writer beside its re-keyer', async () => {
+        const doc = await file();
+        await writtenBy(writer, doc);
+        await rotatedOnce(doc.id, { rekey: 'valid' });
+        const operator = await createTestAccount();
+        await createTestIdentity(operator.userId);
+        await db.update(users).set({ role: 'admin' }).where(eq(users.id, operator.userId));
+        const row = await nodeRow(doc.id);
+        const filed = await reports.createReport({
+            id: randomUUID(),
+            workspaceId: ws,
+            nodeId: doc.id,
+            keyEpoch: row.keyEpoch,
+            linkId: null,
+            shareId: null,
+            category: 'other',
+            reason: 'Looks wrong.',
+            reporterUserId: null,
+            reporterEmail: null,
+            reporterAddressHash: createHash('sha256').update('1.2.3.4').digest(),
+            keys: [{ operatorUserId: operator.userId, keyEnvelope: randomBytes(112) }],
+        });
+        if (filed.status !== 'ok') throw new Error(filed.status);
+        const [item] = await db
+            .select()
+            .from(driveReportItems)
+            .where(eq(driveReportItems.reportId, filed.report.id));
+        // The re-keyer locked it; the writer wrote it: evidence keeps both, not the re-keyer alone.
+        expect(item!.metadataSignerId).toBe(owner.userId);
+        expect(item!.metadataOriginSignerId).toBe(writer.userId);
+        expect(item!.versionSignerId).toBe(owner.userId);
+        expect(item!.versionOriginSignerId).toBe(writer.userId);
     });
 });

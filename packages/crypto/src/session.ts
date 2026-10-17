@@ -533,6 +533,14 @@ type BaseRequests = {
             /* Who signed the source version's envelope. */
             signer: string | null;
             signature: string | null;
+            /*
+             * A re-keyed source (family folders, rekeyedFor): the node's key epoch and
+             * each record's origin, so the copy is judged on its writer's record (the
+             * origin's verdict, when its bytes bind), not on the re-keyer's columns.
+             */
+            keyEpoch?: number;
+            metadataRekey?: ServedRekey | null;
+            rekey?: ServedRekey | null;
         } & DriveVersionEnvelope;
         node: {
             id: string;
@@ -3348,6 +3356,36 @@ export function createCryptoSession() {
                 // The source as a reading would check it: only what verified is vouched for again,
                 // and a copy of something saved from a link stays saved.
                 const trusted = trustSet(message.input.signers);
+                // A re-keyed source is judged on its writer's record, where origins are read.
+                const readsOrigins =
+                    group !== null &&
+                    source.keyEpoch !== undefined &&
+                    rekeyedFor({ ownerKind: groups.isArea(workspaceId) ? 'group' : 'personal' });
+                const originKey = readsOrigins
+                    ? keyAtEpoch(workspaceId, source.nodeId, source.keyEpoch!)
+                    : null;
+                const rekeyedOf = (
+                    record: 'metadata' | 'version',
+                    statement: MetadataStatement | VersionStatement,
+                    envelope: string,
+                    rekey: ServedRekey | null | undefined,
+                    rekeyer: string | null,
+                ) =>
+                    readsOrigins && rekey
+                        ? {
+                              rekeyed: {
+                                  record: servedRekeyedRecord(
+                                      record,
+                                      statement,
+                                      source.keyEpoch!,
+                                      envelope,
+                                      rekey,
+                                  ),
+                                  nodeKey: originKey,
+                                  rekeyer,
+                              },
+                          }
+                        : {};
                 const metadataRecord = {
                     statements: async () =>
                         metadataStatements(
@@ -3361,6 +3399,18 @@ export function createCryptoSession() {
                         ),
                     signer: source.metadataSigner,
                     signature: source.metadataSignature,
+                    ...rekeyedOf(
+                        'metadata',
+                        {
+                            workspaceId,
+                            nodeId: source.nodeId,
+                            kind: 'file',
+                            metadataVersion: source.metadataVersion,
+                        },
+                        source.metadataEnvelope,
+                        source.metadataRekey,
+                        source.metadataSigner,
+                    ),
                 };
                 const versionRecord = {
                     statements: async () =>
@@ -3376,6 +3426,19 @@ export function createCryptoSession() {
                         ),
                     signer: source.signer,
                     signature: source.signature,
+                    ...rekeyedOf(
+                        'version',
+                        {
+                            workspaceId,
+                            nodeId: source.nodeId,
+                            versionId: source.id,
+                            objectId: source.objectId,
+                            contentSuite: source.contentSuite,
+                        },
+                        source.contentKeyEnvelope,
+                        source.rekey,
+                        source.signer,
+                    ),
                 };
                 // In a family folder the family's judge (it refuses another group's or a
                 // personal workspace); elsewhere this person's own pins.

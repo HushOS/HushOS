@@ -412,6 +412,8 @@ const nodeColumns = {
     metadataOriginSignerId: driveNodes.metadataOriginSignerId,
     metadataOriginSignature: driveNodes.metadataOriginSignature,
     metadataRekeySignature: driveNodes.metadataRekeySignature,
+    metadataDroppedSignerId: driveNodes.metadataDroppedSignerId,
+    metadataOriginDroppedBy: driveNodes.metadataOriginDroppedBy,
     workspaceId: driveNodes.workspaceId,
     parentId: driveNodes.parentId,
     kind: driveNodes.kind,
@@ -450,6 +452,8 @@ const versionColumns = {
     originSignerId: fileVersions.originSignerId,
     originSignature: fileVersions.originSignature,
     rekeySignature: fileVersions.rekeySignature,
+    droppedSignerId: fileVersions.droppedSignerId,
+    originDroppedBy: fileVersions.originDroppedBy,
 };
 /*
  * What every write that sets a record's envelope outside a rotation clears: the
@@ -463,6 +467,9 @@ export const NO_METADATA_ORIGIN = {
     metadataOriginSignerId: null,
     metadataOriginSignature: null,
     metadataRekeySignature: null,
+    // A dropped origin's trace describes the record being replaced too (drive_origin_drops keeps it).
+    metadataDroppedSignerId: null,
+    metadataOriginDroppedBy: null,
 } as const;
 export const NO_VERSION_ORIGIN = {
     originEnvelope: null,
@@ -470,6 +477,8 @@ export const NO_VERSION_ORIGIN = {
     originSignerId: null,
     originSignature: null,
     rekeySignature: null,
+    droppedSignerId: null,
+    originDroppedBy: null,
 } as const;
 /*
  * Who wrote a record: the account id alone. A client names a signer from its
@@ -496,6 +505,9 @@ export type VersionRow = {
     originSignerId: string | null;
     originSignature: Buffer | null;
     rekeySignature: Buffer | null;
+    /* A dropped origin's signer and who dropped it (see fileVersions); null otherwise. */
+    droppedSignerId: string | null;
+    originDroppedBy: string | null;
     status: 'pending' | 'ready' | 'purged';
     /* Suite 1 only; null under suite 2, where the envelope carries it. */
     plaintextSize: bigint | null;

@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "805a11c4-38ff-4682-851f-cf9056091f1b",
+    "id": "9cf3163e-08d5-4a70-a24c-a28095ed33cd",
     "prevIds": ["e58f8800-8601-4417-8b95-8194094235c6"],
     "ddl": [
         {
@@ -121,6 +121,12 @@
         {
             "isRlsEnabled": false,
             "name": "drive_objects",
+            "entityType": "tables",
+            "schema": "public"
+        },
+        {
+            "isRlsEnabled": false,
+            "name": "drive_origin_drops",
             "entityType": "tables",
             "schema": "public"
         },
@@ -2987,6 +2993,32 @@
             "default": null,
             "generated": null,
             "identity": null,
+            "name": "metadata_dropped_signer",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_nodes"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "metadata_origin_dropped_by",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_nodes"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
             "name": "current_version_id",
             "entityType": "columns",
             "schema": "public",
@@ -3445,6 +3477,149 @@
             "name": "id",
             "entityType": "columns",
             "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "workspace_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "node_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "metadata_version",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "version_id",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "origin_signer",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "origin_digest",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "origin_signature",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "dropped_by",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "integer",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "target_epoch",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "timestamp with time zone",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "now()",
+            "generated": null,
+            "identity": null,
+            "name": "dropped_at",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "gen_random_uuid()",
+            "generated": null,
+            "identity": null,
+            "name": "id",
+            "entityType": "columns",
+            "schema": "public",
             "table": "drive_report_events"
         },
         {
@@ -3820,6 +3995,32 @@
             "generated": null,
             "identity": null,
             "name": "version_signature",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_report_items"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "metadata_origin_signer",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_report_items"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "version_origin_signer",
             "entityType": "columns",
             "schema": "public",
             "table": "drive_report_items"
@@ -5042,6 +5243,32 @@
             "generated": null,
             "identity": null,
             "name": "rekey_signature",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "file_versions"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "dropped_signer",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "file_versions"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "origin_dropped_by",
             "entityType": "columns",
             "schema": "public",
             "table": "file_versions"
@@ -8182,6 +8409,34 @@
             "nameExplicit": true,
             "columns": [
                 {
+                    "value": "workspace_id",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                },
+                {
+                    "value": "node_id",
+                    "isExpression": false,
+                    "asc": true,
+                    "nullsFirst": false,
+                    "opclass": null
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "with": "",
+            "method": "btree",
+            "concurrently": false,
+            "name": "drive_origin_drops_node_idx",
+            "entityType": "indexes",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "nameExplicit": true,
+            "columns": [
+                {
                     "value": "report_id",
                     "isExpression": false,
                     "asc": true,
@@ -9383,6 +9638,19 @@
         },
         {
             "nameExplicit": false,
+            "columns": ["workspace_id"],
+            "schemaTo": "public",
+            "tableTo": "workspaces",
+            "columnsTo": ["id"],
+            "onUpdate": "NO ACTION",
+            "onDelete": "CASCADE",
+            "name": "drive_origin_drops_workspace_id_workspaces_id_fkey",
+            "entityType": "fks",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "nameExplicit": false,
             "columns": ["report_id"],
             "schemaTo": "public",
             "tableTo": "drive_reports",
@@ -10404,6 +10672,14 @@
         {
             "columns": ["id"],
             "nameExplicit": false,
+            "name": "drive_origin_drops_pkey",
+            "schema": "public",
+            "table": "drive_origin_drops",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["id"],
+            "nameExplicit": false,
             "name": "drive_report_events_pkey",
             "schema": "public",
             "table": "drive_report_events",
@@ -11027,7 +11303,14 @@
             "table": "drive_nodes"
         },
         {
-            "value": "(\"metadata_origin_envelope\" is null and \"metadata_origin_key_envelope\" is null and \"metadata_origin_signer\" is null and \"metadata_origin_signature\" is null and \"metadata_rekey_signature\" is null) or (\"metadata_origin_envelope\" is not null and \"metadata_origin_key_envelope\" is not null and \"metadata_origin_signature\" is not null and \"metadata_rekey_signature\" is not null and \"metadata_envelope\" is not null and octet_length(\"metadata_origin_envelope\") between 42 and 4136 and octet_length(\"metadata_origin_key_envelope\") = 72 and octet_length(\"metadata_origin_signature\") = 64 and octet_length(\"metadata_rekey_signature\") = 64)",
+            "value": "(\"metadata_dropped_signer\" is null) = (\"metadata_origin_dropped_by\" is null)",
+            "name": "drive_nodes_dropped_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "drive_nodes"
+        },
+        {
+            "value": "(\"metadata_origin_envelope\" is null and \"metadata_origin_key_envelope\" is null and \"metadata_origin_signer\" is null and \"metadata_origin_signature\" is null and \"metadata_rekey_signature\" is null) or (\"metadata_origin_envelope\" is not null and \"metadata_origin_signer\" is not null and \"metadata_origin_key_envelope\" is not null and \"metadata_origin_signature\" is not null and \"metadata_rekey_signature\" is not null and \"metadata_envelope\" is not null and octet_length(\"metadata_origin_envelope\") between 42 and 4136 and octet_length(\"metadata_origin_key_envelope\") = 72 and octet_length(\"metadata_origin_signature\") = 64 and octet_length(\"metadata_rekey_signature\") = 64)",
             "name": "drive_nodes_origin_valid",
             "entityType": "checks",
             "schema": "public",
@@ -11060,6 +11343,13 @@
             "entityType": "checks",
             "schema": "public",
             "table": "drive_objects"
+        },
+        {
+            "value": "(\"metadata_version\" is null) <> (\"version_id\" is null) and octet_length(\"origin_digest\") = 32 and octet_length(\"origin_signature\") = 64 and \"target_epoch\" >= 1",
+            "name": "drive_origin_drops_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "drive_origin_drops"
         },
         {
             "value": "char_length(\"action\") between 1 and 40 and (\"note\" is null or char_length(\"note\") <= 2000)",
@@ -11216,7 +11506,14 @@
             "table": "file_versions"
         },
         {
-            "value": "(\"origin_envelope\" is null and \"origin_key_envelope\" is null and \"origin_signer\" is null and \"origin_signature\" is null and \"rekey_signature\" is null) or (\"origin_envelope\" is not null and \"origin_key_envelope\" is not null and \"origin_signature\" is not null and \"rekey_signature\" is not null and \"content_key_envelope\" is not null and octet_length(\"origin_envelope\") in (72, 84) and octet_length(\"origin_envelope\") = octet_length(\"content_key_envelope\") and octet_length(\"origin_key_envelope\") = 72 and octet_length(\"origin_signature\") = 64 and octet_length(\"rekey_signature\") = 64)",
+            "value": "(\"dropped_signer\" is null) = (\"origin_dropped_by\" is null)",
+            "name": "file_versions_dropped_valid",
+            "entityType": "checks",
+            "schema": "public",
+            "table": "file_versions"
+        },
+        {
+            "value": "(\"origin_envelope\" is null and \"origin_key_envelope\" is null and \"origin_signer\" is null and \"origin_signature\" is null and \"rekey_signature\" is null) or (\"origin_envelope\" is not null and \"origin_signer\" is not null and \"origin_key_envelope\" is not null and \"origin_signature\" is not null and \"rekey_signature\" is not null and \"content_key_envelope\" is not null and octet_length(\"origin_envelope\") in (72, 84) and octet_length(\"origin_envelope\") = octet_length(\"content_key_envelope\") and octet_length(\"origin_key_envelope\") = 72 and octet_length(\"origin_signature\") = 64 and octet_length(\"rekey_signature\") = 64)",
             "name": "file_versions_origin_valid",
             "entityType": "checks",
             "schema": "public",

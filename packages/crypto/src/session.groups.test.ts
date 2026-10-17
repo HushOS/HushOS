@@ -2935,6 +2935,8 @@ describe('copying in a family folder (1c step 7)', () => {
             metadataSignature: node.metadataSignature,
             signer: BOB,
             signature: prepared.versionSignature,
+            // Not a copy's field: what a walk of the file re-keys under.
+            fileKeyEnvelope: node.keyEnvelope,
         };
     }
     const copyCtx = (ws: string) => ({
@@ -3056,6 +3058,132 @@ describe('copying in a family folder (1c step 7)', () => {
                 aliceKey,
             ),
         ).toBe(true);
+    });
+
+    test('a copy of a file a rotation re-keyed is judged on its writer’s record: vouched for, not re-sealed', async () => {
+        const f = await family();
+        const { alice, bob, groupId, ws, area } = f;
+        const source = await bobsFile(f);
+        const bobWriter: GroupWriter = {
+            userId: BOB,
+            pinned: null,
+            served: bob.served,
+            links: [],
+            personal: null,
+        };
+        const group = { groupId, staged: null, writers: [bobWriter] };
+        // Alice's walk re-keys Bob's file: it stays his (an origin), her name only on the binding.
+        const fileRow = (
+            await alice.call('driveRotateNodes', {
+                workspaceId: ws,
+                targetEpoch: 9,
+                granterUserId: ALICE,
+                signers: {},
+                group,
+                nodes: [
+                    {
+                        id: FILE,
+                        kind: 'file',
+                        parentId: area.root.id,
+                        parentKeyEpoch: 1,
+                        keyEpoch: 3,
+                        wrappedParentKeyEpoch: 1,
+                        keyEnvelope: source.fileKeyEnvelope,
+                        metadataVersion: 1,
+                        metadataEnvelope: source.metadataEnvelope,
+                        metadataSigner: BOB,
+                        metadataSignature: source.metadataSignature,
+                        versions: [
+                            {
+                                id: VERSION,
+                                objectId: OBJECT,
+                                contentKeyEnvelope: source.contentKeyEnvelope,
+                                contentSuite: CONTENT_SUITE,
+                                plaintextSize: null,
+                                signer: BOB,
+                                signature: source.signature,
+                            },
+                        ],
+                        shares: [],
+                        links: [],
+                    },
+                ],
+            })
+        ).nodes[0]!;
+        if (fileRow.error !== undefined) throw new Error(fileRow.error);
+        await alice.call('driveRotateCommit', { workspaceId: ws, nodeIds: [FILE] });
+        const version = fileRow.versions[0]!;
+        // The file as the server then serves it: Alice's columns, Bob's origins, no legacy signature.
+        const rekeyedSource = {
+            ...source,
+            metadataEnvelope: fileRow.metadataEnvelope,
+            metadataSigner: ALICE,
+            metadataSignature: null,
+            contentKeyEnvelope: version.contentKeyEnvelope,
+            signer: ALICE,
+            signature: null,
+            keyEpoch: 9,
+            metadataRekey: {
+                origin: {
+                    envelope: source.metadataEnvelope,
+                    signerId: BOB,
+                    signature: source.metadataSignature,
+                    keyEnvelope: fileRow.metadataRekey!.originKeyEnvelope,
+                },
+                signature: fileRow.metadataRekey!.signature,
+            },
+            rekey: {
+                origin: {
+                    envelope: source.contentKeyEnvelope,
+                    signerId: BOB,
+                    signature: source.signature,
+                    keyEnvelope: version.rekey!.originKeyEnvelope,
+                },
+                signature: version.rekey!.signature,
+            },
+        };
+        const copy = (from: typeof rekeyedSource | typeof source) =>
+            alice.call('driveCopyFile', {
+                workspaceId: ws,
+                signers: {},
+                source: from as typeof rekeyedSource,
+                node: {
+                    id: COPY,
+                    parentId: area.root.id,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 4,
+                    metadata: folder('notes (copy).txt'),
+                },
+                versionId: COPY_VERSION,
+                group,
+            });
+        const aliceKey = decode(alice.served.signingPublicKey, 32);
+        const formOf = async (copied: Awaited<ReturnType<typeof copy>>) => {
+            const envelope = decode(copied.metadataEnvelope);
+            const signature = decode(copied.metadataSignature);
+            if (
+                await verifyStatement(
+                    await metadataStatement(copyCtx(ws), envelope),
+                    signature,
+                    aliceKey,
+                )
+            )
+                return 'ordinary';
+            if (
+                await verifyStatement(
+                    await metadataResealedStatement(copyCtx(ws), envelope),
+                    signature,
+                    aliceKey,
+                )
+            )
+                return 'resealed';
+            return 'neither';
+        };
+        // Bob's record, which the family vouches for: the copy is vouched for too, as before the walk.
+        expect(await formOf(await copy(rekeyedSource))).toBe('ordinary');
+        // Judged on the re-keyer's columns alone (no signature there), it would only be re-sealed.
+        const { metadataRekey: _m, rekey: _v, ...columnsOnly } = rekeyedSource;
+        expect(await formOf(await copy(columnsOnly as typeof rekeyedSource))).toBe('resealed');
     });
 
     test('a group’s trust on a personal workspace is refused', async () => {

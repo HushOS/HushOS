@@ -1007,6 +1007,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 metadataSignature: signed.metadataSignature,
                 signer: signed.versions?.[0]?.signer ?? null,
                 signature: signed.versions?.[0]?.signature ?? null,
+                // A re-keyed source is judged on its writer's record (family folders, rekeyedFor).
+                keyEpoch: signed.keyEpoch,
+                metadataRekey: signed.metadataRekey ?? null,
+                rekey: signed.versions?.[0]?.rekey ?? null,
             },
             node: {
                 id,

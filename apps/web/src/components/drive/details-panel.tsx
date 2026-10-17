@@ -18,7 +18,8 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { authClient } from '@/lib/auth-client';
 import {
-    nameSigner,
+    changedByWords,
+    droppedLines,
     rekeyedLines,
     rekeyTechnical,
     verifiedByLine,
@@ -314,24 +315,7 @@ function OwnCopy({ node }: { node: DriveNode }) {
 /* Who wrote what did not verify, as this person can name them: from their own pins only. */
 function ChangedBy({ issue }: { issue: IntegrityIssue }) {
     const userId = useStore(authClient.store, (state) => state.unlockedUserId);
-    const named = nameSigner(issue.signer, useSignerNames(userId, true));
-    return (
-        <span>
-            {issue.integrity === 'unchecked'
-                ? 'Not checked'
-                : named.kind === 'you'
-                  ? 'You'
-                  : named.kind === 'contact'
-                    ? named.name
-                    : named.kind === 'member'
-                      ? named.email
-                          ? `${named.name} (${named.email})`
-                          : named.name
-                      : issue.signer
-                        ? 'Someone you haven’t checked'
-                        : 'Unknown'}
-        </span>
-    );
+    return <span>{changedByWords(issue, useSignerNames(userId, true))}</span>;
 }
 
 export function ItemDetails({
@@ -361,6 +345,7 @@ export function ItemDetails({
     const unverified = integrityIssues(node);
     // A re-keyed item names both people: who wrote it and who locked it again.
     const rekeyed = rekeyedLines(node, names);
+    const dropped = droppedLines(node, names);
     const notes = node.integrity?.rekeyed;
     const status =
         version === null
@@ -465,11 +450,16 @@ export function ItemDetails({
                 )}
             </dl>
             <SavedFromLinkLine node={node} />
-            {rekeyed.replacedBy && (
-                <p data-keys-replaced className="text-[13px] text-muted-foreground">
-                    {rekeyed.replacedBy}
+            {rekeyed.replacedBy.map((line) => (
+                <p key={line} data-keys-replaced className="text-[13px] text-muted-foreground">
+                    {line}
                 </p>
-            )}
+            ))}
+            {dropped.map((line) => (
+                <p key={line} data-origin-dropped className="text-[13px] text-muted-foreground">
+                    {line}
+                </p>
+            ))}
             <div className="rounded-xl border border-rule">
                 <Fold title="Keep your own copy" name="own-copy">
                     <OwnCopy key={node.id} node={node} />

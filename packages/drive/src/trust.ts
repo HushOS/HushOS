@@ -290,9 +290,10 @@ export type RekeyCause = 'mismatch' | 'unconfirmed' | 'unattested';
 
 /*
  * One record that did not verify, who the server says wrote it, and what it
- * is. A re-keyed record's issue names its writer (the origin's signer), or for
- * a re-key cause the re-keyer, with `rekey` saying why and how the re-keyer
- * itself checked.
+ * is. A re-keyed record's issue names its writer (the origin's signer); one
+ * with a re-key cause (`rekey`, saying why and how the re-keyer checked) names
+ * the re-keyer only for a mismatch their verified signature covers, and
+ * nobody (null) otherwise.
  */
 export type IntegrityIssue = {
     record: 'metadata' | 'version';
@@ -327,18 +328,20 @@ export function recordIssues(
     const issues: IntegrityIssue[] = [];
     if (note) {
         const rekeyer = note.integrity;
+        // A re-key cause names someone only when their own verified signature covers what failed:
+        // a mismatch under the re-keyer's verified re-key. Anything else a server could cause alone.
         if (note.bound === false)
             issues.push({
                 record,
                 integrity: 'bad-signature',
-                signer: note.by,
+                signer: rekeyer === 'verified' ? note.by : null,
                 rekey: { cause: 'mismatch', rekeyer },
             });
         else if (note.bound === null)
             issues.push({
                 record,
                 integrity: 'unchecked',
-                signer: note.by,
+                signer: null,
                 rekey: { cause: 'unconfirmed', rekeyer },
             });
         else {
@@ -348,7 +351,7 @@ export function recordIssues(
                 issues.push({
                     record,
                     integrity: rekeyer as IntegrityIssue['integrity'],
-                    signer: note.by,
+                    signer: null,
                     rekey: { cause: 'unattested', rekeyer },
                 });
         }

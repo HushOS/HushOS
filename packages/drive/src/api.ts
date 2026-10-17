@@ -43,7 +43,16 @@ export type VersionView = {
      * before re-keyed records.
      */
     rekey?: RekeyView | null;
+    /*
+     * A rotation dropped the version's kept origin (its client found it did not
+     * bind, or said so): whose signature it carried and who dropped it. The
+     * server cannot check that; it keeps the trace. Absent where `rekey` is.
+     */
+    originDropped?: DroppedView | null;
 };
+
+/* Evidence of a dropped origin: the dropped origin's signer and the account that dropped it. */
+export type DroppedView = { signer: Signer; by: Signer };
 
 /*
  * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the
@@ -90,6 +99,7 @@ export type NodeView = {
     metadataSignature?: string | null;
     /* What a rotation kept of the metadata's writer, as on versions. */
     metadataRekey?: RekeyView | null;
+    metadataOriginDropped?: DroppedView | null;
 };
 
 export type NodeEnvelopes = {
