@@ -33,6 +33,13 @@ import {
     localeHintQueryOptions,
     storageQueryOptions,
 } from '@/lib/queries';
+import {
+    CHECKOUT_SYNC_INTERVAL_MS,
+    checkoutNotice,
+    checkoutReturn,
+    isRateLimited,
+    SUPPORT_LABEL,
+} from '@/lib/checkout-return';
 import { cue } from '@/lib/sounds';
 import type { BillingSubscription, BillingSummary, Plan } from '@hushos/billing/api';
 import {
@@ -41,7 +48,7 @@ import {
     type CancellationReason,
 } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { cn } from 'cn';
 import {
     ArrowUpRightIcon,
@@ -117,6 +124,21 @@ function Notice({ tone, busy, children }: { tone: Tone; busy?: boolean; children
     );
 }
 
+/* A notice that tells people to contact support links the words to the Support page. */
+function WithSupportLink({ text }: { text: string }) {
+    const at = text.indexOf(SUPPORT_LABEL);
+    if (at < 0) return text;
+    return (
+        <>
+            {text.slice(0, at)}
+            <Link to="/support" className="font-semibold underline">
+                {SUPPORT_LABEL}
+            </Link>
+            {text.slice(at + SUPPORT_LABEL.length)}
+        </>
+    );
+}
+
 const longDay = (value: string) => formatDay(value);
 
 const per = { month: 'a month', year: 'a year' } as const;
@@ -172,44 +194,43 @@ function BillingPage() {
         [queryClient],
     );
 
-    // Back from checkout: the webhook is usually ahead of us, but not always, so
-    // the summary is polled every two seconds, fifteen times at most, until it is live.
-    const ACTIVATION_TRIES = 15;
-    const activation = useQuery({
-        queryKey: ['billing', 'checkout', checkoutId],
-        queryFn: () => billingApi.sync(),
-        enabled: Boolean(checkoutId),
-        retry: false,
-        staleTime: Infinity,
-        refetchOnWindowFocus: false,
-        refetchInterval: (query) => {
-            const found = query.state.data?.subscription;
-            if (found && !found.endedAt) return false;
-            return query.state.dataUpdateCount + query.state.errorUpdateCount >= ACTIVATION_TRIES
-                ? false
-                : 2_000;
-        },
-    });
+    // Back from checkout: Polar is re-read until a sync shows the plan live, a
+    // bounded number of times (lib/checkout-return.ts). Nothing says the payment
+    // was received before then.
+    const [syncTries, setSyncTries] = useState(0);
+    const [synced, setSynced] = useState<BillingSubscription | null>(null);
+    const [syncLimited, setSyncLimited] = useState(false);
+    const returning = checkoutId
+        ? checkoutReturn({ synced, tries: syncTries, limited: syncLimited })
+        : null;
+    const syncing = returning?.kind === 'finishing';
     useEffect(() => {
-        const next = activation.data;
-        if (!next) return;
-        settle(next);
-        if (next.subscription && !next.subscription.endedAt) {
-            cue('success');
-            setNotice({
-                tone: 'success',
-                text: `You’re on ${next.subscription.productName}. Thank you.`,
-            });
-            void navigate({ to: '/app/billing', search: {}, replace: true });
-        }
-    }, [activation.data, navigate, settle]);
-    // Read from the cache: the observer result doesn't carry the counts.
-    const activationState = checkoutId
-        ? queryClient.getQueryState(['billing', 'checkout', checkoutId])
-        : undefined;
-    const activationTries =
-        (activationState?.dataUpdateCount ?? 0) + (activationState?.errorUpdateCount ?? 0);
-    const stillActivating = Boolean(checkoutId) && activationTries >= ACTIVATION_TRIES && !live;
+        if (!checkoutId || !syncing) return;
+        const timer = setTimeout(
+            () => {
+                void billingApi
+                    .sync()
+                    .then((next) => {
+                        settle(next);
+                        setSynced(next.subscription);
+                    })
+                    .catch((error: unknown) => {
+                        if (isRateLimited(error)) setSyncLimited(true);
+                    })
+                    .finally(() => setSyncTries((n) => n + 1));
+            },
+            syncTries === 0 ? 0 : CHECKOUT_SYNC_INTERVAL_MS,
+        );
+        return () => clearTimeout(timer);
+    }, [checkoutId, syncing, syncTries, settle]);
+    useEffect(() => {
+        if (returning?.kind !== 'received') return;
+        cue('success');
+        setNotice(checkoutNotice(returning));
+        void navigate({ to: '/app/billing', search: {}, replace: true });
+        // Once per checkout: `returning` is rebuilt every render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [returning?.kind, navigate]);
 
     // Back from Polar restores this page with `busy` still set.
     usePageRestored(() => setBusy(null));
@@ -289,24 +310,19 @@ function BillingPage() {
     const overdue = live?.status === 'past_due';
     const shown =
         notice ??
-        (activating && !stillActivating
-            ? { tone: 'info' as const, busy: true, text: 'Payment received. Turning on your plan…' }
-            : stillActivating
+        (returning && returning.kind !== 'received'
+            ? checkoutNotice(returning)
+            : live?.cancelAtPeriodEnd
               ? {
-                    tone: 'warning' as const,
-                    text: 'Payment received, but the plan is still turning on. Refresh in a minute.',
+                    tone: 'quiet' as const,
+                    text: `Your plan ends on ${longDay(live.currentPeriodEnd)}. Resume any time before then to keep it.`,
                 }
-              : live?.cancelAtPeriodEnd
+              : !selling
                 ? {
                       tone: 'quiet' as const,
-                      text: `Your plan ends on ${longDay(live.currentPeriodEnd)}. Resume any time before then to keep it.`,
+                      text: 'This HushOS server doesn’t sell plans. Ask whoever runs it if you need more room.',
                   }
-                : !selling
-                  ? {
-                        tone: 'quiet' as const,
-                        text: 'This HushOS server doesn’t sell plans. Ask whoever runs it if you need more room.',
-                    }
-                  : null);
+                : null);
 
     return (
         <div className="flex flex-col pb-10">
@@ -314,7 +330,7 @@ function BillingPage() {
             <div className="flex max-w-4xl flex-col gap-9 px-5 sm:px-8">
                 {shown && (
                     <Notice tone={shown.tone} busy={'busy' in shown && shown.busy}>
-                        {shown.text}
+                        <WithSupportLink text={shown.text} />
                     </Notice>
                 )}
 

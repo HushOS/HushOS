@@ -636,6 +636,20 @@ describe('reconcileCustomer', () => {
         await billing.reconcileCustomer(userId);
         expect(await billingRepository.getCustomer(userId)).toBeNull();
     });
+
+    test('a person’s sync is rate-limited per person, and a refused one asks Polar nothing', async () => {
+        const [first, second] = await Promise.all([createTestAccount(), createTestAccount()]);
+        const user = (userId: string) => ({ id: userId, name: 'Test', email: 'x@hushos.test' });
+        subscribe(first.userId, { id: 'sub_e' });
+        for (let index = 0; index < 10; index++) await billing.sync(user(first.userId));
+        polar.calls = [];
+        await expect(billing.sync(user(first.userId))).rejects.toMatchObject({ status: 429 });
+        expect(polar.calls).toEqual([]);
+        // Someone else's budget is their own.
+        await expect(billing.sync(user(second.userId))).resolves.toMatchObject({
+            subscription: null,
+        });
+    });
 });
 
 describe('handleWebhook', () => {
