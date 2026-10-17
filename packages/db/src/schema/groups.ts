@@ -431,9 +431,9 @@ export const groupAreaCommitments = pgTable(
     'group_area_commitments',
     {
         commitment: bytea('commitment').primaryKey(),
-        groupId: uuid('group_id')
-            .notNull()
-            .references(() => groups.id, { onDelete: 'cascade' }),
+        // No foreign key: a commitment outlives its group, so a key a deleted group used is
+        // never another group's either.
+        groupId: uuid('group_id').notNull(),
         rosterVersion: integer('roster_version').notNull(),
     },
     (table) => [check('group_area_commitments_valid', sql`octet_length(${table.commitment}) = 32`)],

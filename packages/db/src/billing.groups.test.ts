@@ -11,7 +11,7 @@ const billing = await import('./billing');
 const { db } = await import('./client');
 const { getStorage } = await import('./drive');
 const { deletionBlockers } = await import('./groups');
-const { groupBillingCustomers, groups, workspaceStorage } = await import('./schema');
+const { groupBillingCustomers, groups, workspaceStorage, workspaces } = await import('./schema');
 
 /*
  * A family's plan as billing writes it, and the pool Drive reads from it: the
@@ -109,6 +109,29 @@ describe('the pool', () => {
                 reserved: 30n,
                 free: 10n,
             });
+    });
+
+    test('a deleted family folder stops drawing from the pool before its purge', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: userId,
+            areas: 2,
+            pooled: true,
+        });
+        await apply(groupId, [plan({ quotaBytes: 100n })]);
+        await setBytes(areaIds[0]!, 60n, 30n);
+        expect((await getStorage(areaIds[1]!))?.free).toBe(10n);
+        // Deleted, not yet purged: its storage row still holds the bytes.
+        await db
+            .update(workspaces)
+            .set({ deletedAt: new Date() })
+            .where(eq(workspaces.id, areaIds[0]!));
+        expect(await getStorage(areaIds[1]!)).toMatchObject({
+            allowance: 100n,
+            used: 0n,
+            reserved: 0n,
+            free: 100n,
+        });
     });
 
     test('an area’s own base allowance is not added to the pool', async () => {

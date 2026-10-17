@@ -1276,7 +1276,7 @@ export async function listTrash(input: { workspaceId: string; after?: string; li
  * What a workspace may still take. A group area whose group has a storage
  * pool (billing wrote one, docs/groups-design.md 3.5) reads the pool instead
  * of its own allowance: the pool's quota against the used and reserved bytes
- * of every area of the group. The pool row is locked first, so reservations
+ * of every live area of the group (a deleted one counts no more). The pool row is locked first, so reservations
  * in two areas of one group cannot both spend the same free bytes; each area
  * still counts its own bytes, so purges and releases are unchanged.
  */
@@ -1312,7 +1312,9 @@ async function freeBytes(tx: Tx, workspaceId: string) {
             })
             .from(workspaceStorage)
             .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
-            .where(eq(workspaces.groupId, groupId));
+            // A deleted family folder no longer draws from the pool (docs/groups-design.md 2.10):
+            // its bytes wait for the purge, and nothing can be written there meanwhile.
+            .where(and(eq(workspaces.groupId, groupId), isNull(workspaces.deletedAt)));
         const used = BigInt(totals?.used ?? '0');
         const reserved = BigInt(totals?.reserved ?? '0');
         // Past the plan's period and grace, the pool is empty until billing writes it again.

@@ -211,7 +211,10 @@ type Fork = Extract<CryptoResults['groupAccept'], { status: 'fork' }>;
  *   their outbox rows go only once the record is written, and never the row
  *   of `owner` (a creation, whose seed stays until the settings pin is);
  * - a record that does not open (`record-unreadable`, after a master-key
- *   rotation) is deleted, and the caller starts over without it.
+ *   rotation) is deleted, and the caller starts over without it;
+ * - a record the worker refuses even from version 1 is left out, and the
+ *   chain accepted from version 1 against the settings pin alone; the record
+ *   is overwritten only by that acceptance.
  */
 export async function acceptServed(
     ctx: GroupContext,
@@ -220,24 +223,35 @@ export async function acceptServed(
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
     const row = await ctx.store.chain(ctx.userId, groupId);
-    const accept = async (after: number) => {
+    const accept = async (after: number, record: string | null) => {
         const { served } = await fetchServed(ctx, groupId, after);
         return ctx.rpc('groupAccept', {
             userId: ctx.userId,
             groupId,
             served,
-            record: row?.envelope ?? null,
+            record,
             checkedAt: ctx.now().toISOString(),
             creating: options.creating ? { stagedEnvelope: options.creating } : null,
         });
     };
     let result: CryptoResults['groupAccept'];
     try {
-        result = await accept(row?.rosterVersion ?? 0);
+        result = await accept(row?.rosterVersion ?? 0, row?.envelope ?? null);
     } catch (error) {
         // The route's answer is the route's: only the worker's refusal is retried from version 1.
-        if (error instanceof GroupApiError || !row || row.rosterVersion === 0) throw error;
-        result = await accept(0);
+        if (error instanceof GroupApiError || !row) throw error;
+        try {
+            if (row.rosterVersion === 0) throw error;
+            result = await accept(0, row.envelope);
+        } catch (again) {
+            if (again instanceof GroupApiError) throw again;
+            // Refused with the record as a mark too: the record is what the worker refuses (one
+            // a newer release wrote, or a damaged one), and retrying with it would refuse the
+            // family on this device for good. Verified from version 1 against the settings pin
+            // instead, as after a master-key rotation; the record is replaced only once that
+            // acceptance holds, so a chain refused on its own merits costs the device nothing.
+            result = await accept(0, null);
+        }
     }
     if (result.status === 'record-unreadable') {
         await ctx.store.deleteChain(ctx.userId, groupId);

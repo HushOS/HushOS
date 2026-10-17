@@ -215,6 +215,43 @@ describe('syncing a family', () => {
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
     });
 
+    test('a record the worker refuses from version 1 too is left out, and replaced only by what is then accepted', async () => {
+        const h = harness({ head: 6 });
+        await knownFamily(h);
+        const asked = routeRosters(h);
+        const accept = h.results.groupAccept!;
+        // A record a newer release wrote: every acceptance it is a mark of is refused.
+        h.results.groupAccept = (input) => {
+            if (input.record) throw new Error('Invalid group chain cache.');
+            return accept(input);
+        };
+        expect((await syncGroup(h.ctx, GROUP)).status).toBe('accepted');
+        expect(asked).toEqual([5, 0, 0]);
+        expect(h.calls('groupAccept')).toMatchObject([
+            { record: 'record-5' },
+            { record: 'record-5' },
+            { record: null },
+        ]);
+        expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
+        // The settings pin was the mark, and stays.
+        expect(h.settings.doc.groups?.[GROUP]).toBeTruthy();
+    });
+
+    test('a chain refused on its own merits, record or not, keeps the record', async () => {
+        const h = harness({ head: 6 });
+        await knownFamily(h);
+        h.results.groupAccept = () => {
+            throw new Error('Invalid roster.');
+        };
+        await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow('Invalid roster.');
+        expect(h.calls('groupAccept')).toMatchObject([
+            { record: 'record-5' },
+            { record: 'record-5' },
+            { record: null },
+        ]);
+        expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
+    });
+
     test('with no settings pin either, an unreadable record leaves the family unchecked', async () => {
         const h = harness({ head: 6 });
         await knownFamily(h);
