@@ -7,6 +7,8 @@ import { createMemoryJournal } from './journal';
 import {
     backoffDelay,
     createTransferManager,
+    KEY_CHANGE_GAVE_UP,
+    VERSION_MOVED,
     type TransferManagerOptions,
     type UploadStash,
 } from './transfers';
@@ -97,14 +99,18 @@ function harness(
         refuseWrite?: (target: DriveNode) => string | null;
         waitsForKeyChange?: (target: DriveNode) => boolean;
         openNodes?: TransferManagerOptions['openNodes'];
+        keyChangePause?: TransferManagerOptions['keyChangePause'];
+        keyChangeGiveUpMs?: number;
+        onEvent?: TransferManagerOptions['onEvent'];
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
     const calls: string[] = [];
     /* The statement each signing call was asked for, in order. */
     const signed: { operation: string; signAs: string | undefined }[] = [];
-    /* The key epoch every created node was given. */
+    /* The key epoch every created node was given, and the parent epoch its key was wrapped under. */
     const givenEpochs: number[] = [];
+    const wrappedUnder: number[] = [];
     let inFlight = 0;
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
@@ -118,12 +124,14 @@ function harness(
             case 'driveCreateNodes':
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
+                    wrappedUnder.push(n.parentKeyEpoch);
                     signed.push({ operation, signAs: n.signAs });
                 }
                 return {
+                    // A node key's envelope names the parent epoch it was wrapped under.
                     nodes: (input as CryptoRequests['driveCreateNodes']).nodes.map((n) => ({
                         id: n.id,
-                        keyEnvelope: 'ke',
+                        keyEnvelope: `ke-under-${n.parentKeyEpoch}`,
                         metadataEnvelope: 'me',
                     })),
                 } as CryptoResults[K];
@@ -136,9 +144,10 @@ function harness(
                         signAs: (input as CryptoRequests['driveUploadPrepare']).signAs,
                     });
                 const chunks = Math.max(1, Math.ceil(plaintextSize / CHUNK));
+                // Every prepare mints a fresh content key, so its envelope is never the same twice.
                 return {
                     contentNonce: 'n',
-                    contentKeyEnvelope: 'c',
+                    contentKeyEnvelope: `c-${calls.filter((call) => call === operation).length}`,
                     chunkCount: chunks,
                     ciphertextSize: plaintextSize + 16 * chunks,
                     thumbnail: null,
@@ -322,6 +331,9 @@ function harness(
         refuseWrite: options.refuseWrite,
         waitsForKeyChange: options.waitsForKeyChange,
         keyChangeRecheckMs: 1_000,
+        keyChangePause: options.keyChangePause,
+        keyChangeGiveUpMs: options.keyChangeGiveUpMs,
+        onEvent: options.onEvent,
         onPublished: (n) => published.push(n.id),
         // Ids as the server derives them, minted without Web Crypto's real-time digest,
         // which fake timers would never let resolve.
@@ -351,6 +363,7 @@ function harness(
         calls,
         signed,
         givenEpochs,
+        wrappedUnder,
         server,
         journal,
         published,
@@ -979,6 +992,389 @@ describe('journal and restore', () => {
         await settle(3_000);
         expect(h.item(id!).status).toBe('done');
         expect(h.item(id!).errorCode).toBeNull();
+    });
+});
+
+describe('a key change this device has not heard of (409 rotating)', () => {
+    /*
+     * A family folder, "trips", and the server's side of a key change walking
+     * it, judged as packages/db's beginUpload and attachUpload judge them: a new
+     * node there is refused as `rotating` while the walk has not reached the
+     * folder (its key epoch below the target), and as `stale` when its key is
+     * wrapped under any epoch but the folder's own. The app's own view
+     * (refuseWrite) never hears of the change: it started a moment after the
+     * file was queued, so only the server's answer says to wait.
+     */
+    function family(
+        options: Parameters<typeof harness>[0] & {
+            /* At this look, the walk finishes right after the folder was listed under its old key. */
+            raceAtLook?: number;
+        } = {},
+    ) {
+        const { raceAtLook, ...rest } = options;
+        // The folder, and a file in it, as the server holds them; the walk re-keys both.
+        const folder = { epoch: 1, target: null as number | null, file: 1, version: 'v1' };
+        const at = () => ({ ...node('trips', 'root'), keyEpoch: folder.epoch });
+        const file = () => ({
+            ...node('old', 'trips'),
+            kind: 'file' as const,
+            keyEpoch: folder.file,
+            currentVersion: { id: folder.version } as DriveNode['currentVersion'],
+        });
+        const pauses: number[] = [];
+        let looks = 0;
+        const walked = () => {
+            folder.epoch = folder.target ?? folder.epoch;
+            folder.file = folder.target ?? folder.file;
+            folder.target = null;
+        };
+        const h = harness({
+            // The folder (and the file replaced) as the server lists them now.
+            openNodes: async (entry) => {
+                const listed = {
+                    parent: at(),
+                    ...('replacesId' in entry && entry.replacesId ? { replaces: file() } : {}),
+                };
+                if (++looks === raceAtLook) walked();
+                return listed;
+            },
+            // The app's pause: a sync of the family, a second here.
+            keyChangePause: async (_target, attempt) => {
+                pauses.push(attempt);
+                await new Promise((resolve) => setTimeout(resolve, 1_000));
+            },
+            ...rest,
+        });
+        const rotating = () =>
+            new DriveApiError(
+                'Keys are being rotated for this folder. Try again in a moment.',
+                'rotating',
+                409,
+            );
+        const stale = () =>
+            new DriveApiError(
+                'This item changed since you last saw it. Refresh and try again.',
+                'stale',
+                409,
+            );
+        const walking = (epoch: number) => folder.target !== null && epoch < folder.target;
+        // As packages/db judges a node in trips: `rotating` first, then `stale`.
+        const judge = (parentKeyEpoch: number) => {
+            if (walking(folder.epoch)) throw rotating();
+            if (parentKeyEpoch !== folder.epoch) throw stale();
+        };
+        /* Every begin sent, refused ones included. */
+        const tried: Parameters<DriveApi['beginUpload']>[1][] = [];
+        const api = h.api as unknown as DriveApi;
+        const begin = api.beginUpload.bind(api);
+        api.beginUpload = (async (ws, input) => {
+            tried.push(input);
+            if (input.node.existing) {
+                if (walking(folder.file)) throw rotating();
+                if (input.node.keyEpoch !== folder.file) throw stale();
+                if (input.node.expectedVersionId !== folder.version) throw stale();
+            } else if (input.node.parentId === 'trips') judge(input.node.parentKeyEpoch);
+            return begin(ws, input);
+        }) as typeof begin;
+        const attach = api.attachUpload.bind(api);
+        api.attachUpload = (async (ws, id, input) => {
+            if (input.mode === 'sibling' && input.node.parentId === 'trips')
+                judge(input.node.parentKeyEpoch);
+            return attach(ws, id, input);
+        }) as typeof attach;
+        return {
+            ...h,
+            api,
+            at,
+            file,
+            folder,
+            pauses,
+            tried,
+            // The key change starts: the folder keeps its old key until the walk reaches it.
+            start: (target: number) => {
+                folder.target = target;
+            },
+            // The walk re-keys the folder (and the file) and the run ends.
+            walked,
+        };
+    }
+
+    test('a refused begin waits, says so, and lands by itself once the walk is done, sealed afresh under the folder’s new key', async () => {
+        const f = family();
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        f.start(5);
+        await settle(500);
+        // Refused once, under the old key: it waits rather than failing, and holds no slot.
+        expect(f.tried).toHaveLength(1);
+        expect(f.tried[0]!.node).toMatchObject({ parentKeyEpoch: 1 });
+        expect(f.item(id!)).toMatchObject({ status: 'preparing', error: null });
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        expect(f.state().active).toBe(0);
+        // Still walking: refused again at each look, never failed, nothing reserved.
+        await settle(5_000);
+        expect(f.item(id!).status).toBe('preparing');
+        expect(f.server.uploads.size).toBe(0);
+        // The walk reaches the folder: nobody presses anything, and it lands.
+        f.walked();
+        await settle(5_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(f.server.begins).toHaveLength(1);
+        const landed = f.server.begins[0]!;
+        // The node's key wrapped under the folder's new key, and a content key never sent before.
+        expect(landed.node).toMatchObject({
+            existing: false,
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+        const refused = f.tried.slice(0, -1).map((input) => input.contentKeyEnvelope);
+        expect(refused).not.toContain(landed.contentKeyEnvelope);
+        expect(f.pauses[0]).toBe(1);
+    });
+
+    test('a refused attach waits the same way, then attaches the sent bytes under the folder’s new key', async () => {
+        const f = family({ conflict: true });
+        // The key change lands while the bytes are in flight: completing finds the node moved on.
+        const complete = f.api.completeUpload.bind(f.api);
+        f.api.completeUpload = (async (...args: Parameters<typeof complete>) => {
+            f.start(5);
+            return complete(...args);
+        }) as typeof complete;
+        const [id] = f.manager.enqueue([{ file: fakeFile(2 * CHUNK), parent: f.at() }]);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'completing', error: null });
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        expect(f.state().active).toBe(0);
+        expect(f.server.attached).toEqual([]);
+        f.walked();
+        await settle(5_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(f.server.attached).toHaveLength(1);
+        const attached = f.server.attached[0]!.input as {
+            mode: string;
+            node: { id: string; parentKeyEpoch: number; keyEnvelope: string };
+            contentKeyEnvelope: string;
+        };
+        expect(attached.mode).toBe('sibling');
+        expect(attached.node).toMatchObject({ parentKeyEpoch: 5, keyEnvelope: 'ke-under-5' });
+        expect(attached.contentKeyEnvelope).toBe(`rewrapped-under-${attached.node.id}`);
+        // Attaching never sends the bytes again.
+        expect(f.calls.filter((call) => call === 'driveUploadSend')).toHaveLength(2);
+    });
+
+    test('a retry after a key change looks the folder up again and seals afresh, never resending the old envelopes', async () => {
+        const f = family();
+        const begin = f.api.beginUpload.bind(f.api);
+        let reachable = false;
+        f.api.beginUpload = (async (...args: Parameters<typeof begin>) => {
+            if (!reachable) throw new Error('Failed to fetch');
+            return begin(...args);
+        }) as typeof begin;
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(1_000);
+        expect(f.item(id!).status).toBe('failed');
+        // Meanwhile a key change re-keyed the folder and finished: nothing on this device says so.
+        f.start(5);
+        f.walked();
+        reachable = true;
+        await f.manager.retry(id!);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null });
+        expect(f.server.begins.at(-1)!.node).toMatchObject({
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+    });
+
+    test('a key change that never finishes gives up after the wait, cleanly; once it is done a retry lands', async () => {
+        const pauses: number[] = [];
+        const f = family({
+            keyChangeGiveUpMs: 60_000,
+            // An app whose pause never returns (a sync that hangs) must not hold the upload forever.
+            keyChangePause: (_target, attempt) => {
+                pauses.push(attempt);
+                return new Promise(() => {});
+            },
+        });
+        f.start(5);
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(30_000);
+        expect(f.item(id!).status).toBe('preparing');
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        await settle(31_000);
+        expect(f.item(id!)).toMatchObject({
+            status: 'failed',
+            error: KEY_CHANGE_GAVE_UP,
+            waitingFor: null,
+        });
+        // Nothing reserved on the server, and nothing tries again by itself.
+        expect(f.server.uploads.size).toBe(0);
+        const tried = f.tried.length;
+        await settle(10 * 60_000);
+        expect(f.tried).toHaveLength(tried);
+        expect(pauses).toEqual([1]);
+        // The walk ends after all: Retry seals afresh under the new key and lands.
+        f.walked();
+        await f.manager.retry(id!);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null });
+        expect(f.server.begins.at(-1)!.node).toMatchObject({ parentKeyEpoch: 5 });
+    });
+
+    test('a walk that reaches the folder between the look and the begin answers stale: looked at again, it still lands', async () => {
+        // The first look after the refusal lists the folder under its old key, and the walk ends
+        // right then: the begin sealed from that look is `stale`, not `rotating`.
+        const f = family({ raceAtLook: 1 });
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        f.start(5);
+        await settle(10_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(
+            f.tried.map((input) => (input.node as { parentKeyEpoch: number }).parentKeyEpoch),
+        ).toEqual([1, 1, 5]);
+        expect(f.server.begins.at(-1)!.node).toMatchObject({ keyEnvelope: 'ke-under-5' });
+    });
+
+    test('the same race at attach answers stale too, and the attach is looked at again and lands', async () => {
+        // Attach looks first under the old key (refused, rotating); its second look races the walk.
+        const f = family({ conflict: true, raceAtLook: 2 });
+        const complete = f.api.completeUpload.bind(f.api);
+        f.api.completeUpload = (async (...args: Parameters<typeof complete>) => {
+            f.start(5);
+            return complete(...args);
+        }) as typeof complete;
+        const [id] = f.manager.enqueue([{ file: fakeFile(2 * CHUNK), parent: f.at() }]);
+        await settle(10_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(f.server.attached).toHaveLength(1);
+        expect((f.server.attached[0]!.input as { node: unknown }).node).toMatchObject({
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+    });
+
+    test('a stale answer before any wait is not a key change: it fails as before', async () => {
+        const f = family();
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        // Re-keyed and finished before the upload began, unseen: nothing said to wait, so `stale`
+        // is the server's last word, as for any upload outside a family folder.
+        f.start(5);
+        f.walked();
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'failed', errorCode: 'stale' });
+        expect(f.tried).toHaveLength(1);
+    });
+
+    test('an upload discarded while it waits is gone for good: its wait ends without failing it or sending anything', async () => {
+        const events: string[] = [];
+        const f = family({
+            keyChangeGiveUpMs: 60_000,
+            // The give-up is what would fire later: a pause that never returns.
+            keyChangePause: () => new Promise(() => {}),
+            onEvent: (event) => events.push(`${event.type}:${event.item.id}`),
+        });
+        f.start(5);
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(1_000);
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        await f.manager.pause(id!);
+        await f.manager.discard(id!);
+        const tried = f.tried.length;
+        await settle(5 * 60_000);
+        expect(f.state().uploads).toEqual([]);
+        expect(events.filter((event) => event.startsWith('failed'))).toEqual([]);
+        expect(f.tried).toHaveLength(tried);
+        // Discarded while its begin is on the wire, which then fails: nothing answers for it.
+        const begin = f.api.beginUpload.bind(f.api);
+        f.api.beginUpload = (async () => {
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            throw new DriveApiError('Not enough storage for this file.', 'over-quota', 402);
+        }) as typeof begin;
+        f.walked();
+        const [other] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(100);
+        await f.manager.pause(other!);
+        await f.manager.discard(other!);
+        await settle(5_000);
+        expect(f.state().uploads).toEqual([]);
+        expect(events.filter((event) => event.startsWith('failed'))).toEqual([]);
+    });
+
+    test('uploads leaving a key-change wait take a slot to seal again, so no more than two run at once', async () => {
+        // Sends that take a while, and a begin that takes half a second: a slot held is visible.
+        let beginning = 0;
+        let most = 0;
+        const f = family({
+            send: (_objectId, index) =>
+                new Promise((resolve) =>
+                    setTimeout(
+                        () => resolve({ ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 }),
+                        10_000,
+                    ),
+                ),
+        });
+        const begin = f.api.beginUpload.bind(f.api);
+        f.api.beginUpload = (async (...args: Parameters<typeof begin>) => {
+            beginning++;
+            const uploading = f.state().uploads.filter((u) => u.status === 'uploading').length;
+            most = Math.max(most, beginning + uploading);
+            try {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                return await begin(...args);
+            } finally {
+                beginning--;
+            }
+        }) as typeof begin;
+        f.start(5);
+        const waiting = f.manager.enqueue(
+            [1, 2, 3].map((n) => ({ file: fakeFile(CHUNK, `trip-${n}.bin`), parent: f.at() })),
+        );
+        await settle(2_000);
+        // Waiting, they hold no slot: two uploads elsewhere start at once.
+        const elsewhere = f.manager.enqueue(
+            [1, 2].map((n) => ({
+                file: fakeFile(CHUNK, `home-${n}.bin`),
+                parent: node('root', null),
+            })),
+        );
+        await settle(2_000);
+        expect(elsewhere.map((id) => f.item(id).status)).toEqual(['uploading', 'uploading']);
+        f.walked();
+        await settle(60_000);
+        for (const id of [...waiting, ...elsewhere]) expect(f.item(id).status).toBe('done');
+        expect(most).toBeLessThanOrEqual(2);
+    });
+
+    test('a new version refused for a key change waits too, and lands under the file’s new key; one overtaken meanwhile is never overwritten', async () => {
+        const f = family();
+        const [id] = f.manager.enqueue([
+            { file: fakeFile(CHUNK, 'old'), parent: f.at(), replaces: f.file() },
+        ]);
+        f.start(5);
+        await settle(3_000);
+        expect(f.item(id!).status).toBe('preparing');
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        expect(f.tried[0]!.node).toMatchObject({ existing: true, keyEpoch: 1 });
+        f.walked();
+        await settle(5_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null });
+        expect(f.server.begins.at(-1)!.node).toMatchObject({
+            existing: true,
+            id: 'old',
+            keyEpoch: 5,
+            expectedVersionId: 'v1',
+        });
+        // Again, but someone else's version becomes current while this one waits.
+        const g = family();
+        const [late] = g.manager.enqueue([
+            { file: fakeFile(CHUNK, 'old'), parent: g.at(), replaces: g.file() },
+        ]);
+        g.start(5);
+        await settle(3_000);
+        g.folder.version = 'v2';
+        g.walked();
+        await settle(5_000);
+        expect(g.item(late!)).toMatchObject({ status: 'failed', error: VERSION_MOVED });
+        expect(g.server.begins).toEqual([]);
     });
 });
 

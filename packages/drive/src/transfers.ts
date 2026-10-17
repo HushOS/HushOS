@@ -1,4 +1,5 @@
 import type {
+    CryptoResults,
     NodeMetadata,
     SignatureForm,
     UploadPartProgress,
@@ -152,6 +153,20 @@ export type TransferManagerOptions = {
      */
     waitsForKeyChange?: (target: DriveNode) => boolean;
     keyChangeRecheckMs?: number;
+    /*
+     * One pause while an upload waits out a family folder's key change: between
+     * looks at a folder the app knows is waiting, and after the server refused
+     * a begin or an attach (409 rotating: the walk had not reached `target`,
+     * which the app may not have heard of yet). The app learns of the run, and
+     * of its end, and lets this device's own background walk join it; then it
+     * resolves, and the engine looks the folder (and the file it replaces) up
+     * again and seals the upload afresh under the keys it finds. `attempt`
+     * counts this upload's pauses from 1, for the app's backoff. Without it
+     * the engine waits `keyChangeRecheckMs` between looks.
+     */
+    keyChangePause?: (target: DriveNode, attempt: number) => Promise<void>;
+    /* How long an upload waits out a key change before it fails and says so (30 minutes). */
+    keyChangeGiveUpMs?: number;
     /* Called once a version is published; the app invalidates its folder listing. */
     onPublished?: (node: NodeView, parentId: string) => void;
     /*
@@ -212,6 +227,17 @@ type Internal = {
     fetchingUrls: Promise<void> | null;
     backoff: Set<ReturnType<typeof setTimeout>>;
     generation: number;
+    /*
+     * Look the folder (and the file replaced) up again before sealing: the
+     * snapshot held may be under keys a key change has replaced since (after
+     * a 409 rotating, or on a retry).
+     */
+    lookAgain: boolean;
+    /* Pauses waiting out a key change in this attempt, and when the first began; null when not waiting. */
+    keyChangePauses: number;
+    keyChangeSince: number | null;
+    /* In a pause between looks: the only part of a key-change wait that holds no slot. */
+    pausing: boolean;
 };
 
 /*
@@ -273,8 +299,28 @@ export function backoffDelay(attempt: number, random = Math.random) {
 
 /* How often an upload waiting for a family folder's key change looks the folder up again. */
 const KEY_CHANGE_RECHECK_MS = 5_000;
+/*
+ * How long an upload waits out a key change before it fails. A walk re-keys a
+ * family folder batch by batch, a large one for some minutes; one that has not
+ * finished in half an hour has stalled, and the person is told rather than left
+ * with an upload that never moves.
+ */
+const KEY_CHANGE_GIVE_UP_MS = 30 * 60_000;
+export const KEY_CHANGE_GAVE_UP =
+    'The family folder’s key change hasn’t finished, so this file wasn’t uploaded. Retry later.';
 
-/* The server's answer when the node moved on under an upload: attach, do not retry. */
+/* The server refused because a family folder's key change has not reached the folder (or the file). */
+function isRotating(error: unknown) {
+    return error instanceof DriveApiError && error.code === 'rotating';
+}
+/* The server refused envelopes under a key epoch that is no longer the node's (or its parent's). */
+function isStale(error: unknown) {
+    return error instanceof DriveApiError && error.code === 'stale';
+}
+/* A new version that waited out a key change, while someone else's version became current. */
+export const VERSION_MOVED =
+    'This file changed while the upload waited for a key change. Upload it again to replace the newer version.';
+
 /*
  * An upload's object before the worker has prepared it: suite 3's padded size
  * and chunk count for a file of `size` bytes with a thumbnail trailer of
@@ -393,11 +439,16 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     function isActive(u: Internal) {
         return (
-            // An upload waiting for a key change holds no slot: others go meanwhile.
-            ((u.item.status === 'preparing' || u.item.status === 'completing') &&
-                !u.item.waitingFor) ||
+            // An upload pausing for a key change holds no slot: others go meanwhile. Looking its
+            // folder up again and sealing afresh between pauses is work, and takes one.
+            ((u.item.status === 'preparing' || u.item.status === 'completing') && !u.pausing) ||
             u.item.status === 'uploading'
         );
+    }
+    /* Uploads leaving a key-change pause, each waiting for a slot to seal again in. */
+    const slotWaiters = new Set<() => void>();
+    function slotFreed() {
+        return new Promise<void>((resolve) => slotWaiters.add(resolve));
     }
     function tick() {
         const at = now();
@@ -463,7 +514,13 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     function fail(u: Internal, message: string, code: UploadItem['errorCode'] = null) {
         clearBackoff(u);
-        set(u, { status: 'failed', error: message, errorCode: code, finishedAt: now() });
+        set(u, {
+            status: 'failed',
+            error: message,
+            errorCode: code,
+            finishedAt: now(),
+            waitingFor: null,
+        });
         options.onEvent?.({ type: 'failed', item: u.item });
         void schedule();
     }
@@ -622,7 +679,9 @@ export function createTransferManager(options: TransferManagerOptions) {
      * `target` once nothing refuses it: a refusal that is only a family folder's
      * key change still on its way waits (looked up again every recheck), any
      * other refusal throws. Null when the upload was cancelled or restarted
-     * meanwhile. While it waits the upload says why and holds no slot.
+     * meanwhile. While it waits the upload says why and holds no slot; it keeps
+     * saying so until its begin or attach lands, since the server may still
+     * refuse it (keyChangeRefused).
      */
     async function untilWritable(
         u: Internal,
@@ -634,11 +693,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         let refused = refusalOf(parent, replaces);
         while (refused && waitsOf(parent, replaces)) {
             set(u, { waitingFor: refused });
-            void schedule();
-            await new Promise((resolve) =>
-                setTimeout(resolve, options.keyChangeRecheckMs ?? KEY_CHANGE_RECHECK_MS),
-            );
-            if (u.generation !== generation || u.item.status === 'cancelled') return null;
+            if (!(await pauseForKeyChange(u, generation, parent))) return null;
+            if (u.item.status === 'cancelled') return null;
             const fresh = await lookup().catch(() => null);
             if (u.generation !== generation) return null;
             if (fresh) {
@@ -647,9 +703,78 @@ export function createTransferManager(options: TransferManagerOptions) {
             }
             refused = refusalOf(parent, replaces);
         }
-        if (u.item.waitingFor) set(u, { waitingFor: null });
         if (refused) throw new Error(refused);
         return { parent, replaces };
+    }
+    /*
+     * One pause while `u` waits out a key change: the app's (which learns of
+     * the run and lets this device's walk join it), or a plain recheck. Never
+     * past the give-up: the first pause of an attempt starts the clock, and a
+     * pause that would run past it ends there and fails the upload, so nothing
+     * waits forever, however the app's pause behaves. The pause itself holds no
+     * slot; the look and the seal after it wait for one, so the queue never runs
+     * more than maxActiveFiles at once. False when the run was cancelled,
+     * discarded or started over meanwhile: it answers for nothing, not even the
+     * give-up.
+     */
+    async function pauseForKeyChange(u: Internal, generation: number, target: DriveNode) {
+        const current = () => u.generation === generation && uploads.get(u.item.id) === u;
+        if (!current()) return false;
+        const since = (u.keyChangeSince ??= now());
+        const deadline = since + (options.keyChangeGiveUpMs ?? KEY_CHANGE_GIVE_UP_MS);
+        if (now() >= deadline) throw new Error(KEY_CHANGE_GAVE_UP);
+        const attempt = ++u.keyChangePauses;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const giveUp = new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, deadline - now());
+        });
+        const pause = options.keyChangePause
+            ? options.keyChangePause(target, attempt).catch(() => {})
+            : new Promise<void>((resolve) =>
+                  setTimeout(resolve, options.keyChangeRecheckMs ?? KEY_CHANGE_RECHECK_MS),
+              );
+        u.pausing = true;
+        try {
+            void schedule();
+            await Promise.race([pause, giveUp]);
+            clearTimeout(timer);
+            if (!current()) return false;
+            if (now() >= deadline) throw new Error(KEY_CHANGE_GAVE_UP);
+            while ([...uploads.values()].filter(isActive).length >= maxActiveFiles) {
+                await slotFreed();
+                if (!current()) return false;
+            }
+            return true;
+        } finally {
+            clearTimeout(timer);
+            u.pausing = false;
+        }
+    }
+    /*
+     * The server refused a begin or an attach because a family folder's key
+     * change has not reached the folder or the file (409 rotating). The app may
+     * not have heard of it (it started a moment ago), so nothing on this device
+     * said to wait: the upload waits now, says so, and is looked up and sealed
+     * again once the pause ends. False when it was cancelled or restarted
+     * meanwhile.
+     */
+    async function keyChangeRefused(
+        u: Internal,
+        generation: number,
+        error: DriveApiError,
+        target: DriveNode,
+    ) {
+        set(u, { waitingFor: error.message });
+        if (!(await pauseForKeyChange(u, generation, target))) return false;
+        if (u.item.status === 'cancelled') return false;
+        u.lookAgain = true;
+        return true;
+    }
+    /* The upload got past a key change (or never met one): its wait, if any, is over. */
+    function keyChangeOver(u: Internal) {
+        u.keyChangePauses = 0;
+        u.keyChangeSince = null;
+        if (u.item.waitingFor) set(u, { waitingFor: null });
     }
     function waitsOf(parent: DriveNode, replaces: DriveNode | undefined) {
         const waits = options.waitsForKeyChange;
@@ -669,31 +794,6 @@ export function createTransferManager(options: TransferManagerOptions) {
         const workspaceId = workspaceOf(u);
         await mintIds(u, workspaceId);
         if (u.generation !== generation) return;
-        // Asked again here, right before a node or a content key is made: into the folder, or as
-        // a new version under the file's own key, either may be waiting for a key change.
-        let refused = refusalOf(parent, u.replaces);
-        if (refused && options.openNodes && u.queued) {
-            // The folder as it was when queued may be under an older key than it is now (the walk
-            // may have reached it since): looked up afresh, then asked again.
-            const fresh = await options.openNodes(u.queued);
-            if (u.generation !== generation) return;
-            parent = u.parent = fresh.parent;
-            if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
-            refused = refusalOf(parent, u.replaces);
-        }
-        // A key change still walking the folder: wait for it, then look again, rather than fail.
-        const queued = u.queued;
-        const lookup = options.openNodes;
-        if (refused && queued && lookup) {
-            const ready = await untilWritable(u, generation, { parent, replaces: u.replaces }, () =>
-                lookup(queued),
-            );
-            if (!ready) return;
-            parent = u.parent = ready.parent;
-            if (u.replaces && ready.replaces) u.replaces = ready.replaces;
-            refused = null;
-        }
-        if (refused) throw new Error(refused);
         const seeds = u.seeds!;
         const metadata: NodeMetadata = {
             name: u.item.name,
@@ -701,88 +801,162 @@ export function createTransferManager(options: TransferManagerOptions) {
             size: u.item.size,
             modified: file.lastModified ? new Date(file.lastModified).toISOString() : null,
         };
-        let node: Parameters<DriveApi['beginUpload']>[1]['node'];
-        let nodeEnvelopes: JournalEntry['node'] = null;
-        if (u.replaces) {
-            node = {
-                existing: true,
-                id: u.replaces.id,
-                keyEpoch: u.replaces.keyEpoch,
-                expectedVersionId: u.replaces.currentVersion?.id ?? null,
-            };
-            u.keyEpoch = u.replaces.keyEpoch;
-        } else {
-            const from = await takeEpoch(workspaceId);
-            const { nodes } = await rpc('driveCreateNodes', {
+        // Sealed, then begun; sealed again from a fresh look each time the server says a key
+        // change has not reached the folder yet (409 rotating), until it takes it or the wait
+        // gives up. Nothing the server refused is sent again: its envelopes are under keys the
+        // key change is replacing.
+        let sealed:
+            | {
+                  nodeEnvelopes: JournalEntry['node'];
+                  prepared: CryptoResults['driveUploadPrepare'];
+                  begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
+              }
+            | undefined;
+        while (!sealed) {
+            // Asked again here, right before a node or a content key is made: into the folder, or
+            // as a new version under the file's own key, either may be waiting for a key change.
+            let refused = refusalOf(parent, u.replaces);
+            if ((refused || u.lookAgain) && options.openNodes && u.queued) {
+                // The folder as it was when queued (or when the server last refused it) may be
+                // under an older key than it is now (the walk may have reached it since): looked
+                // up afresh, then asked again.
+                const fresh = await options.openNodes(u.queued);
+                if (u.generation !== generation) return;
+                // Looked at again for its keys, a replaced file must still be at the version this
+                // upload set out to replace: one someone else made meanwhile is never overwritten.
+                if (
+                    u.lookAgain &&
+                    u.replaces &&
+                    fresh.replaces &&
+                    (fresh.replaces.currentVersion?.id ?? null) !==
+                        (u.replaces.currentVersion?.id ?? null)
+                )
+                    throw new Error(VERSION_MOVED);
+                parent = u.parent = fresh.parent;
+                if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
+                u.lookAgain = false;
+                refused = refusalOf(parent, u.replaces);
+            }
+            // A key change still walking the folder: wait for it, then look again, rather than fail.
+            const queued = u.queued;
+            const lookup = options.openNodes;
+            if (refused && queued && lookup) {
+                const ready = await untilWritable(
+                    u,
+                    generation,
+                    { parent, replaces: u.replaces },
+                    () => lookup(queued),
+                );
+                if (!ready) return;
+                parent = u.parent = ready.parent;
+                if (u.replaces && ready.replaces) u.replaces = ready.replaces;
+                refused = null;
+            }
+            if (refused) throw new Error(refused);
+            let node: Parameters<DriveApi['beginUpload']>[1]['node'];
+            let nodeEnvelopes: JournalEntry['node'] = null;
+            if (u.replaces) {
+                node = {
+                    existing: true,
+                    id: u.replaces.id,
+                    keyEpoch: u.replaces.keyEpoch,
+                    expectedVersionId: u.replaces.currentVersion?.id ?? null,
+                };
+                u.keyEpoch = u.replaces.keyEpoch;
+            } else {
+                const from = await takeEpoch(workspaceId);
+                const { nodes } = await rpc('driveCreateNodes', {
+                    workspaceId,
+                    nodes: [
+                        {
+                            id: u.nodeId,
+                            kind: 'file',
+                            parentId: parent.id,
+                            parentKeyEpoch: parent.keyEpoch,
+                            keyEpoch: from,
+                            metadata,
+                            // A saved copy is signed by where it came from: saved from a link,
+                            // re-locked when the original did not verify, ordinary when it did.
+                            signAs: u.signAs.metadata,
+                        },
+                    ],
+                });
+                u.keyEpoch = from;
+                nodeEnvelopes = {
+                    keyEnvelope: nodes[0]!.keyEnvelope,
+                    metadataEnvelope: nodes[0]!.metadataEnvelope,
+                    metadataVersion: 1,
+                };
+                node = {
+                    existing: false,
+                    id: u.nodeId,
+                    idSeed: seeds.node!,
+                    parentId: parent.id,
+                    parentKeyEpoch: parent.keyEpoch,
+                    keyEpoch: from,
+                    keyEnvelope: nodeEnvelopes.keyEnvelope,
+                    metadataEnvelope: nodeEnvelopes.metadataEnvelope,
+                    metadataSignature: nodes[0]!.metadataSignature,
+                };
+            }
+            if (u.generation !== generation) return;
+            // The thumbnail is sealed as the object's trailer at prepare, so its render
+            // is waited for here: after this, nothing about the object changes.
+            const thumbnail = u.thumbnail ? await u.thumbnail : null;
+            if (u.generation !== generation) return;
+            // A fresh content key, under the node key just made (or the replaced file's key as
+            // just looked up): the worker forgets any it held for this object first.
+            const prepared = await rpc('driveUploadPrepare', {
                 workspaceId,
-                nodes: [
-                    {
-                        id: u.nodeId,
-                        kind: 'file',
-                        parentId: parent.id,
-                        parentKeyEpoch: parent.keyEpoch,
-                        keyEpoch: from,
-                        metadata,
-                        // A saved copy is signed by where it came from: saved from a link,
-                        // re-locked when the original did not verify, ordinary when it did.
-                        signAs: u.signAs.metadata,
-                    },
-                ],
+                nodeId: u.nodeId,
+                versionId: u.versionId,
+                objectId: u.objectId,
+                plaintextSize: u.item.size,
+                thumbnail:
+                    thumbnail && thumbnail.size
+                        ? new Uint8Array(await thumbnail.arrayBuffer())
+                        : null,
+                signAs: u.signAs.version,
             });
-            u.keyEpoch = from;
-            nodeEnvelopes = {
-                keyEnvelope: nodes[0]!.keyEnvelope,
-                metadataEnvelope: nodes[0]!.metadataEnvelope,
-                metadataVersion: 1,
-            };
-            node = {
-                existing: false,
-                id: u.nodeId,
-                idSeed: seeds.node!,
-                parentId: parent.id,
-                parentKeyEpoch: parent.keyEpoch,
-                keyEpoch: from,
-                keyEnvelope: nodeEnvelopes.keyEnvelope,
-                metadataEnvelope: nodeEnvelopes.metadataEnvelope,
-                metadataSignature: nodes[0]!.metadataSignature,
-            };
+            u.prepared = true;
+            if (u.generation !== generation) return;
+            // Padded: the object has the chunks of its bucket, which may be more than the file needs.
+            set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
+            let begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
+            try {
+                begun = await api.beginUpload(workspaceId, {
+                    node,
+                    versionId: u.versionId,
+                    versionIdSeed: seeds.version,
+                    objectId: u.objectId,
+                    objectIdSeed: seeds.object,
+                    contentKeyEnvelope: prepared.contentKeyEnvelope,
+                    versionSignature: prepared.versionSignature,
+                    contentNonce: prepared.contentNonce,
+                    contentSuite: CONTENT_SUITE,
+                    chunkCount: prepared.chunkCount,
+                    ciphertextSize: String(prepared.ciphertextSize),
+                });
+            } catch (error) {
+                // Without a way to look the folder up again there is nothing to seal afresh from.
+                if (!options.openNodes || !u.queued) throw error;
+                if (u.generation !== generation) return;
+                // The server asks `rotating` before `stale`: once this upload has waited, a walk
+                // that reached the folder between the look and the begin answers `stale`, and it
+                // is the same wait ending, looked at again within the same deadline.
+                if (!isRotating(error) && !(isStale(error) && u.keyChangePauses > 0)) throw error;
+                if (!(await keyChangeRefused(u, generation, error as DriveApiError, parent)))
+                    return;
+                continue;
+            }
+            sealed = { nodeEnvelopes, prepared, begun };
         }
-        if (u.generation !== generation) return;
-        // The thumbnail is sealed as the object's trailer at prepare, so its render
-        // is waited for here: after this, nothing about the object changes.
-        const thumbnail = u.thumbnail ? await u.thumbnail : null;
-        if (u.generation !== generation) return;
-        const prepared = await rpc('driveUploadPrepare', {
-            workspaceId,
-            nodeId: u.nodeId,
-            versionId: u.versionId,
-            objectId: u.objectId,
-            plaintextSize: u.item.size,
-            thumbnail:
-                thumbnail && thumbnail.size ? new Uint8Array(await thumbnail.arrayBuffer()) : null,
-            signAs: u.signAs.version,
-        });
-        u.prepared = true;
-        if (u.generation !== generation) return;
-        // Padded: the object has the chunks of its bucket, which may be more than the file needs.
-        set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
-        const begun = await api.beginUpload(workspaceId, {
-            node,
-            versionId: u.versionId,
-            versionIdSeed: seeds.version,
-            objectId: u.objectId,
-            objectIdSeed: seeds.object,
-            contentKeyEnvelope: prepared.contentKeyEnvelope,
-            versionSignature: prepared.versionSignature,
-            contentNonce: prepared.contentNonce,
-            contentSuite: CONTENT_SUITE,
-            chunkCount: prepared.chunkCount,
-            ciphertextSize: String(prepared.ciphertextSize),
-        });
+        const { nodeEnvelopes, prepared, begun } = sealed;
         if (u.generation !== generation) {
             await api.abortUpload(workspaceId, begun.upload.id).catch(() => {});
             return;
         }
+        keyChangeOver(u);
         u.uploadId = begun.upload.id;
         rememberUrls(u, begun.parts, begun.urlExpiresAt);
         u.entry = {
@@ -982,8 +1156,29 @@ export function createTransferManager(options: TransferManagerOptions) {
      * same node when the version begin expected is still current (its key was
      * rotated), otherwise as a new sibling, a conflict copy, so that nobody's
      * version is overwritten. The worker rewraps the content key it still holds.
+     * A family folder's key change the server says has not reached the folder or
+     * the file yet (409 rotating) is waited out, and the attach starts again from
+     * a fresh look, rewrapped under the keys it finds.
      */
     async function attach(u: Internal, generation: number) {
+        for (;;) {
+            try {
+                const result = await attachOnce(u, generation);
+                keyChangeOver(u);
+                return result;
+            } catch (error) {
+                if (u.generation !== generation) throw error;
+                // A late `stale` after a pause is the walk reaching the folder or the file between
+                // the look and the attach, as for a begin.
+                if (!isRotating(error) && !(isStale(error) && u.keyChangePauses > 0)) throw error;
+                const target = u.parent ?? u.replaces;
+                if (!target) throw error;
+                if (!(await keyChangeRefused(u, generation, error as DriveApiError, target)))
+                    throw new Error('Cancelled.');
+            }
+        }
+    }
+    async function attachOnce(u: Internal, generation: number) {
         const entry = u.entry;
         if (!u.uploadId || !entry || !options.openNodes)
             throw new Error('This file changed while it was uploading. Upload it again.');
@@ -1090,9 +1285,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                 const u = uploads.get(id)!;
                 if (u.item.status !== 'queued' || active >= maxActiveFiles || !u.file) continue;
                 active++;
+                const generation = u.generation;
                 void prepare(u)
                     .then(() => schedule())
                     .catch((error: unknown) => {
+                        // A run that was discarded or started over meanwhile answers for nothing.
+                        if (u.generation !== generation || uploads.get(u.item.id) !== u) return;
                         if (u.item.status === 'cancelled') return;
                         if (isLockError(error)) return locked();
                         fail(
@@ -1130,6 +1328,11 @@ export function createTransferManager(options: TransferManagerOptions) {
             }
         } finally {
             scheduling = false;
+            // After the queue took what it could: an upload leaving a key-change pause looks again.
+            for (const wake of Array.from(slotWaiters)) {
+                slotWaiters.delete(wake);
+                wake();
+            }
         }
     }
 
@@ -1162,6 +1365,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             fetchingUrls: null,
             backoff: new Set(),
             generation: 0,
+            lookAgain: false,
+            keyChangePauses: 0,
+            keyChangeSince: null,
+            pausing: false,
         };
     }
 
@@ -1534,6 +1741,12 @@ export function createTransferManager(options: TransferManagerOptions) {
         // A lost copy has nothing to retry with; the list keeps its row until removed.
         if (!u.file) return;
         u.attempts.clear();
+        // What failed may have met a key change: the folder and the file are looked up again and
+        // everything sealed afresh under the keys found, never sent again under the old ones, and
+        // a wait for a key change starts its clock again.
+        u.lookAgain = true;
+        u.keyChangePauses = 0;
+        u.keyChangeSince = null;
         if (u.uploadId && u.file) {
             try {
                 if (!u.prepared) await reopen(u);

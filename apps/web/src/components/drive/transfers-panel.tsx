@@ -92,7 +92,10 @@ function statusLine(item: UploadItem, offline: boolean) {
                 ? `Choose “${item.name}” again to finish`
                 : `Choose “${item.name}” again to finish · ${sent} kept`;
         case 'completing':
-            return 'Finishing';
+            // Sent, and attaching waits for a key change the server named, as a new upload does.
+            return item.waitingFor
+                ? `${FINISHING_KEY_CHANGE} · Waiting while this tab is open`
+                : 'Finishing';
         case 'done':
             return `Uploaded · ${formatBytes(item.size)}`;
         case 'failed':
