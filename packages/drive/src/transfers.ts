@@ -236,6 +236,8 @@ type Internal = {
     /* Pauses waiting out a key change in this attempt, and when the first began; null when not waiting. */
     keyChangePauses: number;
     keyChangeSince: number | null;
+    /* In a pause between looks: the only part of a key-change wait that holds no slot. */
+    pausing: boolean;
 };
 
 /*
@@ -311,6 +313,13 @@ export const KEY_CHANGE_GAVE_UP =
 function isRotating(error: unknown) {
     return error instanceof DriveApiError && error.code === 'rotating';
 }
+/* The server refused envelopes under a key epoch that is no longer the node's (or its parent's). */
+function isStale(error: unknown) {
+    return error instanceof DriveApiError && error.code === 'stale';
+}
+/* A new version that waited out a key change, while someone else's version became current. */
+export const VERSION_MOVED =
+    'This file changed while the upload waited for a key change. Upload it again to replace the newer version.';
 
 /*
  * An upload's object before the worker has prepared it: suite 3's padded size
@@ -430,11 +439,16 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     function isActive(u: Internal) {
         return (
-            // An upload waiting for a key change holds no slot: others go meanwhile.
-            ((u.item.status === 'preparing' || u.item.status === 'completing') &&
-                !u.item.waitingFor) ||
+            // An upload pausing for a key change holds no slot: others go meanwhile. Looking its
+            // folder up again and sealing afresh between pauses is work, and takes one.
+            ((u.item.status === 'preparing' || u.item.status === 'completing') && !u.pausing) ||
             u.item.status === 'uploading'
         );
+    }
+    /* Uploads leaving a key-change pause, each waiting for a slot to seal again in. */
+    const slotWaiters = new Set<() => void>();
+    function slotFreed() {
+        return new Promise<void>((resolve) => slotWaiters.add(resolve));
     }
     function tick() {
         const at = now();
@@ -679,9 +693,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         let refused = refusalOf(parent, replaces);
         while (refused && waitsOf(parent, replaces)) {
             set(u, { waitingFor: refused });
-            void schedule();
-            await pauseForKeyChange(u, parent);
-            if (u.generation !== generation || u.item.status === 'cancelled') return null;
+            if (!(await pauseForKeyChange(u, generation, parent))) return null;
+            if (u.item.status === 'cancelled') return null;
             const fresh = await lookup().catch(() => null);
             if (u.generation !== generation) return null;
             if (fresh) {
@@ -698,9 +711,15 @@ export function createTransferManager(options: TransferManagerOptions) {
      * the run and lets this device's walk join it), or a plain recheck. Never
      * past the give-up: the first pause of an attempt starts the clock, and a
      * pause that would run past it ends there and fails the upload, so nothing
-     * waits forever, however the app's pause behaves.
+     * waits forever, however the app's pause behaves. The pause itself holds no
+     * slot; the look and the seal after it wait for one, so the queue never runs
+     * more than maxActiveFiles at once. False when the run was cancelled,
+     * discarded or started over meanwhile: it answers for nothing, not even the
+     * give-up.
      */
-    async function pauseForKeyChange(u: Internal, target: DriveNode) {
+    async function pauseForKeyChange(u: Internal, generation: number, target: DriveNode) {
+        const current = () => u.generation === generation && uploads.get(u.item.id) === u;
+        if (!current()) return false;
         const since = (u.keyChangeSince ??= now());
         const deadline = since + (options.keyChangeGiveUpMs ?? KEY_CHANGE_GIVE_UP_MS);
         if (now() >= deadline) throw new Error(KEY_CHANGE_GAVE_UP);
@@ -714,12 +733,22 @@ export function createTransferManager(options: TransferManagerOptions) {
             : new Promise<void>((resolve) =>
                   setTimeout(resolve, options.keyChangeRecheckMs ?? KEY_CHANGE_RECHECK_MS),
               );
+        u.pausing = true;
         try {
+            void schedule();
             await Promise.race([pause, giveUp]);
+            clearTimeout(timer);
+            if (!current()) return false;
+            if (now() >= deadline) throw new Error(KEY_CHANGE_GAVE_UP);
+            while ([...uploads.values()].filter(isActive).length >= maxActiveFiles) {
+                await slotFreed();
+                if (!current()) return false;
+            }
+            return true;
         } finally {
             clearTimeout(timer);
+            u.pausing = false;
         }
-        if (now() >= deadline) throw new Error(KEY_CHANGE_GAVE_UP);
     }
     /*
      * The server refused a begin or an attach because a family folder's key
@@ -736,9 +765,8 @@ export function createTransferManager(options: TransferManagerOptions) {
         target: DriveNode,
     ) {
         set(u, { waitingFor: error.message });
-        void schedule();
-        await pauseForKeyChange(u, target);
-        if (u.generation !== generation || u.item.status === 'cancelled') return false;
+        if (!(await pauseForKeyChange(u, generation, target))) return false;
+        if (u.item.status === 'cancelled') return false;
         u.lookAgain = true;
         return true;
     }
@@ -794,6 +822,16 @@ export function createTransferManager(options: TransferManagerOptions) {
                 // up afresh, then asked again.
                 const fresh = await options.openNodes(u.queued);
                 if (u.generation !== generation) return;
+                // Looked at again for its keys, a replaced file must still be at the version this
+                // upload set out to replace: one someone else made meanwhile is never overwritten.
+                if (
+                    u.lookAgain &&
+                    u.replaces &&
+                    fresh.replaces &&
+                    (fresh.replaces.currentVersion?.id ?? null) !==
+                        (u.replaces.currentVersion?.id ?? null)
+                )
+                    throw new Error(VERSION_MOVED);
                 parent = u.parent = fresh.parent;
                 if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
                 u.lookAgain = false;
@@ -901,8 +939,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                 });
             } catch (error) {
                 // Without a way to look the folder up again there is nothing to seal afresh from.
-                if (!isRotating(error) || !options.openNodes || !u.queued) throw error;
+                if (!options.openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;
+                // The server asks `rotating` before `stale`: once this upload has waited, a walk
+                // that reached the folder between the look and the begin answers `stale`, and it
+                // is the same wait ending, looked at again within the same deadline.
+                if (!isRotating(error) && !(isStale(error) && u.keyChangePauses > 0)) throw error;
                 if (!(await keyChangeRefused(u, generation, error as DriveApiError, parent)))
                     return;
                 continue;
@@ -1125,7 +1167,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                 keyChangeOver(u);
                 return result;
             } catch (error) {
-                if (!isRotating(error) || u.generation !== generation) throw error;
+                if (u.generation !== generation) throw error;
+                // A late `stale` after a pause is the walk reaching the folder or the file between
+                // the look and the attach, as for a begin.
+                if (!isRotating(error) && !(isStale(error) && u.keyChangePauses > 0)) throw error;
                 const target = u.parent ?? u.replaces;
                 if (!target) throw error;
                 if (!(await keyChangeRefused(u, generation, error as DriveApiError, target)))
@@ -1240,9 +1285,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                 const u = uploads.get(id)!;
                 if (u.item.status !== 'queued' || active >= maxActiveFiles || !u.file) continue;
                 active++;
+                const generation = u.generation;
                 void prepare(u)
                     .then(() => schedule())
                     .catch((error: unknown) => {
+                        // A run that was discarded or started over meanwhile answers for nothing.
+                        if (u.generation !== generation || uploads.get(u.item.id) !== u) return;
                         if (u.item.status === 'cancelled') return;
                         if (isLockError(error)) return locked();
                         fail(
@@ -1280,6 +1328,11 @@ export function createTransferManager(options: TransferManagerOptions) {
             }
         } finally {
             scheduling = false;
+            // After the queue took what it could: an upload leaving a key-change pause looks again.
+            for (const wake of Array.from(slotWaiters)) {
+                slotWaiters.delete(wake);
+                wake();
+            }
         }
     }
 
@@ -1315,6 +1368,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             lookAgain: false,
             keyChangePauses: 0,
             keyChangeSince: null,
+            pausing: false,
         };
     }
 

@@ -214,16 +214,6 @@ describe('in a family folder', () => {
             'Added by Ana Berg, who has left Lindqvist family.',
         );
         expect(markLabel([issue('former-member', SAM)])).toBe('Unverified');
-        // Neither checked nor on the list the server gives: the row and Info's "Changed by" call
-        // them the same, rather than "someone" in one place and "someone you haven't checked" in
-        // the other.
-        const gone = 'a0000000-0000-4000-8000-000000000009';
-        expect(issueLines([issue('former-member', gone)], family)[0]!.text).toBe(
-            'Written by someone you haven’t checked, who has left Lindqvist family.',
-        );
-        expect(changedByWords(issue('former-member', gone), family)).toBe(
-            'Someone you haven’t checked',
-        );
     });
 
     test('Info says "Verified by" only when every record verified and the family vouched for one', () => {

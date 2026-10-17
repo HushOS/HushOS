@@ -1,4 +1,4 @@
-import type { DriveNode } from '@hushos/drive/client';
+import type { DriveClient, DriveNode } from '@hushos/drive/client';
 import { createIndexedDbJournal, type JournalEntry, type QueuedEntry } from '@hushos/drive/journal';
 import {
     createTransferManager,
@@ -37,10 +37,32 @@ export function bindTransfersToQueries(client: QueryClient) {
  * node from the envelopes the journal kept. A file that was only waiting has no
  * node yet and needs its parent (and the file it replaces) looked up.
  */
-async function openNodes(entry: JournalEntry | QueuedEntry) {
+/*
+ * One listing of a folder shared by every upload that looks it up within a
+ * couple of seconds: a hundred files waiting out a key change in one folder,
+ * each looking again after its pause, fetch it once a round, not a hundred
+ * times. A failed fetch is not kept.
+ */
+const LOOK_SHARED_MS = 2_000;
+const looks = new Map<string, { at: number; listing: ReturnType<DriveClient['listFolder']> }>();
+function lookUp(workspaceId: string, folderId: string) {
+    const key = `${workspaceId}:${folderId}`;
+    const held = looks.get(key);
+    if (held && Date.now() - held.at < LOOK_SHARED_MS) return held.listing;
     // A family folder's upload is opened by that folder's client, which checks by its member list.
+    const listing = clientFor(workspaceId).listFolder(folderId);
+    looks.set(key, { at: Date.now(), listing });
+    listing.catch(() => {
+        if (looks.get(key)?.listing === listing) looks.delete(key);
+    });
+    for (const [other, look] of looks)
+        if (Date.now() - look.at >= LOOK_SHARED_MS) looks.delete(other);
+    return listing;
+}
+
+async function openNodes(entry: JournalEntry | QueuedEntry) {
     const client = clientFor(entry.workspaceId);
-    const listing = await client.listFolder(entry.parentId);
+    const listing = await lookUp(entry.workspaceId, entry.parentId);
     if (!('uploadId' in entry)) {
         const replaces = entry.replacesId
             ? listing.children.find((child) => child.id === entry.replacesId)
