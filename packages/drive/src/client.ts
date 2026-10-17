@@ -13,6 +13,7 @@ import type {
 import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
+import { NOT_CARRIED } from '@hushos/crypto/protocol';
 import { Catalogue, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
@@ -1500,6 +1501,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         let done = 0;
         let cursor: string | null = null;
         let idle = 0;
+        // A node the worker would not carry into the new tree (design 2.10): only a manager clears it.
+        let notCarried = false;
         for (;;) {
             const work = await api.rotationWork(ws, rootId, cursor);
             if (work.done) break;
@@ -1587,7 +1590,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             const batch = [];
             for (const [index, result] of sealed.nodes.entries()) {
                 const source = work.nodes[index]!;
-                if (result.error !== undefined) continue;
+                if (result.error !== undefined) {
+                    if (result.error === NOT_CARRIED) notCarried = true;
+                    continue;
+                }
                 if (!result.rewrap && !result.metadataSignature && !result.metadataRekey)
                     throw new Error('The rotation could not sign what it sealed. Try again.');
                 batch.push({
@@ -1645,7 +1651,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             done += applied;
             onProgress?.(done);
             idle = applied ? 0 : idle + 1;
-            if (idle > 3) throw new Error('The rotation could not finish. Try again.');
+            if (idle > 3)
+                throw new Error(
+                    notCarried
+                        ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
+                        : 'The rotation could not finish. Try again.',
+                );
             // Everything applied: continue past the batch; otherwise start over so parents come first.
             cursor = applied === work.nodes.length ? work.nextCursor : null;
         }

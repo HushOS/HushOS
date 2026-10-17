@@ -65,3 +65,10 @@ export const GROUP_OPERATIONS = [
  */
 export const KEY_CHANGE_PENDING =
     'This folder’s keys changed: the key change has not reached it yet.';
+/*
+ * What the worker answers a walk handed a key it reached only through one the
+ * rotation replaces (design 2.10, F14): the item is not carried into the new
+ * tree, and the walk cannot finish while it is there.
+ */
+export const NOT_CARRIED =
+    'This item was added under a key the key change replaces, so it is not carried over.';

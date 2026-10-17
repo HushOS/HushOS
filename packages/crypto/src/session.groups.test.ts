@@ -22,13 +22,8 @@ import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './
 import { sealLinkSecret } from './links';
 import { decode, encode } from './keys';
 import type { GroupPin } from './pins';
-import { KEY_CHANGE_PENDING } from './protocol';
-import {
-    createCryptoSession,
-    NOT_CARRIED,
-    type CryptoRequests,
-    type CryptoResults,
-} from './session';
+import { KEY_CHANGE_PENDING, NOT_CARRIED } from './protocol';
+import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
 import { openAreaSelfGrant } from './workspace';
 import {
     openDeviceRecord,

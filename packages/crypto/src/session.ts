@@ -132,6 +132,7 @@ import {
     accountKeyContext,
     ENVELOPE_VERSION,
     KEY_CHANGE_PENDING,
+    NOT_CARRIED,
     KEY_STRETCHING,
     OPAQUE_IDENTIFIERS,
     type AccountKeyEnvelope,
@@ -919,9 +920,6 @@ export type SessionHooks = {
 export type WorkspaceSetup = { id: string; grant: WorkspaceKeyEnvelope };
 const KEYS_CHANGED = 'This folder’s keys changed. Reload to continue.';
 const AREA_ROOT = 'A family folder’s top level changes only with the family’s member list.';
-/* A walk handed a key it reached only through one the rotation replaces (design 2.10, F14). */
-export const NOT_CARRIED =
-    'This item was added under a key the key change replaces, so it is not carried over.';
 type Message = {
     [K in keyof CryptoRequests]: { id: number; operation: K; input: CryptoRequests[K] };
 }[keyof CryptoRequests];

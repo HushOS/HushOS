@@ -20,8 +20,8 @@ import { cue } from '@/lib/sounds';
 /*
  * "Delete family folder", for those who manage the family (groups design
  * 2.10): the folder's tombstone on the member list, sent at once. It is gone
- * for everyone straight away, and the server deletes its files after 30 days
- * (their space is freed only then).
+ * for everyone straight away, and the server deletes its files, normally after
+ * 30 days (a report's hold keeps them longer); their space is freed only then.
  * Deleting destroys no key: whoever kept copies or keys keeps them, as after
  * a removal, and the copy says so.
  */
@@ -64,7 +64,7 @@ export function DeleteFamilyFolderDialog({
                 type: 'success',
                 title: `“${folder.name}” is deleted`,
                 description:
-                    'Its files are deleted from the server after 30 days, and their space is freed then.',
+                    'Its files are deleted from the server, normally after 30 days, and their space is freed when they are.',
             });
             onOpenChange(false);
             onDeleted();
@@ -91,9 +91,9 @@ export function DeleteFamilyFolderDialog({
                     <AlertDialogTitle>Delete “{folder?.name}”?</AlertDialogTitle>
                     <AlertDialogDescription>
                         It disappears for everyone in {family} now. Its files are deleted from the
-                        server after 30 days, and their space is freed then. Anyone who kept copies
-                        or keys keeps them, as after someone is removed. The folder can’t be
-                        restored.
+                        server, normally after 30 days, and their space is freed when they are.
+                        Anyone who kept copies or keys keeps them, as after someone is removed. The
+                        folder can’t be restored.
                     </AlertDialogDescription>
                 </AlertDialogHeader>
                 {error && (
