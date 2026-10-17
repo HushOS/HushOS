@@ -1,4 +1,4 @@
-import { CryptoError } from './errors';
+import { SavedAccessError } from './errors';
 import { decode, encode } from './keys';
 
 export type RememberedAccount = {
@@ -50,18 +50,24 @@ export async function restoreAccountKey(bundle: RememberedAccount, deviceKey: Cr
         !Number.isSafeInteger(bundle.credentialVersion) ||
         bundle.credentialVersion < 1
     )
-        throw new CryptoError('This saved account-key version is not supported.');
-    const decrypted = await crypto.subtle.decrypt(
-        {
-            name: 'AES-GCM',
-            iv: decode(bundle.nonce, 12),
-            additionalData: context(bundle),
-            tagLength: 128,
-        },
-        deviceKey,
-        decode(bundle.encryptedKey, 48),
-    );
+        throw new SavedAccessError('This saved account-key version is not supported.');
+    let decrypted: ArrayBuffer;
+    try {
+        decrypted = await crypto.subtle.decrypt(
+            {
+                name: 'AES-GCM',
+                iv: decode(bundle.nonce, 12),
+                additionalData: context(bundle),
+                tagLength: 128,
+            },
+            deviceKey,
+            decode(bundle.encryptedKey, 48),
+        );
+    } catch {
+        // A malformed bundle, or one that fails authentication: another device key, or changed.
+        throw new SavedAccessError('The saved account key does not open with this device key.');
+    }
     const key = new Uint8Array(decrypted);
-    if (key.length !== 32) throw new CryptoError('Invalid saved account key.');
+    if (key.length !== 32) throw new SavedAccessError('Invalid saved account key.');
     return key;
 }

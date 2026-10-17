@@ -17,3 +17,15 @@ export class RefusedError extends CryptoError {
         this.name = 'RefusedError';
     }
 }
+
+/*
+ * The saved unlock and the device key given for it do not open (a wrong key, a changed or
+ * unsupported bundle). The one restore failure that is a verdict on the saved device access:
+ * the client erases it for this, and keeps it through anything else (a lock, a page left).
+ */
+export class SavedAccessError extends CryptoError {
+    constructor(message: string) {
+        super(message);
+        this.name = 'SavedAccessError';
+    }
+}
