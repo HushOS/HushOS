@@ -1151,6 +1151,46 @@ describe('a drop’s evidence', () => {
         });
         expect((await evidenceOf(metadata, k1)).bound).toBe(true);
     });
+
+    test('a row is whole or carries none of it: a partly filled one is refused', async () => {
+        const { doc, versionId } = await droppedFile();
+        const rows = await evidenceRows(doc.id);
+        const copy = (row: (typeof rows)[number], over: Partial<typeof row>) => {
+            const { id: _id, droppedAt: _at, ...rest } = row;
+            return db.insert(driveOriginDrops).values({ ...rest, ...over });
+        };
+        const refused = (write: Promise<unknown>) =>
+            expect(write.then(() => 'stored')).rejects.toBeDefined();
+        const metadata = rows.find((row) => row.versionId === null)!;
+        const version = rows.find((row) => row.versionId === versionId)!;
+        // Each part missing in turn from an otherwise whole row: a row that cannot rebuild the
+        // statement must not pass for evidence that can.
+        for (const missing of [
+            { previousEnvelope: null },
+            { previousKeyEpoch: null },
+            { nodeKind: null },
+        ])
+            await refused(copy(metadata, missing));
+        for (const missing of [
+            { previousEnvelope: null },
+            { previousKeyEpoch: null },
+            { objectId: null },
+            { contentSuite: null },
+        ])
+            await refused(copy(version, missing));
+        // A suite that does not match the envelope's length: 84 bytes are suites 2 and 3.
+        expect(version.previousEnvelope!.length).toBe(84);
+        await refused(copy(version, { contentSuite: 1 }));
+        // Whole rows, and the all-null rows recorded before these columns, still go in.
+        await copy(metadata, {});
+        await copy(version, { contentSuite: 3 });
+        await copy(version, {
+            previousEnvelope: null,
+            previousKeyEpoch: null,
+            objectId: null,
+            contentSuite: null,
+        });
+    });
 });
 
 describe('writes outside a rotation', () => {

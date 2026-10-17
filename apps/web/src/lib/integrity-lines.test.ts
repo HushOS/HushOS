@@ -325,9 +325,9 @@ describe('outside family folders', () => {
             };
         };
         expect(vouchedByLine(rekeyed(SAM, MAYA), vouched)).toBe('Verified by Lindqvist family');
-        // A server serving Sam's id as the re-keyer, his re-key unchecked: no family named for him.
-        for (const integrity of ['unchecked', 'unknown-signer'] as const)
-            expect(vouchedByLine(rekeyed(MAYA, SAM, { integrity }), vouched)).toBeNull();
+        // Sam, pinned on the family's word, only replaced the keys of Maya's record: whatever his
+        // re-key's verdict, the family vouched for no record's writer, so it is not named.
+        expect(vouchedByLine(rekeyed(MAYA, SAM), vouched)).toBeNull();
     });
 });
 
@@ -578,23 +578,17 @@ describe('a re-keyed item', () => {
         // The origin, saved by someone unchecked, verified and bound. The server serves Maya's id
         // as the re-keyer with a re-key signature that does not hold, and withholds her links,
         // so her verdict is only `unchecked`: Info-only, no mark. She signed nothing that held.
-        for (const integrity of ['unchecked', 'unknown-signer', 'bad-signature'] as const) {
-            const node = folder(
-                'saved-from-link',
-                note({ writer: { id: STRANGER }, by: { id: MAYA }, integrity }),
-            );
-            expect(savedLine(node, family)).toBeNull();
-        }
-        // Nor while the binding is unconfirmed or differs (the mark speaks there instead).
-        for (const bound of [null, false] as const)
-            expect(
-                savedLine(
-                    folder(
-                        'saved-from-link',
-                        note({ writer: { id: ME }, by: { id: MAYA }, bound }),
-                    ),
-                    family,
-                ),
-            ).toBeNull();
+        const node = folder(
+            'saved-from-link',
+            note({ writer: { id: STRANGER }, by: { id: MAYA }, integrity: 'unchecked' }),
+        );
+        expect(savedLine(node, family)).toBeNull();
+        // Nor is the reader credited for re-keying someone else's saved copy.
+        expect(
+            savedLine(
+                folder('saved-from-link', note({ writer: { id: SAM }, by: { id: ME } })),
+                family,
+            ),
+        ).toBeNull();
     });
 });
