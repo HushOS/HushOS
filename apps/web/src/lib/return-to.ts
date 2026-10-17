@@ -1,7 +1,8 @@
 /*
  * Where to go after signing in or signing up. Two carriers:
  *
- * - `?redirect=` on /login, for app pages. Only a same-site path is accepted
+ * - `?redirect=` on /login, for app pages and the few public pages worth
+ *   coming back to (signInReturn). Only a same-site path is accepted
  *   (one leading slash, no scheme, no host, no backslash, no control
  *   characters), so the parameter can never send anyone off-site.
  * - A saved return in local storage, for a shared link. A link's key lives
@@ -9,6 +10,8 @@
  *   storage survives the confirmation email opening in a new tab. It is used
  *   once, and ignored after an hour.
  */
+
+import { routePath } from '@/lib/analytics-paths';
 
 const STORAGE = 'hushos.return';
 const MAX_AGE_MS = 60 * 60 * 1000;
@@ -84,4 +87,32 @@ export function forgetReturn(now?: number) {
 /* Where a finished sign-in or sign-up goes: a saved return first, then `?redirect=`, then Home. */
 export function returnTarget(redirect?: string | null) {
     return takeReturn() ?? safeReturnPath(redirect) ?? '/app';
+}
+
+/*
+ * Public pages whose Sign in comes back to them, with everything under them; every other public
+ * page signs in to /app, so a new page goes there too until it is added here. A page whose key
+ * rides after the `#` is remembered in this browser, never put in a query string: a shared link,
+ * and a family invitation (a 404 or error page under either still shows the site header). The
+ * others come back through `?redirect=`: an offer page, whose signed-in view checks out with its
+ * discount, and the app itself, should its error page be what is showing. Not here: an invite
+ * link (/r/), which tells someone already signed in that it is for someone else.
+ */
+const KEYED = ['/s', '/join'];
+const RETURNS = ['/go', '/app'];
+
+/* What Sign in in the site header does from a page: nothing (to /app), a `?redirect=`, or a remembered return. */
+export function signInReturn(
+    pathname: string,
+    search = '',
+): { redirect?: string; remember: boolean } {
+    // As the router matches it: `/S/…` or `/%73/…` is a shared link too, with a key in its fragment.
+    const path = routePath(pathname);
+    if (path === null) return { remember: false };
+    const under = (pages: string[]) =>
+        pages.some((page) => path === page || path.startsWith(`${page}/`));
+    if (under(KEYED)) return { remember: true };
+    if (under(RETURNS))
+        return { redirect: safeReturnPath(pathname + search) ?? undefined, remember: false };
+    return { remember: false };
 }

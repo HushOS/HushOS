@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { rememberReturn, returnTarget, safeReturnPath, takeReturn } from './return-to';
+import {
+    rememberReturn,
+    returnTarget,
+    safeReturnPath,
+    signInReturn,
+    takeReturn,
+} from './return-to';
 
 /* The return address must stay on this site, and a link's key must go no further than this browser. */
 describe('return-to', () => {
@@ -64,5 +70,30 @@ describe('return-to', () => {
         expect(returnTarget('https://evil.example')).toBe('/app');
         rememberReturn('/s/abc#secret');
         expect(returnTarget('/app/contacts')).toBe('/s/abc#secret');
+    });
+
+    test('Sign in from a public page goes to the app; only listed pages come back', () => {
+        const toApp = { redirect: undefined, remember: false };
+        for (const page of ['/', '/pricing', '/blog', '/blog/a-post', '/security', '/terms'])
+            expect(signInReturn(page), page).toEqual(toApp);
+        // A prefix is a whole segment: these are not under /go, /s or /join.
+        for (const page of ['/gone', '/support', '/joiners', '/r/abc'])
+            expect(signInReturn(page), page).toEqual(toApp);
+        expect(signInReturn('/go/creator', '?x=1')).toEqual({
+            redirect: '/go/creator?x=1',
+            remember: false,
+        });
+        expect(signInReturn('/app/contacts')).toEqual({
+            redirect: '/app/contacts',
+            remember: false,
+        });
+    });
+
+    test('a shared link or an invitation is remembered, never put in the query string', () => {
+        const remembered = { remember: true };
+        // However the router would still match a shared link, it is one.
+        for (const page of ['/s/abc', '/S/abc', '/%73/abc', '//s/abc', '/join'])
+            expect(signInReturn(page, '?p=1'), page).toEqual(remembered);
+        expect(signInReturn('/%E0%A4%A')).toEqual({ remember: false });
     });
 });
