@@ -6,12 +6,15 @@ import { readFileSync } from 'node:fs';
 import {
     deviceSessionStatement,
     keysStatement,
+    metadataRekeyedStatement,
     metadataSigned,
     metadataStatement,
+    signedForm,
     successionStatement,
     verifyHybrid,
     verifySignature,
     verifySigned,
+    versionRekeyedStatement,
     versionSigned,
     versionStatement,
 } from './signatures';
@@ -401,5 +404,147 @@ describe('the device session statement', () => {
             attemptDigest: createHash('sha256').update(`${fixture.attemptToken}x`).digest(),
         });
         expect(verifySignature(publicKey, other, signature)).toBe(false);
+    });
+});
+
+/*
+ * The server is the third builder of the rekeyed statements (beside the web's
+ * and the Rust core's): it rebuilds them from the origin it copied and must
+ * produce the bytes the clients signed, byte for byte.
+ */
+describe('the rekeyed statements', () => {
+    type FixtureRecord = {
+        statement: Record<string, string | number>;
+        keyEpoch: number;
+        envelope: string;
+        origin: { envelope: string; signerId: string; signature: string; keyEnvelope: string };
+        rekeySignature: string;
+    };
+    const fixture = JSON.parse(
+        readFileSync(
+            new URL('../../../crates/hushos-core/fixtures/web.json', import.meta.url),
+            'utf8',
+        ),
+    ).rekeyed as {
+        rekeyer: { signingPublicKey: string };
+        metadata: FixtureRecord;
+        version: FixtureRecord;
+        metadataStatement: string;
+        versionStatement: string;
+    };
+    const bytes = (value: string) => Buffer.from(value, 'base64url');
+    const originOf = (record: FixtureRecord) => ({
+        envelope: bytes(record.origin.envelope),
+        signerId: record.origin.signerId,
+        signature: bytes(record.origin.signature),
+        keyEnvelope: bytes(record.origin.keyEnvelope),
+    });
+    const metadataOf = (record = fixture.metadata) =>
+        metadataRekeyedStatement(
+            {
+                workspaceId: record.statement.workspaceId as string,
+                nodeId: record.statement.nodeId as string,
+                kind: record.statement.kind as 'folder' | 'file',
+                metadataVersion: record.statement.metadataVersion as number,
+                metadataEnvelope: bytes(record.envelope),
+                keyEpoch: record.keyEpoch,
+            },
+            originOf(record),
+        );
+    const versionOf = (record = fixture.version) =>
+        versionRekeyedStatement(
+            {
+                workspaceId: record.statement.workspaceId as string,
+                nodeId: record.statement.nodeId as string,
+                versionId: record.statement.versionId as string,
+                objectId: record.statement.objectId as string,
+                contentSuite: record.statement.contentSuite as number,
+                contentKeyEnvelope: bytes(record.envelope),
+                keyEpoch: record.keyEpoch,
+            },
+            originOf(record),
+        );
+    const rekeyer = bytes(fixture.rekeyer.signingPublicKey);
+
+    test('are the bytes the web wrote into the core fixture, and the re-keyer’s signatures hold here', () => {
+        // The fixture's origin signer is upper case: the statement lowercases it, as every id.
+        expect(fixture.metadata.origin.signerId).not.toBe(
+            fixture.metadata.origin.signerId.toLowerCase(),
+        );
+        expect(metadataOf().toString('base64url')).toBe(fixture.metadataStatement);
+        expect(versionOf().toString('base64url')).toBe(fixture.versionStatement);
+        expect(verifySignature(rekeyer, metadataOf(), bytes(fixture.metadata.rekeySignature))).toBe(
+            true,
+        );
+        expect(verifySignature(rekeyer, versionOf(), bytes(fixture.version.rekeySignature))).toBe(
+            true,
+        );
+    });
+
+    test('every field it names moves the bytes: the epoch, the wrapped key, the origin and its signer', () => {
+        const signature = bytes(fixture.metadata.rekeySignature);
+        const holds = (record: FixtureRecord) =>
+            verifySignature(rekeyer, metadataOf(record), signature);
+        const flip = (value: string) => {
+            const raw = bytes(value);
+            raw[raw.length - 1]! ^= 1;
+            return raw.toString('base64url');
+        };
+        const m = fixture.metadata;
+        expect(holds({ ...m, keyEpoch: m.keyEpoch + 1 })).toBe(false);
+        expect(holds({ ...m, envelope: flip(m.envelope) })).toBe(false);
+        for (const field of ['envelope', 'signature', 'keyEnvelope'] as const)
+            expect(holds({ ...m, origin: { ...m.origin, [field]: flip(m.origin[field]) } })).toBe(
+                false,
+            );
+        expect(
+            holds({
+                ...m,
+                origin: { ...m.origin, signerId: '00000000-0000-4000-8000-000000000000' },
+            }),
+        ).toBe(false);
+    });
+
+    test('never pass for a writer statement, in any form, nor the reverse', () => {
+        const rekeyed = bytes(fixture.metadata.rekeySignature);
+        const fields = {
+            workspaceId: fixture.metadata.statement.workspaceId as string,
+            nodeId: fixture.metadata.statement.nodeId as string,
+            kind: fixture.metadata.statement.kind as 'folder' | 'file',
+            metadataVersion: fixture.metadata.statement.metadataVersion as number,
+            metadataEnvelope: bytes(fixture.metadata.envelope),
+        };
+        expect(verifySigned(rekeyer, metadataSigned(fields, rekeyed))).toBe(false);
+        expect(signedForm(rekeyer, metadataSigned(fields, rekeyed))).toBeNull();
+        // The version's re-key signature does not stand for the metadata's either.
+        expect(verifySignature(rekeyer, metadataOf(), bytes(fixture.version.rekeySignature))).toBe(
+            false,
+        );
+    });
+});
+
+describe('which form a writer signature holds in', () => {
+    const signer = signingKeyFromSeed(RFC_1.seed);
+    const fields = {
+        workspaceId: WORKSPACE,
+        nodeId: NODE,
+        kind: 'file' as const,
+        metadataVersion: 2,
+        metadataEnvelope: Buffer.alloc(42, 7),
+    };
+    test('is the one it was signed in, and none under another key', () => {
+        for (const form of ['ordinary', 'saved', 'resealed'] as const)
+            expect(
+                signedForm(
+                    signer.publicKey,
+                    metadataSigned(fields, signer.sign(metadataStatement(fields, form))),
+                ),
+            ).toBe(form);
+        expect(
+            signedForm(
+                RFC_2.publicKey,
+                metadataSigned(fields, signer.sign(metadataStatement(fields, 'resealed'))),
+            ),
+        ).toBeNull();
     });
 });

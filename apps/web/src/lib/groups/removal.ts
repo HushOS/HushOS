@@ -187,18 +187,14 @@ export async function removeMember(
         // Placed again before each folder's walk: walks of large folders add up past 15 minutes.
         const lapsed = await holdAgain();
         if (lapsed) return lapsed;
-        // Judged with the person being removed as on their way out: the committed chain
-        // still lists them active, and their records must not come back as the walker's.
-        await rotations.finish(
-            groupId,
-            {
-                workspaceId: area.workspaceId,
-                rotationId: running.id,
-                nodeId: running.nodeId,
-                targetEpoch: running.targetEpoch,
-            },
-            [userId],
-        );
+        // The walk keeps every writer's record re-keyed, the person being removed included:
+        // their records never come back as the walker's, whatever the committed chain says.
+        await rotations.finish(groupId, {
+            workspaceId: area.workspaceId,
+            rotationId: running.id,
+            nodeId: running.nodeId,
+            targetEpoch: running.targetEpoch,
+        });
     }
 
     options.onStep?.('remove');

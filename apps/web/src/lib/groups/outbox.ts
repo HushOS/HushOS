@@ -89,11 +89,6 @@ export type OutboxEntry = {
      * has this fingerprint. Absent on entries from before it was kept.
      */
     admits?: { userId: string; fingerprint: string };
-    /*
-     * Who the call marks left (a removal's target, the departed it marks):
-     * a walk it has to finish first (409 rotating) re-seals their records.
-     */
-    departing?: string[];
 };
 
 export type SendOutcome =
@@ -556,10 +551,10 @@ async function refused(
                     status: 'pending',
                     reason: 'The server named a folder this change does not rotate.',
                 };
-            // Judged with everyone this call marks left as on their way out (their records are
-            // re-sealed, never re-signed as this manager's own), and the hold placed again first.
+            // The hold is placed again first. The walk keeps every writer's record re-keyed, so
+            // nobody this call marks left has their records re-signed as this manager's own.
             await renewOrStop(ctx, entry);
-            await ctx.rotations.finish(groupId, data, entry.departing ?? []);
+            await ctx.rotations.finish(groupId, data);
             return (await rebuild(ctx, entry, [{ workspaceId: data.workspaceId, kinds: [] }]))
                 ? null
                 : { status: 'pending', reason: error.message };
@@ -779,11 +774,6 @@ async function stageLocked(
         ...(op.kind === 'admit'
             ? { admits: { userId: op.userId, fingerprint: op.pin.fingerprint } }
             : {}),
-        ...(op.kind === 'remove'
-            ? { departing: [op.userId] }
-            : op.kind === 'markLeft'
-              ? { departing: [...op.userIds] }
-              : {}),
     };
     return {
         status: 'sent',

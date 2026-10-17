@@ -55,6 +55,22 @@ export const driveNodes = pgTable(
             onDelete: 'set null',
         }),
         metadataSignature: bytea('metadata_signature'),
+        /*
+         * A re-keyed record's origin (docs/integrity-design.md, "Re-keyed records"): the
+         * envelope its writer signed, under the node key before a rotation; the writer and
+         * their signature, copied by the server from the row as it stood; the key that opens
+         * that envelope alone, wrapped under the current node key; and the re-keyer's
+         * signature over the binding. The re-keyer is `metadata_signer`, who sealed the
+         * current envelope. The origin signer has no foreign key: a deleted account leaves
+         * its id, so a gone writer reads as someone unknown while the re-keyer still
+         * verifies. All null on a record no rotation re-keyed, and cleared by every write
+         * that sets the envelope outside a rotation.
+         */
+        metadataOriginEnvelope: bytea('metadata_origin_envelope'),
+        metadataOriginKeyEnvelope: bytea('metadata_origin_key_envelope'),
+        metadataOriginSignerId: uuid('metadata_origin_signer'),
+        metadataOriginSignature: bytea('metadata_origin_signature'),
+        metadataRekeySignature: bytea('metadata_rekey_signature'),
         currentVersionId: uuid('current_version_id').references(
             (): AnyPgColumn => fileVersions.id,
             { onDelete: 'set null' },
@@ -118,9 +134,14 @@ export const driveNodes = pgTable(
             'drive_nodes_prev_envelope_valid',
             sql`(${table.prevKeyEnvelope} is null) = (${table.prevParentKeyEpoch} is null) and (${table.prevKeyEnvelope} is null) = (${table.prevKeyEpoch} is null) and (${table.prevKeyEnvelope} is null or (octet_length(${table.prevKeyEnvelope}) = 72 and ${table.prevKeyEpoch} >= 1))`,
         ),
+        // A re-keyed record may carry no legacy signature: its signer is then the re-keyer alone.
         check(
             'drive_nodes_signature_valid',
-            sql`(${table.metadataSignature} is null and ${table.metadataSignerId} is null) or (octet_length(${table.metadataSignature}) = 64 and ${table.metadataEnvelope} is not null)`,
+            sql`(${table.metadataSignature} is null and (${table.metadataSignerId} is null or ${table.metadataRekeySignature} is not null)) or (${table.metadataSignature} is not null and octet_length(${table.metadataSignature}) = 64 and ${table.metadataEnvelope} is not null)`,
+        ),
+        check(
+            'drive_nodes_origin_valid',
+            sql`(${table.metadataOriginEnvelope} is null and ${table.metadataOriginKeyEnvelope} is null and ${table.metadataOriginSignerId} is null and ${table.metadataOriginSignature} is null and ${table.metadataRekeySignature} is null) or (${table.metadataOriginEnvelope} is not null and ${table.metadataOriginKeyEnvelope} is not null and ${table.metadataOriginSignature} is not null and ${table.metadataRekeySignature} is not null and ${table.metadataEnvelope} is not null and octet_length(${table.metadataOriginEnvelope}) between 42 and 4136 and octet_length(${table.metadataOriginKeyEnvelope}) = 72 and octet_length(${table.metadataOriginSignature}) = 64 and octet_length(${table.metadataRekeySignature}) = 64)`,
         ),
         check(
             'drive_nodes_file_has_no_children_marker',
@@ -197,6 +218,14 @@ export const fileVersions = pgTable(
         // before signatures and once purged.
         signerId: uuid('signer').references(() => users.id, { onDelete: 'set null' }),
         signature: bytea('signature'),
+        // A re-keyed version's origin, as on drive_nodes: the writer's envelope (the same
+        // length as the current one, so the same suite), its signer (no foreign key) and
+        // signature, its opening key under the node key, and the re-keyer's signature.
+        originEnvelope: bytea('origin_envelope'),
+        originKeyEnvelope: bytea('origin_key_envelope'),
+        originSignerId: uuid('origin_signer'),
+        originSignature: bytea('origin_signature'),
+        rekeySignature: bytea('rekey_signature'),
         status: text().notNull().$type<'pending' | 'ready' | 'purged'>().default('pending'),
         createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
         readyAt: timestamp('ready_at', { withTimezone: true }),
@@ -219,7 +248,11 @@ export const fileVersions = pgTable(
         ),
         check(
             'file_versions_signature_valid',
-            sql`(${table.signature} is null and ${table.signerId} is null) or (octet_length(${table.signature}) = 64 and ${table.contentKeyEnvelope} is not null)`,
+            sql`(${table.signature} is null and (${table.signerId} is null or ${table.rekeySignature} is not null)) or (${table.signature} is not null and octet_length(${table.signature}) = 64 and ${table.contentKeyEnvelope} is not null)`,
+        ),
+        check(
+            'file_versions_origin_valid',
+            sql`(${table.originEnvelope} is null and ${table.originKeyEnvelope} is null and ${table.originSignerId} is null and ${table.originSignature} is null and ${table.rekeySignature} is null) or (${table.originEnvelope} is not null and ${table.originKeyEnvelope} is not null and ${table.originSignature} is not null and ${table.rekeySignature} is not null and ${table.contentKeyEnvelope} is not null and octet_length(${table.originEnvelope}) in (72, 84) and octet_length(${table.originEnvelope}) = octet_length(${table.contentKeyEnvelope}) and octet_length(${table.originKeyEnvelope}) = 72 and octet_length(${table.originSignature}) = 64 and octet_length(${table.rekeySignature}) = 64)`,
         ),
     ],
 );

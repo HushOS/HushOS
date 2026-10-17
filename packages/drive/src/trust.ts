@@ -247,23 +247,117 @@ export async function granterKeysOf(pin: Pin, served: Pick<ServedIdentity, 'mlDs
 }
 
 /*
+ * A re-keyed record's second verdict (docs/integrity-design.md, "Re-keyed
+ * records"): the record's own verdict is its origin's, named after `writer`,
+ * the origin's signer; `by` is the re-keyer (the record's signer) and
+ * `integrity` their verdict over the re-key; `bound` what the plaintexts
+ * showed: true when they match, false when they differ (or the re-keyer's own
+ * verified signature covers what failed to open), null when it could not be
+ * confirmed. `via` as on NodeIntegrity, for the re-keyer.
+ */
+export type RekeyNote = {
+    writer: Signer | null;
+    by: Signer | null;
+    integrity: RecordIntegrity;
+    via?: string | null;
+    bound: boolean | null;
+};
+
+/*
  * An item's checks: its metadata, and its current version when it has one;
  * null when not checked. `via`, only inside a family's folders: the group
  * whose member list vouched for each verified record ("Verified by Lindqvist
  * family"), null for one this person's own words check vouched for.
+ * `rekeyed`, per record a rotation re-keyed: who wrote it and who locked it
+ * again (RekeyNote); absent or null for a record no rotation kept.
  */
 export type NodeIntegrity = {
     metadata: RecordIntegrity;
     version: RecordIntegrity | null;
     via?: { metadata: string | null; version: string | null };
+    rekeyed?: { metadata: RekeyNote | null; version: RekeyNote | null };
 };
 
-/* One record that did not verify, who the server says wrote it, and what it is. */
+/*
+ * Why a re-keyed record carries a mark of its own making: `mismatch`, what was
+ * locked again does not match what was written (`bound` false, said as the
+ * re-keyer's fault only when their verified signature covers it); `unconfirmed`,
+ * that could not be confirmed (`bound` null: a server can cause it alone);
+ * `unattested`, the bytes match but the re-key is unsigned, badly signed, or
+ * by someone whose keys conflict ("HushOS can't confirm who replaced the keys").
+ */
+export type RekeyCause = 'mismatch' | 'unconfirmed' | 'unattested';
+
+/*
+ * One record that did not verify, who the server says wrote it, and what it
+ * is. A re-keyed record's issue names its writer (the origin's signer), or for
+ * a re-key cause the re-keyer, with `rekey` saying why and how the re-keyer
+ * itself checked.
+ */
 export type IntegrityIssue = {
     record: 'metadata' | 'version';
     integrity: Exclude<RecordIntegrity, 'verified' | 'saved-from-link'>;
     signer: Signer | null;
+    rekey?: { cause: RekeyCause; rekeyer: RecordIntegrity };
 };
+
+/* The re-keyer verdicts that leave the record unmarked: said in Info, never as a mark (decision D5). */
+const INFO_ONLY: RecordIntegrity[] = [
+    'verified',
+    'saved-from-link',
+    'retired-key',
+    'unknown-signer',
+    'unchecked',
+    'former-member',
+    'resealed',
+];
+
+/*
+ * One record's issues: its own verdict, named after whoever it is about (the
+ * origin's writer for a re-keyed record whose bytes bound, the re-keyer when
+ * they did not), and for a re-keyed record whose bytes bound but whose re-key
+ * is not attested, a mark of its own.
+ */
+export function recordIssues(
+    record: 'metadata' | 'version',
+    integrity: RecordIntegrity,
+    signer: Signer | null,
+    note?: RekeyNote | null,
+): IntegrityIssue[] {
+    const issues: IntegrityIssue[] = [];
+    if (note) {
+        const rekeyer = note.integrity;
+        if (note.bound === false)
+            issues.push({
+                record,
+                integrity: 'bad-signature',
+                signer: note.by,
+                rekey: { cause: 'mismatch', rekeyer },
+            });
+        else if (note.bound === null)
+            issues.push({
+                record,
+                integrity: 'unchecked',
+                signer: note.by,
+                rekey: { cause: 'unconfirmed', rekeyer },
+            });
+        else {
+            if (integrity !== 'verified' && integrity !== 'saved-from-link')
+                issues.push({ record, integrity, signer: note.writer });
+            if (!INFO_ONLY.includes(rekeyer))
+                issues.push({
+                    record,
+                    integrity: rekeyer as IntegrityIssue['integrity'],
+                    signer: note.by,
+                    rekey: { cause: 'unattested', rekeyer },
+                });
+        }
+        return issues;
+    }
+    if (integrity !== 'verified' && integrity !== 'saved-from-link')
+        issues.push({ record, integrity, signer });
+    return issues;
+}
 
 /*
  * Why an item is shown as Unverified, worst first: keys that conflict with
@@ -282,21 +376,27 @@ export function integrityIssues(
     },
 ): IntegrityIssue[] {
     if (!node.integrity) return [];
-    const issues: IntegrityIssue[] = [];
-    const metadata = node.integrity.metadata;
-    if (metadata !== 'verified' && metadata !== 'saved-from-link')
-        issues.push({
-            record: 'metadata',
-            integrity: metadata,
-            signer: node.metadataSigner ?? null,
-        });
-    const version = node.integrity.version;
-    if (version !== null && version !== 'verified' && version !== 'saved-from-link')
-        issues.push({
-            record: 'version',
-            integrity: version,
-            signer: node.currentVersion?.signer ?? null,
-        });
+    const issues: IntegrityIssue[] = [
+        ...recordIssues(
+            'metadata',
+            node.integrity.metadata,
+            node.metadataSigner ?? null,
+            node.integrity.rekeyed?.metadata,
+        ),
+        ...(node.integrity.version === null
+            ? []
+            : recordIssues(
+                  'version',
+                  node.integrity.version,
+                  node.currentVersion?.signer ?? null,
+                  node.integrity.rekeyed?.version,
+              )),
+    ];
+    return sortIssues(issues);
+}
+
+/* Worst first (see integrityIssues); a re-key that is not attested ranks with a re-sealed record. */
+export function sortIssues(issues: IntegrityIssue[]): IntegrityIssue[] {
     const rank: Record<IntegrityIssue['integrity'], number> = {
         'key-conflict': 0,
         'bad-signature': 1,
@@ -307,5 +407,7 @@ export function integrityIssues(
         resealed: 6,
         unchecked: 7,
     };
-    return issues.sort((a, b) => rank[a.integrity] - rank[b.integrity]);
+    const of = (issue: IntegrityIssue) =>
+        issue.rekey?.cause === 'unattested' ? rank.resealed : rank[issue.integrity];
+    return [...issues].sort((a, b) => of(a) - of(b));
 }

@@ -37,6 +37,25 @@ export type VersionView = {
      */
     signer?: Signer | null;
     signature?: string | null;
+    /*
+     * What a rotation kept of the version's writer (see RekeyView); null when no
+     * rotation did, absent on what a link visitor receives and from servers
+     * before re-keyed records.
+     */
+    rekey?: RekeyView | null;
+};
+
+/*
+ * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the
+ * envelope its writer signed (its origin), who the server says that writer is
+ * and their signature, the key that opens the origin alone wrapped under the
+ * node key at the node's key epoch, and the re-keyer's signature over the
+ * binding. The re-keyer is the record's own signer (`metadataSigner`,
+ * `signer`): whoever sealed the current envelope.
+ */
+export type RekeyView = {
+    origin: { envelope: string; signer: Signer | null; signature: string; keyEnvelope: string };
+    signature: string;
 };
 
 export type NodeView = {
@@ -69,6 +88,8 @@ export type NodeView = {
      */
     metadataSigner?: Signer | null;
     metadataSignature?: string | null;
+    /* What a rotation kept of the metadata's writer, as on versions. */
+    metadataRekey?: RekeyView | null;
 };
 
 export type NodeEnvelopes = {
@@ -157,6 +178,8 @@ export type RotationWorkNode = NodeView & {
         /* Who signed the envelope being replaced. */
         signer: Signer | null;
         signature: string | null;
+        /* The origin an earlier rotation kept, which this one carries. */
+        rekey?: RekeyView | null;
     }[];
     /* Each live share with the grantee's served identity, for the owner's pin check before re-sealing. */
     shares: { id: string; granteeUserId: string; grantee: ServedIdentity }[];
@@ -176,21 +199,42 @@ export type RotateNodeWire = {
     keyEnvelope: string;
     rotated: {
         metadataEnvelope: string;
-        /* The rotating account's signature over the node's unchanged metadata version. */
-        metadataSignature: string;
-        versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+        /*
+         * The rotating account's legacy signature over the node's unchanged metadata
+         * version: optional beside `metadataRekey`, required without it.
+         */
+        metadataSignature?: string | null;
+        metadataRekey?: RekeyWire | null;
+        /* A legacy re-seal meant to drop the origin the record carries (it did not bind, or names nobody). */
+        metadataDropOrigin?: boolean;
+        versions: RotatedVersionWire[];
         shares: { id: string; shareEnvelope: string }[];
         links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
         unsealableLinks: string[];
     } | null;
 };
+/*
+ * A re-keyed record's part of a rotation: the origin's opening key wrapped
+ * under the new node key, and the rekeyed statement's signature. The server
+ * copies the origin itself from the record as it stands.
+ */
+export type RekeyWire = { originKeyEnvelope: string; signature: string };
+export type RotatedVersionWire = {
+    id: string;
+    contentKeyEnvelope: string;
+    signature?: string | null;
+    rekey?: RekeyWire | null;
+    dropOrigin?: boolean;
+};
+/* `unsupported`: a record signed in a form the server does not take there (see docs/integrity-design.md). */
 export type RotateOutcome =
     | 'ok'
     | 'stale'
     | 'not-found'
     | 'parent-not-ready'
     | 'already'
-    | 'bad-signature';
+    | 'bad-signature'
+    | 'unsupported';
 
 export type Listing = {
     folder: NodeView;

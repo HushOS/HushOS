@@ -113,6 +113,19 @@ export type VersionView = {
     /* The account that sealed the content-key envelope and its Ed25519 signature; null before signatures. */
     signer: Signer | null;
     signature: string | null;
+    /* What a rotation kept of the version's writer, and the re-keyer's signature; null if none did. */
+    rekey: RekeyView | null;
+};
+/*
+ * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the
+ * envelope its writer signed, that writer and their signature, the key that
+ * opens that envelope alone (wrapped under the node key at the node's epoch),
+ * and the re-keyer's signature over the binding. The re-keyer is the record's
+ * signer: whoever sealed the current envelope.
+ */
+export type RekeyView = {
+    origin: { envelope: string; signer: Signer | null; signature: string; keyEnvelope: string };
+    signature: string;
 };
 /* A sealed workspace document as it travels: kind, version, Base64url bytes. */
 export type DocumentView = {
@@ -146,7 +159,48 @@ export type NodeView = {
     /* The account that wrote the metadata envelope and its Ed25519 signature; null before signatures. */
     metadataSigner: Signer | null;
     metadataSignature: string | null;
+    /* What a rotation kept of the metadata's writer; null if none did. */
+    metadataRekey: RekeyView | null;
 };
+
+/* A record's origin columns as served, or null when no rotation kept one. */
+function rekeyView(origin: {
+    envelope: Buffer | null;
+    keyEnvelope: Buffer | null;
+    signerId: string | null;
+    signature: Buffer | null;
+    rekeySignature: Buffer | null;
+}): RekeyView | null {
+    if (!origin.envelope || !origin.keyEnvelope || !origin.signature || !origin.rekeySignature)
+        return null;
+    return {
+        origin: {
+            envelope: b64(origin.envelope),
+            signer: signerOf(origin.signerId),
+            signature: b64(origin.signature),
+            keyEnvelope: b64(origin.keyEnvelope),
+        },
+        signature: b64(origin.rekeySignature),
+    };
+}
+function versionRekey(version: {
+    originEnvelope: Buffer | null;
+    originKeyEnvelope: Buffer | null;
+    originSignerId: string | null;
+    originSignature: Buffer | null;
+    rekeySignature: Buffer | null;
+}) {
+    return rekeyView({
+        envelope: version.originEnvelope,
+        keyEnvelope: version.originKeyEnvelope,
+        signerId: version.originSignerId,
+        signature: version.originSignature,
+        rekeySignature: version.rekeySignature,
+    });
+}
+function signerOf(id: string | null): Signer | null {
+    return id ? { id } : null;
+}
 
 function b64(buffer: Buffer | Uint8Array) {
     return Buffer.from(buffer).toString('base64url');
@@ -168,6 +222,7 @@ function versionView(version: VersionRow | null | undefined): VersionView | null
         readyAt: version.readyAt?.toISOString() ?? null,
         signer: version.signer,
         signature: version.signature ? b64(version.signature) : null,
+        rekey: versionRekey(version),
     };
 }
 export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null }): NodeView {
@@ -194,6 +249,13 @@ export function nodeView(node: NodeRow & { currentVersion?: VersionRow | null })
         envelopeSuite: node.envelopeSuite,
         metadataSigner: node.metadataSigner,
         metadataSignature: node.metadataSignature ? b64(node.metadataSignature) : null,
+        metadataRekey: rekeyView({
+            envelope: node.metadataOriginEnvelope,
+            keyEnvelope: node.metadataOriginKeyEnvelope,
+            signerId: node.metadataOriginSignerId,
+            signature: node.metadataOriginSignature,
+            rekeySignature: node.metadataRekeySignature,
+        }),
     };
 }
 
@@ -1771,19 +1833,21 @@ async function limitLink(token: string, address: string) {
  * anonymous holder of the URL who wrote the files. `workspaceId` stays: it is
  * bound into every envelope.
  */
-export type VisitorVersionView = Omit<VersionView, 'signer' | 'signature'>;
+export type VisitorVersionView = Omit<VersionView, 'signer' | 'signature' | 'rekey'>;
 export type VisitorNodeView = Omit<
     NodeView,
-    'metadataSigner' | 'metadataSignature' | 'currentVersion'
+    'metadataSigner' | 'metadataSignature' | 'metadataRekey' | 'currentVersion'
 > & { currentVersion: VisitorVersionView | null };
+/* A re-keyed record's origin names its writer and carries a signature too: dropped with the rest. */
 function visitorVersion(version: VersionView): VisitorVersionView {
-    const { signer: _signer, signature: _signature, ...rest } = version;
+    const { signer: _signer, signature: _signature, rekey: _rekey, ...rest } = version;
     return rest;
 }
 function visitorView(node: NodeView): VisitorNodeView {
     const {
         metadataSigner: _signer,
         metadataSignature: _signature,
+        metadataRekey: _rekey,
         currentVersion,
         ...rest
     } = node;
@@ -1979,6 +2043,8 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
                   readyAt: null,
                   signer: item.versionSigner,
                   signature: item.versionSignature ? b64(item.versionSignature) : null,
+                  // Snapshots do not keep origins yet (decision D10, a follow-up).
+                  rekey: null,
               }
             : null;
     return {
@@ -2002,6 +2068,7 @@ function reportItemView(item: reportsRepository.ReportItemRow, workspaceId: stri
         envelopeSuite: DRIVE_ENVELOPE_SUITE,
         metadataSigner: item.metadataSigner,
         metadataSignature: item.metadataSignature ? b64(item.metadataSignature) : null,
+        metadataRekey: null,
     };
 }
 const reportGone = () => new DriveError('not-found', 'This report does not exist.', 404);
@@ -2389,6 +2456,8 @@ export function rotationWorkView(row: RotationWorkRow) {
             plaintextSize: v.plaintextSize?.toString() ?? null,
             signer: v.signer,
             signature: v.signature ? b64(v.signature) : null,
+            // The origin an earlier rotation kept: the client carries it, never sends it.
+            rekey: versionRekey(v),
         })),
         shares: row.shares.map((share) => ({
             id: share.id,
@@ -2497,14 +2566,36 @@ export type RotatedNodeWire = {
     keyEnvelope: string;
     rotated: {
         metadataEnvelope: string;
-        /* The rotating account's signature over the node's unchanged metadata version. */
-        metadataSignature: string;
-        versions: { id: string; contentKeyEnvelope: string; signature: string }[];
+        /*
+         * The rotating account's legacy signature over the node's unchanged metadata
+         * version: optional beside a re-key, required without one.
+         */
+        metadataSignature?: string | null;
+        /* The re-keyed form: the origin's wrapped opening key and the rekeyed statement's signature. */
+        metadataRekey?: RekeyWire | null;
+        /* A legacy re-seal that drops the origin the row carries (unbound, or its writer gone). */
+        metadataDropOrigin?: boolean;
+        versions: {
+            id: string;
+            contentKeyEnvelope: string;
+            signature?: string | null;
+            rekey?: RekeyWire | null;
+            dropOrigin?: boolean;
+        }[];
         shares: { id: string; shareEnvelope: string }[];
         links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
         unsealableLinks: string[];
     } | null;
 };
+export type RekeyWire = { originKeyEnvelope: string; signature: string };
+function rekeyInput(rekey: RekeyWire | null | undefined) {
+    return rekey
+        ? {
+              originKeyEnvelope: keyEnvelope(rekey.originKeyEnvelope),
+              signature: signature(rekey.signature),
+          }
+        : null;
+}
 
 /*
  * A workspace document sealed again under a group area's new key, decoded as
@@ -2536,12 +2627,18 @@ export function rotatedNodeInput(node: RotatedNodeWire): rotationsRepository.Rot
         rotated: node.rotated
             ? {
                   metadataEnvelope: metadataEnvelope(node.rotated.metadataEnvelope),
-                  metadataSignature: signature(node.rotated.metadataSignature),
+                  metadataSignature: node.rotated.metadataSignature
+                      ? signature(node.rotated.metadataSignature)
+                      : null,
+                  metadataRekey: rekeyInput(node.rotated.metadataRekey),
+                  metadataDropOrigin: node.rotated.metadataDropOrigin === true,
                   versions: node.rotated.versions.map((v) => ({
                       id: v.id,
                       // Resealed in the object's own suite: 72 bytes for suite 1, 84 for 2 and 3.
                       contentKeyEnvelope: anyVersionEnvelope(v.contentKeyEnvelope),
-                      signature: signature(v.signature),
+                      signature: v.signature ? signature(v.signature) : null,
+                      rekey: rekeyInput(v.rekey),
+                      dropOrigin: v.dropOrigin === true,
                   })),
                   shares: node.rotated.shares.map((share) => ({
                       id: share.id,
@@ -2582,6 +2679,12 @@ export async function rotateNodes(
     // Each node is its own transaction: the ones before a refused one stand, and say so.
     if (results.some((result) => result.status === 'bad-signature'))
         throw badSignature({ results });
+    // A record signed in a form this server does not take there (a legacy re-seal of a re-keyed
+    // record, or a family folder's record re-signed as the walker's): an older client.
+    if (results.some((result) => result.status === 'unsupported'))
+        throw new DriveError('unsupported', 'Update HushOS to replace these keys.', 409, {
+            results,
+        });
     return { results };
 }
 

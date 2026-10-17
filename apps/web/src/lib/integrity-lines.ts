@@ -1,5 +1,10 @@
 import type { Signer } from '@hushos/drive/api';
-import { integrityIssues, type IntegrityIssue, type NodeIntegrity } from '@hushos/drive/trust';
+import {
+    integrityIssues,
+    type IntegrityIssue,
+    type NodeIntegrity,
+    type RekeyNote,
+} from '@hushos/drive/trust';
 
 /*
  * The words behind an Unverified or Couldn't check mark, one verdict at a
@@ -82,6 +87,53 @@ export type IssueLine = {
         | null;
 };
 
+/*
+ * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): what a
+ * server alone could cause is said as unconfirmed, never as anyone's fault.
+ */
+export const REKEY_UNCONFIRMED = 'HushOS couldn’t confirm this item since its keys were replaced.';
+const REKEY_UNCONFIRMED_VERSION =
+    'HushOS couldn’t confirm this version since its keys were replaced.';
+export const REKEY_UNATTESTED = 'HushOS can’t confirm who replaced this item’s keys.';
+
+/* Someone as a sentence names them, or null for nobody this person can name. */
+function personWords(named: Named) {
+    if (named.kind === 'you') return 'you';
+    if (named.kind === 'unknown') return null;
+    return memberWords(named, '');
+}
+
+/*
+ * The words for a re-keyed record's own cause. "Doesn't match" is said only
+ * when the plaintexts showed it (`bound` false), and a person is named only
+ * when their verified re-key signature covers what failed; a mismatch nobody
+ * attested to names nobody.
+ */
+function rekeyLine(
+    issue: IntegrityIssue & { rekey: NonNullable<IntegrityIssue['rekey']> },
+    named: Named,
+): IssueLine {
+    const version = issue.record === 'version';
+    switch (issue.rekey.cause) {
+        case 'mismatch': {
+            const who = issue.rekey.rekeyer === 'verified' ? personWords(named) : null;
+            return {
+                text: version
+                    ? `This version as ${who ? `${who} locked it` : 'it was locked'} again doesn’t match what was added. Don’t trust this item.`
+                    : `What ${who ? `${who} locked` : 'was locked'} again doesn’t match what was written. Don’t trust this item.`,
+                action: null,
+            };
+        }
+        case 'unconfirmed':
+            return {
+                text: version ? REKEY_UNCONFIRMED_VERSION : REKEY_UNCONFIRMED,
+                action: { kind: 'retry' },
+            };
+        case 'unattested':
+            return { text: REKEY_UNATTESTED, action: null };
+    }
+}
+
 const CANT_CONFIRM = 'HushOS can’t confirm who wrote this.';
 const CANT_CONFIRM_VERSION = 'HushOS can’t confirm who added this version.';
 export const COULDNT_CHECK = 'HushOS couldn’t check who wrote this. Try again later.';
@@ -92,6 +144,7 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
     const named = nameSigner(signer, names);
     const plain = version ? CANT_CONFIRM_VERSION : CANT_CONFIRM;
     const family = names.family?.name;
+    if (issue.rekey) return rekeyLine({ ...issue, rekey: issue.rekey }, named);
     switch (integrity) {
         // Never an accusation: the keys differ from the ones this person checked, and no
         // signed chain joins them. Comparing words again is the way out.
@@ -189,12 +242,18 @@ function line(issue: IntegrityIssue, names: SignerNames): IssueLine {
  */
 export function issueLines(issues: IntegrityIssue[], names: SignerNames): IssueLine[] {
     const [a, b] = issues;
+    const sameSigner = (a?.signer?.id ?? null) === (b?.signer?.id ?? null);
+    // The same re-key cause on both records, by the same re-keyer, is said once (the item's words).
+    if (a?.rekey && b?.rekey && a.rekey.cause === b.rekey.cause && sameSigner)
+        return [line(a.record === 'metadata' ? a : b, names)];
     if (
         a &&
         b &&
+        !a.rekey &&
+        !b.rekey &&
         a.integrity === b.integrity &&
         a.integrity !== 'bad-signature' &&
-        (a.integrity === 'unchecked' || (a.signer?.id ?? null) === (b.signer?.id ?? null))
+        (a.integrity === 'unchecked' || sameSigner)
     )
         return [line(a.record === 'metadata' ? a : b, names)];
     return issues.map((issue) => line(issue, names));
@@ -207,8 +266,66 @@ export function issueLines(issues: IntegrityIssue[], names: SignerNames): IssueL
 export function markLabel(issues: IntegrityIssue[]) {
     if (issues.length > 0 && issues.every((issue) => issue.integrity === 'unchecked'))
         return 'Couldn’t check';
-    if (issues.some((issue) => issue.integrity === 'key-conflict')) return 'Keys don’t match';
+    // A re-keyer's conflicting keys say the re-key is not attested, not that the writer's differ.
+    if (issues.some((issue) => issue.integrity === 'key-conflict' && !issue.rekey))
+        return 'Keys don’t match';
     return 'Unverified';
+}
+
+/*
+ * Who wrote a re-keyed item and who locked it again, as Info says them
+ * (decision D5: the re-keyer is said in Info, never as a mark). Only for
+ * records whose bytes bound to their writer's; a mismatch or an unconfirmed
+ * re-key is the mark's to say. `writtenBy` only when the item verified (an
+ * item that did not says who wrote it beside its mark); `replacedBy` by the
+ * re-keyer's own verdict, null where the mark says it instead.
+ */
+export function rekeyedLines(
+    node: { integrity: NodeIntegrity | null },
+    names: SignerNames,
+): { writtenBy: string | null; replacedBy: string | null } {
+    const integrity = node.integrity;
+    const none = { writtenBy: null, replacedBy: null };
+    if (!integrity?.rekeyed) return none;
+    const records: { verdict: NodeIntegrity['metadata']; note: RekeyNote | null }[] = [
+        { verdict: integrity.metadata, note: integrity.rekeyed.metadata },
+        ...(integrity.version === null
+            ? []
+            : [{ verdict: integrity.version, note: integrity.rekeyed.version }]),
+    ];
+    const bound = records.filter((record) => record.note?.bound === true);
+    const first = bound[0]?.note;
+    if (!first) return none;
+    const trusted = (verdict: NodeIntegrity['metadata']) =>
+        verdict === 'verified' || verdict === 'saved-from-link';
+    const named = (signer: RekeyNote['writer']) => {
+        const who = nameSigner(signer, names);
+        return who.kind === 'you' ? 'You' : who.kind === 'unknown' ? null : memberWords(who, '');
+    };
+    const writtenBy = records.every((record) => trusted(record.verdict))
+        ? named(first.writer)
+        : null;
+    const by = nameSigner(first.by, names);
+    const byWords = by.kind === 'you' ? 'you' : by.kind === 'unknown' ? null : memberWords(by, '');
+    let replacedBy: string | null = null;
+    switch (first.integrity) {
+        case 'verified':
+            replacedBy = byWords ? `Keys replaced by ${byWords}` : null;
+            break;
+        case 'retired-key':
+            replacedBy = `Keys replaced by ${byWords ?? 'someone'}, with keys since replaced`;
+            break;
+        case 'former-member':
+            replacedBy = `Keys replaced by ${byWords ?? 'someone'}, who has left ${names.family?.name ?? 'the family'}`;
+            break;
+        case 'unknown-signer':
+            replacedBy = 'Keys replaced by someone you haven’t checked';
+            break;
+        case 'unchecked':
+            replacedBy = 'HushOS couldn’t check who replaced its keys';
+            break;
+    }
+    return { writtenBy, replacedBy };
 }
 
 /*
@@ -303,4 +420,31 @@ export function savedLine(
     const by = named.kind === 'you' ? 'you' : named.kind === 'contact' ? named.name : null;
     if (!by) return null;
     return `Saved from a link by ${by}. HushOS can’t confirm who made the original.`;
+}
+
+/*
+ * A re-keyed record's check as Technical details says it: what the contents
+ * showed, then the re-key signature. Plain enough to read, exact enough to
+ * report.
+ */
+export function rekeyTechnical(note: RekeyNote) {
+    const contents =
+        note.bound === true
+            ? 'Contents match what was written'
+            : note.bound === false
+              ? 'Contents differ from what was written'
+              : 'Contents not confirmed';
+    const signature: Record<RekeyNote['integrity'], string> = {
+        verified: 'key change signed',
+        'saved-from-link': 'key change signed',
+        resealed: 'key change signed',
+        'retired-key': 'key change signed with keys since replaced',
+        'former-member': 'key change signed by a former member',
+        'unknown-signer': 'key change signed by someone you haven’t checked',
+        'key-conflict': 'key change signed with keys that don’t match',
+        'bad-signature': 'key change signature doesn’t hold',
+        unsigned: 'key change not signed',
+        unchecked: 'key change not checked',
+    };
+    return `${contents} · ${signature[note.integrity]}`;
 }

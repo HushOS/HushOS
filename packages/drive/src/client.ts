@@ -8,6 +8,7 @@ import type {
     DriveVersionEnvelope,
     GroupRotationTrust,
     NodeMetadata,
+    ServedRekey,
 } from '@hushos/crypto';
 import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
@@ -39,12 +40,14 @@ import {
     type VersionView,
     type WorkspaceView,
     type NodeChange,
+    type RekeyView,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
 import {
     signatureFormFor,
     type NodeIntegrity,
     type RecordIntegrity,
+    type RekeyNote,
     type SignatureForm,
 } from './trust';
 
@@ -96,6 +99,20 @@ export function versionEnvelopeOf(version: VersionView): DriveVersionEnvelope {
     };
 }
 
+/* A re-keyed record's origin as the worker takes it: the writer by id. */
+export function servedRekeyOf(view: RekeyView | null | undefined): ServedRekey | null {
+    if (!view) return null;
+    return {
+        origin: {
+            envelope: view.origin.envelope,
+            signerId: view.origin.signer?.id ?? null,
+            signature: view.origin.signature,
+            keyEnvelope: view.origin.keyEnvelope,
+        },
+        signature: view.signature,
+    };
+}
+
 /* A node's signed records as driveVerify takes them; `versions` are the ones to check. */
 export function signedNodeOf(node: NodeView, versions: VersionView[]): DriveSignedNode {
     return {
@@ -106,6 +123,8 @@ export function signedNodeOf(node: NodeView, versions: VersionView[]): DriveSign
         // Rows a device mirrored before signatures carry neither field.
         metadataSigner: node.metadataSigner?.id ?? null,
         metadataSignature: node.metadataSignature ?? null,
+        keyEpoch: node.keyEpoch,
+        metadataRekey: servedRekeyOf(node.metadataRekey),
         versions: versions.map(signedVersionOf),
     };
 }
@@ -117,6 +136,26 @@ function signedVersionOf(version: VersionView): DriveSignedVersion {
         contentKeyEnvelope: version.contentKeyEnvelope,
         signer: version.signer?.id ?? null,
         signature: version.signature ?? null,
+        rekey: servedRekeyOf(version.rekey),
+    };
+}
+
+/* A re-keyed record's note, from its served origin and the verifier's second verdict. */
+function rekeyNoteOf(
+    view: RekeyView | null | undefined,
+    by: VersionView['signer'],
+    check: RekeyChecked | null | undefined,
+): RekeyNote | null {
+    // The verifier says whether it read the origin: a family folder's always does (its verdict
+    // fails closed itself), and a personal workspace's does not yet (rekeyedFor), so a served
+    // origin there is read as shipped apps read the row, by its legacy columns.
+    if (!view || !check) return null;
+    return {
+        writer: view.origin.signer,
+        by: by ?? null,
+        integrity: check.rekeyer,
+        via: check.via ?? null,
+        bound: check.bound,
     };
 }
 
@@ -184,8 +223,16 @@ export type VerifiedRecords = {
     id: string;
     metadata: RecordIntegrity;
     via: string | null;
-    versions: { id: string; integrity: RecordIntegrity; via: string | null }[];
+    /* A re-keyed record's re-keyer and binding; its own verdict above is its origin's. */
+    metadataRekey?: RekeyChecked | null;
+    versions: {
+        id: string;
+        integrity: RecordIntegrity;
+        via: string | null;
+        rekey?: RekeyChecked | null;
+    }[];
 }[];
+export type RekeyChecked = { rekeyer: RecordIntegrity; via: string | null; bound: boolean | null };
 export type DriveClientOptions = {
     /*
      * A workspace whose key the caller has already opened in the worker, and
@@ -388,6 +435,20 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 const version = node.currentVersion
                     ? result?.versions.find((v) => v.id === node.currentVersion!.id)
                     : undefined;
+                const rekeyed = {
+                    metadata: rekeyNoteOf(
+                        node.metadataRekey,
+                        node.metadataSigner ?? null,
+                        result?.metadataRekey,
+                    ),
+                    version: node.currentVersion
+                        ? rekeyNoteOf(
+                              node.currentVersion.rekey,
+                              node.currentVersion.signer ?? null,
+                              version?.rekey,
+                          )
+                        : null,
+                };
                 out.set(node.id, {
                     metadata: result?.metadata ?? 'unchecked',
                     version: node.currentVersion ? (version?.integrity ?? 'unchecked') : null,
@@ -399,6 +460,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                               },
                           }
                         : {}),
+                    ...(rekeyed.metadata || rekeyed.version ? { rekeyed } : {}),
                 });
             }
         } catch {
@@ -422,10 +484,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             id: node.id,
             metadata: node.metadata,
             via: null,
+            metadataRekey: node.metadataRekey ? { ...node.metadataRekey, via: null } : null,
             versions: node.versions.map((version) => ({
                 id: version.id,
                 integrity: version.integrity,
                 via: null,
+                rekey: version.rekey ? { ...version.rekey, via: null } : null,
             })),
         }));
     }
@@ -1030,6 +1094,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             return [] as (VersionListView & {
                 content: DriveContentInfo | null;
                 integrity: RecordIntegrity | null;
+                rekeyed: RekeyNote | null;
             })[];
         const { versions: opened } = await rpc('driveOpenVersions', {
             workspaceId: node.workspaceId,
@@ -1037,22 +1102,26 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             versions: listed.map(versionEnvelopeOf),
         });
         // Each version on its own: an earlier one may have been added by someone else.
-        const checked = new Map<string, RecordIntegrity>();
+        const checked = new Map<string, VerifiedRecords[number]['versions'][number]>();
         const link = linkWorkspaces.has(node.workspaceId);
         if (!link) {
             try {
                 const nodes = await checkRecords(node.workspaceId, [signedNodeOf(node, listed)]);
                 for (const version of nodes[0]?.id === node.id ? nodes[0].versions : [])
-                    checked.set(version.id, version.integrity);
+                    checked.set(version.id, version);
             } catch {
                 /* Unchecked: every version below says so. */
             }
         }
         return listed.map((version, index) => {
             const result = opened[index]!;
+            const check = checked.get(version.id);
             return {
                 ...version,
-                integrity: link ? null : (checked.get(version.id) ?? 'unchecked'),
+                integrity: link ? null : (check?.integrity ?? 'unchecked'),
+                rekeyed: link
+                    ? null
+                    : rekeyNoteOf(version.rekey, version.signer ?? null, check?.rekey),
                 content:
                     result.error !== undefined
                         ? null
@@ -1413,7 +1482,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         kind: 'folder' | 'file',
         rootParentId: string | null,
         onProgress?: (done: number) => void,
-        departing: readonly string[] = [],
     ) {
         // The root's own chain must be open: its parent key is what the new root key wraps under.
         if (kind === 'folder') await listFolder(rootId);
@@ -1423,10 +1491,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // Who this person trusts: every record is checked before it is signed again, and
         // without the trust set the rotation stops here and is retried, never run unchecked.
         const signers = await trustedSigners();
-        // A family folder's records are judged as its member list says (the worker requires it).
-        const group = options.rotationTrust
-            ? { ...(await options.rotationTrust()), departing: [...departing] }
-            : null;
+        // A family folder's walk is checked against its member list (the worker requires it).
+        const group = options.rotationTrust ? await options.rotationTrust() : null;
         let done = 0;
         let cursor: string | null = null;
         let idle = 0;
@@ -1467,6 +1533,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         metadataEnvelope: n.metadataEnvelope,
                         metadataSigner: n.metadataSigner?.id ?? null,
                         metadataSignature: n.metadataSignature ?? null,
+                        // The origin an earlier rotation kept: carried on, never sent back.
+                        metadataRekey: servedRekeyOf(n.metadataRekey),
                         versions: n.versions.map((v) => ({
                             id: v.id,
                             objectId: v.objectId,
@@ -1476,6 +1544,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                 v.plaintextSize === null ? null : Number(v.plaintextSize),
                             signer: v.signer?.id ?? null,
                             signature: v.signature ?? null,
+                            rekey: servedRekeyOf(v.rekey),
                         })),
                         shares: (
                             await Promise.all(
@@ -1515,7 +1584,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             for (const [index, result] of sealed.nodes.entries()) {
                 const source = work.nodes[index]!;
                 if (result.error !== undefined) continue;
-                if (!result.rewrap && !result.metadataSignature)
+                if (!result.rewrap && !result.metadataSignature && !result.metadataRekey)
                     throw new Error('The rotation could not sign what it sealed. Try again.');
                 batch.push({
                     id: source.id,
@@ -1526,7 +1595,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         ? null
                         : {
                               metadataEnvelope: result.metadataEnvelope,
-                              metadataSignature: result.metadataSignature!,
+                              metadataSignature: result.metadataSignature,
+                              metadataRekey: result.metadataRekey ?? null,
+                              ...(result.metadataDropOrigin ? { metadataDropOrigin: true } : {}),
                               versions: result.versions,
                               shares: result.shares,
                               links: result.links.flatMap((link) =>
@@ -1613,8 +1684,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function walkRotation(
         pending: { nodeId: string; targetEpoch: number },
         onProgress?: (done: number) => void,
-        /* In a family folder: members on their way out, whose records the walk re-seals (never re-signs). */
-        departing: readonly string[] = [],
     ) {
         if (!workspace) throw new Error('Open Drive first.');
         const root = await api
@@ -1636,7 +1705,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             kind,
             parentId,
             onProgress,
-            departing,
         );
     }
 

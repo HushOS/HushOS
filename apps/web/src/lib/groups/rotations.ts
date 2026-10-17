@@ -1,5 +1,5 @@
 import type { AreaRotationInput, GroupWriter, RotatedDocumentWire } from '@hushos/crypto';
-import type { DriveApi } from '@hushos/drive/api';
+import type { DriveApi, RekeyView } from '@hushos/drive/api';
 import { DOCUMENT_KINDS } from '@hushos/drive/protocol';
 import type { GroupsApi } from './api';
 import type { RotationSource } from './context';
@@ -38,7 +38,6 @@ export type RotationDeps = {
     walk(
         groupId: string,
         rotation: { workspaceId: string; rotationId: string; nodeId: string; targetEpoch: number },
-        departing?: readonly string[],
     ): Promise<void>;
 };
 
@@ -48,6 +47,20 @@ export type RotationDeps = {
  * (`wrappedParentKeyEpoch`) and the one it goes under (`parentKeyEpoch`, one
  * more). The worker checks that against the staged member list's own version.
  */
+/* A served origin as the worker takes it, the writer by id (as servedRekeyOf in @hushos/drive/client). */
+function servedRekeyOf(view: RekeyView | null | undefined) {
+    if (!view) return null;
+    return {
+        origin: {
+            envelope: view.origin.envelope,
+            signerId: view.origin.signer?.id ?? null,
+            signature: view.origin.signature,
+            keyEnvelope: view.origin.keyEnvelope,
+        },
+        signature: view.signature,
+    };
+}
+
 export function rootInput(workspaceId: string, served: AreaRoot): AreaRotationInput['root'] {
     return {
         id: served.id,
@@ -61,6 +74,8 @@ export function rootInput(workspaceId: string, served: AreaRoot): AreaRotationIn
         metadataEnvelope: served.metadataEnvelope,
         metadataSigner: served.metadataSigner?.id ?? null,
         metadataSignature: served.metadataSignature ?? null,
+        // The origin an earlier rotation kept: the worker carries it, the server copies it.
+        metadataRekey: servedRekeyOf(served.metadataRekey),
         versions: served.versions.map((version) => ({
             id: version.id,
             objectId: version.objectId,
@@ -69,6 +84,7 @@ export function rootInput(workspaceId: string, served: AreaRoot): AreaRotationIn
             plaintextSize: version.plaintextSize === null ? null : Number(version.plaintextSize),
             signer: version.signer?.id ?? null,
             signature: version.signature ?? null,
+            rekey: servedRekeyOf(version.rekey),
         })),
         shares: [],
         links: [],
@@ -105,6 +121,6 @@ export function createRotationSource(deps: RotationDeps): RotationSource {
             return out;
         },
         writers: (groupId) => deps.writers(groupId),
-        finish: (groupId, rotation, departing) => deps.walk(groupId, rotation, departing),
+        finish: (groupId, rotation) => deps.walk(groupId, rotation),
     };
 }

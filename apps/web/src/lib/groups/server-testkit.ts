@@ -8,6 +8,7 @@ import type {
 import { parseRoster, rosterDigest } from '@hushos/crypto/groups';
 import { digest } from '@hushos/crypto/signatures';
 import type { ContactPin } from '@hushos/crypto';
+import type { RekeyView } from '@hushos/drive/api';
 import type { GroupApiError, GroupsApi } from './api';
 import type { GroupContext } from './context';
 import { createRotationSource } from './rotations';
@@ -34,7 +35,9 @@ type Root = {
     metadataVersion: number;
     metadataEnvelope: string;
     metadataSigner: string;
-    metadataSignature: string;
+    metadataSignature: string | null;
+    /* What a rotation kept of the writer, as the server serves it (it copies the origin itself). */
+    metadataRekey?: RekeyView | null;
     changeSeq: number;
     prevKeyEnvelope: string | null;
     prevKeyEpoch: number | null;
@@ -110,6 +113,7 @@ export async function familyServer() {
             metadataEnvelope: r.metadataEnvelope,
             metadataSigner: { id: r.metadataSigner },
             metadataSignature: r.metadataSignature,
+            metadataRekey: r.metadataRekey ?? null,
             prevKeyEnvelope: r.prevKeyEnvelope,
             prevKeyEpoch: r.prevKeyEpoch,
             prevParentKeyEpoch: r.prevParentKeyEpoch,
@@ -126,7 +130,21 @@ export async function familyServer() {
             keyEnvelope: rotation.root.keyEnvelope,
             metadataEnvelope: rotation.root.rotated!.metadataEnvelope,
             metadataSigner: caller,
-            metadataSignature: rotation.root.rotated!.metadataSignature,
+            metadataSignature: rotation.root.rotated!.metadataSignature ?? null,
+            // As the server copies it: the origin kept before, else the record as it stood.
+            metadataRekey: rotation.root.rotated!.metadataRekey
+                ? {
+                      origin: {
+                          ...(before.metadataRekey?.origin ?? {
+                              envelope: before.metadataEnvelope,
+                              signer: { id: before.metadataSigner },
+                              signature: before.metadataSignature!,
+                          }),
+                          keyEnvelope: rotation.root.rotated!.metadataRekey.originKeyEnvelope,
+                      },
+                      signature: rotation.root.rotated!.metadataRekey.signature,
+                  }
+                : null,
             changeSeq: before.changeSeq + 1,
             prevKeyEnvelope: junkNextPrevious
                 ? btoa(String.fromCharCode(...new Uint8Array(72).fill(7)))
@@ -431,8 +449,8 @@ export async function familyServer() {
                 personal: null,
             })),
         // The Drive walk itself is lib/spaces.ts's (and Drive's tests'): here it is logged, and done.
-        walk: async (_groupId, rotation, departing) => {
-            log.push({ route: 'walk', body: { ...rotation, departing: [...(departing ?? [])] } });
+        walk: async (_groupId, rotation) => {
+            log.push({ route: 'walk', body: { ...rotation } });
             walked.push({ workspaceId: rotation.workspaceId, rotationId: rotation.rotationId });
             areas.get(rotation.workspaceId)!.rotation = null;
         },

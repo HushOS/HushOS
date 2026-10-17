@@ -92,11 +92,15 @@ describe('removing someone: hold, finish, remove', () => {
             .filter((route) => ['hold', 'walk', 'remove'].includes(route));
         // Placed, placed again before the walk, and again right before the call is built.
         expect(order).toEqual(['hold', 'hold', 'walk', 'hold', 'remove']);
-        // The finish walk judges Bob as on his way out: his records are re-sealed, not Alice's own.
-        expect(server.log.find((entry) => entry.route === 'walk')!.body).toMatchObject({
-            departing: [BOB],
-        });
         const [call] = server.sent('remove');
+        // The removal's own rotation keeps the top folder's record as its writer's: re-keyed, with
+        // no legacy signature beside it that could claim it as Alice's.
+        const rotated = rotationsOf(call!)[0]!.root.rotated!;
+        expect(rotated.metadataRekey).toMatchObject({
+            originKeyEnvelope: expect.any(String),
+            signature: expect.any(String),
+        });
+        expect(rotated.metadataSignature).toBeNull();
         expect(statusOf(call!, BOB)).toBe('left');
         expect(statusOf(call!, CAROL)).toBe('active');
         // Every folder rotated, under the top folder route 29 served, at a freshly drawn epoch.

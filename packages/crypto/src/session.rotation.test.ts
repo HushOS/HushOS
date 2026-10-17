@@ -564,6 +564,174 @@ describe('rotation', () => {
         ).toBe(false);
     }, 60_000);
 
+    test('a personal rotation writes exactly what it wrote before: the legacy form, no origin kept, carried or read', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const grant = await createWorkspaceGrant(root, USER, WS, 1);
+        const identity = await createIdentity(root, USER);
+        const owner = await device(USER, root, 'owner');
+        await owner('driveOpenWorkspace', { userId: USER, grant });
+        await owner('identityOpen', { userId: USER, identity });
+        const created = (await owner('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('Maya’s'),
+                },
+                {
+                    id: C,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 3,
+                    metadata: meta('Mine'),
+                },
+            ],
+        })) as {
+            nodes: { keyEnvelope: string; metadataEnvelope: string; metadataSignature: string }[];
+        };
+        const [, b, c] = created.nodes as [
+            unknown,
+            (typeof created.nodes)[number],
+            (typeof created.nodes)[number],
+        ];
+        // Maya, an editor the owner checked, wrote B.
+        await sodium.ready;
+        const maya = sodium.crypto_sign_keypair();
+        const MAYA = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+        const ctx = (nodeId: string) => ({
+            workspaceId: WS,
+            nodeId,
+            kind: 'folder' as const,
+            metadataVersion: 1,
+        });
+        const mayaSignature = encode(
+            await signStatement(
+                await metadataStatement(ctx(B), decode(b.metadataEnvelope)),
+                maya.privateKey,
+            ),
+        );
+        const signers = { [MAYA]: { current: encode(maya.publicKey), retired: [] } };
+        const ownerKey = decode(identity.signingPublicKey, 32);
+        const input = (
+            id: string,
+            node: { keyEnvelope: string; metadataEnvelope: string },
+            keyEpoch: number,
+            signer: string,
+            signature: string | null,
+            metadataRekey: unknown = null,
+        ) => ({
+            id,
+            kind: 'folder' as const,
+            parentId: A,
+            parentKeyEpoch: 1,
+            keyEpoch,
+            wrappedParentKeyEpoch: 1,
+            keyEnvelope: node.keyEnvelope,
+            metadataVersion: 1,
+            metadataEnvelope: node.metadataEnvelope,
+            metadataSigner: signer,
+            metadataSignature: signature,
+            metadataRekey: metadataRekey as never,
+            versions: [],
+            shares: [],
+            links: [],
+        });
+        type Rotated = {
+            id: string;
+            keyEnvelope: string;
+            metadataEnvelope: string;
+            metadataSignature: string | null;
+            metadataRekey: { originKeyEnvelope: string; signature: string } | null;
+            metadataDropOrigin?: true;
+            error?: string;
+        };
+        const rotate = async (targetEpoch: number, nodes: ReturnType<typeof input>[]) => {
+            const { nodes: out } = (await owner('driveRotateNodes', {
+                workspaceId: WS,
+                targetEpoch,
+                granterUserId: USER,
+                signers,
+                nodes,
+            })) as { nodes: Rotated[] };
+            for (const node of out) if (node.error) throw new Error(node.error);
+            await owner('driveRotateCommit', { workspaceId: WS, nodeIds: out.map((n) => n.id) });
+            return out;
+        };
+        const verify = async (node: Rotated, keyEpoch: number, metadataRekey: unknown) =>
+            (
+                (await owner('driveVerify', {
+                    workspaceId: WS,
+                    signers,
+                    nodes: [
+                        {
+                            id: node.id,
+                            kind: 'folder',
+                            metadataVersion: 1,
+                            metadataEnvelope: node.metadataEnvelope,
+                            metadataSigner: USER,
+                            metadataSignature: node.metadataSignature,
+                            keyEpoch,
+                            metadataRekey: metadataRekey as never,
+                        },
+                    ],
+                })) as { nodes: { metadata: string; metadataRekey?: unknown }[] }
+            ).nodes[0]!;
+
+        const [first, mine] = await rotate(7, [
+            input(B, b, 2, MAYA, mayaSignature),
+            input(C, c, 3, USER, c.metadataSignature),
+        ]);
+        // Shipped apps stall on a row with an origin (rekeyedFor): none is written here yet.
+        for (const node of [first!, mine!]) {
+            expect(node.metadataRekey ?? null).toBeNull();
+            expect(node.metadataDropOrigin).toBeUndefined();
+        }
+        // The legacy form as before: a verified record re-signed ordinary, Maya's included.
+        const legacyOf = async (node: Rotated) =>
+            (await verifyStatement(
+                await metadataStatement(ctx(node.id), decode(node.metadataEnvelope)),
+                decode(node.metadataSignature!),
+                ownerKey,
+            ))
+                ? 'ordinary'
+                : 'other';
+        expect(await legacyOf(first!)).toBe('ordinary');
+        expect(await legacyOf(mine!)).toBe('ordinary');
+        // An origin the server serves on a personal row is neither carried nor dropped.
+        const served = {
+            origin: {
+                envelope: b.metadataEnvelope,
+                signerId: MAYA,
+                signature: mayaSignature,
+                keyEnvelope: first!.keyEnvelope,
+            },
+            signature: mayaSignature,
+        };
+        const [second] = await rotate(9, [
+            input(B, first!, 7, USER, first!.metadataSignature, served),
+        ]);
+        expect(second!.metadataRekey ?? null).toBeNull();
+        expect(second!.metadataDropOrigin).toBeUndefined();
+        expect(await legacyOf(second!)).toBe('ordinary');
+        // Nor is it read: the row reads by its legacy columns, as a shipped app reads it.
+        const read = await verify(second!, 9, served);
+        expect(read).toMatchObject({ metadata: 'verified' });
+        expect(read).not.toHaveProperty('metadataRekey');
+    }, 60_000);
+
     test('a rotation keeps a copy saved from a link saved only when it verified as saved', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const grant = await createWorkspaceGrant(root, USER, WS, 1);

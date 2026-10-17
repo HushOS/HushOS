@@ -246,7 +246,6 @@ export function walkArea(
         nodeId: string;
         targetEpoch: number;
     },
-    departing: readonly string[] = [],
 ): Promise<void> {
     const workspaceId = rotation.workspaceId;
     const held = walking.get(workspaceId);
@@ -271,7 +270,6 @@ export function walkArea(
                         walkState.set(workspaceId, { groupId, workspaceId, done, error: null });
                         publishWalks();
                     },
-                    departing,
                 ),
             running: async () => stillRunning((await groupsApi.spaces()).spaces, groupId, rotation),
         });
@@ -322,7 +320,7 @@ export function walkPending(
     for (const state of states) {
         const rotation = state.view.rotation;
         // Only a roster rotation this device saw for itself (walks.ts): never a run on the
-        // server's word alone, since a walk re-signs every record it reaches as the walker.
+        // server's word alone, since a walk closes every share and link its own ledger lacks.
         if (!rotation || !ownReasonToWalk(state)) continue;
         const key = `${state.workspaceId}:${rotation.id}`;
         const backoff = walkBackoff.get(key);
@@ -362,8 +360,7 @@ provideRotations({
         allocateEpochs: (workspaceId, count) => driveApi.allocateEpochs(workspaceId, count),
         document: (workspaceId, kind) => driveApi.document(workspaceId, kind),
         writers: (groupId) => writersFor(unlockedUser(), groupId),
-        walk: (groupId, rotation, departing) =>
-            walkArea(unlockedUser(), groupId, rotation, departing),
+        walk: (groupId, rotation) => walkArea(unlockedUser(), groupId, rotation),
     }),
     opened: (groupId, states) => {
         const userId = authClient.store.getState().unlockedUserId;

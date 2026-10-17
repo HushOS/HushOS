@@ -1,6 +1,11 @@
 import type { DriveNode } from '@hushos/drive/client';
 import type { Signer } from '@hushos/drive/api';
-import type { IntegrityIssue, RecordIntegrity } from '@hushos/drive/trust';
+import {
+    recordIssues,
+    type IntegrityIssue,
+    type RecordIntegrity,
+    type RekeyNote,
+} from '@hushos/drive/trust';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DownloadIcon, EyeIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
 import { useState } from 'react';
@@ -56,14 +61,11 @@ const replacedWhen = (iso: string) =>
 function versionIssues(version: {
     integrity: RecordIntegrity | null;
     signer?: Signer | null;
+    rekeyed?: RekeyNote | null;
 }): IntegrityIssue[] {
-    if (
-        !version.integrity ||
-        version.integrity === 'verified' ||
-        version.integrity === 'saved-from-link'
-    )
-        return [];
-    return [{ record: 'version', integrity: version.integrity, signer: version.signer ?? null }];
+    if (!version.integrity) return [];
+    // A re-keyed version names its writer, or for a re-key of its own the re-keyer.
+    return recordIssues('version', version.integrity, version.signer ?? null, version.rekeyed);
 }
 
 export function VersionsDialog({

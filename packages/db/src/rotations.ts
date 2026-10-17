@@ -2,11 +2,13 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     LINK_KDF_VERSION,
+    NO_METADATA_ORIGIN,
+    NO_VERSION_ORIGIN,
     SHARE_ENVELOPE_BYTES,
     activeRotation,
+    currentSigningKey,
     nextChangeSeq,
     selectNodes,
-    signedBy,
     signerOf,
     walk,
     type NodeRow,
@@ -15,8 +17,17 @@ import {
     type Tx,
     type VersionRow,
 } from './drive';
+import { rekeyedFor } from '@hushos/crypto/rekeyed-scope';
 import { grantedByMember } from './membership';
-import { metadataSigned, versionSigned } from './signatures';
+import {
+    metadataRekeyedStatement,
+    metadataSigned,
+    signedForm,
+    verifySignature,
+    versionRekeyedStatement,
+    versionSigned,
+    type RecordOriginInput,
+} from './signatures';
 import {
     accountIdentities,
     driveLinks,
@@ -143,6 +154,12 @@ export type RotationWorkNode = NodeRow & {
         /* Who signed the envelope being replaced, so the client knows what it re-signs. */
         signer: Signer | null;
         signature: Buffer | null;
+        /* The origin an earlier rotation kept, which the next one carries (see fileVersions). */
+        originEnvelope: Buffer | null;
+        originKeyEnvelope: Buffer | null;
+        originSignerId: string | null;
+        originSignature: Buffer | null;
+        rekeySignature: Buffer | null;
     }[];
     shares: {
         id: string;
@@ -179,6 +196,11 @@ async function workNodes(tx: Tx, page: SubtreeRow[]): Promise<RotationWorkNode[]
                   plaintextSize: driveObjects.plaintextSize,
                   signerId: fileVersions.signerId,
                   signature: fileVersions.signature,
+                  originEnvelope: fileVersions.originEnvelope,
+                  originKeyEnvelope: fileVersions.originKeyEnvelope,
+                  originSignerId: fileVersions.originSignerId,
+                  originSignature: fileVersions.originSignature,
+                  rekeySignature: fileVersions.rekeySignature,
               })
               .from(fileVersions)
               .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
@@ -243,6 +265,11 @@ async function workNodes(tx: Tx, page: SubtreeRow[]): Promise<RotationWorkNode[]
                         plaintextSize: v.plaintextSize,
                         signer: signerOf(v.signerId),
                         signature: v.signature,
+                        originEnvelope: v.originEnvelope,
+                        originKeyEnvelope: v.originKeyEnvelope,
+                        originSignerId: v.originSignerId,
+                        originSignature: v.originSignature,
+                        rekeySignature: v.rekeySignature,
                     })),
                 shares: shares
                     .filter((s) => s.nodeId === row.id)
@@ -333,6 +360,27 @@ export async function listRotationWork(input: {
     });
 }
 
+/*
+ * A re-keyed record's part of a rotation (docs/integrity-design.md, "Re-keyed
+ * records"): the origin's opening key wrapped under the new node key, and the
+ * rotating account's signature over the rekeyed statement. The origin itself
+ * is never the client's: the server copies it from the row.
+ */
+export type RekeyInput = { originKeyEnvelope: Buffer; signature: Buffer };
+/*
+ * How one record of a rotated node is signed: the re-keyed form (`rekey`),
+ * with or without a legacy signature beside it for readers that do not know
+ * that form yet, or the legacy signature alone. `dropOrigin` says a legacy
+ * re-seal means to drop the origin the row carries (the rotating client found
+ * it unbound, or its signer gone); without it such a re-seal is refused, since
+ * it is what a client that does not know origins sends.
+ */
+export type RotatedRecordSignatures = {
+    signature: Buffer | null;
+    rekey?: RekeyInput | null;
+    dropOrigin?: boolean;
+};
+
 export type RotatedNodeInput = {
     id: string;
     changeSeq: number;
@@ -345,8 +393,10 @@ export type RotatedNodeInput = {
      */
     rotated: {
         metadataEnvelope: Buffer;
-        metadataSignature: Buffer;
-        versions: { id: string; contentKeyEnvelope: Buffer; signature: Buffer }[];
+        metadataSignature: Buffer | null;
+        metadataRekey?: RekeyInput | null;
+        metadataDropOrigin?: boolean;
+        versions: ({ id: string; contentKeyEnvelope: Buffer } & RotatedRecordSignatures)[];
         shares: { id: string; shareEnvelope: Buffer }[];
         links: { id: string; linkEnvelope: Buffer; secretEnvelope: Buffer }[];
         /* Links the owner's device could not re-seal: revoked, since nobody could open them anyway. */
@@ -354,13 +404,126 @@ export type RotatedNodeInput = {
     } | null;
 };
 
+/*
+ * `unsupported`: a record signed in a form the server does not take there (a
+ * legacy re-seal of a row that carries an origin, a re-key of a row with
+ * nothing to keep, or in a group's area anything that would claim authorship).
+ */
 export type RotateOutcome =
     | 'ok'
     | 'stale'
     | 'not-found'
     | 'parent-not-ready'
     | 'already'
-    | 'bad-signature';
+    | 'bad-signature'
+    | 'unsupported';
+
+/* A record as the row holds it now: its envelope's signer and signature, and any origin kept. */
+type StoredRecord = {
+    envelope: Buffer | null;
+    signerId: string | null;
+    signature: Buffer | null;
+    originEnvelope: Buffer | null;
+    originSignerId: string | null;
+    originSignature: Buffer | null;
+};
+/* What one checked record writes: its signer and legacy signature, and its origin columns. */
+type SignedRecord = {
+    signature: Buffer | null;
+    origin: {
+        envelope: Buffer;
+        signerId: string;
+        signature: Buffer;
+        keyEnvelope: Buffer;
+        rekeySignature: Buffer;
+    } | null;
+};
+
+/*
+ * One re-sealed record against the rules (docs/integrity-design.md, "What the
+ * server enforces"), before anything is written:
+ * - a re-keyed record's origin is the row's: the origin it already carries,
+ *   else its current envelope, signer and signature, read under the rotation's
+ *   change sequence precondition; never one the client sent. A record with no
+ *   signature or no signer has nothing to keep and is refused re-keyed;
+ * - the rekeyed statement is built from that origin, the submitted envelope
+ *   and wrapped key and the target epoch, and verified under the rotating
+ *   account's current key;
+ * - a legacy signature beside it holds in any form, but claims authorship
+ *   (ordinary or saved) only over the rotating account's own origin, and in a
+ *   group's area never;
+ * - a legacy signature alone, on a row that carries an origin, only with
+ *   `dropOrigin` and only re-sealed (decision D9); in a group's area only
+ *   re-sealed, and only for a record there is no writer's signature to keep.
+ * Outside the re-keyed scope (`inScope` false: rekeyedFor, personal
+ * workspaces until native clients read origins) a re-key is refused and the
+ * legacy form is taken exactly as before, writing no origin.
+ */
+function checkRecord(input: {
+    stored: StoredRecord;
+    sent: RotatedRecordSignatures;
+    key: Uint8Array;
+    rotator: string;
+    inScope: boolean;
+    group: boolean;
+    legacy: (signature: Buffer) => SignedStatement;
+    rekeyed: (origin: RecordOriginInput) => Buffer;
+}): SignedRecord | 'bad-signature' | 'unsupported' {
+    const { stored, sent, key, rotator, group } = input;
+    const legacyForm = sent.signature ? signedForm(key, input.legacy(sent.signature)) : null;
+    if (sent.signature && legacyForm === null) return 'bad-signature';
+    // Personal workspaces, for now: what shipped clients write, and nothing that leaves an origin.
+    if (!input.inScope) {
+        if (sent.rekey) return 'unsupported';
+        if (!sent.signature || legacyForm === null) return 'bad-signature';
+        return { signature: sent.signature, origin: null };
+    }
+    const kept =
+        stored.originEnvelope && stored.originSignature
+            ? {
+                  envelope: stored.originEnvelope,
+                  signerId: stored.originSignerId,
+                  signature: stored.originSignature,
+              }
+            : null;
+    if (sent.rekey) {
+        if (sent.dropOrigin) return 'unsupported';
+        const origin =
+            kept ??
+            (stored.envelope && stored.signature
+                ? {
+                      envelope: stored.envelope,
+                      signerId: stored.signerId,
+                      signature: stored.signature,
+                  }
+                : null);
+        // Unsigned, or its writer no longer named: nothing to keep (decision D6), re-sealed instead.
+        if (!origin || !origin.signerId) return 'unsupported';
+        const full = {
+            ...origin,
+            signerId: origin.signerId,
+            keyEnvelope: sent.rekey.originKeyEnvelope,
+        };
+        if (!verifySignature(key, input.rekeyed(full), sent.rekey.signature))
+            return 'bad-signature';
+        if (legacyForm !== null && legacyForm !== 'resealed') {
+            if (group || origin.signerId.toLowerCase() !== rotator.toLowerCase())
+                return 'unsupported';
+        }
+        return {
+            signature: sent.signature,
+            origin: { ...full, rekeySignature: sent.rekey.signature },
+        };
+    }
+    if (!sent.signature || legacyForm === null) return 'bad-signature';
+    if (kept && (!sent.dropOrigin || legacyForm !== 'resealed')) return 'unsupported';
+    if (group) {
+        if (legacyForm !== 'resealed') return 'unsupported';
+        // A signed record with a named writer is kept, never re-signed in the walker's name.
+        if (!kept && stored.signature && stored.signerId) return 'unsupported';
+    }
+    return { signature: sent.signature, origin: null };
+}
 
 /*
  * Applies a batch parents first, each node in its own transaction under the
@@ -415,6 +578,14 @@ export async function rotateNodeIn(
     if (!node || node.purgedAt) return 'not-found';
     if (node.changeSeq !== item.changeSeq) return 'stale';
     const root = item.id === input.rootId;
+    // Whose area this is: a group's takes no rotation that claims authorship (decision D3).
+    const [workspace] = await tx
+        .select({ ownerKind: workspaces.ownerKind, version: workspaces.workspaceKeyVersion })
+        .from(workspaces)
+        .where(eq(workspaces.id, input.workspaceId));
+    const group = workspace?.ownerKind === 'group';
+    // The one switch for where records are re-keyed (personal workspaces wait for native).
+    const inScope = rekeyedFor({ ownerKind: group ? 'group' : 'personal' });
     if (!root) {
         const [parent] = await tx
             .select({ keyEpoch: driveNodes.keyEpoch })
@@ -426,12 +597,7 @@ export async function rotateNodeIn(
         // A group area's root is wrapped under the area's key at its current version: only a
         // roster moves that version (applyRotation bumps it first), so nobody re-keys the
         // root under any other version outside a roster.
-        const [workspace] = await tx
-            .select({ ownerKind: workspaces.ownerKind, version: workspaces.workspaceKeyVersion })
-            .from(workspaces)
-            .where(eq(workspaces.id, input.workspaceId));
-        if (workspace?.ownerKind === 'group' && item.parentKeyEpoch !== workspace.version)
-            return 'stale';
+        if (group && item.parentKeyEpoch !== workspace.version) return 'stale';
     } else if (node.parentId) {
         const [parent] = await tx
             .select({ keyEpoch: driveNodes.keyEpoch })
@@ -466,6 +632,12 @@ export async function rotateNodeIn(
             id: fileVersions.id,
             objectId: fileVersions.objectId,
             contentSuite: driveObjects.contentSuite,
+            envelope: fileVersions.contentKeyEnvelope,
+            signerId: fileVersions.signerId,
+            signature: fileVersions.signature,
+            originEnvelope: fileVersions.originEnvelope,
+            originSignerId: fileVersions.originSignerId,
+            originSignature: fileVersions.originSignature,
         })
         .from(fileVersions)
         .innerJoin(driveObjects, eq(driveObjects.id, fileVersions.objectId))
@@ -477,37 +649,66 @@ export async function rotateNodeIn(
         ready.some((row) => !submitted.has(row.id))
     )
         return 'stale';
-    const statements: SignedStatement[] = [
-        metadataSigned(
-            {
-                workspaceId: input.workspaceId,
-                nodeId: item.id,
-                kind: node.kind,
-                metadataVersion: node.metadataVersion,
-                metadataEnvelope: rotated.metadataEnvelope,
-            },
-            rotated.metadataSignature,
-        ),
-    ];
-    // Signed over what is stored: the node's kind and unchanged metadata version, and
-    // each version's own object and suite.
+    const key = await currentSigningKey(tx, input.userId);
+    if (!key) return 'bad-signature';
+    // Every record is checked before anything is written. Signed over what is stored: the
+    // node's kind and unchanged metadata version, each version's own object and suite, and
+    // the epoch the rotation moves the node to.
+    const metadataFields = {
+        workspaceId: input.workspaceId,
+        nodeId: item.id,
+        kind: node.kind,
+        metadataVersion: node.metadataVersion,
+        metadataEnvelope: rotated.metadataEnvelope,
+    };
+    const metadata = checkRecord({
+        stored: {
+            envelope: node.metadataEnvelope,
+            signerId: node.metadataSignerId,
+            signature: node.metadataSignature,
+            originEnvelope: node.metadataOriginEnvelope,
+            originSignerId: node.metadataOriginSignerId,
+            originSignature: node.metadataOriginSignature,
+        },
+        sent: {
+            signature: rotated.metadataSignature,
+            rekey: rotated.metadataRekey,
+            dropOrigin: rotated.metadataDropOrigin,
+        },
+        key,
+        rotator: input.userId,
+        inScope,
+        group,
+        legacy: (signature) => metadataSigned(metadataFields, signature),
+        rekeyed: (origin) =>
+            metadataRekeyedStatement({ ...metadataFields, keyEpoch: input.targetEpoch }, origin),
+    });
+    if (typeof metadata === 'string') return metadata;
+    const versions: { id: string; contentKeyEnvelope: Buffer; signed: SignedRecord }[] = [];
     for (const version of rotated.versions) {
         const row = ready.find((v) => v.id === version.id)!;
-        statements.push(
-            versionSigned(
-                {
-                    workspaceId: input.workspaceId,
-                    nodeId: item.id,
-                    versionId: version.id,
-                    objectId: row.objectId!,
-                    contentSuite: row.contentSuite,
-                    contentKeyEnvelope: version.contentKeyEnvelope,
-                },
-                version.signature,
-            ),
-        );
+        const fields = {
+            workspaceId: input.workspaceId,
+            nodeId: item.id,
+            versionId: version.id,
+            objectId: row.objectId!,
+            contentSuite: row.contentSuite,
+            contentKeyEnvelope: version.contentKeyEnvelope,
+        };
+        const signed = checkRecord({
+            stored: row,
+            sent: version,
+            key,
+            rotator: input.userId,
+            inScope,
+            group,
+            legacy: (signature) => versionSigned(fields, signature),
+            rekeyed: (origin) =>
+                versionRekeyedStatement({ ...fields, keyEpoch: input.targetEpoch }, origin),
+        });
+        if (typeof signed === 'string') return signed;
+        versions.push({ id: version.id, contentKeyEnvelope: version.contentKeyEnvelope, signed });
     }
-    if (!(await signedBy(tx, input.userId, statements))) return 'bad-signature';
     await tx
         .update(driveNodes)
         .set({
@@ -520,18 +721,37 @@ export async function rotateNodeIn(
             keyEpoch: input.targetEpoch,
             parentKeyEpoch: item.parentKeyEpoch,
             metadataEnvelope: rotated.metadataEnvelope,
+            // The account rotating sealed the envelope: the re-keyer, whatever else it signed.
             metadataSignerId: input.userId,
-            metadataSignature: rotated.metadataSignature,
+            metadataSignature: metadata.signature,
+            ...(metadata.origin
+                ? {
+                      metadataOriginEnvelope: metadata.origin.envelope,
+                      metadataOriginKeyEnvelope: metadata.origin.keyEnvelope,
+                      metadataOriginSignerId: metadata.origin.signerId,
+                      metadataOriginSignature: metadata.origin.signature,
+                      metadataRekeySignature: metadata.origin.rekeySignature,
+                  }
+                : NO_METADATA_ORIGIN),
             changeSeq,
         })
         .where(eq(driveNodes.id, item.id));
-    for (const version of rotated.versions)
+    for (const version of versions)
         await tx
             .update(fileVersions)
             .set({
                 contentKeyEnvelope: version.contentKeyEnvelope,
                 signerId: input.userId,
-                signature: version.signature,
+                signature: version.signed.signature,
+                ...(version.signed.origin
+                    ? {
+                          originEnvelope: version.signed.origin.envelope,
+                          originKeyEnvelope: version.signed.origin.keyEnvelope,
+                          originSignerId: version.signed.origin.signerId,
+                          originSignature: version.signed.origin.signature,
+                          rekeySignature: version.signed.origin.rekeySignature,
+                      }
+                    : NO_VERSION_ORIGIN),
             })
             .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
     // Only suite 3 is written; anything else is left unsealed and revoked below.

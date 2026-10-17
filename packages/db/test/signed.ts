@@ -1,9 +1,15 @@
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../src/client';
 import * as drive from '../src/drive';
 import * as rotations from '../src/rotations';
-import { driveNodes, driveObjects, driveUploads, fileVersions } from '../src/schema';
-import { metadataStatement, versionStatement } from '../src/signatures';
+import { driveNodes, driveObjects, driveUploads, fileVersions, workspaces } from '../src/schema';
+import {
+    metadataRekeyedStatement,
+    metadataStatement,
+    versionRekeyedStatement,
+    versionStatement,
+} from '../src/signatures';
 import { signerFor } from './helpers';
 
 /*
@@ -228,11 +234,130 @@ type UnsignedRotated = Omit<rotations.RotatedNodeInput, 'rotated'> & {
         | null;
 };
 
+/*
+ * A record's origin as the server will copy it: the one the row already
+ * carries, else its current envelope, signer and signature; null when there
+ * is nothing to keep (unsigned, or the signer is gone).
+ */
+export function originOf(row: {
+    envelope: Buffer | null;
+    signerId: string | null;
+    signature: Buffer | null;
+    originEnvelope: Buffer | null;
+    originSignerId: string | null;
+    originSignature: Buffer | null;
+}) {
+    if (row.originEnvelope && row.originSignature)
+        return row.originSignerId
+            ? {
+                  envelope: row.originEnvelope,
+                  signerId: row.originSignerId,
+                  signature: row.originSignature,
+              }
+            : null;
+    return row.envelope && row.signature && row.signerId
+        ? { envelope: row.envelope, signerId: row.signerId, signature: row.signature }
+        : null;
+}
+
+/* A node's metadata re-keyed by `userId` at `keyEpoch`, over the origin the server will copy. */
+export async function metadataRekey(
+    userId: string,
+    workspaceId: string,
+    nodeId: string,
+    keyEpoch: number,
+    metadataEnvelope: Buffer,
+    originKeyEnvelope: Buffer = randomBytes(72),
+) {
+    const [node] = await db.select().from(driveNodes).where(eq(driveNodes.id, nodeId));
+    const origin = node
+        ? originOf({
+              envelope: node.metadataEnvelope,
+              signerId: node.metadataSignerId,
+              signature: node.metadataSignature,
+              originEnvelope: node.metadataOriginEnvelope,
+              originSignerId: node.metadataOriginSignerId,
+              originSignature: node.metadataOriginSignature,
+          })
+        : null;
+    if (!node || !origin) return null;
+    return {
+        originKeyEnvelope,
+        signature: signerFor(userId).sign(
+            metadataRekeyedStatement(
+                {
+                    workspaceId,
+                    nodeId,
+                    kind: node.kind,
+                    metadataVersion: node.metadataVersion,
+                    metadataEnvelope,
+                    keyEpoch,
+                },
+                { ...origin, keyEnvelope: originKeyEnvelope },
+            ),
+        ),
+    };
+}
+
+/* A version re-keyed by `userId` at `keyEpoch`, over the origin the server will copy. */
+export async function versionRekey(
+    userId: string,
+    workspaceId: string,
+    nodeId: string,
+    versionId: string,
+    keyEpoch: number,
+    contentKeyEnvelope: Buffer,
+    originKeyEnvelope: Buffer = randomBytes(72),
+) {
+    const [row] = await db.select().from(fileVersions).where(eq(fileVersions.id, versionId));
+    const object = await objectOfVersion(versionId);
+    const origin = row
+        ? originOf({
+              envelope: row.contentKeyEnvelope,
+              signerId: row.signerId,
+              signature: row.signature,
+              originEnvelope: row.originEnvelope,
+              originSignerId: row.originSignerId,
+              originSignature: row.originSignature,
+          })
+        : null;
+    if (!row || !object || !origin) return null;
+    return {
+        originKeyEnvelope,
+        signature: signerFor(userId).sign(
+            versionRekeyedStatement(
+                {
+                    workspaceId,
+                    nodeId,
+                    versionId,
+                    objectId: object.objectId!,
+                    contentSuite: object.contentSuite,
+                    contentKeyEnvelope,
+                    keyEpoch,
+                },
+                { ...origin, keyEnvelope: originKeyEnvelope },
+            ),
+        ),
+    };
+}
+
+/*
+ * A batch signed as a current client signs it. In a personal workspace each
+ * record carries the rotating account's ordinary signature, as before re-keyed
+ * records (and as shipped apps still send). In a group's area, where nothing a
+ * rotation signs may claim authorship, a record with a writer's signature to
+ * keep is re-keyed over it, and anything else is signed re-sealed.
+ */
 export async function rotateNodes(
     input: Omit<Parameters<typeof rotations.rotateNodes>[0], 'nodes'> & {
         nodes: UnsignedRotated[];
     },
 ) {
+    const [workspace] = await db
+        .select({ ownerKind: workspaces.ownerKind })
+        .from(workspaces)
+        .where(eq(workspaces.id, input.workspaceId));
+    const group = workspace?.ownerKind === 'group';
     const nodes: rotations.RotatedNodeInput[] = [];
     for (const item of input.nodes) {
         if (!item.rotated) {
@@ -245,33 +370,66 @@ export async function rotateNodes(
             .where(eq(driveNodes.id, item.id));
         const versions = [];
         for (const version of item.rotated.versions) {
+            const rekey = group
+                ? await versionRekey(
+                      input.userId,
+                      input.workspaceId,
+                      item.id,
+                      version.id,
+                      input.targetEpoch,
+                      version.contentKeyEnvelope,
+                  )
+                : null;
             const object = await objectOfVersion(version.id);
             versions.push({
                 ...version,
-                signature: sealVersion(input.userId, {
-                    workspaceId: input.workspaceId,
-                    nodeId: item.id,
-                    versionId: version.id,
-                    objectId: object?.objectId ?? version.id,
-                    contentSuite: object?.contentSuite ?? 0,
-                    contentKeyEnvelope: version.contentKeyEnvelope,
-                }),
+                rekey,
+                signature: rekey
+                    ? null
+                    : signerFor(input.userId).sign(
+                          versionStatement(
+                              {
+                                  workspaceId: input.workspaceId,
+                                  nodeId: item.id,
+                                  versionId: version.id,
+                                  objectId: object?.objectId ?? version.id,
+                                  contentSuite: object?.contentSuite ?? 0,
+                                  contentKeyEnvelope: version.contentKeyEnvelope,
+                              },
+                              group ? 'resealed' : 'ordinary',
+                          ),
+                      ),
             });
         }
+        const rekeyed = group
+            ? await metadataRekey(
+                  input.userId,
+                  input.workspaceId,
+                  item.id,
+                  input.targetEpoch,
+                  item.rotated.metadataEnvelope,
+              )
+            : null;
         nodes.push({
             ...item,
             rotated: {
                 ...item.rotated,
                 versions,
-                metadataSignature: signerFor(input.userId).sign(
-                    metadataStatement({
-                        workspaceId: input.workspaceId,
-                        nodeId: item.id,
-                        kind: node?.kind ?? 'folder',
-                        metadataVersion: node?.metadataVersion ?? 1,
-                        metadataEnvelope: item.rotated.metadataEnvelope,
-                    }),
-                ),
+                metadataRekey: rekeyed,
+                metadataSignature: rekeyed
+                    ? null
+                    : signerFor(input.userId).sign(
+                          metadataStatement(
+                              {
+                                  workspaceId: input.workspaceId,
+                                  nodeId: item.id,
+                                  kind: node?.kind ?? 'folder',
+                                  metadataVersion: node?.metadataVersion ?? 1,
+                                  metadataEnvelope: item.rotated.metadataEnvelope,
+                              },
+                              group ? 'resealed' : 'ordinary',
+                          ),
+                      ),
             },
         });
     }

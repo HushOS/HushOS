@@ -94,13 +94,12 @@ export type RotationSource = {
     writers(groupId: string): Promise<GroupWriter[]>;
     /*
      * Walks a running Drive rotation in an area to its end (409 rotating, a
-     * removal's finish step). `departing`: members on their way out (the one
-     * being removed, those a call marks left), whose records it re-seals.
+     * removal's finish step). The walk keeps every writer's record re-keyed,
+     * so it needs no word of who is leaving.
      */
     finish(
         groupId: string,
         rotation: { workspaceId: string; rotationId: string; nodeId: string; targetEpoch: number },
-        departing?: readonly string[],
     ): Promise<void>;
     /*
      * A sync opened the family's folders (their keys in the worker, their roots

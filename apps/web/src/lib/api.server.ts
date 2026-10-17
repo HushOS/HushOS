@@ -481,6 +481,11 @@ const workspaceKeySchema = t.Object({
 });
 const workspaceSetupSchema = t.Object({ id: workspaceIdSchema, grant: workspaceKeySchema });
 
+/* A re-keyed record's part of a rotation: the origin's wrapped key and the rekeyed statement's signature. */
+const rekeySchema = t.Object({
+    originKeyEnvelope: keyEnvelopeSchema,
+    signature: signatureSchema,
+});
 /* A node of a rotation batch, and a group area root's rotation. */
 const rotatedNodeSchema = t.Object({
     id: uuidSchema,
@@ -490,12 +495,17 @@ const rotatedNodeSchema = t.Object({
     rotated: t.Nullable(
         t.Object({
             metadataEnvelope: metadataEnvelopeSchema,
-            metadataSignature: signatureSchema,
+            // Optional beside a re-key (docs/integrity-design.md, "Re-keyed records").
+            metadataSignature: t.Optional(t.Nullable(signatureSchema)),
+            metadataRekey: t.Optional(t.Nullable(rekeySchema)),
+            metadataDropOrigin: t.Optional(t.Boolean()),
             versions: t.Array(
                 t.Object({
                     id: uuidSchema,
                     contentKeyEnvelope: anyVersionEnvelopeSchema,
-                    signature: signatureSchema,
+                    signature: t.Optional(t.Nullable(signatureSchema)),
+                    rekey: t.Optional(t.Nullable(rekeySchema)),
+                    dropOrigin: t.Optional(t.Boolean()),
                 }),
                 { maxItems: 1000 },
             ),
