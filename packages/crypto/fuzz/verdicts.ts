@@ -67,6 +67,7 @@ import {
     openOriginKey,
     openWithOriginKey,
 } from '../src/drive';
+import { opensAsMade, readSteps, runSteps } from '../src/area-ledger-testkit';
 import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
 import { chain, core, groups, people, shareGrantee, signed, web, type Json } from './fixtures';
 
@@ -99,6 +100,7 @@ export const TARGETS = [
     'accept',
     'record_integrity',
     'origin_open',
+    'area_ledger',
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
@@ -1232,5 +1234,26 @@ export async function verdict(target: Target, data: Uint8Array): Promise<Verdict
             return withJson(data, recordIntegrity);
         case 'origin_open':
             return originOpen(data);
+        case 'area_ledger':
+            return withJson(data, areaLedger);
     }
+}
+
+/*
+ * The family write rules on any sequence of steps (area-ledger-testkit.ts):
+ * every step's outcome, which the core's AreaLedger must match. Invariant:
+ * every key envelope the ledger made opens, under the key its parent holds,
+ * to the key the ledger handed back.
+ */
+async function areaLedger(value: Doc): Promise<Verdict | undefined> {
+    const steps = readSteps(value.steps);
+    if (!steps) return undefined;
+    const { outcomes, made } = await runSteps(steps);
+    for (const envelope of made)
+        if (envelope.parentKey)
+            invariant(
+                await opensAsMade(envelope),
+                'a key envelope the ledger made opens to its key',
+            );
+    return { ok: true, out: { outcomes } };
 }

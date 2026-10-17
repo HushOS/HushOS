@@ -196,6 +196,93 @@ pub fn node_wrap(ctx: NodeKeyContext, parent_key: Vec<u8>, node_key: Vec<u8>) ->
     seal(&parent_key, &node_key, &node_key_context(&ctx))
 }
 
+/*
+ * A node key's associated data as the web's `nodeKeyContext` builds it, ids
+ * and epochs checked the same way (lowercase UUIDs, 1 to 2^53 - 1), under
+ * `label`. `node_open` and `node_wrap` keep their unchecked context (the
+ * shipped apps call them); the area ledger and the previous-root envelope
+ * use this one, so they refuse exactly what the web refuses.
+ */
+pub(crate) fn node_key_context_checked(ctx: &NodeKeyContext, label: &str) -> CoreResult<Vec<u8>> {
+    Ok(context(&[
+        json!(label),
+        json!(ENVELOPE_SUITE),
+        json!(context_id(&ctx.workspace_id, "workspace id")?),
+        json!(context_id(&ctx.node_id, "node id")?),
+        json!(context_id(&ctx.parent_id, "parent id")?),
+        json!(context_epoch(ctx.parent_key_epoch, "parent key epoch")?),
+        json!(context_epoch(ctx.key_epoch, "key epoch")?),
+    ]))
+}
+
+pub(crate) const NODE_KEY_LABEL: &str = "hushos/drive/node-key";
+const PREVIOUS_ROOT_KEY_LABEL: &str = "hushos/drive/previous-root-key";
+
+/* A node key under its parent's, the context checked as the web checks it. */
+pub(crate) fn node_wrap_checked(
+    ctx: &NodeKeyContext,
+    parent_key: &[u8],
+    node_key: &[u8],
+) -> CoreResult<Vec<u8>> {
+    let aad = node_key_context_checked(ctx, NODE_KEY_LABEL)?;
+    expect_len("parentKey", parent_key, KEY_BYTES)?;
+    expect_len("nodeKey", node_key, KEY_BYTES)?;
+    seal(parent_key, node_key, &aad)
+}
+
+/* A node key out of its envelope, the context checked as the web checks it. */
+pub(crate) fn node_open_checked(
+    ctx: &NodeKeyContext,
+    parent_key: &[u8],
+    envelope: &[u8],
+) -> CoreResult<Vec<u8>> {
+    let aad = node_key_context_checked(ctx, NODE_KEY_LABEL)?;
+    expect_len("keyEnvelope", envelope, KEY_ENVELOPE_BYTES)?;
+    open_key(parent_key, envelope, &aad, "node key")
+}
+
+/// A group area root's previous key wrapped under the new area key by a
+/// roster rotation (option A, docs/groups-server.md 8): the node key
+/// envelope's fields under the label `hushos/drive/previous-root-key`, so it
+/// opens only as a previous root key, never as a node key. Twin of the web's
+/// `wrapPreviousRootKey`; only a root (parent = workspace) has one.
+///
+/// ```
+/// use hushos_core::{previous_root_key_open, previous_root_key_wrap, random_bytes, NodeKeyContext};
+/// let ws = "11111111-1111-4111-8111-111111111111".to_string();
+/// let ctx = NodeKeyContext { workspace_id: ws.clone(), node_id: "22222222-2222-4222-8222-222222222222".into(), parent_id: ws, parent_key_epoch: 2, key_epoch: 1 };
+/// let (root_key, area_key) = (random_bytes(32)?, random_bytes(32)?);
+/// let envelope = previous_root_key_wrap(ctx.clone(), area_key.clone(), root_key.clone())?;
+/// assert_eq!(previous_root_key_open(ctx, area_key, envelope)?, root_key);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn previous_root_key_wrap(
+    ctx: NodeKeyContext,
+    area_key: Vec<u8>,
+    root_key: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    expect_len("rootKey", &root_key, KEY_BYTES).map_err(|_| input("Invalid node key."))?;
+    if ctx.parent_id != ctx.workspace_id {
+        return Err(input("Invalid node key."));
+    }
+    let aad = node_key_context_checked(&ctx, PREVIOUS_ROOT_KEY_LABEL)?;
+    expect_len("areaKey", &area_key, KEY_BYTES)?;
+    seal(&area_key, &root_key, &aad)
+}
+
+/// A group area root's previous key out of its option A envelope; see [`previous_root_key_wrap`].
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn previous_root_key_open(
+    ctx: NodeKeyContext,
+    area_key: Vec<u8>,
+    envelope: Vec<u8>,
+) -> CoreResult<Vec<u8>> {
+    let aad = node_key_context_checked(&ctx, PREVIOUS_ROOT_KEY_LABEL)?;
+    expect_len("keyEnvelope", &envelope, KEY_ENVELOPE_BYTES)?;
+    open_key(&area_key, &envelope, &aad, "node key")
+}
+
 // ---------------------------------------------------------------------------
 // Metadata
 // ---------------------------------------------------------------------------
@@ -1847,5 +1934,38 @@ mod tests {
         }
         let bad = VersionContext { object_id: "obj".into(), ..version_ctx() };
         assert!(matches!(version_seal(bad, key.clone(), random(32), 1, 0), Err(CoreError::Input(_))));
+    }
+
+    #[test]
+    fn a_previous_root_key_opens_only_under_its_own_label_and_only_for_a_root() {
+        let ws = "aaaaaaaa-1111-4111-8111-111111111111".to_string();
+        let ctx = NodeKeyContext {
+            workspace_id: ws.clone(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            parent_id: ws.clone(),
+            parent_key_epoch: 2,
+            key_epoch: 1,
+        };
+        let (root_key, area_key) = (random(32), random(32));
+        let previous = previous_root_key_wrap(ctx.clone(), area_key.clone(), root_key.clone()).unwrap();
+        // Never a node key, nor a node key envelope a previous root key.
+        assert!(node_open(ctx.clone(), area_key.clone(), previous.clone()).is_err());
+        let as_node = node_wrap(ctx.clone(), area_key.clone(), root_key.clone()).unwrap();
+        assert!(previous_root_key_open(ctx.clone(), area_key.clone(), as_node).is_err());
+        // Bound to its epochs: the same envelope at another key epoch opens nothing.
+        assert!(previous_root_key_open(
+            NodeKeyContext { key_epoch: 2, ..ctx.clone() },
+            area_key.clone(),
+            previous
+        )
+        .is_err());
+        // Only a root has one, and only over lowercase ids and real epochs, as the web refuses them.
+        let child =
+            NodeKeyContext { parent_id: "33333333-3333-4333-8333-333333333333".into(), ..ctx.clone() };
+        assert!(previous_root_key_wrap(child, area_key.clone(), root_key.clone()).is_err());
+        let upper =
+            NodeKeyContext { workspace_id: ws.to_uppercase(), parent_id: ws.to_uppercase(), ..ctx.clone() };
+        assert!(previous_root_key_wrap(upper, area_key.clone(), root_key.clone()).is_err());
+        assert!(previous_root_key_wrap(NodeKeyContext { key_epoch: 0, ..ctx }, area_key, root_key).is_err());
     }
 }
