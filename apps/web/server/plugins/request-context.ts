@@ -1,7 +1,7 @@
 import { initLogger, loggingOptions, redactAuthenticationEvent } from '@hushos/logging';
 import { definePlugin } from 'nitro';
 
-const oneRequestPerConnection = Boolean(process.env.CI);
+const oneRequestPerConnection = process.env.CI === 'true';
 
 export default definePlugin((nitroApp) => {
     let privacyConfigured = false;

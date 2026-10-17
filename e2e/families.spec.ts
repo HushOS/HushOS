@@ -63,8 +63,8 @@ import {
 // As the server reads it: on unless set to false (an empty value is the default too).
 const familiesOn = process.env.GROUPS_ENABLED !== 'false';
 
-// Each block below is serial and makes its own people, so the blocks run side by side and
-// CI can shard the file: as one serial file it was the slowest job of a run.
+// Each block below is serial and makes its own people, so the blocks run side by side on
+// separate workers: as one serial file it was the slowest job of a run.
 test.describe.configure({ mode: 'parallel' });
 
 test.beforeAll(async ({ request }) => {
