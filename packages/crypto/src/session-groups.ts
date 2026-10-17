@@ -667,7 +667,7 @@ export type RecordJudge = (record: {
     signature: string | null;
     /*
      * A re-keyed record (a copy's source in a family folder): judged on its
-     * origin's verdict, which is its writer's only when its bytes bind, with
+     * origin's verdict when its bytes bind, re-sealed when they do not, with
      * the node's key at its epoch and the re-keyer (the record's signer).
      */
     rekeyed?: { record: RekeyedRecord; nodeKey: Uint8Array | null; rekeyer: string | null };
@@ -1587,15 +1587,20 @@ export function createGroupSession(host: GroupHost) {
      */
     function judgeWith(verdict: ReturnType<typeof verdicts>): RecordJudge {
         return async (record) => {
-            const { integrity } = record.rekeyed
-                ? (
-                      await verdict.rekeyed(
-                          record.rekeyed.record,
-                          record.rekeyed.nodeKey,
-                          record.rekeyed.rekeyer,
-                      )
-                  ).origin
-                : await verdict(record.statements, record.signer, record.signature);
+            let integrity: GroupIntegrity;
+            if (record.rekeyed) {
+                const checked = await verdict.rekeyed(
+                    record.rekeyed.record,
+                    record.rekeyed.nodeKey,
+                    record.rekeyed.rekeyer,
+                );
+                // Bytes that do not bind to the writer's record (a broken wrap, the wrong epoch,
+                // a key this device does not hold): the copy is re-sealed, never vouched for.
+                if (checked.bound !== true) return 'resealed';
+                integrity = checked.origin.integrity;
+            } else
+                integrity = (await verdict(record.statements, record.signer, record.signature))
+                    .integrity;
             if (integrity === 'key-conflict' || integrity === 'former-member') return 'resealed';
             return resealForm(integrity as Integrity);
         };

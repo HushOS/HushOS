@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
@@ -426,6 +425,9 @@ type StoredRecord = {
     originEnvelope: Buffer | null;
     originSignerId: string | null;
     originSignature: Buffer | null;
+    /* The kept origin's wrap and the binding its re-keyer (`signerId`) signed: a drop's evidence. */
+    originKeyEnvelope?: Buffer | null;
+    rekeySignature?: Buffer | null;
 };
 /* What one checked record writes: its signer and legacy signature, and its origin columns. */
 export type SignedRecord = {
@@ -437,8 +439,15 @@ export type SignedRecord = {
         keyEnvelope: Buffer;
         rekeySignature: Buffer;
     } | null;
-    /* The kept origin a legacy re-seal dropped (dropOrigin), recorded as evidence. */
-    dropped: { envelope: Buffer; signerId: string; signature: Buffer } | null;
+    /* The kept origin a legacy re-seal dropped (dropOrigin), recorded whole as evidence. */
+    dropped: {
+        envelope: Buffer;
+        signerId: string;
+        signature: Buffer;
+        keyEnvelope: Buffer;
+        rekeySignature: Buffer;
+        previousRekeyerId: string | null;
+    } | null;
 };
 
 /*
@@ -539,8 +548,15 @@ export function checkRotatedRecord(input: {
         origin: null,
         // The server cannot check binding, so a drop leaves a trace of whose signature went.
         dropped:
-            kept && kept.signerId
-                ? { envelope: kept.envelope, signerId: kept.signerId, signature: kept.signature }
+            kept && kept.signerId && stored.originKeyEnvelope && stored.rekeySignature
+                ? {
+                      envelope: kept.envelope,
+                      signerId: kept.signerId,
+                      signature: kept.signature,
+                      keyEnvelope: stored.originKeyEnvelope,
+                      rekeySignature: stored.rekeySignature,
+                      previousRekeyerId: stored.signerId,
+                  }
                 : null,
     };
 }
@@ -658,6 +674,8 @@ export async function rotateNodeIn(
             originEnvelope: fileVersions.originEnvelope,
             originSignerId: fileVersions.originSignerId,
             originSignature: fileVersions.originSignature,
+            originKeyEnvelope: fileVersions.originKeyEnvelope,
+            rekeySignature: fileVersions.rekeySignature,
             droppedSignerId: fileVersions.droppedSignerId,
             originDroppedBy: fileVersions.originDroppedBy,
         })
@@ -691,6 +709,8 @@ export async function rotateNodeIn(
             originEnvelope: node.metadataOriginEnvelope,
             originSignerId: node.metadataOriginSignerId,
             originSignature: node.metadataOriginSignature,
+            originKeyEnvelope: node.metadataOriginKeyEnvelope,
+            rekeySignature: node.metadataRekeySignature,
         },
         sent: {
             signature: rotated.metadataSignature,
@@ -765,7 +785,7 @@ export async function rotateNodeIn(
             metadataOriginSignerId: metadata.origin?.signerId ?? null,
             metadataOriginSignature: metadata.origin?.signature ?? null,
             metadataRekeySignature: metadata.origin?.rekeySignature ?? null,
-            // A drop's trace stays with the record until it is written again: the first one counts.
+            // A drop's trace stays with the record until it is purged: the first one counts.
             ...(metadata.dropped && !node.metadataDroppedSignerId
                 ? {
                       metadataDroppedSignerId: metadata.dropped.signerId,
@@ -826,8 +846,11 @@ export async function rotateNodeIn(
                 metadataVersion: drop.metadataVersion,
                 versionId: drop.versionId,
                 originSignerId: drop.dropped.signerId,
-                originDigest: createHash('sha256').update(drop.dropped.envelope).digest(),
+                originEnvelope: drop.dropped.envelope,
                 originSignature: drop.dropped.signature,
+                originKeyEnvelope: drop.dropped.keyEnvelope,
+                previousRekeySignature: drop.dropped.rekeySignature,
+                previousRekeyerId: drop.dropped.previousRekeyerId,
                 droppedBy: input.userId,
                 targetEpoch: input.targetEpoch,
             })),

@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "9cf3163e-08d5-4a70-a24c-a28095ed33cd",
+    "id": "3baa363a-ccc2-4366-9fb8-2dff9451aa11",
     "prevIds": ["e58f8800-8601-4417-8b95-8194094235c6"],
     "ddl": [
         {
@@ -3552,7 +3552,7 @@
             "default": null,
             "generated": null,
             "identity": null,
-            "name": "origin_digest",
+            "name": "origin_envelope",
             "entityType": "columns",
             "schema": "public",
             "table": "drive_origin_drops"
@@ -3566,6 +3566,45 @@
             "generated": null,
             "identity": null,
             "name": "origin_signature",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "origin_key_envelope",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "bytea",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "previous_rekey_signature",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "drive_origin_drops"
+        },
+        {
+            "type": "uuid",
+            "typeSchema": null,
+            "notNull": false,
+            "dimensions": 0,
+            "default": null,
+            "generated": null,
+            "identity": null,
+            "name": "previous_rekeyer",
             "entityType": "columns",
             "schema": "public",
             "table": "drive_origin_drops"
@@ -11345,7 +11384,7 @@
             "table": "drive_objects"
         },
         {
-            "value": "(\"metadata_version\" is null) <> (\"version_id\" is null) and octet_length(\"origin_digest\") = 32 and octet_length(\"origin_signature\") = 64 and \"target_epoch\" >= 1",
+            "value": "(\"metadata_version\" is null) <> (\"version_id\" is null) and octet_length(\"origin_envelope\") between 42 and 4136 and octet_length(\"origin_signature\") = 64 and octet_length(\"origin_key_envelope\") = 72 and octet_length(\"previous_rekey_signature\") = 64 and \"target_epoch\" >= 1",
             "name": "drive_origin_drops_valid",
             "entityType": "checks",
             "schema": "public",

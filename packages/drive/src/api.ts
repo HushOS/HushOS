@@ -45,14 +45,16 @@ export type VersionView = {
     rekey?: RekeyView | null;
     /*
      * A rotation dropped the version's kept origin (its client found it did not
-     * bind, or said so): whose signature it carried and who dropped it. The
-     * server cannot check that; it keeps the trace. Absent where `rekey` is.
+     * bind, or said so): who the server says dropped it. Kept until the version
+     * is purged, so it may stand beside a later `rekey` (a re-key of the record
+     * the drop left). Unsigned: a reader names the dropper only where a
+     * signature it checked agrees. Absent on what a link visitor receives.
      */
     originDropped?: DroppedView | null;
 };
 
-/* Evidence of a dropped origin: the dropped origin's signer and the account that dropped it. */
-export type DroppedView = { signer: Signer; by: Signer };
+/* A dropped origin, as served: who dropped it, as the server says (see originDropped). */
+export type DroppedView = { by: Signer };
 
 /*
  * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the

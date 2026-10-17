@@ -3184,6 +3184,20 @@ describe('copying in a family folder (1c step 7)', () => {
         // Judged on the re-keyer's columns alone (no signature there), it would only be re-sealed.
         const { metadataRekey: _m, rekey: _v, ...columnsOnly } = rekeyedSource;
         expect(await formOf(await copy(columnsOnly as typeof rekeyedSource))).toBe('resealed');
+        // An origin that does not bind is never vouched for: the version's wrap in the metadata's
+        // place (the re-key signature no longer covers it), or an epoch whose key is not held.
+        const swapped = {
+            ...rekeyedSource,
+            metadataRekey: {
+                ...rekeyedSource.metadataRekey,
+                origin: {
+                    ...rekeyedSource.metadataRekey.origin,
+                    keyEnvelope: rekeyedSource.rekey.origin.keyEnvelope,
+                },
+            },
+        };
+        expect(await formOf(await copy(swapped))).toBe('resealed');
+        expect(await formOf(await copy({ ...rekeyedSource, keyEpoch: 8 }))).toBe('resealed');
     });
 
     test('a group’s trust on a personal workspace is refused', async () => {

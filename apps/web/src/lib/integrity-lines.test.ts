@@ -453,29 +453,56 @@ describe('a re-keyed item', () => {
         });
     });
 
-    test('a dropped origin says whose signature went and who dropped it', () => {
-        expect(
-            droppedLines(
-                {
-                    metadataOriginDropped: { signer: { id: SAM }, by: { id: MAYA } },
-                    currentVersion: { originDropped: { signer: { id: SAM }, by: { id: MAYA } } },
-                },
-                family,
-            ),
-        ).toEqual([
-            'Its original signature, by Sam (sam@example.com), was dropped by Maya when its keys were replaced.',
+    test('a dropped origin names its dropper only where their checked signature agrees, and never its writer', () => {
+        // What a drop leaves: the record re-sealed and signed by the dropper, which this
+        // person checked (verdict `resealed` by Maya); the server's trace names Maya.
+        const dropped = (by: string, verdict: NodeIntegrity['metadata'], signer = MAYA) => ({
+            metadataSigner: { id: signer },
+            metadataOriginDropped: { by: { id: by } },
+            currentVersion: null,
+            integrity: { metadata: verdict, version: null },
+        });
+        expect(droppedLines(dropped(MAYA, 'resealed'), family)).toEqual([
+            'Its original signature was dropped by Maya when its keys were replaced.',
         ]);
-        expect(
-            droppedLines(
-                {
-                    metadataOriginDropped: null,
-                    currentVersion: { originDropped: { signer: { id: STRANGER }, by: { id: ME } } },
-                },
-                family,
-            ),
-        ).toEqual([
-            'This version’s original signature, by someone you haven’t checked, was dropped by you when its keys were replaced.',
+        // A served trace blaming someone the verified signature does not name: nobody is named.
+        expect(droppedLines(dropped(ME, 'resealed'), family)).toEqual([
+            'Its original signature was dropped when its keys were replaced.',
         ]);
-        expect(droppedLines({ currentVersion: null }, family)).toEqual([]);
+        // Nor where the re-sealed signature did not check out, or is someone unchecked's.
+        for (const verdict of ['unknown-signer', 'bad-signature', 'unchecked'] as const)
+            expect(droppedLines(dropped(MAYA, verdict), family)).toEqual([
+                'Its original signature was dropped when its keys were replaced.',
+            ]);
+        // Re-keyed since: the dropper's re-sealed record is the bound origin, and still names them.
+        const rekeyed = {
+            ...dropped(MAYA, 'resealed', ME),
+            integrity: {
+                metadata: 'resealed' as const,
+                version: null,
+                rekeyed: {
+                    metadata: note({ writer: { id: MAYA }, by: { id: ME } }),
+                    version: null,
+                },
+            },
+        };
+        expect(droppedLines(rekeyed, family)).toEqual([
+            'Its original signature was dropped by Maya when its keys were replaced.',
+        ]);
+        // Unless the origin did not bind: then nothing confirms it.
+        const unbound = {
+            ...rekeyed,
+            integrity: {
+                ...rekeyed.integrity,
+                rekeyed: {
+                    metadata: note({ writer: { id: MAYA }, by: { id: ME }, bound: null }),
+                    version: null,
+                },
+            },
+        };
+        expect(droppedLines(unbound, family)[0]).not.toMatch(/Maya/);
+        // The dropped origin's writer is never named, whoever the server says it was.
+        expect(droppedLines(dropped(MAYA, 'resealed'), family)[0]).not.toMatch(/Sam/);
+        expect(droppedLines({ integrity: null, currentVersion: null }, family)).toEqual([]);
     });
 });

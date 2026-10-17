@@ -115,11 +115,16 @@ export type VersionView = {
     signature: string | null;
     /* What a rotation kept of the version's writer, and the re-keyer's signature; null if none did. */
     rekey: RekeyView | null;
-    /* A rotation dropped the version's kept origin: whose signature it carried, and who dropped it. */
+    /* A rotation dropped the version's kept origin: who the server says dropped it. */
     originDropped: DroppedView | null;
 };
-/* Evidence of a dropped origin (the server cannot check binding): its signer and the dropper. */
-export type DroppedView = { signer: Signer; by: Signer };
+/*
+ * A rotation dropped the record's kept origin: who the server says dropped it.
+ * Unsigned, like every column the server serves: a reader names the dropper
+ * only where a signature it checked agrees, and never names the dropped
+ * origin's writer, which the server keeps as evidence only.
+ */
+export type DroppedView = { by: Signer };
 /*
  * A re-keyed record (docs/integrity-design.md, "Re-keyed records"): the
  * envelope its writer signed, that writer and their signature, the key that
@@ -168,7 +173,7 @@ export type NodeView = {
     metadataOriginDropped: DroppedView | null;
 };
 function droppedView(signerId: string | null, by: string | null): DroppedView | null {
-    return signerId && by ? { signer: { id: signerId }, by: { id: by } } : null;
+    return signerId && by ? { by: { id: by } } : null;
 }
 
 /* A record's origin columns as served, or null when no rotation kept one. */

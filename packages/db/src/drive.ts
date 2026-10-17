@@ -467,9 +467,6 @@ export const NO_METADATA_ORIGIN = {
     metadataOriginSignerId: null,
     metadataOriginSignature: null,
     metadataRekeySignature: null,
-    // A dropped origin's trace describes the record being replaced too (drive_origin_drops keeps it).
-    metadataDroppedSignerId: null,
-    metadataOriginDroppedBy: null,
 } as const;
 export const NO_VERSION_ORIGIN = {
     originEnvelope: null,
@@ -477,6 +474,19 @@ export const NO_VERSION_ORIGIN = {
     originSignerId: null,
     originSignature: null,
     rekeySignature: null,
+} as const;
+/*
+ * A purge clears a dropped origin's trace with everything else; a rename does
+ * not, so writing a record again never hides that its origin was dropped
+ * (drive_origin_drops keeps the evidence either way).
+ */
+export const PURGED_METADATA_ORIGIN = {
+    ...NO_METADATA_ORIGIN,
+    metadataDroppedSignerId: null,
+    metadataOriginDroppedBy: null,
+} as const;
+export const PURGED_VERSION_ORIGIN = {
+    ...NO_VERSION_ORIGIN,
     droppedSignerId: null,
     originDroppedBy: null,
 } as const;
@@ -1589,7 +1599,7 @@ async function releaseUpload(tx: Tx, upload: UploadRow, status: 'aborted' | 'com
             contentKeyEnvelope: null,
             signerId: null,
             signature: null,
-            ...NO_VERSION_ORIGIN,
+            ...PURGED_VERSION_ORIGIN,
             purgedAt: new Date(),
         })
         .where(eq(fileVersions.id, upload.versionId));
@@ -1715,7 +1725,7 @@ async function publishUpload(
                     contentKeyEnvelope: null,
                     signerId: null,
                     signature: null,
-                    ...NO_VERSION_ORIGIN,
+                    ...PURGED_VERSION_ORIGIN,
                     purgedAt: now,
                 })
                 .where(eq(fileVersions.id, version.id));
@@ -2359,7 +2369,7 @@ async function purgeVersion(tx: Tx, workspaceId: string, version: PurgedVersion)
             contentKeyEnvelope: null,
             signerId: null,
             signature: null,
-            ...NO_VERSION_ORIGIN,
+            ...PURGED_VERSION_ORIGIN,
             purgedAt: new Date(),
         })
         .where(eq(fileVersions.id, version.id));
@@ -2406,7 +2416,7 @@ async function purgeOne(tx: Tx, workspaceId: string, nodeId: string, changeSeq: 
             metadataEnvelope: null,
             metadataSignerId: null,
             metadataSignature: null,
-            ...NO_METADATA_ORIGIN,
+            ...PURGED_METADATA_ORIGIN,
             changeSeq,
             updatedAt: now,
         })

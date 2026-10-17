@@ -26,9 +26,11 @@ const SIGNED_FIELDS = [
     'metadataSigner',
     'metadataSignature',
     'metadataRekey',
+    'metadataOriginDropped',
     'signer',
     'signature',
     'rekey',
+    'originDropped',
 ];
 const ADDRESS = '203.0.113.7';
 
@@ -94,9 +96,23 @@ describe('link visitors', () => {
              where id = $1`,
             [doc.currentVersion!.id, origin.keyEnvelope, writer, origin.signature, origin.rekey],
         );
+        // And a drop's trace, as a later rotation would leave it beside the record.
+        await db.$client.query(
+            `update drive_nodes set metadata_dropped_signer = $2, metadata_origin_dropped_by = $3 where id = $1`,
+            [doc.id, writer, owner.userId],
+        );
+        await db.$client.query(
+            `update file_versions set dropped_signer = $2, origin_dropped_by = $3 where id = $1`,
+            [doc.currentVersion!.id, writer, owner.userId],
+        );
         const token = await link(owner, shared);
 
         const own = await server.listChildren(owner.userId, owner.workspaceId, shared.id);
+        // Members get who the server says dropped it, never the dropped origin's writer.
+        expect(own.children[0]?.metadataOriginDropped).toEqual({ by: { id: owner.userId } });
+        expect(own.children[0]?.currentVersion?.originDropped).toEqual({
+            by: { id: owner.userId },
+        });
         expect(own.children[0]?.metadataRekey).toEqual({
             origin: {
                 envelope: origin.envelope.toString('base64url'),
@@ -112,7 +128,14 @@ describe('link visitors', () => {
         expect(listing.children.map((child) => child.id)).toEqual([doc.id]);
         const keys = keysOf(listing);
         for (const field of SIGNED_FIELDS) expect(keys.has(field)).toBe(false);
-        expect(JSON.stringify(listing)).not.toContain(writer);
+        const [child] = listing.children;
+        for (const field of ['metadataRekey', 'metadataOriginDropped', 'metadataSigner'])
+            expect(child).not.toHaveProperty(field);
+        for (const field of ['rekey', 'originDropped', 'signer'])
+            expect(child!.currentVersion).not.toHaveProperty(field);
+        const opened = await server.openLink(token, ADDRESS);
+        expect(opened.node).not.toHaveProperty('metadataOriginDropped');
+        expect(opened.node).not.toHaveProperty('metadataRekey');
     });
 
     test('a node outside the linked subtree is not served, however it is named', async () => {

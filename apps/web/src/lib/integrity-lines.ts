@@ -377,40 +377,76 @@ export function rekeyedLines(
 
 /*
  * A dropped origin, as Info says it: a rotation dropped the signature a
- * record's writer made (its client found the origin did not bind, or said so),
- * and the server kept who it named and who dropped it. Named from this
- * person's own pins and the family's list; a line per record, or one when
- * both say the same.
+ * record's writer made (its client found the origin did not bind, or said so).
+ * The server says who dropped it, unsigned. The dropper is named only where a
+ * signature this person checked agrees: the record's own re-sealed signature
+ * by them, which is what a drop writes, or, once a later rotation re-keyed the
+ * record, the same re-sealed signature as the bound origin. Anyone else, and
+ * the dropped origin's writer always, goes unnamed: nothing here proves them,
+ * and a server could otherwise blame an innocent member.
  */
 export function droppedLines(
     node: {
+        integrity: NodeIntegrity | null;
+        metadataSigner?: Signer | null;
         metadataOriginDropped?: DroppedView | null;
-        currentVersion?: { originDropped?: DroppedView | null } | null;
+        currentVersion?: { signer?: Signer | null; originDropped?: DroppedView | null } | null;
     },
     names: SignerNames,
 ): string[] {
-    const who = (signer: Signer) => {
-        const named = nameSigner(signer, names);
-        return named.kind === 'you'
-            ? 'you'
-            : named.kind === 'unknown'
-              ? 'someone you haven’t checked'
-              : memberWords(named, '');
+    const integrity = node.integrity;
+    const confirmed = (
+        dropped: DroppedView,
+        verdict: NodeIntegrity['metadata'] | null | undefined,
+        signer: Signer | null,
+        note: RekeyNote | null | undefined,
+    ) => {
+        if (verdict !== 'resealed') return false;
+        const who = note ? (note.bound === true ? note.writer : null) : signer;
+        return who !== null && who.id.toLowerCase() === dropped.by.id.toLowerCase();
     };
-    const line = (dropped: DroppedView, what: string) =>
-        `${what} original signature, by ${who(dropped.signer)}, was dropped by ${who(dropped.by)} when its keys were replaced.`;
+    /* What follows "Its original signature" or "This version's original signature". */
+    const tail = (dropped: DroppedView, named: boolean) => {
+        if (!named) return 'was dropped when its keys were replaced.';
+        const by = nameSigner(dropped.by, names);
+        const who =
+            by.kind === 'you'
+                ? 'you'
+                : by.kind === 'unknown'
+                  ? 'someone you haven’t checked'
+                  : memberWords(by, '');
+        return `was dropped by ${who} when its keys were replaced.`;
+    };
     const metadata = node.metadataOriginDropped ?? null;
     const version = node.currentVersion?.originDropped ?? null;
-    if (
-        metadata &&
-        version &&
-        metadata.signer.id === version.signer.id &&
-        metadata.by.id === version.by.id
-    )
-        return [line(metadata, 'Its')];
+    const metadataTail = metadata
+        ? tail(
+              metadata,
+              confirmed(
+                  metadata,
+                  integrity?.metadata,
+                  node.metadataSigner ?? null,
+                  integrity?.rekeyed?.metadata,
+              ),
+          )
+        : null;
+    const versionTail = version
+        ? tail(
+              version,
+              confirmed(
+                  version,
+                  integrity?.version,
+                  node.currentVersion?.signer ?? null,
+                  integrity?.rekeyed?.version,
+              ),
+          )
+        : null;
+    // The same words for both records are said once.
+    if (metadataTail && metadataTail === versionTail)
+        return [`Its original signature ${metadataTail}`];
     return [
-        ...(metadata ? [line(metadata, 'Its')] : []),
-        ...(version ? [line(version, 'This version’s')] : []),
+        ...(metadataTail ? [`Its original signature ${metadataTail}`] : []),
+        ...(versionTail ? [`This version’s original signature ${versionTail}`] : []),
     ];
 }
 

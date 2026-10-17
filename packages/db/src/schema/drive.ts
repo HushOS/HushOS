@@ -74,8 +74,9 @@ export const driveNodes = pgTable(
         /*
          * Evidence that a rotation dropped a kept origin (it did not bind for the rotating
          * client, or so it said): whose signature it carried and who dropped it, the first
-         * drop since the record was last written. The server cannot check binding, so it keeps
-         * the trace, for Info and in drive_origin_drops. Cleared with the origin.
+         * drop until the record is purged (a rename keeps it, so it cannot hide a drop). The
+         * server cannot check binding, so it keeps the trace, for Info and in
+         * drive_origin_drops. Readers name nobody from it that a signature does not confirm.
          */
         metadataDroppedSignerId: uuid('metadata_dropped_signer'),
         metadataOriginDroppedBy: uuid('metadata_origin_dropped_by'),
@@ -278,8 +279,9 @@ export const fileVersions = pgTable(
 
 /*
  * Every origin a rotation dropped (docs/integrity-design.md, "What the server
- * enforces"): the record, the dropped origin's signer, digest and signature,
- * who dropped it and at which epoch. Append-only evidence: a rotating member
+ * enforces"): the record, the dropped origin whole (envelope, signer,
+ * signature, its wrap and the previous re-keyer's binding), who dropped it and
+ * at which epoch. Ciphertext, signatures and uuids only. Append-only evidence: a rotating member
  * (or a departing one's poisoned wraps) can make an honest client drop an
  * origin the server cannot check, so the drop is kept even after the record
  * is written again. Ids are plain uuids, as an origin's signer is.
@@ -295,9 +297,16 @@ export const driveOriginDrops = pgTable(
         // The metadata record at its version, or one version of a file.
         metadataVersion: integer('metadata_version'),
         versionId: uuid('version_id'),
+        // The dropped origin whole, with the wrap that was to open it and the binding the
+        // previous re-keyer signed over both: with the node key at that epoch, a reader can tell
+        // a poisoned wrap (the previous re-keyer's fault) from a dropper who lied about it.
         originSignerId: uuid('origin_signer').notNull(),
-        originDigest: bytea('origin_digest').notNull(),
+        originEnvelope: bytea('origin_envelope').notNull(),
         originSignature: bytea('origin_signature').notNull(),
+        originKeyEnvelope: bytea('origin_key_envelope').notNull(),
+        previousRekeySignature: bytea('previous_rekey_signature').notNull(),
+        // Null once that account is gone (the row's signer column is nulled with it).
+        previousRekeyerId: uuid('previous_rekeyer'),
         droppedBy: uuid('dropped_by').notNull(),
         targetEpoch: integer('target_epoch').notNull(),
         droppedAt: timestamp('dropped_at', { withTimezone: true }).notNull().defaultNow(),
@@ -306,7 +315,7 @@ export const driveOriginDrops = pgTable(
         index('drive_origin_drops_node_idx').on(table.workspaceId, table.nodeId),
         check(
             'drive_origin_drops_valid',
-            sql`(${table.metadataVersion} is null) <> (${table.versionId} is null) and octet_length(${table.originDigest}) = 32 and octet_length(${table.originSignature}) = 64 and ${table.targetEpoch} >= 1`,
+            sql`(${table.metadataVersion} is null) <> (${table.versionId} is null) and octet_length(${table.originEnvelope}) between 42 and 4136 and octet_length(${table.originSignature}) = 64 and octet_length(${table.originKeyEnvelope}) = 72 and octet_length(${table.previousRekeySignature}) = 64 and ${table.targetEpoch} >= 1`,
         ),
     ],
 );

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
     closeDatabase,
@@ -21,8 +21,10 @@ import {
     driveOriginDrops,
     driveReportItems,
     fileVersions,
+    groupMemberships,
     users,
     workspaceKeys,
+    workspaces,
 } from './schema';
 import {
     metadataRekeyedStatement,
@@ -46,7 +48,6 @@ import {
  */
 
 const MiB = 1024n * 1024n;
-const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest();
 const env = () => randomBytes(72);
 const meta = () => randomBytes(100);
 
@@ -705,8 +706,17 @@ describe('a legacy re-seal of a re-keyed record', () => {
             ]),
         );
         const metadataDrop = evidence.find((row) => row.versionId === null)!;
+        // The origin whole, its wrap and the binding the previous re-keyer signed: enough, with
+        // the node key at that epoch, to tell a poisoned wrap from a dropper who lied.
+        expect(metadataDrop.originEnvelope.equals(kept.metadataOriginEnvelope!)).toBe(true);
         expect(metadataDrop.originSignature.equals(kept.metadataOriginSignature!)).toBe(true);
-        expect(metadataDrop.originDigest.equals(sha256(kept.metadataOriginEnvelope!))).toBe(true);
+        expect(metadataDrop.originKeyEnvelope.equals(kept.metadataOriginKeyEnvelope!)).toBe(true);
+        expect(metadataDrop.previousRekeySignature.equals(kept.metadataRekeySignature!)).toBe(true);
+        expect(metadataDrop.previousRekeyerId).toBe(kept.metadataSignerId);
+        const versionDrop = evidence.find((row) => row.versionId !== null)!;
+        expect(versionDrop.originEnvelope.equals(keptVersion.originEnvelope!)).toBe(true);
+        expect(versionDrop.originKeyEnvelope.equals(keptVersion.originKeyEnvelope!)).toBe(true);
+        expect(versionDrop.previousRekeySignature.equals(keptVersion.rekeySignature!)).toBe(true);
         expect(evidence).toHaveLength(2);
 
         // A later rotation re-keys the dropped record as its own origin: the trace stays.
@@ -714,7 +724,7 @@ describe('a legacy re-seal of a re-keyed record', () => {
         const next = await startOn(doc.id);
         expect((await rotateFile(next, doc.id, { rekey: 'valid' })).status).toBe('ok');
         expect((await nodeRow(doc.id)).metadataDroppedSignerId).toBe(writer.userId);
-        // A rename replaces the record: its trace goes with it, the evidence row stays.
+        // A rename writes the record again, but never hides that its origin was dropped.
         const renamed = await nodeRow(doc.id);
         expect(
             (
@@ -729,11 +739,72 @@ describe('a legacy re-seal of a re-keyed record', () => {
             ).status,
         ).toBe('ok');
         const afterRename = await nodeRow(doc.id);
-        expect(afterRename.metadataDroppedSignerId).toBeNull();
-        expect(afterRename.metadataOriginDroppedBy).toBeNull();
+        expect(afterRename.metadataOriginEnvelope).toBeNull();
+        expect(afterRename.metadataDroppedSignerId).toBe(writer.userId);
+        expect(afterRename.metadataOriginDroppedBy).toBe(owner.userId);
         expect(
             await db.select().from(driveOriginDrops).where(eq(driveOriginDrops.nodeId, doc.id)),
         ).toHaveLength(2);
+    });
+});
+
+describe('a second drop', () => {
+    test('by someone else keeps the first trace on the record and adds its own evidence row', async () => {
+        const doc = await file();
+        await writtenBy(writer, doc);
+        await rotatedOnce(doc.id, { rekey: 'valid' });
+        // The owner drops it, then re-keys it again: the owner's re-sealed record is the origin.
+        let run = await startOn(doc.id);
+        expect(
+            (await rotateFile(run, doc.id, { legacy: 'resealed', dropOrigin: true })).status,
+        ).toBe('ok');
+        if (!(await rotations.finishRotation(run))) throw new Error('not finished');
+        await rotatedOnce(doc.id, { rekey: 'valid' });
+        // The writer joins the family, and drops that origin in turn.
+        const [area] = await db
+            .select({ groupId: workspaces.groupId })
+            .from(workspaces)
+            .where(eq(workspaces.id, ws));
+        await db.insert(groupMemberships).values({
+            groupId: area!.groupId!,
+            userId: writer.userId,
+            state: 'active',
+            roles: [],
+            admittedAt: new Date(),
+        });
+        await db.insert(workspaceKeys).values({
+            workspaceId: ws,
+            userId: writer.userId,
+            keyVersion: 1,
+            workspaceKeyVersion: 1,
+            wrappingSalt: randomBytes(32),
+            wrappingNonce: randomBytes(24),
+            encryptedKey: randomBytes(48),
+        });
+        run = await startOn(doc.id);
+        const second = await rotateFile(
+            { ...run, userId: writer.userId },
+            doc.id,
+            { legacy: 'resealed', dropOrigin: true },
+            { legacy: 'resealed', dropOrigin: true },
+            writer.userId,
+        );
+        expect(second.status).toBe('ok');
+        const row = await nodeRow(doc.id);
+        // The first trace stands: the writer's signature, dropped by the owner.
+        expect(row.metadataDroppedSignerId).toBe(writer.userId);
+        expect(row.metadataOriginDroppedBy).toBe(owner.userId);
+        const evidence = await db
+            .select()
+            .from(driveOriginDrops)
+            .where(and(eq(driveOriginDrops.nodeId, doc.id), isNull(driveOriginDrops.versionId)));
+        expect(evidence.map((drop) => [drop.originSignerId, drop.droppedBy])).toEqual(
+            expect.arrayContaining([
+                [writer.userId, owner.userId],
+                [owner.userId, writer.userId],
+            ]),
+        );
+        expect(evidence).toHaveLength(2);
     });
 });
 
