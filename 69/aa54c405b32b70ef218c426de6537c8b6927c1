@@ -1,0 +1,23 @@
+packages/db/src/rotations.ts
+  s_c56e31c87cddde::t_655a6cf40704f9 492-493,495
+  s_c56e31c87cddde::t_5581220cba4a04 460-479
+  s_c56e31c87cddde::t_5da602e99bd37b 502
+packages/db/src/drive.rotations.test.ts
+  s_c56e31c87cddde::t_84090b5e6001e6 9,15-16,95-143,647-792
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69aa54c405b32b70ef218c426de6537c8b6927c1",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
