@@ -6,12 +6,14 @@ import {
     createTestAccount,
     createTestIdentity,
     resetDatabase,
+    signerFor,
 } from '../test/helpers';
 import * as signed from '../test/signed';
 import { db } from './client';
 import * as drive from './drive';
 import * as rotations from './rotations';
-import { driveLinks, driveNodes, driveShares, workspaceKeys } from './schema';
+import { driveLinks, driveNodes, driveShares, fileVersions, workspaceKeys } from './schema';
+import { metadataStatement, versionStatement } from './signatures';
 
 /*
  * Rotation on the server: one per workspace, work listed parents first and
@@ -89,6 +91,55 @@ async function file(parentId: string, parentKeyEpoch: number) {
     const done = await drive.finishCompleting(owner.workspaceId, begun.uploadId, plaintext + 16n);
     if (done.status !== 'published') throw new Error(done.status);
     return done.node;
+}
+/* An upload of a new version of an existing file, left open: its version is pending. */
+async function beginVersion(node: {
+    id: string;
+    keyEpoch: number;
+    currentVersionId: string | null;
+}) {
+    const plaintext = 1n * MiB;
+    const objectId = randomUUID();
+    const begun = await signed.beginUpload({
+        workspaceId: owner.workspaceId,
+        userId: owner.userId,
+        node: {
+            existing: true,
+            id: node.id,
+            keyEpoch: node.keyEpoch,
+            expectedVersionId: node.currentVersionId,
+        },
+        version: { id: randomUUID(), contentKeyEnvelope: randomBytes(84) },
+        object: {
+            id: objectId,
+            objectKey: `ws/${owner.workspaceId}/${objectId}`,
+            contentSuite: 2,
+            chunkSize: Number(8n * MiB),
+            chunkCount: 1,
+            contentNonce: randomBytes(16),
+            ciphertextSize: plaintext + 16n,
+        },
+        multipartId: `mp-${objectId}`,
+        expiresAt: new Date(Date.now() + 3600_000),
+    });
+    if (begun.status !== 'ok') throw new Error(begun.status);
+    return { uploadId: begun.uploadId, size: plaintext + 16n };
+}
+/* A new version of an existing file: the one it displaces stays, ready and superseded. */
+async function nextVersion(node: {
+    id: string;
+    keyEpoch: number;
+    currentVersionId: string | null;
+}) {
+    const { uploadId, size } = await beginVersion(node);
+    await drive.startCompleting(owner.workspaceId, uploadId);
+    const done = await drive.finishCompleting(owner.workspaceId, uploadId, size);
+    if (done.status !== 'published') throw new Error(done.status);
+    return done.node;
+}
+async function version(id: string) {
+    const [row] = await db.select().from(fileVersions).where(eq(fileVersions.id, id));
+    return row!;
 }
 async function current(id: string) {
     const [row] = await db.select().from(driveNodes).where(eq(driveNodes.id, id));
@@ -592,5 +643,151 @@ describe('rotation', () => {
             revokedAt: null,
             keyEpoch: resealed.keyEpoch,
         });
+    });
+
+    /*
+     * A file with two ready versions (the current one and the one it displaced), its
+     * folder already rotated: what the next tests submit for the file.
+     */
+    async function rotatingFile() {
+        const project = await folder(rootId, rootEpoch);
+        const first = await file(project.id, project.keyEpoch);
+        const doc = await nextVersion(first);
+        const started = await rotations.startRotation({
+            workspaceId: owner.workspaceId,
+            nodeId: project.id,
+            startedBy: owner.userId,
+        });
+        if (started.status !== 'ok') throw new Error(started.status);
+        const ws = {
+            workspaceId: owner.workspaceId,
+            rootId: project.id,
+            targetEpoch: started.rotation.targetEpoch,
+            userId: owner.userId,
+        };
+        expect(await signed.rotateNodes({ ...ws, nodes: [rotated(project, rootEpoch)] })).toEqual([
+            { id: project.id, status: 'ok' },
+        ]);
+        const [work] = (await rotations.listRotationWork(ws)).nodes;
+        expect(work!.id).toBe(doc.id);
+        expect(work!.versions.map((v) => v.id).sort()).toEqual(
+            [first.currentVersionId!, doc.currentVersionId!].sort(),
+        );
+        return {
+            ws,
+            doc: work!,
+            older: first.currentVersionId!,
+            newer: doc.currentVersionId!,
+        };
+    }
+
+    test('a submitted version that is not a ready version of the node is refused, and nothing it carries is stored', async () => {
+        const { ws, doc, older, newer } = await rotatingFile();
+        // Discarded on another device after the work was read: purged, its object retired,
+        // and the file's change sequence does not move, so only the versions can tell.
+        expect(await drive.discardVersion(owner.workspaceId, older)).toEqual({ status: 'ok' });
+        expect((await version(older)).objectId).toBeNull();
+        expect((await current(doc.id)).changeSeq).toBe(doc.changeSeq);
+
+        const sign = signerFor(owner.userId);
+        const metadataEnvelope = meta();
+        const content = randomBytes(84);
+        const submit = (
+            versions: { id: string; contentKeyEnvelope: Buffer; signature: Buffer }[],
+        ) =>
+            rotations.rotateNodes({
+                ...ws,
+                nodes: [
+                    {
+                        id: doc.id,
+                        changeSeq: doc.changeSeq!,
+                        parentKeyEpoch: ws.targetEpoch,
+                        keyEnvelope: env(),
+                        rotated: {
+                            metadataEnvelope,
+                            metadataSignature: sign.sign(
+                                metadataStatement({
+                                    workspaceId: ws.workspaceId,
+                                    nodeId: doc.id,
+                                    kind: 'file',
+                                    metadataVersion: doc.metadataVersion,
+                                    metadataEnvelope,
+                                }),
+                            ),
+                            versions,
+                            shares: [],
+                            links: [],
+                            unsealableLinks: [],
+                        },
+                    },
+                ],
+            });
+        const good = {
+            id: newer,
+            contentKeyEnvelope: content,
+            signature: sign.sign(
+                versionStatement({
+                    workspaceId: ws.workspaceId,
+                    nodeId: doc.id,
+                    versionId: newer,
+                    objectId: (await version(newer)).objectId!,
+                    contentSuite: 2,
+                    contentKeyEnvelope: content,
+                }),
+            ),
+        };
+        const junk = { contentKeyEnvelope: randomBytes(84), signature: randomBytes(64) };
+
+        // The purged version with a signature nobody made, and a version that is no row at all.
+        for (const id of [older, randomUUID()])
+            expect(await submit([good, { id, ...junk }])).toEqual([
+                { id: doc.id, status: 'stale' },
+            ]);
+        const purged = await version(older);
+        expect(purged.status).toBe('purged');
+        expect(purged.contentKeyEnvelope).toBeNull();
+        expect(purged.signature).toBeNull();
+        expect((await current(doc.id)).keyEpoch).toBe(doc.keyEpoch);
+
+        // Read again, the work names only the version that is left, and that batch applies.
+        const [reread] = (await rotations.listRotationWork(ws)).nodes;
+        expect(reread!.versions.map((v) => v.id)).toEqual([newer]);
+        expect(await submit([good])).toEqual([{ id: doc.id, status: 'ok' }]);
+        expect((await version(newer)).contentKeyEnvelope?.equals(content)).toBe(true);
+    });
+
+    test('a batch that leaves out a ready version is refused, so no version stays sealed under the old key', async () => {
+        const { ws, doc, older, newer } = await rotatingFile();
+        const before = await version(older);
+        const fresh = (id: string) => ({ id, contentKeyEnvelope: randomBytes(84) });
+        const send = (versions: { id: string; contentKeyEnvelope: Buffer }[]) =>
+            signed.rotateNodes({ ...ws, nodes: [rotated(doc, ws.targetEpoch, { versions })] });
+
+        // Only the current version; the current one twice in the displaced one's place; none.
+        for (const versions of [[fresh(newer)], [fresh(newer), fresh(newer)], []])
+            expect(await send(versions)).toEqual([{ id: doc.id, status: 'stale' }]);
+        const untouched = await version(older);
+        expect(untouched.contentKeyEnvelope?.equals(before.contentKeyEnvelope!)).toBe(true);
+        expect((await current(doc.id)).keyEpoch).toBe(doc.keyEpoch);
+        expect(await rotations.finishRotation(ws)).toBe(false);
+
+        // An upload left open on the file is not work: its pending version is not asked for.
+        await beginVersion(await current(doc.id));
+        const [reread] = (await rotations.listRotationWork(ws)).nodes;
+        expect(reread!.versions.map((v) => v.id).sort()).toEqual([older, newer].sort());
+
+        // Both ready ones: applied, and the rotation finishes with every version re-sealed.
+        const both = [fresh(older), fresh(newer)];
+        expect(
+            await signed.rotateNodes({
+                ...ws,
+                nodes: [rotated(reread!, ws.targetEpoch, { versions: both })],
+            }),
+        ).toEqual([{ id: doc.id, status: 'ok' }]);
+        for (const sent of both)
+            expect(
+                (await version(sent.id)).contentKeyEnvelope?.equals(sent.contentKeyEnvelope),
+            ).toBe(true);
+        expect(await rotations.finishRotation(ws)).toBe(true);
     });
 });
