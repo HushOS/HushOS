@@ -188,6 +188,15 @@ mod tests {
         );
     }
 
+    /* The web refuses the same since the differential fuzzer found it building these (2026-10-17). */
+    #[test]
+    fn an_empty_account_device_or_attempt_is_refused() {
+        assert!(device_session_statement("u".into(), "d".into(), "a".into()).is_ok());
+        assert!(device_session_statement(String::new(), "d".into(), "a".into()).is_err());
+        assert!(device_session_statement("u".into(), String::new(), "a".into()).is_err());
+        assert!(device_session_statement("u".into(), "d".into(), String::new()).is_err());
+    }
+
     #[test]
     fn a_proof_holds_for_its_own_account_device_and_attempt_only() {
         let key = device_signing_create().unwrap();

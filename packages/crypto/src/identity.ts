@@ -690,9 +690,20 @@ export async function verifyOwnIdentity(
     }
 }
 
-/* The public keys of a version 2 envelope, as the keys statement and contacts see them. */
+/*
+ * The public keys of a version 2 envelope, as the keys statement and contacts
+ * see them. A version 2 envelope the server served without its KEM key, its
+ * ML-DSA key or its keys signature is refused, as the Rust core refuses it,
+ * rather than read through a missing field.
+ */
 export function publicIdentity(envelope: IdentityEnvelope) {
-    if (envelope.version !== 2) throw new CryptoError('Unsupported identity envelope.');
+    if (
+        envelope.version !== 2 ||
+        !envelope.kem ||
+        !envelope.mlDsa ||
+        typeof envelope.keysSignature !== 'string'
+    )
+        throw new CryptoError('Unsupported identity envelope.');
     return {
         keyVersion: envelope.keyVersion,
         encryptionPublicKey: envelope.encryptionPublicKey,

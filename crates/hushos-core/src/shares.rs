@@ -18,7 +18,9 @@ use crate::identity::{
     KEM_SEED_BYTES,
 };
 use crate::pq::{ML_DSA_PUBLIC_KEY_BYTES, ML_DSA_SEED_BYTES};
-use crate::signatures::{digest, sign_hybrid, verify_hybrid, HybridPublicKey, HYBRID_SIGNATURE_BYTES};
+use crate::signatures::{
+    digest, sign_hybrid, verify_hybrid, HybridPublicKey, HYBRID_SIGNATURE_BYTES, MAX_SAFE_INTEGER,
+};
 use hkdf::Hkdf;
 use serde_json::json;
 use sha2::Digest as _;
@@ -63,7 +65,9 @@ pub fn share_statement(ctx: ShareContext, sealed: Vec<u8>) -> CoreResult<Vec<u8>
 }
 
 fn share_message(ctx: &ShareContext, sealed: &[u8]) -> CoreResult<Vec<u8>> {
-    if ctx.key_epoch < 1 {
+    // 1 to 2^53 - 1, as the web counts epochs: above it the web refuses the statement, so a share
+    // signed for such an epoch here would open on no web client (found by the differential fuzzer).
+    if !(1..=MAX_SAFE_INTEGER).contains(&ctx.key_epoch) {
         return Err(input("Invalid key epoch."));
     }
     let id = |value: &str| {
@@ -368,6 +372,20 @@ mod tests {
 
     fn not_signed(result: CoreResult<Vec<u8>>) -> bool {
         matches!(result, Err(CoreError::Sealed(message)) if message.contains("not signed"))
+    }
+
+    /* Fuzzing (differential): the web refuses an epoch past 2^53 - 1, so this twin must too. */
+    #[test]
+    fn the_key_epoch_stops_where_the_web_s_safe_integers_do() {
+        let at = |key_epoch| share_statement(ShareContext { key_epoch, ..ctx() }, vec![1; 8]);
+        assert!(at(1).is_ok());
+        assert!(at(MAX_SAFE_INTEGER).is_ok());
+        assert!(at(0).is_err());
+        assert!(at(MAX_SAFE_INTEGER + 1).is_err());
+        assert!(at(u64::MAX).is_err());
+        let (owner, guest) = (person("granter"), person("grantee"));
+        let beyond = ShareContext { key_epoch: MAX_SAFE_INTEGER + 1, ..ctx() };
+        assert!(share_seal(beyond, random(32), owner, public(&guest), kem(&guest)).is_err());
     }
 
     #[test]

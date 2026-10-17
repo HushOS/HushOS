@@ -1,3 +1,4 @@
+import { CryptoError } from './errors';
 import { encode } from './keys';
 
 /*
@@ -37,11 +38,17 @@ export async function emailDigest(email: string) {
     return encode(await sha256(new TextEncoder().encode(email.trim().toLowerCase())));
 }
 
+/*
+ * An empty account, device or attempt is refused, as the Rust core refuses it
+ * (devices.rs): no sign-in names one, so a statement over one proves nothing.
+ */
 export async function deviceSessionStatement(input: {
     userId: string;
     deviceId: string;
     attemptToken: string;
 }) {
+    if (!input.userId || !input.deviceId || !input.attemptToken)
+        throw new CryptoError('Invalid device session.');
     return new TextEncoder().encode(
         JSON.stringify([
             DOMAIN,
