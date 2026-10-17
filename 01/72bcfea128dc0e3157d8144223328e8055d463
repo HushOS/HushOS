@@ -1,0 +1,25 @@
+apps/web/src/lib/checkout-return.test.ts
+  s_c56e31c87cddde::t_6a703edeccd9f8 1-55
+apps/web/src/lib/checkout-return.ts
+  s_c56e31c87cddde::t_cddaa915cdbd7f 1-44
+DESIGN.md
+  s_c56e31c87cddde::t_cde58b95d02123 396
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_c56e31c87cddde::t_e8faff73a88264 36-41,50,126-140,196-202,204-227,307-309,311-312,314,317,319,327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0172bcfea128dc0e3157d8144223328e8055d463",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
