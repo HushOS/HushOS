@@ -91,7 +91,10 @@ const requestContext = new Elysia({ name: 'hushos-api-context' })
                     useLogger().set({ billing: { failure: describeFailure(error) } });
                     useLogger().error(new Error('Billing request failed.'));
                 }
-                return status(error.status, { message: error.message });
+                // A refused refresh is told apart, so the page can wait instead of failing.
+                return error.status === 429
+                    ? status(429, { message: error.message, code: 'rate-limited' as const })
+                    : status(error.status, { message: error.message });
             }
             if (error instanceof ValidationError || error instanceof ParseError)
                 return status(400, { message: 'Please check your information and try again.' });

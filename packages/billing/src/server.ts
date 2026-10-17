@@ -1,4 +1,5 @@
-import { billingRepository, growthRepository } from '@hushos/db';
+import { createHash } from 'node:crypto';
+import { authRepository, billingRepository, growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import { billingEnv } from '@hushos/env/billing';
 import { log } from '@hushos/logging';
@@ -446,7 +447,19 @@ export function resume(user: BillingUser) {
     return updateCurrent(user, { cancel_at_period_end: false });
 }
 
+/*
+ * Each sync reads Polar several times: ten a person every ten minutes, as for a family's. The
+ * billing page's return from checkout polls up to six times, leaving room for a refresh.
+ */
+const SYNC_LIMIT = { count: 10, windowMs: 10 * 60 * 1000 };
+
 export async function sync(user: BillingUser) {
+    const bucket = createHash('sha256').update(`billing:sync:${user.id}`).digest();
+    if (!(await authRepository.consumeRateLimit(bucket, SYNC_LIMIT.count, SYNC_LIMIT.windowMs)))
+        throw new BillingError(
+            'Too many refreshes just now. Please try again in a few minutes.',
+            429,
+        );
     await reconcileCustomer(user.id);
     return getSummary(user);
 }
