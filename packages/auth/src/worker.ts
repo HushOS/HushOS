@@ -2,6 +2,7 @@ import {
     createCryptoSession,
     CryptoError,
     RefusedError,
+    SavedAccessError,
     type CryptoRequests,
     type CryptoResults,
 } from '@hushos/crypto';
@@ -27,6 +28,8 @@ self.onmessage = async (event: MessageEvent<Message>) => {
         // does not hold, a change refused), which the group session undoes itself. A
         // refusal changed nothing, so it keeps the session too.
         const kept = error instanceof RefusedError;
+        // The saved unlock does not open with its device key: the client's cue to erase it.
+        const invalid = error instanceof SavedAccessError;
         if (!kept && !ordinaryFailure(String(event.data.operation))) session.reset();
         self.postMessage({
             id,
@@ -35,6 +38,7 @@ self.onmessage = async (event: MessageEvent<Message>) => {
                     ? error.message
                     : 'Something went wrong on this device. Please try again.',
             ...(kept ? { kept } : {}),
+            ...(invalid ? { invalid } : {}),
         });
     }
 };

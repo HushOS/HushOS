@@ -26,6 +26,8 @@ type WorkerMessage = {
     error?: string;
     /* The worker refused without changing anything, and kept its keys. */
     kept?: boolean;
+    /* The saved unlock does not open with the device key it was given (SavedAccessError). */
+    invalid?: boolean;
     progress?: unknown;
 };
 
@@ -68,7 +70,11 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
         clearTimeout(task.timer);
         if (event.data.error)
             task.reject(
-                Object.assign(new Error(event.data.error), event.data.kept ? { kept: true } : {}),
+                Object.assign(
+                    new Error(event.data.error),
+                    event.data.kept ? { kept: true } : {},
+                    event.data.invalid ? { invalid: true } : {},
+                ),
             );
         else task.resolve(event.data.result);
     };

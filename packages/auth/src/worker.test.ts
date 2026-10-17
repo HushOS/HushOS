@@ -1,3 +1,4 @@
+import { CryptoError, SavedAccessError } from '@hushos/crypto';
 import { describe, expect, test, vi } from 'vitest';
 
 /*
@@ -50,4 +51,26 @@ describe('a failed worker operation', () => {
             expect(await fail(operation)).toBe(true);
         },
     );
+});
+
+/*
+ * The client erases the saved unlock only for `invalid`, so the worker must say it for a saved
+ * access that does not open, and for nothing else: any other failure would erase it.
+ */
+describe('a failed restore', () => {
+    async function answer(error: Error) {
+        posted.length = 0;
+        session.handle.mockRejectedValueOnce(error);
+        await worker.onmessage({ data: { id: 2, operation: 'restore', input: {} } });
+        return posted[0] as { invalid?: boolean };
+    }
+
+    test('that did not open with the device key is marked invalid', async () => {
+        expect((await answer(new SavedAccessError('does not open'))).invalid).toBe(true);
+    });
+
+    test('for any other reason is not', async () => {
+        expect((await answer(new CryptoError('Your account was locked.'))).invalid).toBeUndefined();
+        expect((await answer(new Error('worker reset'))).invalid).toBeUndefined();
+    });
 });
