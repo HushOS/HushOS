@@ -101,7 +101,7 @@ export function placesOf(
  * Amounts after checkout are list prices: the summary carries no discount, so
  * a discounted family is told the figure is before it, never a wrong total.
  */
-export const TAX_LINE = 'Plus tax where it applies; Polar adds it at checkout.';
+export { TAX_LINE } from '@/lib/plans';
 export const TAX_ON_CHARGES =
     'Before any discount. Plus tax where it applies; Polar adds it to each charge.';
 
@@ -307,10 +307,5 @@ export function familyCurrencies(plans: readonly FamilyPlan[]) {
     return shared.has(DEFAULT_CURRENCY) ? [DEFAULT_CURRENCY, ...rest] : rest;
 }
 
-/* A family plan's prices in a currency, or in the default when it has none there. */
-export function familyPrice(plan: FamilyPlan, currency: string) {
-    const price = plan.prices[currency];
-    if (price) return { ...price, currency };
-    const fallback = plan.prices[DEFAULT_CURRENCY];
-    return fallback ? { ...fallback, currency: DEFAULT_CURRENCY } : null;
-}
+/* In lib/plans, shared with the pricing page, which must not load this module's API clients. */
+export { familyPrice } from '@/lib/plans';
