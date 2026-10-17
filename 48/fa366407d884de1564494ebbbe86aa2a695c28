@@ -1,0 +1,51 @@
+.env.example
+  s_c56e31c87cddde::t_8e0a789a02d715 81
+.env.production.example
+  s_c56e31c87cddde::t_34240a8f91b73d 109
+.github/workflows/ci.yml
+  s_c56e31c87cddde::t_2e36a989fa5dc8 103-106,109,162-165,245-246,250
+apps/web/src/components/families/server-knows.tsx
+  s_c56e31c87cddde::t_27051cc2e20e9e 7-9
+apps/web/src/content/security.mdx
+  s_c56e31c87cddde::t_ba7683568ac374 490
+apps/web/src/lib/group-requests.ts
+  s_c56e31c87cddde::t_92769b3ac9cc5e 14-15
+compose.yaml
+  s_c56e31c87cddde::t_52e34d9cc8ef8b 130
+docs/groups-design.md
+  s_c56e31c87cddde::t_a8c79190e2163d 241,512,514-531
+docs/groups-invariants.md
+  s_c56e31c87cddde::t_36af036542ca65 9,28,46-47,112,197,213,276-296
+docs/groups-server.md
+  s_c56e31c87cddde::t_efe08af3032622 1,3,5,202,224,258-282
+docs/groups-threat-model.md
+  s_c56e31c87cddde::t_6b173c2bc7a249 57,66
+docs/self-hosting.md
+  s_c56e31c87cddde::t_8d23e1759f1fca 194,614,616-623
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_c25f6ebb0bed43 52-53
+packages/auth/src/api.ts
+  s_c56e31c87cddde::t_ff722aad66b927 138
+packages/auth/src/server.ts
+  s_c56e31c87cddde::t_b0c74d1cafb468 747
+packages/drive/src/server.capabilities.test.ts
+  s_c56e31c87cddde::t_2b1237a2ba2b23 28,31-33
+packages/env/src/groups.ts
+  s_c56e31c87cddde::t_71b757d98f92cb 8-11,22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "48fa366407d884de1564494ebbbe86aa2a695c28",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
