@@ -1,0 +1,30 @@
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_8a7e7df901b69f 2539-2956
+  s_c56e31c87cddde::t_4afd1b3a5e410f 29
+  s_c56e31c87cddde::t_9e92cdd7c1a1c6 2957-2963
+packages/groups/src/server.test.ts
+  s_c56e31c87cddde::t_d20ce39c28bc71 923-976
+packages/crypto/src/group-trust-server.test.ts
+  s_c56e31c87cddde::t_59218c80669e12 1-224,226-227,234,236
+  s_c56e31c87cddde::t_8d1f2ac044b928 225,228-233,235,237-239
+packages/groups/src/server.ts
+  s_c56e31c87cddde::t_4768077ee2f204 272-278
+apps/web/src/lib/groups/join-only.test.ts
+  s_c56e31c87cddde::t_e7928171cd72e4 20-25,29,38-39,42-71,80-86,107-130,141-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e9165ce768c555cb5e947cf588f5f133c782281",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
