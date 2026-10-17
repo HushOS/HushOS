@@ -28,10 +28,18 @@
 //! `examples/area_ledger_fixtures.rs`), and the fuzz target `area_ledger`
 //! compares them on any sequence of steps.
 //!
+//! Area state is kept per (family, area): an area resolves only through the
+//! family [`AreaLedger::open_area`] derived its id under, and never while a
+//! second committed chain lists it, so another family's member list (one a
+//! removed member manages, say) can neither move an area's write version nor
+//! drop its keys. A chain older than the one held is refused.
+//!
 //! Where it differs from the worker, on purpose: [`AreaLedger::rotate_key`]
-//! marks a walk's fresh key pending at once (the worker does after re-keying
-//! the node's records), so an app whose record re-keying fails must call
-//! [`AreaLedger::rotate_drop`] for the node, as a refused batch does.
+//! marks a walk's fresh key pending at once (the worker's `rotateKey` does
+//! after re-keying the node's records, a callback UniFFI does not carry), so
+//! an app whose record re-keying fails calls [`AreaLedger::rotate_drop`] for
+//! the node, or [`AreaLedger::rotate_drop_all`] when it lost track of the
+//! batch, as a refused batch does.
 
 use crate::bytes::{random, SecretBytes};
 use crate::canonical::uuid;
@@ -69,6 +77,15 @@ const NO_CHAIN: &str = "Check the family’s member list first.";
 const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
 const NOT_LISTED: &str = "This folder is not on the family’s member list.";
 const ITEM_CHANGED: &str = "This item changed since it was opened. Refresh and retry.";
+/// A chain older than the one this device already holds for the family (a
+/// background acceptance that lost a race with the foreground's): refused,
+/// and nothing of it (the record, the pin) is to be written.
+pub const OLDER_CHAIN: &str = "This device already holds a later member list for this family. Sync again.";
+/// Another chain at the very roster version held for the family, with another
+/// digest: a split view, never committed. An app reports it as the fork (the
+/// hard warning); acceptance with the session's committed chain as a mark
+/// (core step 3, `accept_served`) answers the fork before this.
+pub const SPLIT_CHAIN: &str = "This family’s member list was shown differently to this device.";
 
 /// Why a family folder may not be written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +184,8 @@ pub struct RotatedKey {
 }
 
 type Slot = (String, String);
+/* (group id, workspace id). */
+type AreaSlot = (String, String);
 
 struct Held {
     key: Zeroizing<Vec<u8>>,
@@ -207,9 +226,12 @@ struct State {
     lineage: HashMap<Slot, Option<u64>>,
     pending: HashMap<Slot, Pending>,
     root_opened_under: HashMap<Slot, u64>,
-    area_write: HashMap<String, u64>,
-    blocked: HashMap<String, AreaBlock>,
-    root_seen_at: HashMap<String, u64>,
+    /* Per (family, area): never per area alone, so one family's chain never moves another's area. */
+    area_write: HashMap<AreaSlot, u64>,
+    blocked: HashMap<AreaSlot, AreaBlock>,
+    root_seen_at: HashMap<AreaSlot, u64>,
+    /* Each area's root node: the first top-level row whose key the family's chain committed to. */
+    root_ids: HashMap<AreaSlot, String>,
     /* What the web's group session holds: committed chains by group, and areas opened per group. */
     chains: HashMap<String, Arc<AcceptedRosters>>,
     opened: HashMap<String, BTreeMap<String, OpenedArea>>,
@@ -244,56 +266,77 @@ impl State {
     /* Which workspaces are areas, and the version each is written under */
     /* ------------------------------------------------------------ */
 
-    fn known_area(&self, workspace_id: &str) -> bool {
-        self.opened.values().any(|areas| areas.contains_key(workspace_id))
-            || self.chains.values().any(|chain| chain.area_keys.contains_key(workspace_id))
+    /* The families that opened the area here (one, unless something is badly wrong). */
+    fn opened_by(&self, workspace_id: &str) -> Vec<String> {
+        let mut groups: Vec<String> = self
+            .opened
+            .iter()
+            .filter(|(_, areas)| areas.contains_key(workspace_id))
+            .map(|(group_id, _)| group_id.clone())
+            .collect();
+        groups.sort();
+        groups
     }
 
-    fn chain_of(&self, workspace_id: &str) -> Option<Arc<AcceptedRosters>> {
-        // The web takes the first committed chain listing it; a workspace id is one group's.
-        let mut listing: Vec<&Arc<AcceptedRosters>> =
-            self.chains.values().filter(|chain| chain.area_keys.contains_key(workspace_id)).collect();
-        listing.sort_by(|a, b| a.group_id.cmp(&b.group_id));
-        listing.first().map(|chain| Arc::clone(chain))
+    /* How many committed chains list the area. */
+    fn listings(&self, workspace_id: &str) -> usize {
+        self.chains.values().filter(|chain| chain.area_keys.contains_key(workspace_id)).count()
+    }
+
+    /*
+     * The family an area is resolved through: the one it was opened under (open_area checked its
+     * id as derived under it), and only while no second committed chain lists it.
+     */
+    fn family_of(&self, workspace_id: &str) -> Option<String> {
+        let families = self.opened_by(workspace_id);
+        if families.len() != 1 || self.listings(workspace_id) > 1 {
+            return None;
+        }
+        families.into_iter().next()
     }
 
     fn is_area(&self, workspace_id: &str) -> bool {
-        self.area_write.contains_key(workspace_id)
-            || self.blocked.contains_key(workspace_id)
-            || self.root_seen_at.contains_key(workspace_id)
-            || self.known_area(workspace_id)
+        !self.opened_by(workspace_id).is_empty()
+            || self.listings(workspace_id) > 0
+            || self.area_write.keys().any(|(_, ws)| ws == workspace_id)
+            || self.blocked.keys().any(|(_, ws)| ws == workspace_id)
+            || self.root_seen_at.keys().any(|(_, ws)| ws == workspace_id)
+    }
+
+    /* The family and version an area is read under; none for a workspace that is no family's area. */
+    fn read_at(&self, workspace_id: &str) -> CoreResult<Option<(AreaSlot, u64)>> {
+        if !self.is_area(workspace_id) {
+            return Ok(None);
+        }
+        let group_id = self.family_of(workspace_id).ok_or_else(|| refused(NOT_CHECKED_KEYS))?;
+        let at = (group_id, workspace_id.to_string());
+        let version = *self.area_write.get(&at).ok_or_else(|| refused(NOT_CHECKED_KEYS))?;
+        Ok(Some((at, version)))
     }
 
     fn read_version(&self, workspace_id: &str) -> CoreResult<Option<u64>> {
-        if !self.is_area(workspace_id) {
-            return Ok(None);
-        }
-        match self.area_write.get(workspace_id) {
-            Some(version) => Ok(Some(*version)),
-            None => Err(refused(NOT_CHECKED_KEYS)),
-        }
+        Ok(self.read_at(workspace_id)?.map(|(_, version)| version))
     }
 
     fn write_version(&self, workspace_id: &str) -> CoreResult<Option<u64>> {
-        if !self.is_area(workspace_id) {
+        let Some((at, version)) = self.read_at(workspace_id)? else {
             return Ok(None);
-        }
-        if self.blocked.contains_key(workspace_id) {
+        };
+        if self.blocked.contains_key(&at) {
             return Err(refused(KEYS_CHANGED));
         }
-        let version = self.read_version(workspace_id)?.expect("an area");
         // Only once a root wrapped under this very version was opened here.
-        if self.root_seen_at.get(workspace_id) != Some(&version) {
+        if self.root_seen_at.get(&at) != Some(&version) {
             return Err(refused(KEYS_CHANGED));
         }
         Ok(Some(version))
     }
 
-    fn unwritable(&self, workspace_id: &str, latest: u64) -> Option<AreaBlock> {
-        if let Some(reason) = self.blocked.get(workspace_id) {
+    fn unwritable(&self, at: &AreaSlot, latest: u64) -> Option<AreaBlock> {
+        if let Some(reason) = self.blocked.get(at) {
             return Some(*reason);
         }
-        match self.root_seen_at.get(workspace_id) {
+        match self.root_seen_at.get(at) {
             Some(seen) if *seen == latest => None,
             None => Some(AreaBlock::RootUnknown),
             Some(_) => Some(AreaBlock::RootBehind),
@@ -310,66 +353,102 @@ impl State {
         Ok(())
     }
 
-    fn root_seen(&mut self, workspace_id: &str, parent_key_epoch: u64, root_key: &[u8]) -> CoreResult<bool> {
+    /*
+     * A root a listing just opened under the area key at `parent_key_epoch`: seen only when its
+     * family's chain committed to its key there; an older root that holds never lowers what was
+     * seen, and the first that holds is the area's root node from then on.
+     */
+    fn root_seen(
+        &mut self,
+        workspace_id: &str,
+        node_id: &str,
+        parent_key_epoch: u64,
+        root_key: &[u8],
+    ) -> CoreResult<bool> {
         if !self.is_area(workspace_id) {
             return Ok(true);
         }
-        // Without a committed chain nothing says which root is current: no write until one.
-        let Some(chain) = self.chain_of(workspace_id) else {
+        // Without its family's committed chain nothing says which root is current: no write until one.
+        let Some(group_id) = self.family_of(workspace_id) else {
             return Ok(true);
         };
+        let Some(chain) = self.chains.get(&group_id).cloned() else {
+            return Ok(true);
+        };
+        let at = (group_id, workspace_id.to_string());
         if area_root_check(chain, workspace_id.to_string(), parent_key_epoch, root_key.to_vec()).is_err() {
-            if self.root_seen_at.get(workspace_id) == Some(&parent_key_epoch) {
-                self.root_seen_at.remove(workspace_id);
+            if self.root_seen_at.get(&at) == Some(&parent_key_epoch) {
+                self.root_seen_at.remove(&at);
             }
             return Ok(false);
         }
-        self.root_seen_at.insert(workspace_id.to_string(), parent_key_epoch);
+        let seen = self.root_seen_at.get(&at).copied();
+        if seen.is_none_or(|seen| seen < parent_key_epoch) {
+            self.root_seen_at.insert(at.clone(), parent_key_epoch);
+        }
+        self.root_ids.entry(at).or_insert_with(|| node_id.to_string());
         Ok(true)
     }
 
-    fn commit_areas(&mut self, chain: &AcceptedRosters) {
-        let mut areas: Vec<&String> = chain.area_keys.keys().collect();
-        areas.sort();
-        for workspace_id in areas {
-            match area_write_version_of(chain, workspace_id) {
+    /* Whether a top-level row is another node than the root its family's area already has. */
+    fn not_the_root(&self, workspace_id: &str, node_id: &str) -> bool {
+        let Some(group_id) = self.family_of(workspace_id) else {
+            return false;
+        };
+        self.root_ids.get(&(group_id, workspace_id.to_string())).is_some_and(|root| root != node_id)
+    }
+
+    fn commit(&mut self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
+        if let Some(held) = self.chains.get(&chain.group_id) {
+            if held.roster.roster_version > chain.roster.roster_version {
+                return Err(refused(OLDER_CHAIN));
+            }
+            // Another roster at the very version held: a split view, never committed over it.
+            if held.roster.roster_version == chain.roster.roster_version
+                && held.roster_digest != chain.roster_digest
+            {
+                return Err(refused(SPLIT_CHAIN));
+            }
+        }
+        let group_id = chain.group_id.clone();
+        for workspace_id in chain.area_keys.keys() {
+            let at = (group_id.clone(), workspace_id.clone());
+            match area_write_version_of(&chain, workspace_id) {
                 None => {
-                    self.area_write.remove(workspace_id);
-                    self.root_seen_at.remove(workspace_id);
+                    self.area_write.remove(&at);
+                    self.root_seen_at.remove(&at);
                 }
                 Some(version) => {
-                    self.area_write.insert(workspace_id.clone(), version);
+                    self.area_write.insert(at, version);
                 }
             }
         }
+        self.chains.insert(group_id, chain);
+        Ok(())
     }
 
-    fn areas_of_group(&self, group_id: &str) -> Vec<String> {
-        let mut areas: Vec<String> = self
-            .chains
-            .get(group_id)
-            .map(|chain| chain.area_keys.keys().cloned().collect())
-            .unwrap_or_default();
-        areas.extend(
-            self.opened
-                .get(group_id)
-                .map(|opened| opened.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default(),
-        );
-        areas
+    fn uncommit(&mut self, group_id: &str) {
+        self.area_write.retain(|(group, _), _| group != group_id);
+        self.chains.remove(group_id);
     }
 
-    fn forget_areas(&mut self, workspace_ids: &[String]) {
-        for workspace_id in workspace_ids {
-            self.drop_workspace(workspace_id);
-            self.area_write.remove(workspace_id);
-            self.blocked.remove(workspace_id);
-            self.root_seen_at.remove(workspace_id);
+    fn forget_group(&mut self, group_id: &str) {
+        let opened: Vec<String> =
+            self.opened.get(group_id).map(|areas| areas.keys().cloned().collect()).unwrap_or_default();
+        for workspace_id in opened {
+            self.drop_workspace(&workspace_id);
         }
+        self.area_write.retain(|(group, _), _| group != group_id);
+        self.blocked.retain(|(group, _), _| group != group_id);
+        self.root_seen_at.retain(|(group, _), _| group != group_id);
+        self.root_ids.retain(|(group, _), _| group != group_id);
+        self.opened.remove(group_id);
+        self.chains.remove(group_id);
     }
 
     fn admit_area_key(
         &mut self,
+        group_id: &str,
         workspace_id: &str,
         version: u64,
         key: Vec<u8>,
@@ -386,13 +465,14 @@ impl State {
             None
         };
         self.hold_workspace_key(workspace_id, version, key);
+        let at = (group_id.to_string(), workspace_id.to_string());
         match reason {
-            Some(reason) => self.blocked.insert(workspace_id.to_string(), reason),
-            None => self.blocked.remove(workspace_id),
+            Some(reason) => self.blocked.insert(at.clone(), reason),
+            None => self.blocked.remove(&at),
         };
         // The root is the listing's to decide: until one is opened at the latest version, the
         // area reads root-unknown (or root-behind) and is not written.
-        self.unwritable(workspace_id, latest)
+        self.unwritable(&at, latest)
     }
 
     /* ------------------------------------------------------------ */
@@ -607,6 +687,11 @@ impl State {
     fn open_listed_node(&mut self, workspace_id: &str, node: &ServedNodeKey) -> CoreResult<Vec<u8>> {
         let at = slot(workspace_id, &node.node_id);
         let area_root = node.parent_id == workspace_id && self.is_area(workspace_id);
+        // Another top-level node than the area's root: nothing in Drive goes there (wrap_key_for),
+        // so it is planted, and it decides nothing about the area.
+        if area_root && self.not_the_root(workspace_id, &node.node_id) {
+            return Err(refused(NOT_COMMITTED_ROOT));
+        }
         let cached = self.node_key(workspace_id, &node.node_id).map(|held| (held.key.to_vec(), held.epoch));
         // A group area's root is taken from the cache only under the area key version it was
         // opened under: a row that names another is opened again.
@@ -642,7 +727,7 @@ impl State {
         let key = key.expect("opened or cached");
         // A group area's root decides whether the area may be written: only one whose envelope
         // opened under the area's write version, and whose key the roster committed to there.
-        if area_root && !self.root_seen(workspace_id, node.parent_key_epoch, &key)? {
+        if area_root && !self.root_seen(workspace_id, &node.node_id, node.parent_key_epoch, &key)? {
             self.pool_mut(workspace_id).remove(&at);
             self.root_opened_under.remove(&at);
             return Err(refused(NOT_COMMITTED_ROOT));
@@ -780,6 +865,8 @@ impl State {
         node: &RotatingNodeKey,
         target_epoch: u64,
     ) -> CoreResult<RotatedKey> {
+        // As the web's driveRotateNodes: no walk in a family folder this device found unwritable.
+        self.require_writable(workspace_id)?;
         let old = self.rotation_old_key(workspace_id, node)?;
         // Already at the target, only wrapped under an unrotated parent: the same key, re-wrapped.
         if node.key_epoch >= target_epoch {
@@ -835,6 +922,12 @@ impl State {
         count
     }
 
+    fn drop_all_pending(&mut self, workspace_id: &str) -> u32 {
+        let before = self.pending.len();
+        self.pending.retain(|(ws, _), _| ws != workspace_id);
+        (before - self.pending.len()) as u32
+    }
+
     fn drop_pending(&mut self, workspace_id: &str, node_ids: &[String]) -> u32 {
         let mut count = 0;
         for node_id in node_ids {
@@ -884,31 +977,28 @@ impl AreaLedger {
         Arc::new(AreaLedger::default())
     }
 
-    /// A group's chain, accepted from what the server served (never a staged
-    /// one): its areas are written under the versions it lists. A new write
+    /// A family's chain, accepted from what the server served (never a staged
+    /// one): its areas are written under the versions it lists, and only its
+    /// own areas (an area is resolved only through the family it was opened
+    /// under, and never while a second committed chain lists it). A new write
     /// version needs its root seen again; a retired area is written no more.
-    pub fn commit(&self, chain: Arc<AcceptedRosters>) {
-        let mut state = self.lock();
-        state.commit_areas(&chain);
-        state.chains.insert(chain.group_id.clone(), chain);
+    /// Refused ([`OLDER_CHAIN`]) for a chain older than the one held, and
+    /// ([`SPLIT_CHAIN`]) for another chain at the version held: an app then
+    /// writes nothing of that acceptance (record, pin), and shows the second
+    /// as the fork.
+    pub fn commit(&self, chain: Arc<AcceptedRosters>) -> CoreResult<()> {
+        self.lock().commit(chain)
     }
 
-    /// A refusal or a fork for the group: none of its areas is written until a chain is committed again.
+    /// A refusal or a fork for the family: none of its areas is written until a chain is committed again.
     pub fn uncommit(&self, group_id: String) {
-        let mut state = self.lock();
-        for workspace_id in state.areas_of_group(&group_id) {
-            state.area_write.remove(&workspace_id);
-        }
-        state.chains.remove(&group_id);
+        self.lock().uncommit(&group_id);
     }
 
-    /// A group the person no longer reads: every key of its areas, wiped.
+    /// A family the person no longer reads: the keys of the areas it opened, and all it knew of them.
+    /// Another family's chain listing those areas touches nothing.
     pub fn forget_group(&self, group_id: String) {
-        let mut state = self.lock();
-        let areas = state.areas_of_group(&group_id);
-        state.forget_areas(&areas);
-        state.opened.remove(&group_id);
-        state.chains.remove(&group_id);
+        self.lock().forget_group(&group_id);
     }
 
     /// Every key, wiped: a lock or a sign-out.
@@ -946,10 +1036,18 @@ impl AreaLedger {
         if version == 0 || listed.get(index) != Some(&commitment) {
             return Err(refused(NOT_CHECKED_KEYS));
         }
+        let group_id_of_area = group_id.clone();
         let areas = state.opened.entry(group_id).or_default();
         let before = areas.get(&workspace_id).map(|area| area.version).unwrap_or(0);
         areas.insert(workspace_id.clone(), OpenedArea { id_seed, version: before.max(version) });
-        let reason = state.admit_area_key(&workspace_id, version, area_key.to_vec(), served_version, latest);
+        let reason = state.admit_area_key(
+            &group_id_of_area,
+            &workspace_id,
+            version,
+            area_key.to_vec(),
+            served_version,
+            latest,
+        );
         Ok(AreaOpened { version, writable: reason.is_none(), reason })
     }
 
@@ -1084,6 +1182,12 @@ impl AreaLedger {
         self.lock().drop_pending(&workspace_id, &node_ids)
     }
 
+    /// A walk abandoned, or a batch whose node list the app lost: every fresh key pending in the
+    /// workspace, dropped. What an app calls when it cannot tell which nodes a failed batch held.
+    pub fn rotate_drop_all(&self, workspace_id: String) -> u32 {
+        self.lock().drop_all_pending(&workspace_id)
+    }
+
     /// A share, link or report naming one of this session's own workspaces: a key planted, never taken.
     pub fn refuse_own_workspace(&self, workspace_id: String) -> CoreResult<()> {
         if self.lock().workspace_keys.contains_key(&workspace_id) {
@@ -1107,6 +1211,7 @@ mod tests {
     use crate::group_trust::{accept_rosters, RosterChain};
     use crate::groups::tests::{
         area_key_at, group_seed_at, ml_dsa_keys, reader, Person, AREA, AREA_SEED, GROUP, OTHER_AREA_SEED,
+        OTHER_GROUP,
     };
     use crate::groups::{
         area_root_commitment, group_public_key, roster_digest, roster_sign, GroupKind, GroupRole,
@@ -1133,6 +1238,11 @@ mod tests {
 
     /* A family whose rosters carry `rows` (one list per roster), signed by its only holder and accepted. */
     fn chain(rows: Vec<Vec<Row>>) -> Arc<AcceptedRosters> {
+        chain_of(GROUP, rows)
+    }
+
+    /* The same for the family `group_id`, whose rosters may list AREA too (another family's chain). */
+    fn chain_of(group_id: &str, rows: Vec<Vec<Row>>) -> Arc<AcceptedRosters> {
         let owner = Person::new(1);
         let entry = owner.entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active);
         let mut signed: Vec<crate::groups::SignedGroupStatement> = vec![];
@@ -1165,7 +1275,7 @@ mod tests {
                 })
                 .collect();
             let roster = Roster {
-                group_id: GROUP.into(),
+                group_id: group_id.into(),
                 kind: GroupKind::Family,
                 roster_version: index as u64 + 1,
                 previous_roster_digest: signed
@@ -1181,7 +1291,7 @@ mod tests {
             signed.push(roster_sign(roster, group_seed_at(1), owner.keys.clone()).unwrap());
         }
         match accept_rosters(
-            GROUP.into(),
+            group_id.into(),
             group_public_key(group_seed_at(1)).unwrap(),
             true,
             vec![],
@@ -1261,7 +1371,7 @@ mod tests {
     /* A ledger with the area at `v` (of a chain listing versions 1..=v), its top level opened. */
     fn writable_at(v: u64) -> Arc<AreaLedger> {
         let ledger = AreaLedger::new();
-        ledger.commit(chain((1..=v).map(|at| vec![Row::Key(at)]).collect()));
+        ledger.commit(chain((1..=v).map(|at| vec![Row::Key(at)]).collect())).unwrap();
         open(&ledger, v, v);
         ledger.open_listed_node(AREA.into(), root_row(v)).unwrap();
         ledger
@@ -1270,7 +1380,7 @@ mod tests {
     #[test]
     fn a_family_folder_takes_writes_only_once_its_committed_top_level_is_seen() {
         let ledger = AreaLedger::new();
-        ledger.commit(chain(vec![vec![Row::Key(1)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
         let opened = open(&ledger, 1, 1);
         assert_eq!((opened.writable, opened.reason), (false, Some(AreaBlock::RootUnknown)));
         assert_eq!(message(ledger.require_writable(AREA.into())), KEYS_CHANGED);
@@ -1299,7 +1409,7 @@ mod tests {
     #[test]
     fn a_top_level_under_the_right_area_key_but_not_the_committed_key_is_dropped() {
         let ledger = AreaLedger::new();
-        ledger.commit(chain(vec![vec![Row::Key(1)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
         open(&ledger, 1, 1);
         let planted = served(&node(ROOT), AREA, 1, 1, &area_key_at(AREA, 1), &key(5));
         assert_eq!(message(ledger.open_listed_node(AREA.into(), planted)), NOT_COMMITTED_ROOT);
@@ -1307,7 +1417,7 @@ mod tests {
         assert_eq!(message(ledger.require_writable(AREA.into())), KEYS_CHANGED);
         // A format 1 version committed to no top level: the envelope opening is the rule there.
         let old = AreaLedger::new();
-        old.commit(chain(vec![vec![Row::F1(1)]]));
+        old.commit(chain(vec![vec![Row::F1(1)]])).unwrap();
         open(&old, 1, 1);
         old.open_listed_node(AREA.into(), served(&node(ROOT), AREA, 1, 1, &area_key_at(AREA, 1), &key(5)))
             .unwrap();
@@ -1379,7 +1489,7 @@ mod tests {
             key_envelope: folder.key_envelope,
         };
         ledger.rotate_key(AREA.into(), rotating, 2).unwrap();
-        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
         assert_eq!(open(&ledger, 2, 2).reason, Some(AreaBlock::RootBehind));
         ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
         assert_eq!(message(ledger.new_node_key(AREA.into(), node(3), node(2), 2, 2)), KEY_CHANGE_PENDING);
@@ -1448,7 +1558,7 @@ mod tests {
             )),
             NO_CHAIN
         );
-        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
         assert_eq!(open(&ledger, 1, 2).reason, Some(AreaBlock::NoGrantAtLatest));
         assert_eq!(open(&ledger, 2, 1).reason, Some(AreaBlock::ServerBehind));
         assert_eq!(open(&ledger, 2, 3).reason, Some(AreaBlock::ServerAhead));
@@ -1470,7 +1580,7 @@ mod tests {
     fn a_deleted_folder_is_read_and_never_written_and_forgetting_the_family_wipes_its_keys() {
         let ledger = writable_at(1);
         let folder = ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1).unwrap();
-        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Retired(2)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Retired(2)]])).unwrap();
         assert_eq!(message(ledger.write_version(AREA.into())), NOT_CHECKED_KEYS);
         assert_eq!(message(ledger.new_node_key(AREA.into(), node(3), node(2), 1, 1)), NOT_CHECKED_KEYS);
         assert_eq!(ledger.key_at_epoch(AREA.into(), node(2), 1).unwrap(), folder.key);
@@ -1478,7 +1588,7 @@ mod tests {
         let refused = writable_at(1);
         refused.uncommit(GROUP.into());
         assert_eq!(message(refused.require_writable(AREA.into())), NOT_CHECKED_KEYS);
-        refused.commit(chain(vec![vec![Row::Key(1)]]));
+        refused.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
         assert!(refused.require_writable(AREA.into()).is_ok());
         refused.forget_group(GROUP.into());
         assert!(!refused.is_area(AREA.into()));
@@ -1490,7 +1600,7 @@ mod tests {
     #[test]
     fn the_top_level_s_previous_key_this_device_opened_outranks_a_served_previous_envelope() {
         let ledger = writable_at(1);
-        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]]));
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
         open(&ledger, 2, 2);
         let mut row = root_row(2);
         row.prev_key_envelope = Some(
@@ -1518,9 +1628,7 @@ mod tests {
 
     #[test]
     fn a_top_level_is_never_a_walk_s_even_one_this_device_cannot_open() {
-        let ledger = AreaLedger::new();
-        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]]));
-        open(&ledger, 2, 2);
+        let ledger = writable_at(2);
         // Served under the area key at version 1, which this device does not hold.
         let rotating = RotatingNodeKey {
             node_id: node(ROOT),
@@ -1540,5 +1648,167 @@ mod tests {
         let ledger = writable_at(1);
         ledger.lock().workspace_keys.get_mut(AREA).unwrap().keys.clear();
         assert_eq!(message(ledger.require_writable(AREA.into())), KEYS_CHANGED);
+    }
+
+    /* Version 2 writable with both area keys held (version 1 first, as a reader catching up opens them). */
+    fn writable_with_both() -> Arc<AreaLedger> {
+        let ledger = AreaLedger::new();
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
+        assert_eq!(open(&ledger, 1, 2).reason, Some(AreaBlock::NoGrantAtLatest));
+        open(&ledger, 2, 2);
+        ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        ledger
+    }
+
+    #[test]
+    fn another_family_s_chain_listing_an_area_never_moves_its_write_version() {
+        // The reviewers' attack: a removed member who manages another family the person is in
+        // lists this family's folder at its old version; the server serves the old top level.
+        let ledger = writable_with_both();
+        ledger.commit(chain_of(OTHER_GROUP, vec![vec![Row::Key(1)]])).unwrap();
+        assert_eq!(message(ledger.write_version(AREA.into())), NOT_CHECKED_KEYS);
+        let old_root = served(&node(ROOT), AREA, 1, 1, &area_key_at(AREA, 1), &root_key(1));
+        ledger.open_listed_node(AREA.into(), old_root).unwrap();
+        assert_eq!(message(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1)), NOT_CHECKED_KEYS);
+        // The other family gone again, the area is its own family's: version 2, and the old top
+        // level writes nothing.
+        ledger.uncommit(OTHER_GROUP.into());
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        assert_eq!(message(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1)), KEY_CHANGE_PENDING);
+        ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+        assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 2, 2).is_ok());
+    }
+
+    #[test]
+    fn another_family_uncommitted_or_forgotten_leaves_this_family_s_folder_alone() {
+        let ledger = writable_at(1);
+        let folder = ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1).unwrap();
+        // Its chain refused, or forgotten, without ever being committed here: nothing changes.
+        ledger.uncommit(OTHER_GROUP.into());
+        ledger.forget_group(OTHER_GROUP.into());
+        assert!(ledger.require_writable(AREA.into()).is_ok());
+        // Committed listing the area, then forgotten: the folder's keys stay, and it is written again.
+        ledger.commit(chain_of(OTHER_GROUP, vec![vec![Row::Key(1)]])).unwrap();
+        ledger.forget_group(OTHER_GROUP.into());
+        assert_eq!(ledger.key_at_epoch(AREA.into(), node(2), 1).unwrap(), folder.key);
+        assert_eq!(ledger.key_at_epoch(AREA.into(), node(ROOT), 1).unwrap(), root_key(1));
+        assert!(ledger.new_node_key(AREA.into(), node(3), node(2), 1, 1).is_ok());
+    }
+
+    #[test]
+    fn an_older_chain_for_the_family_is_refused_and_changes_nothing() {
+        let ledger = AreaLedger::new();
+        let held = chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]]);
+        ledger.commit(Arc::clone(&held)).unwrap();
+        open(&ledger, 2, 2);
+        ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+        assert_eq!(message(ledger.commit(chain(vec![vec![Row::Key(1)]]))), OLDER_CHAIN);
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        // The same chain again is taken (a re-sync).
+        assert!(ledger.commit(held).is_ok());
+    }
+
+    #[test]
+    fn an_old_top_level_served_again_or_another_top_level_node_never_lowers_what_was_seen() {
+        let ledger = writable_with_both();
+        let old_root = served(&node(ROOT), AREA, 1, 1, &area_key_at(AREA, 1), &root_key(1));
+        ledger.open_listed_node(AREA.into(), old_root).unwrap();
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        let planted = served(&node(9), AREA, 2, 2, &area_key_at(AREA, 2), &key(5));
+        assert_eq!(message(ledger.open_listed_node(AREA.into(), planted)), NOT_COMMITTED_ROOT);
+        assert!(ledger.key_at_epoch(AREA.into(), node(9), 2).is_none());
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        // The real top level served under the right area version with another key still is a rollback.
+        let rolled = served(&node(ROOT), AREA, 2, 2, &area_key_at(AREA, 2), &key(6));
+        assert_eq!(message(ledger.open_listed_node(AREA.into(), rolled)), NOT_COMMITTED_ROOT);
+        assert_eq!(message(ledger.write_version(AREA.into())), KEYS_CHANGED);
+    }
+
+    #[test]
+    fn a_walk_needs_a_writable_folder_and_an_abandoned_one_drops_every_pending_key() {
+        let unseen = AreaLedger::new();
+        unseen.commit(chain(vec![vec![Row::Key(1)]])).unwrap();
+        open(&unseen, 1, 1);
+        let any = RotatingNodeKey {
+            node_id: node(2),
+            parent_id: node(ROOT),
+            parent_key_epoch: 1,
+            key_epoch: 1,
+            wrapped_parent_key_epoch: 1,
+            key_envelope: wrap(&node(2), &node(ROOT), 1, 1, &root_key(1), &key(1)),
+        };
+        assert_eq!(message(unseen.rotate_key(AREA.into(), any, 2)), KEYS_CHANGED);
+        let ledger = writable_at(2);
+        for (n, k) in [(2, 1), (3, 2)] {
+            let folder = served(&node(n), &node(ROOT), 1, 1, &root_key(1), &key(k));
+            ledger.open_listed_node(AREA.into(), folder.clone()).unwrap();
+            let rotating = RotatingNodeKey {
+                node_id: node(n),
+                parent_id: node(ROOT),
+                parent_key_epoch: 2,
+                key_epoch: 1,
+                wrapped_parent_key_epoch: 1,
+                key_envelope: folder.key_envelope,
+            };
+            ledger.rotate_key(AREA.into(), rotating, 2).unwrap();
+        }
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 2);
+        assert_eq!(ledger.rotate_drop_all(AREA.into()), 0);
+        assert!(ledger.key_at_epoch(AREA.into(), node(2), 2).is_none());
+        assert_eq!(message(ledger.new_node_key(AREA.into(), node(4), node(2), 2, 2)), KEY_CHANGE_PENDING);
+    }
+
+    #[test]
+    fn a_walk_s_fresh_key_never_goes_under_a_parent_reached_through_a_previous_key() {
+        let ledger = writable_at(2);
+        ledger
+            .open_listed_node(AREA.into(), served(&node(2), &node(ROOT), 1, 1, &root_key(1), &key(1)))
+            .unwrap();
+        let child = served(&node(3), &node(2), 1, 1, &key(1), &key(7));
+        ledger.open_listed_node(AREA.into(), child.clone()).unwrap();
+        let rotating = RotatingNodeKey {
+            node_id: node(3),
+            parent_id: node(2),
+            parent_key_epoch: 1,
+            key_epoch: 1,
+            wrapped_parent_key_epoch: 1,
+            key_envelope: child.key_envelope,
+        };
+        assert_eq!(message(ledger.rotate_key(AREA.into(), rotating, 2)), KEY_CHANGE_PENDING);
+        assert!(ledger.key_at_epoch(AREA.into(), node(3), 2).is_none());
+    }
+
+    #[test]
+    fn forgetting_the_family_mid_walk_drops_the_walk_s_pending_keys() {
+        let ledger = writable_at(2);
+        let folder = served(&node(2), &node(ROOT), 1, 1, &root_key(1), &key(1));
+        ledger.open_listed_node(AREA.into(), folder.clone()).unwrap();
+        let rotating = RotatingNodeKey {
+            node_id: node(2),
+            parent_id: node(ROOT),
+            parent_key_epoch: 2,
+            key_epoch: 1,
+            wrapped_parent_key_epoch: 1,
+            key_envelope: folder.key_envelope.clone(),
+        };
+        ledger.rotate_key(AREA.into(), rotating, 2).unwrap();
+        ledger.forget_group(GROUP.into());
+        // Back in the family: the walk's fresh key is gone, nothing goes under it, nothing commits it.
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
+        open(&ledger, 2, 2);
+        ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+        ledger.open_listed_node(AREA.into(), folder).unwrap();
+        assert_eq!(message(ledger.new_node_key(AREA.into(), node(3), node(2), 2, 2)), KEY_CHANGE_PENDING);
+        assert_eq!(ledger.rotate_commit(AREA.into(), vec![node(2)]), 0);
+    }
+
+    #[test]
+    fn another_chain_at_the_version_held_is_never_committed() {
+        let ledger = writable_at(2);
+        // Roster 2 with no rows: the same version, another digest.
+        let split = chain(vec![vec![Row::Key(1)], vec![]]);
+        assert_eq!(message(ledger.commit(split)), SPLIT_CHAIN);
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
     }
 }

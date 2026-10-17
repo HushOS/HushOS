@@ -1248,7 +1248,8 @@ export async function verdict(target: Target, data: Uint8Array): Promise<Verdict
 async function areaLedger(value: Doc): Promise<Verdict | undefined> {
     const steps = readSteps(value.steps);
     if (!steps) return undefined;
-    const { outcomes, made } = await runSteps(steps);
+    const { outcomes, made, violations } = await runSteps(steps);
+    invariant(violations.length === 0, violations.join('; '));
     for (const envelope of made)
         if (envelope.parentKey)
             invariant(

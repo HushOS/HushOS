@@ -32,7 +32,8 @@ describe('the family write rules, step by step', () => {
 
     for (const scenario of scenarios)
         it(scenario.name, async () => {
-            const { outcomes } = await runSteps(readSteps(scenario.steps)!);
+            const { outcomes, violations } = await runSteps(readSteps(scenario.steps)!);
             expect(unmet(scenario, outcomes)).toEqual([]);
+            expect(violations).toEqual([]);
         });
 });

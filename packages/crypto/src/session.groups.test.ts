@@ -1284,6 +1284,82 @@ describe('workspace documents in a rotation', () => {
 });
 
 describe('the write version (F9)', () => {
+    test('another roster at the version this session committed is the fork, never committed, even with the device record and settings from before both', async () => {
+        const f = await family();
+        const { alice, bob, groupId, server } = f;
+        const carol = await account(CAROL);
+        const before = { record: f.marks.bob.record, envelope: bob.settings.envelope! };
+        const servedBefore = server.served();
+        // Alice signs two rosters at version 3: Carol's admission (never stored), then the rotation.
+        const rival = await alice.call('groupStage', {
+            groupId,
+            expectedRevision: 2,
+            op: {
+                kind: 'admit',
+                userId: CAROL,
+                pin: await pinOf(carol),
+                served: carol.served,
+                roles: [],
+            },
+            kems: { [BOB]: bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
+        });
+        if (rival.outboxId === null) throw new Error('nothing staged');
+        await alice.call('groupDrop', { outboxId: rival.outboxId });
+        await rotated(f);
+        const device = await bob.device();
+        await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+        const accept = (served: ServedChain) =>
+            device.call('groupAccept', {
+                userId: BOB,
+                groupId,
+                served,
+                record: before.record,
+                checkedAt: CHECKED,
+            });
+        await expect(accept(server.served())).resolves.toMatchObject({
+            status: 'accepted',
+            view: { rosterVersion: 3 },
+        });
+        // The server shows this session the rival version 3: the person's own mark (the chain this
+        // session committed) disagrees with what is served, so it is the hard warning.
+        const split = { ...servedBefore, rosters: [...servedBefore.rosters, rival.body.roster] };
+        await expect(accept(split)).resolves.toMatchObject({
+            status: 'fork',
+            fork: { of: 'roster', version: 3 },
+        });
+    });
+
+    test('an acceptance that lost a race with a later one is refused and keeps nothing: no record, no pin, no older write version', async () => {
+        const f = await family();
+        const { bob, groupId, server } = f;
+        // What a background acceptance started from: the record and settings before the rotation.
+        const before = { record: f.marks.bob.record, envelope: bob.settings.envelope! };
+        const servedBefore = server.served();
+        await rotated(f);
+        // A second device of Bob's, opened on those older settings, as both runs began.
+        const device = await bob.device();
+        await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+        const accept = (served: ServedChain) =>
+            device.call('groupAccept', {
+                userId: BOB,
+                groupId,
+                served,
+                record: before.record,
+                checkedAt: CHECKED,
+            });
+        // The foreground's run, through the rotation, lands first.
+        await expect(accept(server.served())).resolves.toMatchObject({
+            status: 'accepted',
+            view: { rosterVersion: 3 },
+        });
+        // The background's, over what the server served before, finishes after: refused, so the
+        // data layer writes neither its record nor its pin, and the committed chain stays at 3.
+        await expect(accept(servedBefore)).rejects.toThrow(/already holds a later member list/);
+        await expect(accept(server.served())).resolves.toMatchObject({
+            view: { rosterVersion: 3 },
+        });
+    });
+
     test('writes and documents need the area’s write version, the top level takes no node, and older documents are refused', async () => {
         const f = await family();
         const r = await rotated(f);

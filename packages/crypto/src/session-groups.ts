@@ -1,5 +1,5 @@
 import { encryptKey, decryptKey } from './aead';
-import type { AreaLedger } from './area-ledger';
+import { OLDER_CHAIN, SPLIT_CHAIN, type AreaLedger } from './area-ledger';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
 import type { ContactPin } from './contacts';
@@ -1222,6 +1222,23 @@ function entryIsPin(entry: RosterMember | undefined, pin: ContactPin) {
  * Both screens' code comes from here; acceptance works its own out (group-trust.ts), and the two
  * must agree at every version (session-groups.join.test.ts).
  */
+/*
+ * The latest roster version what the server served reaches: the highest a
+ * served roster claims (one that does not parse claims nothing), or the
+ * device record's cache when nothing after it was served. Only a lower bound
+ * is taken from it; acceptance verifies the rest.
+ */
+function servedHead(served: ServedChain, cache: GroupChainCache | null) {
+    let head = cache?.rosterDigests.length ?? 0;
+    for (const roster of served.rosters)
+        try {
+            head = Math.max(head, parseRoster(decode(roster.statement)).rosterVersion);
+        } catch {
+            /* Not a roster: it reaches nothing. */
+        }
+    return head;
+}
+
 export async function codeAt(chain: AcceptedRosters, version: number) {
     if (!Number.isSafeInteger(version) || version < 1 || version > chain.rosterDigests.length)
         throw new CryptoError('This member list is not on the family’s history.');
@@ -1275,18 +1292,7 @@ export function createGroupSession(host: GroupHost) {
     function areasOf(groupId: string) {
         return opened.get(groupId) ?? new Map<string, { idSeed: string; version: number }>();
     }
-    /* Whether this session knows the workspace as an area: opened here, or on a committed chain. */
-    function knownArea(workspaceId: string) {
-        for (const areas of opened.values()) if (areas.has(workspaceId)) return true;
-        for (const chain of chains.values())
-            if (Object.hasOwn(chain.areaKeys, workspaceId)) return true;
-        return false;
-    }
-    /* The committed chain that lists the area, if any. */
-    function chainOf(workspaceId: string) {
-        return [...chains.values()].find((at) => Object.hasOwn(at.areaKeys, workspaceId));
-    }
-    const { isArea, readVersion, writeVersion, requireWritable, rootSeen } = ledger;
+    const { isArea, readVersion, writeVersion, requireWritable } = ledger;
     /*
      * Within one unlock, settings that opened never give way to none (or to a
      * version 1 document, which opens as none): a server answering so would
@@ -1315,8 +1321,8 @@ export function createGroupSession(host: GroupHost) {
     function commit(chain: AcceptedRosters) {
         chains.set(chain.groupId, chain);
         forked.delete(chain.groupId);
-        // Each area's write version; a new one needs its root seen again.
-        ledger.commitAreas(chain);
+        // Each area's write version, under this family alone; a new one needs its root seen again.
+        ledger.commit(chain);
         // Seeds of keys the group has replaced sign nothing any more.
         for (const [at, seed] of seeds) {
             const [groupId, version] = at.split(':');
@@ -1336,8 +1342,7 @@ export function createGroupSession(host: GroupHost) {
     }
     /* A refusal or a fork: nothing in the group is vouched for by its roster, and its areas are not written. */
     function uncommit(groupId: string, fork: boolean) {
-        const chain = chains.get(groupId);
-        ledger.uncommitAreas([...Object.keys(chain?.areaKeys ?? {}), ...areasOf(groupId).keys()]);
+        ledger.uncommit(groupId);
         chains.delete(groupId);
         if (fork) forked.add(groupId);
         else forked.delete(groupId);
@@ -1361,11 +1366,8 @@ export function createGroupSession(host: GroupHost) {
                 seeds.delete(slot);
             }
         for (const [outboxId, entry] of staged) if (entry.groupId === groupId) dropStaged(outboxId);
-        const areas = [
-            ...Object.keys(chains.get(groupId)?.areaKeys ?? {}),
-            ...areasOf(groupId).keys(),
-        ];
-        ledger.forgetAreas(areas);
+        // Only the areas this family opened: another family's chain listing them touches nothing.
+        ledger.forgetGroup(groupId);
         opened.delete(groupId);
         chains.delete(groupId);
         forked.delete(groupId);
@@ -1375,7 +1377,7 @@ export function createGroupSession(host: GroupHost) {
         for (const seed of seeds.values()) seed.fill(0);
         seeds.clear();
         for (const outboxId of staged.keys()) dropStaged(outboxId);
-        ledger.forgetAllAreas();
+        ledger.forgetAllGroups();
         chains.clear();
         forked.clear();
         opened.clear();
@@ -2105,6 +2107,14 @@ export function createGroupSession(host: GroupHost) {
         }
         const { me, identities } = ownIdentities();
         if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        // The chain this session already committed for the family is one of the person's marks:
+        // served short of it, the run lost a race with a later one (or the server rolled back),
+        // and nothing of it is kept; served through another roster at a version it fixes, the
+        // acceptance below reports the fork, the hard warning, and never commits it.
+        const held = chains.get(groupId);
+        if (held && servedHead(input.served, cache) < held.roster.rosterVersion)
+            throw new CryptoError(OLDER_CHAIN);
+        const sessionPin = held ? await pinAfter([], held, input.checkedAt) : null;
         // Served digests: a roster this device staged that the server now serves landed.
         const served = new Set(
             await Promise.all(
@@ -2123,7 +2133,7 @@ export function createGroupSession(host: GroupHost) {
                 groupId,
                 firstKeys: input.served.firstKeys,
                 firstKeysChecked,
-                pins,
+                pins: sessionPin ? [...pins, sessionPin] : pins,
                 rosters: input.served.rosters.map(unwire),
                 successions: input.served.successions.map(unwire),
                 mlDsaKeys: { ...input.served.signerKeys },
@@ -2140,6 +2150,18 @@ export function createGroupSession(host: GroupHost) {
             uncommit(groupId, true);
             return { status: 'fork', fork: chain };
         }
+        // An acceptance that lost a race with one committed while it ran changes nothing: no
+        // staged call dropped, no record or pin written; nor does one through another roster at
+        // the version committed meanwhile (the ledger refuses both again).
+        const now = chains.get(groupId);
+        if (now && now.roster.rosterVersion > chain.roster.rosterVersion)
+            throw new CryptoError(OLDER_CHAIN);
+        if (
+            now &&
+            now.roster.rosterVersion === chain.roster.rosterVersion &&
+            now.rosterDigest !== chain.rosterDigest
+        )
+            throw new CryptoError(SPLIT_CHAIN);
         // Staged calls whose roster the server served and this acceptance took: they landed (another
         // tab sent them, or a resend this tab never heard back from), and go with their secrets.
         // Only after acceptance held, so junk served beside them, or under them, drops nothing.
@@ -2328,7 +2350,18 @@ export function createGroupSession(host: GroupHost) {
                           version,
                       )
                     : null;
-            const areaKey = key as Uint8Array<ArrayBuffer>;
+            // Held under this family alone (its id checked as derived under it, the key's
+            // commitment as the chain lists it), and blocked while behind the chain or the server
+            // disagrees; writable only once a root at the latest version is seen too (the
+            // listing's to decide).
+            const held = await ledger.openArea(
+                groupId,
+                workspaceId,
+                input.idSeed,
+                version,
+                key as Uint8Array<ArrayBuffer>,
+                served,
+            );
             key = null;
             const areas = opened.get(groupId) ?? new Map();
             const before = areas.get(workspaceId);
@@ -2337,9 +2370,6 @@ export function createGroupSession(host: GroupHost) {
                 version: Math.max(before?.version ?? 0, version),
             });
             opened.set(groupId, areas);
-            // Held, and blocked while behind the chain or the server disagrees; writable only once
-            // a root at the latest version is seen too (the listing's to decide, rootSeen).
-            const held = ledger.admitAreaKey(workspaceId, version, areaKey, served, latest);
             return {
                 version,
                 writable: held === null,
@@ -3231,12 +3261,9 @@ export function createGroupSession(host: GroupHost) {
         readVersion,
         writeVersion,
         requireWritable,
-        rootSeen,
         useSettings,
         legacySettings,
         isArea,
-        knownArea,
-        chainOf,
         rotationJudge,
         copyJudge,
         forget,

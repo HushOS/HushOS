@@ -24,7 +24,8 @@ fn main() {
         let steps = read_steps(&scenario["steps"])
             .unwrap_or_else(|| panic!("{}: a step does not fit", scenario["name"]));
         let run = run_steps(&steps);
-        let misses = unmet(scenario, &run.outcomes);
+        let mut misses = unmet(scenario, &run.outcomes);
+        misses.extend(run.violations.iter().cloned());
         assert!(misses.is_empty(), "{}:\n  {}", scenario["name"], misses.join("\n  "));
         runs.push(json!({ "name": scenario["name"], "outcomes": run.outcomes, "made": run.made, "served": run.served }));
     }

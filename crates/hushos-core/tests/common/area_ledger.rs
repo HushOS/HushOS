@@ -8,16 +8,19 @@
 #![allow(dead_code)]
 
 use super::groups::{
-    accepted_of, area_key_at, area_row, key_row_at, pattern, person, root_key_at, tombstone_at, History,
-    AREA, AREA_SEED, GROUP,
+    accepted_of, area_key_at, area_row, key_row_at, pattern, person, reader, root_key_at, served_ml_dsa,
+    tombstone_at, History, AREA, AREA_SEED, GROUP, OTHER_GROUP,
 };
 use hushos_core::*;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-/// Every chain a step may commit: AREA in GROUP, created by person 1, rotated or retired.
-pub const CHAINS: &[&str] = &["f2-v1", "f2-v2", "f2-v3", "f1-v1", "f1-v2", "f1-to-f2", "f2-retired"];
+/// Every chain a step may commit: AREA in GROUP, created by person 1, rotated or retired; and
+/// another family (OTHER_GROUP) whose chain also lists AREA at version 1, as a removed member who
+/// manages a second family the person is in could sign it.
+pub const CHAINS: &[&str] =
+    &["f2-v1", "f2-v2", "f2-v3", "f1-v1", "f1-v2", "f1-to-f2", "f2-retired", "other-f2-v1", "f2-v2-split"];
 
 /// Node names a step may use.
 pub const NODES: &[&str] = &["ROOT", "A", "B", "C", "D", "E", "F", "G"];
@@ -53,6 +56,8 @@ pub fn code_of(error: &CoreError) -> &'static str {
         ("This folder does not belong to the family.", "not-the-familys"),
         ("This folder is not on the family’s member list.", "not-listed"),
         ("This item changed since it was opened. Refresh and retry.", "item-changed"),
+        (OLDER_CHAIN, "older-chain"),
+        (SPLIT_CHAIN, "split-chain"),
     ];
     codes.iter().find(|(text, _)| *text == message).map(|(_, code)| *code).unwrap_or("refused")
 }
@@ -114,6 +119,24 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
             "f2-retired",
             make(2, vec![Step::Rows(vec![key_row_at(AREA, 1)]), Step::Rows(vec![tombstone_at(AREA, 2)])]),
         );
+        // Roster 2 with no rows: the version f2-v2 holds, another digest (a split view).
+        out.insert("f2-v2-split", make(2, vec![Step::Rows(vec![key_row_at(AREA, 1)]), Step::Rows(vec![])]));
+        let mut other = History { format: 2, group_id: OTHER_GROUP.into(), ..History::new() };
+        other.roster_with(&owner, vec![entry.clone()], None, Some(vec![key_row_at(AREA, 1)]));
+        let Ok(RosterChain::Accepted { chain }) = accept_rosters(
+            OTHER_GROUP.into(),
+            other.key(1),
+            true,
+            vec![],
+            other.rosters.clone(),
+            vec![],
+            served_ml_dsa(&[&owner]),
+            reader(),
+            None,
+        ) else {
+            panic!("the other family's chain is accepted");
+        };
+        out.insert("other-f2-v1", chain);
         out
     })
 }
@@ -174,6 +197,16 @@ fn node_of(value: &Value) -> Option<String> {
     NODES.contains(&value).then(|| value.to_string())
 }
 
+/* The family a step names: GROUP unless it says "other". */
+fn group_of(value: Option<&Value>) -> Option<String> {
+    match value {
+        None => Some(GROUP.into()),
+        Some(Value::String(name)) if name == "family" => Some(GROUP.into()),
+        Some(Value::String(name)) if name == "other" => Some(OTHER_GROUP.into()),
+        _ => None,
+    }
+}
+
 fn parent_of(value: &Value) -> Option<String> {
     if value.as_str() == Some("WS") {
         Some("WS".into())
@@ -212,9 +245,9 @@ fn wrapped_of(value: &Value) -> Option<Wrapped> {
 #[derive(Clone, Debug)]
 pub enum Step {
     Commit(String),
-    Uncommit,
-    Forget,
-    OpenArea { version: u64, served: u64, key: String, id_seed: String },
+    Uncommit(String),
+    Forget(String),
+    OpenArea { group: String, version: u64, served: u64, key: String, id_seed: String },
     List { node: String, parent: String, envelope: Wrapped, prev: Option<Wrapped> },
     Create { node: String, parent: String, parent_key_epoch: u64, key_epoch: u64 },
     Writable(String),
@@ -223,6 +256,7 @@ pub enum Step {
     Rotate { node: String, parent: String, parent_key_epoch: u64, target: u64, envelope: Wrapped },
     CommitPending(Vec<String>),
     DropPending(Vec<String>),
+    DropAllPending,
     KeyAt { node: String, epoch: u64 },
     State,
 }
@@ -236,11 +270,13 @@ pub fn read_step(value: &Value) -> Option<Step> {
             let chain = field("chain").as_str()?;
             Step::Commit(CHAINS.iter().find(|c| **c == chain)?.to_string())
         }
-        "uncommit" => Step::Uncommit,
-        "forget" => Step::Forget,
+        "uncommit" => Step::Uncommit(group_of(object.get("group"))?),
+        "forget" => Step::Forget(group_of(object.get("group"))?),
+        "dropAllPending" => Step::DropAllPending,
         "requireWritable" => Step::RequireWritable,
         "state" => Step::State,
         "openArea" => {
+            let group = group_of(object.get("group"))?;
             let version = epoch_of(field("version"))?;
             let served = epoch_of(field("served"))?;
             let key = match object.get("key") {
@@ -252,7 +288,7 @@ pub fn read_step(value: &Value) -> Option<Step> {
                 Some(Value::String(seed)) => seed.clone(),
                 Some(_) => return None,
             };
-            Step::OpenArea { version, served, key, id_seed }
+            Step::OpenArea { group, version, served, key, id_seed }
         }
         "list" => {
             let prev = match object.get("prev") {
@@ -322,6 +358,9 @@ pub struct Run {
     pub made: Vec<Value>,
     /// Every envelope a step served the ledger, for the other twin to open under its label.
     pub served: Vec<Value>,
+    /// What the rule oracles caught (both must stay empty): a write under a parent not rooted at
+    /// the area's write version, or a node a write made that is not writable at once.
+    pub violations: Vec<String>,
 }
 
 struct Runner {
@@ -329,6 +368,10 @@ struct Runner {
     made: HashMap<String, Vec<u8>>,
     labels: HashMap<Vec<u8>, String>,
     pending_fresh: HashMap<String, Vec<u8>>,
+    /* Each walk's pending key by NODE@EPOCH: the write version it is rooted at, or none. */
+    pending_rooted: HashMap<String, Option<u64>>,
+    /* The families that opened AREA here: forgetting one of them drops AREA's keys, pending ones included. */
+    opened_by: std::collections::HashSet<String>,
     out: Vec<Value>,
     served: std::cell::RefCell<Vec<Value>>,
 }
@@ -340,21 +383,47 @@ pub fn run_steps(steps: &[Step]) -> Run {
         made: HashMap::new(),
         labels: HashMap::new(),
         pending_fresh: HashMap::new(),
+        pending_rooted: HashMap::new(),
+        opened_by: Default::default(),
         out: vec![],
         served: Default::default(),
     };
     let mut outcomes = vec![];
+    let mut violations = vec![];
     for (index, step) in steps.iter().enumerate() {
-        outcomes.push(match runner.run(index, step) {
+        let parent = match step {
+            Step::Create { parent, parent_key_epoch, .. }
+            | Step::Rewrap { parent, parent_key_epoch, .. }
+            | Step::Rotate { parent, parent_key_epoch, .. } => {
+                runner.rooted_parent(parent, *parent_key_epoch)
+            }
+            _ => true,
+        };
+        outcomes.push(match runner.run(index, step, parent) {
             Ok(Value::Object(mut fields)) => {
                 fields.insert("ok".into(), json!(true));
+                if !parent {
+                    violations.push(format!(
+                        "step {index}: a write went under a parent not rooted at the write version"
+                    ));
+                }
+                if let Step::Create { node, .. } = step {
+                    if runner.ledger.is_area(AREA.into())
+                        && !runner
+                            .ledger
+                            .writable_node_key(AREA.into(), id(node))
+                            .is_ok_and(|held| held.is_some())
+                    {
+                        violations.push(format!("step {index}: a node a write made is not writable"));
+                    }
+                }
                 Value::Object(fields)
             }
             Ok(_) => unreachable!("every outcome is an object"),
             Err(error) => json!({ "error": code_of(&error) }),
         });
     }
-    Run { outcomes, made: runner.out, served: runner.served.into_inner() }
+    Run { outcomes, made: runner.out, served: runner.served.into_inner(), violations }
 }
 
 fn unknown_key() -> CoreError {
@@ -362,6 +431,30 @@ fn unknown_key() -> CoreError {
 }
 
 impl Runner {
+    fn forget_pending(&mut self, node: &str) {
+        let prefix = format!("{node}@");
+        self.pending_fresh.retain(|at, _| !at.starts_with(&prefix));
+        self.pending_rooted.retain(|at, _| !at.starts_with(&prefix));
+    }
+
+    fn write_version_now(&self) -> Option<u64> {
+        self.ledger.write_version(AREA.into()).ok().flatten()
+    }
+
+    /* The oracle's view: whether a parent at `epoch` is rooted at the area's write version. */
+    fn rooted_parent(&self, parent: &str, epoch: u64) -> bool {
+        if !self.ledger.is_area(AREA.into()) {
+            return true;
+        }
+        if parent == "WS" {
+            return false;
+        }
+        if let Some(pending) = self.pending_rooted.get(&format!("{parent}@{epoch}")) {
+            return pending.is_some() && *pending == self.write_version_now();
+        }
+        matches!(self.ledger.writable_node_key(AREA.into(), id(parent)), Ok(Some(held)) if held.epoch == epoch)
+    }
+
     fn remember(&mut self, node: &str, epoch: u64, key: &[u8]) {
         let label = format!("made:{node}@{epoch}");
         self.made.insert(label.clone(), key.to_vec());
@@ -453,25 +546,31 @@ impl Runner {
         }));
     }
 
-    fn run(&mut self, index: usize, step: &Step) -> CoreResult<Value> {
+    fn run(&mut self, index: usize, step: &Step, rooted_before: bool) -> CoreResult<Value> {
         let ledger = Arc::clone(&self.ledger);
         Ok(match step {
             Step::Commit(name) => {
-                ledger.commit(Arc::clone(&chains()[name.as_str()]));
+                ledger.commit(Arc::clone(&chains()[name.as_str()]))?;
                 json!({})
             }
-            Step::Uncommit => {
-                ledger.uncommit(GROUP.into());
+            Step::Uncommit(group) => {
+                ledger.uncommit(group.clone());
                 json!({})
             }
-            Step::Forget => {
-                ledger.forget_group(GROUP.into());
+            Step::Forget(group) => {
+                ledger.forget_group(group.clone());
+                if self.opened_by.remove(group) {
+                    for node in NODES {
+                        self.forget_pending(node);
+                    }
+                }
                 json!({})
             }
-            Step::OpenArea { version, served, key, id_seed } => {
+            Step::OpenArea { group, version, served, key, id_seed } => {
                 let key = self.resolve(key).ok_or_else(unknown_key)?;
                 let opened =
-                    ledger.open_area(GROUP.into(), AREA.into(), id_seed.clone(), *version, key, *served)?;
+                    ledger.open_area(group.clone(), AREA.into(), id_seed.clone(), *version, key, *served)?;
+                self.opened_by.insert(group.clone());
                 json!({ "version": opened.version, "writable": opened.writable, "reason": opened.reason.map(AreaBlock::name) })
             }
             Step::List { node, parent, envelope, prev } => {
@@ -562,8 +661,10 @@ impl Runner {
                     let fresh = rotated.fresh_key.expect("a fresh key").to_vec();
                     let old_name = self.name_of(&old);
                     self.remember(node, *target, &fresh);
-                    self.pending_fresh.retain(|at, _| !at.starts_with(&format!("{node}@")));
+                    self.forget_pending(node);
                     self.pending_fresh.insert(format!("{node}@{target}"), fresh.clone());
+                    let rooted = if rooted_before { self.write_version_now() } else { None };
+                    self.pending_rooted.insert(format!("{node}@{target}"), rooted);
                     self.made_of(
                         index,
                         node,
@@ -577,9 +678,15 @@ impl Runner {
                     json!({ "rewrap": false, "old": old_name, "fresh": self.name_of(&fresh) })
                 }
             }
+            Step::DropAllPending => {
+                for node in NODES {
+                    self.forget_pending(node);
+                }
+                json!({ "count": ledger.rotate_drop_all(AREA.into()) })
+            }
             Step::CommitPending(nodes) | Step::DropPending(nodes) => {
                 for node in nodes {
-                    self.pending_fresh.retain(|at, _| !at.starts_with(&format!("{node}@")));
+                    self.forget_pending(node);
                 }
                 let ids = nodes.iter().map(|n| id(n)).collect();
                 let count = if matches!(step, Step::CommitPending(_)) {

@@ -21,8 +21,8 @@
                     "op": "state",
                     "expect": {
                         "isArea": true,
-                        "read": 1,
-                        "write": "keys-changed"
+                        "read": "not-checked",
+                        "write": "not-checked"
                     }
                 },
                 {
@@ -33,6 +33,14 @@
                         "version": 1,
                         "writable": false,
                         "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": "keys-changed"
                     }
                 },
                 {
@@ -1556,6 +1564,18 @@
                     }
                 },
                 {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
                     "op": "rotate",
                     "node": "ROOT",
                     "parent": "WS",
@@ -1568,18 +1588,6 @@
                         "keyEpoch": 1
                     },
                     "expect": "area-root"
-                },
-                {
-                    "op": "list",
-                    "node": "ROOT",
-                    "parent": "WS",
-                    "parentKeyEpoch": 2,
-                    "keyEpoch": 2,
-                    "key": "root:2",
-                    "under": "area:2",
-                    "expect": {
-                        "key": "root:2"
-                    }
                 },
                 {
                     "op": "rotate",
@@ -1773,6 +1781,963 @@
                     "parentKeyEpoch": 2,
                     "keyEpoch": 2,
                     "expect": "keys-changed"
+                }
+            ]
+        },
+        {
+            "name": "another family's chain listing this family's folder at an old version never moves its write version",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 2,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "no-grant-at-latest"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "other-f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": "not-checked",
+                        "write": "not-checked"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "not-checked"
+                },
+                {
+                    "op": "requireWritable",
+                    "expect": "not-checked"
+                },
+                {
+                    "op": "uncommit",
+                    "group": "other",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "expect": {
+                        "key": "made:A@2"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "another family's refusal leaves this family's folder written",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "uncommit",
+                    "group": "other",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": 1
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "other-f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "uncommit",
+                    "group": "other",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": 1
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:B@1"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "forgetting another family keeps this family's folder keys",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "other-f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "group": "other",
+                    "version": 1,
+                    "served": 1,
+                    "expect": "not-the-familys"
+                },
+                {
+                    "op": "forget",
+                    "group": "other",
+                    "expect": "ok"
+                },
+                {
+                    "op": "keyAt",
+                    "node": "ROOT",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "A",
+                    "epoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": 1
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:B@1"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "an older member list for the family is refused and changes nothing",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 2,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "no-grant-at-latest"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "older-chain"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                }
+            ]
+        },
+        {
+            "name": "an old top level served again, or another top-level node, never lowers what was seen",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 2,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "no-grant-at-latest"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "G",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "k:5",
+                    "under": "area:2",
+                    "expect": "not-committed-root"
+                },
+                {
+                    "op": "keyAt",
+                    "node": "G",
+                    "epoch": 2,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "k:6",
+                    "under": "area:2",
+                    "expect": "not-committed-root"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": "keys-changed"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a walk needs a writable folder, and an abandoned walk drops every pending key",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "rotate",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "target": 2,
+                    "served": {
+                        "key": "k:1",
+                        "under": "root:1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": "keys-changed"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "prev": {
+                        "key": "root:1",
+                        "under": "area:2",
+                        "parentKeyEpoch": 2,
+                        "keyEpoch": 1,
+                        "label": "previous-root"
+                    },
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:1",
+                    "under": "root:1",
+                    "expect": {
+                        "key": "k:1"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "B",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:2",
+                    "under": "root:1",
+                    "expect": {
+                        "key": "k:2"
+                    }
+                },
+                {
+                    "op": "rotate",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "target": 2,
+                    "served": {
+                        "key": "k:1",
+                        "under": "root:1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": {
+                        "rewrap": false,
+                        "old": "k:1",
+                        "fresh": "made:A@2"
+                    }
+                },
+                {
+                    "op": "rotate",
+                    "node": "B",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "target": 2,
+                    "served": {
+                        "key": "k:2",
+                        "under": "root:1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": {
+                        "rewrap": false,
+                        "old": "k:2",
+                        "fresh": "made:B@2"
+                    }
+                },
+                {
+                    "op": "dropAllPending",
+                    "expect": {
+                        "count": 2
+                    }
+                },
+                {
+                    "op": "dropAllPending",
+                    "expect": {
+                        "count": 0
+                    }
+                },
+                {
+                    "op": "keyAt",
+                    "node": "A",
+                    "epoch": 2,
+                    "expect": {
+                        "key": null
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "C",
+                    "parent": "A",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "expect": "key-change-pending"
+                }
+            ]
+        },
+        {
+            "name": "a walk's fresh key never goes under a parent reached through a previous key",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "prev": {
+                        "key": "root:1",
+                        "under": "area:2",
+                        "parentKeyEpoch": 2,
+                        "keyEpoch": 1,
+                        "label": "previous-root"
+                    },
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:1",
+                    "under": "root:1",
+                    "expect": {
+                        "key": "k:1"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "C",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:7",
+                    "under": "k:1",
+                    "expect": {
+                        "key": "k:7"
+                    }
+                },
+                {
+                    "op": "rotate",
+                    "node": "C",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "target": 2,
+                    "served": {
+                        "key": "k:7",
+                        "under": "k:1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "keyAt",
+                    "node": "C",
+                    "epoch": 2,
+                    "expect": {
+                        "key": null
+                    }
+                }
+            ]
+        },
+        {
+            "name": "forgetting the family mid-walk drops the walk's pending keys",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "prev": {
+                        "key": "root:1",
+                        "under": "area:2",
+                        "parentKeyEpoch": 2,
+                        "keyEpoch": 1,
+                        "label": "previous-root"
+                    },
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:1",
+                    "under": "root:1",
+                    "expect": {
+                        "key": "k:1"
+                    }
+                },
+                {
+                    "op": "rotate",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "target": 2,
+                    "served": {
+                        "key": "k:1",
+                        "under": "root:1",
+                        "parentKeyEpoch": 1,
+                        "keyEpoch": 1
+                    },
+                    "expect": {
+                        "rewrap": false,
+                        "old": "k:1",
+                        "fresh": "made:A@2"
+                    }
+                },
+                {
+                    "op": "forget",
+                    "expect": "ok"
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "prev": {
+                        "key": "root:1",
+                        "under": "area:2",
+                        "parentKeyEpoch": 2,
+                        "keyEpoch": 1,
+                        "label": "previous-root"
+                    },
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "k:1",
+                    "under": "root:1",
+                    "expect": {
+                        "key": "k:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "expect": "key-change-pending"
+                },
+                {
+                    "op": "commitPending",
+                    "nodes": ["A"],
+                    "expect": {
+                        "count": 0
+                    }
+                }
+            ]
+        },
+        {
+            "name": "another member list at the version this device holds is never committed",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 2,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "no-grant-at-latest"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2-split",
+                    "expect": "split-chain"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "expect": {
+                        "key": "made:A@2"
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
                 }
             ]
         }

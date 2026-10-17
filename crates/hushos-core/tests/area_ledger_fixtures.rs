@@ -26,6 +26,7 @@ fn every_scenario_gives_each_stated_outcome_here() {
         let steps = read_steps(&scenario["steps"]).unwrap_or_else(|| panic!("{} fits", scenario["name"]));
         let run = run_steps(&steps);
         assert_eq!(unmet(scenario, &run.outcomes), Vec::<String>::new(), "{}", scenario["name"]);
+        assert_eq!(run.violations, Vec::<String>::new(), "{}", scenario["name"]);
     }
 }
 

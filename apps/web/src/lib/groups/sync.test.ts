@@ -1,4 +1,5 @@
 import type { CryptoResults } from '@hushos/crypto';
+import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
 import { areaWrite, syncGroup, writeRefusal } from './sync';
 import { AREA, GROUP, USER, harness, pinAt, refusal } from './test-harness';
@@ -47,6 +48,39 @@ describe('syncing a family', () => {
             { record: 'record-5' },
         ]);
         expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
+    });
+
+    test('a run a later acceptance overtook is read again quietly, never retried from version 1 or without the cache', async () => {
+        for (const refused of [OLDER_CHAIN, SPLIT_CHAIN]) {
+            const h = harness({ head: 6 });
+            await knownFamily(h);
+            const asked = routeRosters(h);
+            h.failNext.set('groupAccept', new Error(refused));
+            const result = await syncGroup(h.ctx, GROUP);
+            expect(result.status).toBe('accepted');
+            // Read again from the record, as the first run was: not from version 1, no withoutCache.
+            expect(asked).toEqual([5, 5]);
+            expect(h.calls('groupAccept')).toMatchObject([
+                { record: 'record-5' },
+                { record: 'record-5' },
+            ]);
+            expect(h.calls('groupAccept').some((call) => 'withoutCache' in (call as object))).toBe(
+                false,
+            );
+            expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-6');
+        }
+    });
+
+    test('a server that keeps serving older than this worker checked is said so, not as a lost race', async () => {
+        const h = harness({ head: 6 });
+        await knownFamily(h);
+        h.results.groupAccept = () => {
+            throw new Error(OLDER_CHAIN);
+        };
+        await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow(/older member list than this device/);
+        expect(h.calls('groupAccept')).toHaveLength(3);
+        expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
+        expect(h.settingsLog.writes).toEqual([]);
     });
 
     test('a route that failed is not taken for a chain that did not continue', async () => {

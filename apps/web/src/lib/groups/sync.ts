@@ -1,4 +1,5 @@
 import type { CryptoResults, GroupView, RosterFork, ServedChain } from '@hushos/crypto';
+import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import {
     GroupApiError,
     isNotMember,
@@ -223,6 +224,39 @@ export async function acceptServed(
     groupId: string,
     options: { creating?: string | null; owner?: string | null } = {},
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
+    for (let attempt = 0; ; attempt++)
+        try {
+            return await acceptOnce(ctx, groupId, options);
+        } catch (error) {
+            // A run that lost a race with a later acceptance in this worker (a background sync
+            // finishing after the foreground's), or met a roster committed meanwhile at its own
+            // version: nothing of it was kept. Read the record and settings again and accept once
+            // more, quietly; the next run either lands or, for a split view, answers the fork.
+            if (!lostRace(error)) throw error;
+            if (attempt >= 2) throw new Error(SERVED_OLDER);
+        }
+}
+
+/*
+ * After three runs that all came back older than this worker's committed
+ * chain, it is no race: the server keeps serving an older member list than
+ * this device already checked. Writes go on under the chain held.
+ */
+const SERVED_OLDER =
+    'HushOS sent an older member list than this device already checked. Try again later.';
+
+/* The worker's answer to a run that a later acceptance in the same session overtook. */
+export function lostRace(error: unknown) {
+    return (
+        error instanceof Error && (error.message === OLDER_CHAIN || error.message === SPLIT_CHAIN)
+    );
+}
+
+async function acceptOnce(
+    ctx: GroupContext,
+    groupId: string,
+    options: { creating?: string | null; owner?: string | null },
+): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
     const row = await ctx.store.chain(ctx.userId, groupId);
     const accept = async (after: number, withoutCache = false) => {
@@ -241,13 +275,14 @@ export async function acceptServed(
     try {
         result = await accept(row?.rosterVersion ?? 0);
     } catch (error) {
-        // The route's answer is the route's: only the worker's refusal is retried from version 1.
-        if (error instanceof GroupApiError || !row) throw error;
+        // The route's answer is the route's, and a lost race is the caller's to read again: only
+        // the worker's other refusals are retried from version 1.
+        if (error instanceof GroupApiError || !row || lostRace(error)) throw error;
         try {
             if (row.rosterVersion === 0) throw error;
             result = await accept(0);
         } catch (again) {
-            if (again instanceof GroupApiError) throw again;
+            if (again instanceof GroupApiError || lostRace(again)) throw again;
             // Refused with the record as a mark too: its cache may be what the worker refuses (one
             // a newer release wrote, or a damaged one), and retrying with it would refuse the
             // family on this device for good. Accepted from version 1 without the cache, but with

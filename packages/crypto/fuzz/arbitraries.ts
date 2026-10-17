@@ -220,6 +220,7 @@ const structured = (target: 'accept' | 'roster_build') =>
  * named and made keys, writes, walks and their batches, in any order.
  */
 const ledgerNode = fc.constantFrom('ROOT', 'A', 'B', 'C', 'D');
+const ledgerGroup = fc.constantFrom('family', 'family', 'other');
 const ledgerParent = fc.constantFrom('WS', 'ROOT', 'A', 'B', 'C');
 const ledgerEpoch = fc.integer({ min: 0, max: 4 });
 const ledgerKey = fc.oneof(
@@ -254,15 +255,18 @@ const ledgerStep = fc.oneof(
             'f1-v2',
             'f1-to-f2',
             'f2-retired',
+            'other-f2-v1',
+            'f2-v2-split',
         ),
     }),
-    fc.constantFrom(
-        { op: 'uncommit' },
-        { op: 'forget' },
-        { op: 'requireWritable' },
-        { op: 'state' },
-    ),
-    fc.record({ op: fc.constant('openArea'), version: ledgerEpoch, served: ledgerEpoch }),
+    fc.record({ op: fc.constantFrom('uncommit', 'forget'), group: ledgerGroup }),
+    fc.constantFrom({ op: 'requireWritable' }, { op: 'state' }, { op: 'dropAllPending' }),
+    fc.record({
+        op: fc.constant('openArea'),
+        group: ledgerGroup,
+        version: ledgerEpoch,
+        served: ledgerEpoch,
+    }),
     fc
         .tuple(
             ledgerNode,

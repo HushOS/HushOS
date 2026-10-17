@@ -20,8 +20,8 @@ const runs = [];
 for (const scenario of scenarios) {
     const steps = readSteps(scenario.steps);
     if (!steps) throw new Error(`${scenario.name}: a step does not fit`);
-    const { outcomes, made, served } = await runSteps(steps);
-    const misses = unmet(scenario, outcomes);
+    const { outcomes, made, served, violations } = await runSteps(steps);
+    const misses = [...unmet(scenario, outcomes), ...violations];
     if (misses.length) throw new Error(`${scenario.name}:\n  ${misses.join('\n  ')}`);
     runs.push({ name: scenario.name, outcomes, made, served });
 }

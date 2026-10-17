@@ -865,6 +865,7 @@ pub fn origin_open(data: &[u8]) -> Value {
 pub fn area_ledger(value: &Value) -> Option<Value> {
     let steps = crate::area_ledger::read_steps(value.get("steps")?)?;
     let run = crate::area_ledger::run_steps(&steps);
+    assert!(run.violations.is_empty(), "a family write rule oracle failed: {:?}", run.violations);
     for made in &run.made {
         if made["parentKey"].as_str().is_some_and(|key| !key.is_empty()) {
             assert!(

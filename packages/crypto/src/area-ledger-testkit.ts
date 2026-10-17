@@ -3,25 +3,21 @@ import {
     KEYS_CHANGED,
     NOT_CHECKED_KEYS,
     NOT_COMMITTED_ROOT,
+    OLDER_CHAIN,
+    SPLIT_CHAIN,
     createAreaLedger,
     type AreaLedger,
     type RotatingNodeKey,
 } from './area-ledger';
 import { areaKeyCommitment } from './area-keys';
-import { uuid } from './canonical';
-import {
-    generateKey,
-    openNodeKey,
-    openPreviousRootKey,
-    wrapNodeKey,
-    wrapPreviousRootKey,
-} from './drive';
+import { openNodeKey, openPreviousRootKey, wrapNodeKey, wrapPreviousRootKey } from './drive';
 import { CryptoError } from './errors';
 import type { AcceptedRosters } from './group-trust';
 import {
     AREA,
     AREA_SEED,
     GROUP,
+    OTHER_GROUP,
     acceptedOf,
     areaKeyAt,
     history,
@@ -33,8 +29,7 @@ import {
     tombstoneAt,
     type Person,
 } from './group-testkit';
-import { areaWriteVersion, type RosterArea } from './groups';
-import { checkId } from './ids';
+import type { RosterArea } from './groups';
 import { decode, encode } from './keys';
 import { KEY_CHANGE_PENDING, NOT_CARRIED } from './protocol';
 
@@ -49,13 +44,28 @@ import { KEY_CHANGE_PENDING, NOT_CARRIED } from './protocol';
  * step. The scenarios both run, with what each step must give, are
  * crates/hushos-core/fixtures/area-ledger-scenarios.json.
  *
- * The group part of a step (commit, uncommit, forget, openArea) is what the
- * web's group session does around the ledger (session-groups.ts) and the
- * core's AreaLedger does itself: committed chains, opened areas, the area
- * key's commitment checked against the chain.
+ * Every step calls the worker's own ledger functions, the ones session.ts and
+ * session-groups.ts call: commit, uncommit, forgetGroup and openArea (what
+ * groupAccept, groupForget and groupOpenArea hand the ledger), openListedNode
+ * (driveOpenNodes), requireWritable with newNodeKey (driveCreateNodes),
+ * rewrapNode (driveRewrapNode) and rotateKey (rotateOne, with a re-key that
+ * only wraps the fresh key). What they do not reach is the worker's grant
+ * opening (openAreaGrant needs an unlocked account and a holder's seal; it
+ * has its own shared cases, `sealCases`) and rekeyNode's records (core step 2).
+ *
+ * Two rule oracles hold on every run: each successful create, re-wrap or walk
+ * key went under a parent rooted at the area's write version (a key the
+ * ledger itself reports writable at that epoch, or a walk's pending key made
+ * under one at the current write version), and each node a step made is
+ * writable at once. A miss is listed in `violations`.
  */
 
-/* Every chain a step may commit: AREA in GROUP, created by person 1, rotated or retired. */
+/*
+ * Every chain a step may commit: AREA in GROUP, created by person 1, rotated
+ * or retired; and another family (OTHER_GROUP) whose chain also lists AREA at
+ * version 1, as a removed member who manages a second family the person is
+ * in could sign it.
+ */
 export const CHAINS = [
     'f2-v1',
     'f2-v2',
@@ -64,6 +74,8 @@ export const CHAINS = [
     'f1-v2',
     'f1-to-f2',
     'f2-retired',
+    'other-f2-v1',
+    'f2-v2-split',
 ] as const;
 export type ChainName = (typeof CHAINS)[number];
 
@@ -90,6 +102,8 @@ const CODES: Record<string, string> = {
     'This folder does not belong to the family.': 'not-the-familys',
     'This folder is not on the family’s member list.': 'not-listed',
     'This item changed since it was opened. Refresh and retry.': 'item-changed',
+    [OLDER_CHAIN]: 'older-chain',
+    [SPLIT_CHAIN]: 'split-chain',
 };
 export function codeOf(error: unknown) {
     if (!(error instanceof CryptoError)) throw error;
@@ -133,6 +147,11 @@ export function chains() {
         out.set('f1-v2', await make(1, [[await f1(1)], [await f1(2)]]));
         out.set('f1-to-f2', await make(1, [[await f1(1)], 'switch', [await keyRowAt(AREA, 2)]]));
         out.set('f2-retired', await make(2, [await standardAreas(2), [tombstoneAt(AREA, 2)]]));
+        // Roster 2 with no rows: the version f2-v2 holds, another digest (a split view).
+        out.set('f2-v2-split', await make(2, [await standardAreas(2), []]));
+        const other = await history('family', { format: 2, groupId: OTHER_GROUP });
+        await other.roster(owner, [entry], undefined, await standardAreas(2));
+        out.set('other-f2-v1', await acceptedOf(other, [owner as Person]));
         return out;
     })();
     return built;
@@ -167,6 +186,9 @@ const keyRef = (value: unknown) =>
     typeof value === 'string' && (namedKey(value) || /^made:[A-Z]+@\d{1,2}$/.test(value))
         ? value
         : undefined;
+/* The family a step names: GROUP unless it says "other". */
+const groupOf = (value: unknown) =>
+    value === undefined || value === 'family' ? GROUP : value === 'other' ? OTHER_GROUP : undefined;
 const labelOf = (value: unknown) =>
     value === undefined
         ? 'node'
@@ -183,9 +205,15 @@ type Wrapped = {
 };
 export type Step =
     | { op: 'commit'; chain: ChainName }
-    | { op: 'uncommit' }
-    | { op: 'forget' }
-    | { op: 'openArea'; version: number; served: number; key: string; idSeed: string }
+    | { op: 'uncommit' | 'forget'; group: string }
+    | {
+          op: 'openArea';
+          group: string;
+          version: number;
+          served: number;
+          key: string;
+          idSeed: string;
+      }
     | {
           op: 'list';
           node: string;
@@ -206,6 +234,7 @@ export type Step =
           envelope: Wrapped;
       }
     | { op: 'commitPending' | 'dropPending'; nodes: string[] }
+    | { op: 'dropAllPending' }
     | { op: 'keyAt'; node: string; epoch: number }
     | { op: 'state' };
 
@@ -230,11 +259,16 @@ export function readStep(value: unknown): Step | undefined {
                 ? { op: 'commit', chain: value.chain as ChainName }
                 : undefined;
         case 'uncommit':
-        case 'forget':
+        case 'forget': {
+            const group = groupOf(value.group);
+            return group === undefined ? undefined : { op: value.op, group };
+        }
         case 'requireWritable':
         case 'state':
+        case 'dropAllPending':
             return { op: value.op };
         case 'openArea': {
+            const group = groupOf(value.group);
             const version = epochOf(value.version);
             const served = epochOf(value.served);
             const key = keyRef(value.key === undefined ? `area:${version}` : value.key);
@@ -244,9 +278,15 @@ export function readStep(value: unknown): Step | undefined {
                     : typeof value.idSeed === 'string'
                       ? value.idSeed
                       : undefined;
-            if (version === undefined || served === undefined || !key || idSeed === undefined)
+            if (
+                group === undefined ||
+                version === undefined ||
+                served === undefined ||
+                !key ||
+                idSeed === undefined
+            )
                 return undefined;
-            return { op: 'openArea', version, served, key, idSeed };
+            return { op: 'openArea', group, version, served, key, idSeed };
         }
         case 'list': {
             const node = nodeOf(value.node);
@@ -330,19 +370,9 @@ export type Made = {
  */
 export async function runSteps(steps: Step[]) {
     const catalog = await chains();
-    const committed = new Map<string, AcceptedRosters>();
-    const opened = new Map<string, Map<string, number>>();
-    const ledger: AreaLedger = createAreaLedger({
-        knownArea(workspaceId) {
-            for (const areas of opened.values()) if (areas.has(workspaceId)) return true;
-            for (const chain of committed.values())
-                if (Object.hasOwn(chain.areaKeys, workspaceId)) return true;
-            return false;
-        },
-        chainOf(workspaceId) {
-            return [...committed.values()].find((at) => Object.hasOwn(at.areaKeys, workspaceId));
-        },
-    });
+    const ledger: AreaLedger = createAreaLedger();
+    /* The families that opened AREA here: forgetting one of them drops AREA's keys, pending ones included. */
+    const openedBy = new Set<string>();
     /* Every key a step made, by label, and the label of each made key's bytes. */
     const made = new Map<string, Uint8Array>();
     const labels = new Map<string, string>();
@@ -399,71 +429,89 @@ export async function runSteps(steps: Step[]) {
             : (pendingFresh.get(`${parent}@${epoch}`) ??
               ledger.keyAtEpoch(AREA, id(parent), epoch));
     const pendingFresh = new Map<string, Uint8Array>();
-    for (const [index, step] of steps.entries()) {
+    /* Each walk's pending key by NODE@EPOCH: the write version it is rooted at, or null for none. */
+    const pendingRooted = new Map<string, number | null>();
+    const forgetPending = (node: string) => {
+        for (const at of pendingFresh.keys())
+            if (at.startsWith(`${node}@`)) pendingFresh.delete(at);
+        for (const at of pendingRooted.keys())
+            if (at.startsWith(`${node}@`)) pendingRooted.delete(at);
+    };
+    const writeVersionNow = () => {
         try {
-            outcomes.push({ ok: true, ...(await run(index, step)) });
+            return ledger.writeVersion(AREA);
+        } catch {
+            return null;
+        }
+    };
+    /* The oracle's view: whether a parent at `epoch` is rooted at the area's write version. */
+    const rootedParent = (parent: string, epoch: number) => {
+        if (!ledger.isArea(AREA)) return true;
+        if (parent === 'WS') return false;
+        const pending = pendingRooted.get(`${parent}@${epoch}`);
+        if (pending !== undefined) return pending !== null && pending === writeVersionNow();
+        try {
+            return ledger.writableNodeKey(AREA, id(parent))?.epoch === epoch;
+        } catch {
+            return false;
+        }
+    };
+    const violations: string[] = [];
+    for (const [index, step] of steps.entries()) {
+        const parent =
+            step.op === 'create' || step.op === 'rewrap' || step.op === 'rotate'
+                ? rootedParent(step.parent, step.parentKeyEpoch)
+                : true;
+        try {
+            outcomes.push({ ok: true, ...(await run(index, step, parent)) });
+            if (!parent)
+                violations.push(
+                    `step ${index}: ${step.op} went under a parent not rooted at the write version`,
+                );
+            if (step.op === 'create' && ledger.isArea(AREA)) {
+                let writable = false;
+                try {
+                    writable = ledger.writableNodeKey(AREA, id(step.node)) !== undefined;
+                } catch {
+                    /* not writable */
+                }
+                if (!writable)
+                    violations.push(`step ${index}: a node a write made is not writable`);
+            }
         } catch (error) {
             outcomes.push({ error: codeOf(error) });
         }
     }
-    return { outcomes, made: out, served };
+    return { outcomes, made: out, served, violations };
 
-    async function run(index: number, step: Step): Promise<Record<string, unknown>> {
+    async function run(
+        index: number,
+        step: Step,
+        rootedBefore: boolean,
+    ): Promise<Record<string, unknown>> {
         switch (step.op) {
-            case 'commit': {
-                const chain = catalog.get(step.chain)!;
-                committed.set(chain.groupId, chain);
-                ledger.commitAreas(chain);
+            case 'commit':
+                ledger.commit(catalog.get(step.chain)!);
                 return {};
-            }
-            case 'uncommit': {
-                const chain = committed.get(GROUP);
-                ledger.uncommitAreas([
-                    ...Object.keys(chain?.areaKeys ?? {}),
-                    ...(opened.get(GROUP)?.keys() ?? []),
-                ]);
-                committed.delete(GROUP);
+            case 'uncommit':
+                ledger.uncommit(step.group);
                 return {};
-            }
-            case 'forget': {
-                const chain = committed.get(GROUP);
-                ledger.forgetAreas([
-                    ...Object.keys(chain?.areaKeys ?? {}),
-                    ...(opened.get(GROUP)?.keys() ?? []),
-                ]);
-                opened.delete(GROUP);
-                committed.delete(GROUP);
+            case 'forget':
+                ledger.forgetGroup(step.group);
+                if (openedBy.delete(step.group)) for (const node of NODES) forgetPending(node);
                 return {};
-            }
             case 'openArea': {
-                // What the group session does around the ledger (openArea), as the core's open_area.
-                uuid(GROUP, 'group id');
-                const chain = committed.get(GROUP);
-                if (!chain) throw new CryptoError('Check the family’s member list first.');
-                uuid(AREA, 'workspace id');
-                try {
-                    await checkId('workspace', GROUP, step.idSeed, AREA);
-                } catch {
-                    throw new CryptoError('This folder does not belong to the family.');
-                }
-                const latest = areaWriteVersion(chain, AREA);
-                if (latest === null)
-                    throw new CryptoError('This folder is not on the family’s member list.');
                 const key = resolve(step.key);
                 if (!key) throw new CryptoError('unknown key');
-                const listed = chain.areaKeys[AREA] ?? [];
-                if (step.version < 1 || listed[step.version - 1] !== (await areaKeyCommitment(key)))
-                    throw new CryptoError(NOT_CHECKED_KEYS);
-                const areas = opened.get(GROUP) ?? new Map<string, number>();
-                areas.set(AREA, Math.max(areas.get(AREA) ?? 0, step.version));
-                opened.set(GROUP, areas);
-                const reason = ledger.admitAreaKey(
+                const reason = await ledger.openArea(
+                    step.group,
                     AREA,
+                    step.idSeed,
                     step.version,
                     key.slice() as Uint8Array<ArrayBuffer>,
                     step.served,
-                    latest,
                 );
+                openedBy.add(step.group);
                 return { version: step.version, writable: reason === null, reason };
             }
             case 'list': {
@@ -515,22 +563,14 @@ export async function runSteps(steps: Step[]) {
                 ledger.requireWritable(AREA);
                 return {};
             case 'rewrap': {
-                // driveRewrapNode, as the core's rewrap_node.
-                ledger.requireWritable(AREA);
-                const entry = ledger.writableNodeKey(AREA, id(step.node));
-                if (!entry) throw new CryptoError('Open the containing folder first.');
-                if (entry.epoch !== step.keyEpoch)
-                    throw new CryptoError(
-                        'This item changed since it was opened. Refresh and retry.',
-                    );
-                const parentKey = ledger.wrapKeyFor(AREA, id(step.parent), step.parentKeyEpoch);
-                const keyEnvelope = await wrapNodeKey(entry.key, parentKey, {
-                    workspaceId: AREA,
-                    nodeId: id(step.node),
+                const under = parentKeyOf(step.parent, step.parentKeyEpoch)?.slice();
+                const keyEnvelope = await ledger.rewrapNode(AREA, {
+                    id: id(step.node),
                     parentId: id(step.parent),
                     parentKeyEpoch: step.parentKeyEpoch,
                     keyEpoch: step.keyEpoch,
                 });
+                const key = ledger.nodeKey(AREA, id(step.node))!.key;
                 out.push(
                     madeOf(
                         index,
@@ -538,15 +578,14 @@ export async function runSteps(steps: Step[]) {
                         step.parent,
                         step.parentKeyEpoch,
                         step.keyEpoch,
-                        entry.key,
+                        key,
                         keyEnvelope,
-                        parentKey,
+                        under,
                     ),
                 );
                 return {};
             }
             case 'rotate': {
-                // rotateOne's key part (session.ts), as the core's rotate_key.
                 const served = await envelopeOf(step.node, step.parent, step.envelope);
                 if (!served) throw new CryptoError('unknown key');
                 const node: RotatingNodeKey = {
@@ -558,10 +597,24 @@ export async function runSteps(steps: Step[]) {
                     keyEnvelope: served,
                 };
                 const under = parentKeyOf(step.parent, step.parentKeyEpoch)?.slice();
-                const old = await ledger.rotationOldKey(AREA, node);
-                if (node.keyEpoch >= step.target) {
-                    const kept = old.slice();
-                    const keyEnvelope = await ledger.rewrapAtTarget(AREA, node, old);
+                const rotated = await ledger.rotateKey(
+                    AREA,
+                    node,
+                    step.target,
+                    async ({ old, fresh, parentKey }) => ({
+                        old: nameOf(old),
+                        fresh: fresh.slice(),
+                        parentKey: parentKey.slice(),
+                        keyEnvelope: await wrapNodeKey(fresh, parentKey, {
+                            workspaceId: AREA,
+                            nodeId: node.id,
+                            parentId: node.parentId,
+                            parentKeyEpoch: node.parentKeyEpoch,
+                            keyEpoch: step.target,
+                        }),
+                    }),
+                );
+                if (rotated.rewrap) {
                     out.push(
                         madeOf(
                             index,
@@ -569,59 +622,38 @@ export async function runSteps(steps: Step[]) {
                             step.parent,
                             step.parentKeyEpoch,
                             node.keyEpoch,
-                            kept,
-                            keyEnvelope,
+                            rotated.key,
+                            rotated.keyEnvelope,
                             under,
                         ),
                     );
-                    return { rewrap: true, key: nameOf(kept) };
+                    return { rewrap: true, key: nameOf(rotated.key) };
                 }
-                const fresh = generateKey();
-                try {
-                    const parent = ledger.freshKeyParent(AREA, node);
-                    const keyEnvelope = await wrapNodeKey(fresh, parent.key, {
-                        workspaceId: AREA,
-                        nodeId: node.id,
-                        parentId: node.parentId,
-                        parentKeyEpoch: node.parentKeyEpoch,
-                        keyEpoch: step.target,
-                    });
-                    const oldName = nameOf(old);
-                    remember(step.node, step.target, fresh);
-                    for (const at of pendingFresh.keys())
-                        if (at.startsWith(`${step.node}@`)) pendingFresh.delete(at);
-                    pendingFresh.set(`${step.node}@${step.target}`, fresh.slice());
-                    out.push(
-                        madeOf(
-                            index,
-                            step.node,
-                            step.parent,
-                            step.parentKeyEpoch,
-                            step.target,
-                            fresh,
-                            keyEnvelope,
-                            parent.key,
-                        ),
-                    );
-                    ledger.setPending(AREA, node.id, {
+                const { fresh, parentKey, keyEnvelope } = rotated.result;
+                remember(step.node, step.target, fresh);
+                forgetPending(step.node);
+                pendingFresh.set(`${step.node}@${step.target}`, fresh);
+                pendingRooted.set(
+                    `${step.node}@${step.target}`,
+                    rootedBefore ? writeVersionNow() : null,
+                );
+                out.push(
+                    madeOf(
+                        index,
+                        step.node,
+                        step.parent,
+                        step.parentKeyEpoch,
+                        step.target,
                         fresh,
-                        epoch: step.target,
-                        old,
-                        oldEpoch: node.keyEpoch,
-                        rootedAt: parent.rootedAt,
-                    });
-                    return { rewrap: false, old: oldName, fresh: nameOf(fresh) };
-                } catch (error) {
-                    fresh.fill(0);
-                    old.fill(0);
-                    throw error;
-                }
+                        keyEnvelope,
+                        parentKey,
+                    ),
+                );
+                return { rewrap: false, old: rotated.result.old, fresh: nameOf(fresh) };
             }
             case 'commitPending':
             case 'dropPending': {
-                for (const node of step.nodes)
-                    for (const at of pendingFresh.keys())
-                        if (at.startsWith(`${node}@`)) pendingFresh.delete(at);
+                for (const node of step.nodes) forgetPending(node);
                 const ids = step.nodes.map(id);
                 return {
                     count:
@@ -630,6 +662,9 @@ export async function runSteps(steps: Step[]) {
                             : ledger.dropPending(AREA, ids),
                 };
             }
+            case 'dropAllPending':
+                for (const node of NODES) forgetPending(node);
+                return { count: ledger.dropAllPending(AREA) };
             case 'keyAt': {
                 const key = ledger.keyAtEpoch(AREA, id(step.node), step.epoch);
                 return { key: key ? nameOf(key) : null };

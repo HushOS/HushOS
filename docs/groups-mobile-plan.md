@@ -21,10 +21,18 @@ Each step below is one pull request with the full review (an independent review,
 
 ### Core 1: the family write rules (this branch)
 
-`crates/hushos-core/src/area_ledger.rs`: `AreaLedger`, a `uniffi::Object` holding an unlocked session's workspace and node keys and deciding every write in a family folder exactly as the worker does. The worker's key store moved, unchanged, into `packages/crypto/src/area-ledger.ts` so the twin is the code the web runs; `session.ts` and `session-groups.ts` call it. Also `previous_root_key_wrap`/`_open` (option A's label) and a node-key context checked as the web checks it.
+`crates/hushos-core/src/area_ledger.rs`: `AreaLedger`, a `uniffi::Object` holding an unlocked session's workspace and node keys and deciding every write in a family folder exactly as the worker does. The worker's key store moved into `packages/crypto/src/area-ledger.ts` so the twin is the code the web runs; `session.ts` and `session-groups.ts` call it. Also `previous_root_key_wrap`/`_open` (option A's label) and a node-key context checked as the web checks it.
 
-- **Tests:** 12 Rust unit tests in `area_ledger.rs` and one in `drive.rs` (each rule, refused and allowed); 18 shared scenarios (`fixtures/area-ledger-scenarios.json`) whose stated outcomes both twins must give, and whose full outcomes each twin's fixture holds for the other to match step for step; every key envelope one twin made or served (option A's previous-root label included) opened by the other; fuzz target `area_ledger` in both twins, with a fast-check generator of random step sequences in the differential; break-checks of every rule in Rust. The worker's own tests (session, group, rotation, join; the web's `lib/groups`) pass unchanged on the moved code.
-- **Proof:** `core:check`, the crypto suite, `fuzz:diff`, 30 s of cargo-fuzz and Jazzer on `area_ledger`, bindings regenerated and both apps built. No simulator: nothing user-visible changes.
+The review of the first commit (Opus and Fable) found a critical defect the port had copied from the web worker: area state was keyed by area alone, so any committed chain listing an area set its write version, and another family's `uncommit` or forget touched it. A removed member who manages a second family the victim is in could list the area at an old version and, with the server serving the old top level, have the victim write under a key the removed member holds. Fixed in both twins in this PR:
+
+- write version, block reason, root-seen version and root node are kept per (family, area); an area resolves only through the family `openArea` derived its id under, and is refused (`NOT_CHECKED_KEYS`) while a second committed chain lists it; commit, uncommit and forget touch only their own family's areas;
+- a chain older than the one held is refused (`OLDER_CHAIN`), so a background acceptance that loses a race with the foreground's writes no record or pin, and the web's data layer reads again quietly (`lib/groups/sync.ts`, three tries, then it says the server keeps serving an older member list); another chain at the version held is never committed (`SPLIT_CHAIN`), and the worker passes its committed chain to acceptance as a mark, so a split view within a session is the fork, the hard warning;
+- an old top level served again never lowers the root-seen version, and once the root node is known any other top-level node is refused without touching it;
+- a walk runs `requireWritable` first in both twins; the core gains `rotate_drop_all` (its pending mark stays early until Core 2's `rotate_node`, since UniFFI carries no re-key callback; the web's `rotateKey` marks late).
+
+- **Tests:** 20 Rust unit tests in `area_ledger.rs` and one in `drive.rs` (each rule, refused and allowed); 26 shared scenarios (`fixtures/area-ledger-scenarios.json`), the reviewers' two-family attack, another family's refusal and another family forgotten among them (each fails on the first commit's code), whose stated outcomes both twins must give and whose full outcomes each twin's fixture holds for the other to match step for step; every key envelope one twin made or served (option A's previous-root label included) opened by the other; two rule oracles on every run (each successful create, re-wrap or walk key under a parent rooted at the write version; each node a write made writable at once); a worker test of the lost race (`session.groups.test.ts`); fuzz target `area_ledger` in both twins asserting the oracles, with a fast-check generator of random step sequences (two families included) in the differential; break-checks of every rule in Rust. The TypeScript runner calls the worker's own ledger functions (`commit`, `uncommit`, `forgetGroup`, `openArea`, `openListedNode`, `newNodeKey`, `rewrapNode`, `rotateKey`); it does not reach the worker's grant opening (`openAreaGrant` needs an unlocked account and a holder's seal, and has its own shared cases) or `rekeyNode`'s records (Core 2).
+- **Proof:** `core:check`, the crypto suite, the web's groups and drive tests, `fuzz:diff`, 30 s of cargo-fuzz and Jazzer on `area_ledger`, bindings regenerated and both apps built. No simulator: nothing user-visible changes.
+- **Apps write family folders only through the ledger.** `node_wrap`, `node_open` and `previous_root_key_open` stay exported (personal folders, shares, the shipped apps) but check none of these rules. Every wrap, re-wrap, create and walk in a family folder goes through `new_node_key`, `rewrap_node` and `rotate_key`, and keys for writes come from `writable_node_key` only; app reviews reject anything else.
 
 ### Core 2: walks, re-keyed records and verdicts
 
@@ -47,12 +55,19 @@ Twins of the device store and the pin rules: `group_device_record_seal/open` (HK
 - **Tests:** shared fixtures: a preview over a made-up first key or another admission gives another code (`join-mark-made-up-first-keys` probes reused); consent signed by the core verifies in the web and in the server's check (`packages/db/src/auth.consent.test.ts` reads the core's fixture); a version 1 link is never offered for consent.
 - **Proof:** as Core 1.
 
-### Core 5: staged chains and manager calls
+### Core 5a: staged chains, admission and roles
 
-Twins of `groupStage`/`restage` and the call bodies: a staged acceptance of the device's own signed, unsent roster (never a mark, never cached), the admit body (roster, grants of every area's current key, a key seal for a new `members` holder), the removal body (roster marking left, a rotation per live area: new area key, root key, `previous_root_key_wrap`, grants to every remaining member, a succession when a holder leaves), and the folder key replacement (route 24). The app persists the outbox (sealed with the device record's key) and resends the same bytes until a definite answer (F7).
+Twins of `groupStage`/`restage` and the call bodies that change who holds what: a staged acceptance of the device's own signed, unsent roster (never a mark, never cached), the admit body (roster, grants of every area's current key, a key seal for a new `members` holder), role changes (granting `members` with a key seal, taking it away with a group key succession and its seals), and the organizer handover (`billing` and `members` to another adult member before leaving). The app persists the outbox (sealed with the device record's key) and resends the same bytes until a definite answer (F7).
 
 - **Tests:** shared fixtures: bodies built by each twin accepted by the other's `roster_check_next` and by the server's checks (`packages/groups/src/server.test.ts` reads the core's fixture); a staged chain refused as a cache and as a pin; a resend after an unknown outcome is byte-identical.
-- **Proof:** as Core 1, plus a `verify-hushos` run where the web admits a member a core-built roster added (server-side compatibility).
+- **Proof:** as Core 1, plus a `verify-hushos` run where the web admits a member a core-built roster added.
+
+### Core 5b: removal, key replacement, folder deletion and repair
+
+The bodies that rotate areas: removal (roster marking left, a rotation per live area: new area key, root key, `previous_root_key_wrap`, grants to every remaining member, a succession when a holder leaves), a folder's key replacement (route 24), a folder's deletion (the tombstone roster, route 30), and the previous-root repair (route 28, only from a key this device opened itself). Each staged and resent as in 5a.
+
+- **Tests:** as 5a, plus: a removal body that leaves any live area unrotated is refused by both twins and the server; a deletion carries exactly one tombstone and nothing else; a repair never uses a served previous envelope's key.
+- **Proof:** as 5a, with the web removing a member a core-built removal body removed and every folder reading `former-member` for their files.
 
 ### iOS 1: spaces and family folders, read only
 
@@ -77,40 +92,46 @@ The invitation link (`/join#invite=`, `AppLinks`), accept, the own-words screen 
 
 ### iOS 4: leaving, and members' due work
 
-Leave (route 20, with the organizer and last-holder refusals as the server words them), the local wipe, and the member side of a removal: walks of family folders this device has its own reason to run (`ownReasonToWalk`), in the foreground and as a `BGProcessingTask`, through `rotate_node`.
+Leave (route 20, with the organizer and last-holder refusals as the server words them), the local wipe, and the member side of a removal: walks of family folders this device has its own reason to run (`ownReasonToWalk`), in the foreground and, by owner decision, as a `BGProcessingTask` so a walk finishes while the app is closed, through `rotate_node`. A background acceptance and a foreground one can race; `commit` refusing an older chain (Core 1) is what keeps the loser from writing an older record or pin.
 
 - **Tests:** leaving wipes the family's keys, record and Files domain, and keeps the settings pin; a walk resumes after the app is killed mid-batch (the pending keys are dropped, the batch resent).
 - **Proof:** simulator: leave a family; its folders vanish from the app and Files; the web shows the member as left.
 
-### iOS 5: managing (invite, let in, remove)
+### iOS 5a: managing members (invite, let in, roles, handover)
 
-Invite by email, pending admissions with the newcomer's words checked against the served identity (the admin's version 3 pin), "Let them in" (Core 5's admit body), remove (Core 5's removal body, then the walks). Folder deletion and the previous-root repair stay web only.
+Every manager action the web has, except billing (owner decision): invite by email, pending admissions with the newcomer's words checked against the served identity (the admin's version 3 pin), "Let them in" (Core 5a's admit body), granting and taking away `members`, and the organizer handover.
 
-- **Tests:** stub-server tests of the outbox: an unknown outcome resends the same bytes; `stale` drops and re-signs over the winner.
-- **Proof:** simulator plus web, two accounts: the phone lets a web newcomer in; both screens show the same join code; the phone removes them and the web shows every folder's key replaced.
+- **Tests:** stub-server tests of the outbox: an unknown outcome resends the same bytes; `stale` drops and re-signs over the winner; taking `members` away carries a succession.
+- **Proof:** simulator plus web, two accounts: the phone lets a web newcomer in; both screens show the same join code; the phone makes them a manager and the web shows the role.
+
+### iOS 5b: removing, replacing keys, deleting a folder
+
+Remove (Core 5b's removal body, then the walks), "Replace keys" on a folder, "Delete family folder" with the web's dialog wording, and the previous-root repair when a walk reports it.
+
+- **Tests:** as 5a, plus a deletion refused while someone is still to be marked left (409 `left-due`).
+- **Proof:** the phone removes the web member and the web shows every folder's key replaced; the phone deletes a folder and it leaves the web's spaces list.
 
 ### iOS 6: family folders in Files
 
-**Yes, one File Provider domain per family**, identifier `com.hushos.app.family.<groupId>`, display name the family's name, owned by (account, origin, group) exactly as the drive domain is owned today. Why: design 3.4 already promises one Files location per space; a family folder that exists only inside the app is the thing members will notice first; and the ledger makes the extension safe (it fills its own `AreaLedger` from listings, as the worker does after a reload, and runs the same acceptance from its record). Costs that decide the shape: the extension accepts from the device record (one chain read and a cache continuation, no ML-DSA from version 1 unless the record is refused); the domain is removed on leave, not-member, or a fork; Files writes that meet `KEY_CHANGE_PENDING` answer `NSFileProviderError(.serverUnreachable)` so Files retries instead of deleting the item (never `noSuchItem`, apps/ios/AGENTS.md). Read first, writes in the same step only if the PR stays reviewable; otherwise iOS 7.
+**Yes, one File Provider domain per family**, identifier `com.hushos.app.family.<groupId>`, display name the family's name, owned by (account, origin, group) exactly as the drive domain is owned today. Why: design 3.4 already promises one Files location per space; a family folder that exists only inside the app is the thing members will notice first; and the ledger makes the extension safe (it fills its own `AreaLedger` from listings, as the worker does after a reload, and runs the same acceptance from its record). Costs that decide the shape: the extension accepts from the device record (one chain read and a cache continuation, no ML-DSA from version 1 unless the record is refused); the domain is removed on leave, not-member, or a fork; Files writes that meet `KEY_CHANGE_PENDING` answer `NSFileProviderError(.serverUnreachable)` so Files retries instead of deleting the item (never `noSuchItem`, apps/ios/AGENTS.md). Read first, writes in the same step only if the PR stays reviewable; otherwise a step of their own after this one.
 
 - **Tests:** `FilesGate` refuses a family domain whose recorded owner differs; a domain for a family the account left is removed with `.removeAll`.
 - **Proof:** simulator: Files shows "Lindqvist family" under Locations; open a file the web wrote; after leaving, the location is gone.
 
-### iOS 7: billing hand-off
+### iOS 7: billing, read only
 
-**No purchase in the app, and no call to action outside the United States.** Apple's guideline 3.1.1 requires in-app purchase to unlock features or storage; 3.1.3(f) exempts a free companion app to a paid web-based cloud storage service only "provided there is no purchasing inside the app, or calls to action for purchase outside of the app". On the United States storefront, 3.1.1(a) and the 3.1.3 introduction now allow buttons and external links to other purchase methods. So:
+**No purchase, and no link out.** Apple's guideline 3.1.1 requires in-app purchase to unlock features or storage; 3.1.3(f) exempts a free companion app to a paid web-based cloud storage service only "provided there is no purchasing inside the app, or calls to action for purchase outside of the app". The US storefront now allows links to outside purchase (3.1.1(a), the 3.1.3 introduction); the owner chose not to use that: the same app everywhere, read only.
 
-- everywhere: the family page shows the plan, the pool and who pays, read only, with no "upgrade" wording;
-- United States storefront only (`Storefront.current?.countryCode == "USA"`): a "Manage family plan" row opens **the web family page** (`/app/families/<groupId>`, its billing section) in the system browser;
-- never the Polar portal directly. The portal knows nothing of HushOS's rules (who pays, handover only once the new payer added a card, seats counted at admission), and a portal link is a server-minted customer session, a bearer URL for card management that the app would hold; the web page mints it per request for a signed-in payer and also works for self-hosted servers without Polar. Cost: Safari has no HushOS session, so the person signs in on the web first.
-- **Tests:** a unit test that the row exists only for the US storefront.
-- **Proof:** simulator with the storefront set to the US and to another country (StoreKit configuration file): the row appears only in the first.
+- The family page shows the plan, the pool and who pays, read only, with no "upgrade" wording, no link and no button: one line says billing is managed on the web.
+- Never the Polar portal, and no storefront check.
+- **Tests:** a unit test that no family or account screen holds a link or button to a billing page (a scan of the view tree's URLs in a snapshot test).
+- **Proof:** simulator screenshot of the family page's plan section.
 
 ### Android 1 to 6
 
-The same steps in the same order, on Compose and Material 3 Expressive: spaces and family folders read only (Android 1), writes through `AreaLedger` with `KEY_CHANGE_PENDING` as a WorkManager retry (Android 2), joining (Android 3), leaving and walks as an expedited `CoroutineWorker` (Android 4), managing (Android 5), and **one DocumentsProvider root per family** (Android 6: `Root.COLUMN_ROOT_ID` `family:<groupId>`, title the family's name, `notifyChange` on the roots URI when a family appears or goes; the provider fills its own ledger under `vaultLock`, one per session, as `SharedLoad` does for trust). Tests are JVM unit tests with the core built for the host (`TrustLoadsTest` style); proof is emulator screenshots (`Pixel_9_API_36`) and the system Files app showing the family root, since `adb shell content` cannot query the provider.
+The same steps in the same order, on Compose and Material 3 Expressive: spaces and family folders read only (Android 1), writes through `AreaLedger` with `KEY_CHANGE_PENDING` as a WorkManager retry (Android 2), joining (Android 3), leaving and walks in WorkManager so they finish while the app is closed (Android 4, owner decision), every manager action the web has except billing (Android 5a and 5b), and **one DocumentsProvider root per family** (Android 6: `Root.COLUMN_ROOT_ID` `family:<groupId>`, title the family's name, `notifyChange` on the roots URI when a family appears or goes; the provider fills its own ledger under `vaultLock`, one per session, as `SharedLoad` does for trust). Tests are JVM unit tests with the core built for the host (`TrustLoadsTest` style); proof is emulator screenshots (`Pixel_9_API_36`) and the system Files app showing the family root, since `adb shell content` cannot query the provider.
 
-**Billing on Android:** the app is sideloaded today (`android:release`), where no store rule applies: the family page links to the web family page. If it ships on Google Play, Play's payments policy requires Play Billing for digital services, with the US external-content-links and alternative-billing programs (enrolment and fees) as the exception; the iOS rule (no call to action outside the US) would then apply there too. That is an owner decision before any Play listing.
+**Billing on Android (Android 7):** the app ships on Google Play (owner decision). Play's payments policy requires Play Billing for digital services, with US-only programs (external content links, alternative billing) that need enrolment and fees; the owner treats Play like Apple: the plan read only, one line that billing is managed on the web, no link and no button. The sideloaded release build follows the same rule, so the two builds do not differ.
 
 ### Then: re-keyed records in personal folders (W1)
 
@@ -131,19 +152,25 @@ Each is one PR; the third needs the minimum-version decision below. Test: a pers
 
 Objects (no constructors except where stated; Swift and Kotlin cannot forge them): `AcceptedRosters`, `SuccessionCache` (constructor), `AreaLedger` (constructor; one per unlocked session per process). Records cross as plain data; keys cross as `SecretBytes` copies the app wipes.
 
-- Core 1: `AreaLedger::{commit, uncommit, forget_group, clear, open_area, is_area, read_version, write_version, require_writable, open_listed_node, node_key, key_at_epoch, writable_node_key, new_node_key, forget_node_key, rewrap_node, rotate_key, rotate_commit, rotate_drop, refuse_own_workspace}`; `ServedNodeKey`, `RotatingNodeKey`, `HeldNodeKey`, `NewNodeKey`, `RotatedKey`, `AreaOpened`, `AreaBlock`; `previous_root_key_wrap/open`.
+- Core 1: `AreaLedger::{commit (refuses an older chain: OLDER_CHAIN), uncommit, forget_group, clear, open_area, is_area, read_version, write_version, require_writable, open_listed_node, node_key, key_at_epoch, writable_node_key, new_node_key, forget_node_key, rewrap_node, rotate_key, rotate_commit, rotate_drop, rotate_drop_all, refuse_own_workspace}`; `ServedNodeKey`, `RotatingNodeKey`, `HeldNodeKey`, `NewNodeKey`, `RotatedKey`, `AreaOpened`, `AreaBlock`; `previous_root_key_wrap/open`.
 - Core 2: `AreaLedger::{rotate_node, record_verdict, copy_form}`; `RotatedNode`, `RotatedRecord`.
 - Core 3: `group_device_record_seal/open`, `accept_served`, `merge_pin`, `pin_ahead`; `DeviceRecord`.
 - Core 4: `group_join_preview`, `join_check`, `succession_consent_sign`, `links_needing_consent`.
-- Core 5: `stage_roster`, `admit_body`, `removal_body`, `area_rotation_body`.
+- Core 5a: `stage_roster`, `admit_body`, `roles_body`, `handover_body`.
+- Core 5b: `removal_body`, `area_rotation_body`, `area_delete_body`, `previous_root_repair`.
 
 Rules for every addition: no parameter named after a C keyword; doc comment with a runnable example; a unit test in the same file; a fixture in both directions for anything sealed, signed or decided; a fuzz target or kind for anything that parses served data.
 
-## Open decisions for the owner
+## Decisions
 
-1. **Manager actions on the phones.** Proposed: invite, let in and remove in 1d (iOS 5, Android 5); folder deletion, key repair and folder key replacement stay web only.
-2. **iOS billing.** Proposed: read-only plan everywhere, a link to the web family page on the US storefront only. Accept that people sign in again on the web, or fund a one-time sign-in hand-off token (a new auth route and its review)?
-3. **Android distribution.** Stay sideloaded (link freely) or list on Google Play (Play Billing rules, US programs)?
-4. **Files and DocumentsProvider.** Confirm one location per family, and whether Files writes ship with reads.
-5. **Minimum app version** for W1 step 3 and W2 step 2: how long protocol 3 apps keep working before "Update HushOS".
-6. **Background walks.** `BGProcessingTask`/WorkManager walks, or only while the app is open?
+Taken by the owner (2026-10-18):
+
+- **Manager actions:** the phones get every manager action the web has (invite, let in, remove, roles, organizer handover, replace keys, delete folder); billing is the exception.
+- **iOS billing:** read only everywhere, no link out; the app says billing is managed on the web.
+- **Android:** ships on Google Play; billing as on iOS (read only, no link).
+- **Background key changes:** yes: `BGProcessingTask` on iOS, WorkManager on Android. The older-chain refusal (Core 1) is required for it.
+
+Still open:
+
+1. **Files and DocumentsProvider.** One location per family (recommended: yes, iOS 6 and Android 6), and whether Files writes ship with reads.
+2. **Minimum app version** for W1 step 3 and W2 step 2: how long protocol 3 apps keep working before "Update HushOS".

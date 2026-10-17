@@ -940,10 +940,7 @@ export function createCryptoSession() {
      * which of them a write may use, and each group area's write version. The
      * group session (below) tells it which workspaces are areas.
      */
-    const ledger = createAreaLedger({
-        knownArea: (workspaceId) => groups.knownArea(workspaceId),
-        chainOf: (workspaceId) => groups.chainOf(workspaceId),
-    });
+    const ledger = createAreaLedger();
     const {
         isArea,
         holdWorkspaceKey,
@@ -1697,49 +1694,35 @@ export function createCryptoSession() {
         judge: RecordJudge,
     ): Promise<RotatedNode> {
         const nodeId = node.id;
-        const old = await ledger.rotationOldKey(workspaceId, node);
+        const rotated = await ledger.rotateKey(
+            workspaceId,
+            node,
+            targetEpoch,
+            ({ old, fresh, parentKey }) =>
+                rekeyNode({
+                    workspaceId,
+                    targetEpoch,
+                    granterUserId,
+                    node,
+                    judge,
+                    old,
+                    fresh,
+                    parentKey,
+                }),
+        );
+        if (!rotated.rewrap) return rotated.result;
         // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
-        if (node.keyEpoch >= targetEpoch) {
-            const keyEnvelope = await ledger.rewrapAtTarget(workspaceId, node, old);
-            return {
-                id: nodeId,
-                keyEnvelope: encode(keyEnvelope),
-                metadataEnvelope: node.metadataEnvelope,
-                metadataSignature: null,
-                versions: [],
-                shares: [],
-                links: [],
-                rewrap: true,
-            };
-        }
-        const fresh = generateKey();
-        try {
-            const { key: parentKey, rootedAt } = ledger.freshKeyParent(workspaceId, node);
-            const rotated = await rekeyNode({
-                workspaceId,
-                targetEpoch,
-                granterUserId,
-                node,
-                judge,
-                old,
-                fresh,
-                parentKey,
-            });
-            // Pending until the server confirms the batch (driveRotateCommit): children in this walk
-            // wrap under the fresh key meanwhile, and nothing else takes it as the node's.
-            ledger.setPending(workspaceId, nodeId, {
-                fresh,
-                epoch: targetEpoch,
-                old,
-                oldEpoch: node.keyEpoch,
-                rootedAt,
-            });
-            return rotated;
-        } catch (error) {
-            fresh.fill(0);
-            old.fill(0);
-            throw error;
-        }
+        rotated.key.fill(0);
+        return {
+            id: nodeId,
+            keyEnvelope: encode(rotated.keyEnvelope),
+            metadataEnvelope: node.metadataEnvelope,
+            metadataSignature: null,
+            versions: [],
+            shares: [],
+            links: [],
+            rewrap: true,
+        };
     }
     const groups = createGroupSession({
         unlocked() {
@@ -2812,17 +2795,8 @@ export function createCryptoSession() {
             }
             case 'driveRewrapNode': {
                 const { workspaceId, nodeId, parentId, parentKeyEpoch, keyEpoch } = message.input;
-                requireWritable(workspaceId);
-                const entry = writableNodeKey(workspaceId, nodeId);
-                if (!entry) throw new CryptoError('Open the containing folder first.');
-                if (entry.epoch !== keyEpoch)
-                    throw new CryptoError(
-                        'This item changed since it was opened. Refresh and retry.',
-                    );
-                const parentKey = wrapKeyFor(workspaceId, parentId, parentKeyEpoch);
-                const keyEnvelope = await wrapNodeKey(entry.key, parentKey, {
-                    workspaceId,
-                    nodeId,
+                const keyEnvelope = await ledger.rewrapNode(workspaceId, {
+                    id: nodeId,
                     parentId,
                     parentKeyEpoch,
                     keyEpoch,
