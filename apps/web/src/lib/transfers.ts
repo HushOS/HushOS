@@ -1,3 +1,4 @@
+import type { DriveNode } from '@hushos/drive/client';
 import { createIndexedDbJournal, type JournalEntry, type QueuedEntry } from '@hushos/drive/journal';
 import {
     createTransferManager,
@@ -8,9 +9,16 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { renderThumbnail } from '@/lib/thumbnails';
-import { clientFor, invalidateFolders, refuseWrite, waitsForKeyChange } from '@/lib/drive';
+import {
+    clientFor,
+    invalidateFolders,
+    refreshKeyChange,
+    refuseWrite,
+    waitsForKeyChange,
+} from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
+import { backoffDelay } from '@/lib/groups/walks';
 
 /*
  * One transfer manager for the whole app, created once and never tied to a route,
@@ -56,6 +64,24 @@ async function openNodes(entry: JournalEntry | QueuedEntry) {
     return { parent: listing.folder, replaces };
 }
 
+/*
+ * One pause of an upload waiting out a family folder's key change (or one the
+ * server refused for it, 409 rotating): the first look goes at once, since the
+ * walk is often done by then; each later one waits twice as long as the last,
+ * by the walks' own backoff (lib/groups/walks.ts), from 5 seconds up to a
+ * minute. Then the family is synced again, so this device knows where the run
+ * is and walks it too when it should; the engine looks the folder up after.
+ */
+const KEY_CHANGE_FIRST_MS = 5_000;
+const KEY_CHANGE_MOST_MS = 60_000;
+async function keyChangePause(target: DriveNode, attempt: number) {
+    if (attempt > 1)
+        await new Promise((resolve) =>
+            setTimeout(resolve, backoffDelay(attempt - 1, KEY_CHANGE_FIRST_MS, KEY_CHANGE_MOST_MS)),
+        );
+    await refreshKeyChange(target).catch(() => {});
+}
+
 export const transfers = createTransferManager({
     rpc: authClient.rpc,
     api: driveApi,
@@ -66,6 +92,9 @@ export const transfers = createTransferManager({
     // not reached yet makes it wait, and it goes once the walk has re-keyed the folder.
     refuseWrite,
     waitsForKeyChange,
+    // A refusal this device had not foreseen (409 rotating) waits too: the upload is looked up and
+    // sealed again under the folder's new keys once the walk is done, and goes by itself.
+    keyChangePause,
     thumbnail: (file, mime) => renderThumbnail(file, mime),
     onPublished: (node) => {
         if (queryClient) refreshFolderSoon(queryClient, node.parentId);

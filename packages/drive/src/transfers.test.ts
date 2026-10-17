@@ -7,6 +7,7 @@ import { createMemoryJournal } from './journal';
 import {
     backoffDelay,
     createTransferManager,
+    KEY_CHANGE_GAVE_UP,
     type TransferManagerOptions,
     type UploadStash,
 } from './transfers';
@@ -97,14 +98,17 @@ function harness(
         refuseWrite?: (target: DriveNode) => string | null;
         waitsForKeyChange?: (target: DriveNode) => boolean;
         openNodes?: TransferManagerOptions['openNodes'];
+        keyChangePause?: TransferManagerOptions['keyChangePause'];
+        keyChangeGiveUpMs?: number;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
     const calls: string[] = [];
     /* The statement each signing call was asked for, in order. */
     const signed: { operation: string; signAs: string | undefined }[] = [];
-    /* The key epoch every created node was given. */
+    /* The key epoch every created node was given, and the parent epoch its key was wrapped under. */
     const givenEpochs: number[] = [];
+    const wrappedUnder: number[] = [];
     let inFlight = 0;
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
@@ -118,12 +122,14 @@ function harness(
             case 'driveCreateNodes':
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
+                    wrappedUnder.push(n.parentKeyEpoch);
                     signed.push({ operation, signAs: n.signAs });
                 }
                 return {
+                    // A node key's envelope names the parent epoch it was wrapped under.
                     nodes: (input as CryptoRequests['driveCreateNodes']).nodes.map((n) => ({
                         id: n.id,
-                        keyEnvelope: 'ke',
+                        keyEnvelope: `ke-under-${n.parentKeyEpoch}`,
                         metadataEnvelope: 'me',
                     })),
                 } as CryptoResults[K];
@@ -136,9 +142,10 @@ function harness(
                         signAs: (input as CryptoRequests['driveUploadPrepare']).signAs,
                     });
                 const chunks = Math.max(1, Math.ceil(plaintextSize / CHUNK));
+                // Every prepare mints a fresh content key, so its envelope is never the same twice.
                 return {
                     contentNonce: 'n',
-                    contentKeyEnvelope: 'c',
+                    contentKeyEnvelope: `c-${calls.filter((call) => call === operation).length}`,
                     chunkCount: chunks,
                     ciphertextSize: plaintextSize + 16 * chunks,
                     thumbnail: null,
@@ -322,6 +329,8 @@ function harness(
         refuseWrite: options.refuseWrite,
         waitsForKeyChange: options.waitsForKeyChange,
         keyChangeRecheckMs: 1_000,
+        keyChangePause: options.keyChangePause,
+        keyChangeGiveUpMs: options.keyChangeGiveUpMs,
         onPublished: (n) => published.push(n.id),
         // Ids as the server derives them, minted without Web Crypto's real-time digest,
         // which fake timers would never let resolve.
@@ -351,6 +360,7 @@ function harness(
         calls,
         signed,
         givenEpochs,
+        wrappedUnder,
         server,
         journal,
         published,
@@ -979,6 +989,198 @@ describe('journal and restore', () => {
         await settle(3_000);
         expect(h.item(id!).status).toBe('done');
         expect(h.item(id!).errorCode).toBeNull();
+    });
+});
+
+describe('a key change this device has not heard of (409 rotating)', () => {
+    /*
+     * A family folder, "trips", and the server's side of a key change walking
+     * it, judged as packages/db's beginUpload and attachUpload judge them: a new
+     * node there is refused as `rotating` while the walk has not reached the
+     * folder (its key epoch below the target), and as `stale` when its key is
+     * wrapped under any epoch but the folder's own. The app's own view
+     * (refuseWrite) never hears of the change: it started a moment after the
+     * file was queued, so only the server's answer says to wait.
+     */
+    function family(options: Parameters<typeof harness>[0] = {}) {
+        const folder = { epoch: 1, target: null as number | null };
+        const at = () => ({ ...node('trips', 'root'), keyEpoch: folder.epoch });
+        const pauses: number[] = [];
+        const h = harness({
+            // The folder as the server lists it now.
+            openNodes: async () => ({ parent: at() }),
+            // The app's pause: a sync of the family, a second here.
+            keyChangePause: async (_target, attempt) => {
+                pauses.push(attempt);
+                await new Promise((resolve) => setTimeout(resolve, 1_000));
+            },
+            ...options,
+        });
+        const judge = (parentKeyEpoch: number) => {
+            if (folder.target !== null && folder.epoch < folder.target)
+                throw new DriveApiError(
+                    'Keys are being rotated for this folder. Try again in a moment.',
+                    'rotating',
+                    409,
+                );
+            if (parentKeyEpoch !== folder.epoch)
+                throw new DriveApiError(
+                    'This item changed since you last saw it. Refresh and try again.',
+                    'stale',
+                    409,
+                );
+        };
+        /* Every begin sent, refused ones included. */
+        const tried: Parameters<DriveApi['beginUpload']>[1][] = [];
+        const api = h.api as unknown as DriveApi;
+        const begin = api.beginUpload.bind(api);
+        api.beginUpload = (async (ws, input) => {
+            tried.push(input);
+            if (!input.node.existing) judge(input.node.parentKeyEpoch);
+            return begin(ws, input);
+        }) as typeof begin;
+        const attach = api.attachUpload.bind(api);
+        api.attachUpload = (async (ws, id, input) => {
+            if (input.mode === 'sibling') judge(input.node.parentKeyEpoch);
+            return attach(ws, id, input);
+        }) as typeof attach;
+        return {
+            ...h,
+            api,
+            at,
+            pauses,
+            tried,
+            // The key change starts: the folder keeps its old key until the walk reaches it.
+            start: (target: number) => {
+                folder.target = target;
+            },
+            // The walk re-keys the folder and the run ends.
+            walked: () => {
+                folder.epoch = folder.target ?? folder.epoch;
+                folder.target = null;
+            },
+        };
+    }
+
+    test('a refused begin waits, says so, and lands by itself once the walk is done, sealed afresh under the folder’s new key', async () => {
+        const f = family();
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        f.start(5);
+        await settle(500);
+        // Refused once, under the old key: it waits rather than failing, and holds no slot.
+        expect(f.tried).toHaveLength(1);
+        expect(f.tried[0]!.node).toMatchObject({ parentKeyEpoch: 1 });
+        expect(f.item(id!)).toMatchObject({ status: 'preparing', error: null });
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        expect(f.state().active).toBe(0);
+        // Still walking: refused again at each look, never failed, nothing reserved.
+        await settle(5_000);
+        expect(f.item(id!).status).toBe('preparing');
+        expect(f.server.uploads.size).toBe(0);
+        // The walk reaches the folder: nobody presses anything, and it lands.
+        f.walked();
+        await settle(5_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(f.server.begins).toHaveLength(1);
+        const landed = f.server.begins[0]!;
+        // The node's key wrapped under the folder's new key, and a content key never sent before.
+        expect(landed.node).toMatchObject({
+            existing: false,
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+        const refused = f.tried.slice(0, -1).map((input) => input.contentKeyEnvelope);
+        expect(refused).not.toContain(landed.contentKeyEnvelope);
+        expect(f.pauses[0]).toBe(1);
+    });
+
+    test('a refused attach waits the same way, then attaches the sent bytes under the folder’s new key', async () => {
+        const f = family({ conflict: true });
+        // The key change lands while the bytes are in flight: completing finds the node moved on.
+        const complete = f.api.completeUpload.bind(f.api);
+        f.api.completeUpload = (async (...args: Parameters<typeof complete>) => {
+            f.start(5);
+            return complete(...args);
+        }) as typeof complete;
+        const [id] = f.manager.enqueue([{ file: fakeFile(2 * CHUNK), parent: f.at() }]);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'completing', error: null });
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        expect(f.state().active).toBe(0);
+        expect(f.server.attached).toEqual([]);
+        f.walked();
+        await settle(5_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null, waitingFor: null });
+        expect(f.server.attached).toHaveLength(1);
+        const attached = f.server.attached[0]!.input as {
+            mode: string;
+            node: { id: string; parentKeyEpoch: number; keyEnvelope: string };
+            contentKeyEnvelope: string;
+        };
+        expect(attached.mode).toBe('sibling');
+        expect(attached.node).toMatchObject({ parentKeyEpoch: 5, keyEnvelope: 'ke-under-5' });
+        expect(attached.contentKeyEnvelope).toBe(`rewrapped-under-${attached.node.id}`);
+        // Attaching never sends the bytes again.
+        expect(f.calls.filter((call) => call === 'driveUploadSend')).toHaveLength(2);
+    });
+
+    test('a retry after a key change looks the folder up again and seals afresh, never resending the old envelopes', async () => {
+        const f = family();
+        const begin = f.api.beginUpload.bind(f.api);
+        let reachable = false;
+        f.api.beginUpload = (async (...args: Parameters<typeof begin>) => {
+            if (!reachable) throw new Error('Failed to fetch');
+            return begin(...args);
+        }) as typeof begin;
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(1_000);
+        expect(f.item(id!).status).toBe('failed');
+        // Meanwhile a key change re-keyed the folder and finished: nothing on this device says so.
+        f.start(5);
+        f.walked();
+        reachable = true;
+        await f.manager.retry(id!);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null });
+        expect(f.server.begins.at(-1)!.node).toMatchObject({
+            parentKeyEpoch: 5,
+            keyEnvelope: 'ke-under-5',
+        });
+    });
+
+    test('a key change that never finishes gives up after the wait, cleanly; once it is done a retry lands', async () => {
+        const pauses: number[] = [];
+        const f = family({
+            keyChangeGiveUpMs: 60_000,
+            // An app whose pause never returns (a sync that hangs) must not hold the upload forever.
+            keyChangePause: (_target, attempt) => {
+                pauses.push(attempt);
+                return new Promise(() => {});
+            },
+        });
+        f.start(5);
+        const [id] = f.manager.enqueue([{ file: fakeFile(CHUNK), parent: f.at() }]);
+        await settle(30_000);
+        expect(f.item(id!).status).toBe('preparing');
+        expect(f.item(id!).waitingFor).toBeTruthy();
+        await settle(31_000);
+        expect(f.item(id!)).toMatchObject({
+            status: 'failed',
+            error: KEY_CHANGE_GAVE_UP,
+            waitingFor: null,
+        });
+        // Nothing reserved on the server, and nothing tries again by itself.
+        expect(f.server.uploads.size).toBe(0);
+        const tried = f.tried.length;
+        await settle(10 * 60_000);
+        expect(f.tried).toHaveLength(tried);
+        expect(pauses).toEqual([1]);
+        // The walk ends after all: Retry seals afresh under the new key and lands.
+        f.walked();
+        await f.manager.retry(id!);
+        await settle(3_000);
+        expect(f.item(id!)).toMatchObject({ status: 'done', error: null });
+        expect(f.server.begins.at(-1)!.node).toMatchObject({ parentKeyEpoch: 5 });
     });
 });
 

@@ -9,7 +9,7 @@ import { contactPins, openIdentity, trustedSigners } from '@/lib/contacts';
 import { driveKeys, forgetSpace, pruneSpaces, registerSpace } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { familyContext, type FamilyDetail } from '@/lib/families';
-import { onFamilySynced } from '@/lib/families-keys';
+import { familySynced, onFamilySynced } from '@/lib/families-keys';
 import { countFinishedRotation } from '@/lib/rotation';
 import { restoreTransfers } from '@/lib/transfers';
 import { groupsApi } from '@/lib/groups/api';
@@ -17,7 +17,13 @@ import { provideRotations } from '@/lib/groups/client';
 import { stageChange } from '@/lib/groups/outbox';
 import { createRotationSource } from '@/lib/groups/rotations';
 import { AREA_MIRROR_PREFIX } from '@/lib/groups/store';
-import { syncLocked, waitsForKeyChange, writeRefusal, type AreaState } from '@/lib/groups/sync';
+import {
+    syncGroup,
+    syncLocked,
+    waitsForKeyChange,
+    writeRefusal,
+    type AreaState,
+} from '@/lib/groups/sync';
 import { backoffDelay, ownReasonToWalk, stillRunning, walkToEnd } from '@/lib/groups/walks';
 import { groupWriters } from '@/lib/groups/writers';
 
@@ -130,6 +136,7 @@ function register(area: Area) {
         client: area.client,
         refuseWrite: (folder) => writeRefusal(areas.get(workspaceId)?.state, folder),
         waitsForKeyChange: (folder) => waitsForKeyChange(areas.get(workspaceId)?.state, folder),
+        refreshKeyChange: () => refreshFamily(area.userId, area.groupId),
     });
 }
 
@@ -341,6 +348,31 @@ export function walkPending(
             onSettled();
         }, ended);
     }
+}
+
+/*
+ * For an upload waiting out a key change in one of the family's folders, or
+ * one the server refused for it (409 rotating) before this device heard of
+ * the change: the family synced again, so the folders' clients know of the
+ * run (what may be written, and when it is over), and this device walks it
+ * too when it has its own reason to (walkPending, the same rule and backoff
+ * as after any sync). The uploads look their folders up again afterwards
+ * (packages/drive transfers). One sync per family at a time, and none within
+ * a few seconds of the last, however many uploads wait.
+ */
+const REFRESH_GAP_MS = 4_000;
+const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>();
+function refreshFamily(userId: string, groupId: string): Promise<void> {
+    const held = refreshes.get(groupId);
+    if (held?.pending) return held.pending;
+    if (held && Date.now() - held.at < REFRESH_GAP_MS) return Promise.resolve();
+    const pending = (async () => {
+        const result = await syncGroup(familyContext(userId), groupId);
+        familySynced(groupId, result);
+        if (result.status === 'accepted') walkPending(userId, groupId, result.areas, () => {});
+    })().finally(() => refreshes.set(groupId, { at: Date.now(), pending: null }));
+    refreshes.set(groupId, { at: held?.at ?? 0, pending });
+    return pending;
 }
 
 function unlockedUser() {

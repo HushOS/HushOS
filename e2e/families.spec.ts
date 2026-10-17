@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import {
     newContext,
     PASSWORD,
@@ -581,6 +581,27 @@ async function holdWalk(page: Page) {
     };
 }
 
+/*
+ * A device that has not heard of a key change yet: route 25 answers it as if
+ * no walk were running, so nothing on it says to wait, and only the server's
+ * refusal of an upload (409 rotating) does. This is the moment right after a
+ * manager presses Remove from family or Replace keys, before the member's
+ * next sync, held open for as long as the test needs.
+ */
+async function hideKeyChanges(page: Page) {
+    const pattern = '**/api/drive/spaces';
+    const handler = async (route: Route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as {
+            spaces: { areas: { rotation: unknown }[] }[];
+        };
+        for (const space of body.spaces) for (const area of space.areas) area.rotation = null;
+        await route.fulfill({ response, json: body });
+    };
+    await page.context().route(pattern, handler);
+    return { restore: () => page.context().unroute(pattern, handler) };
+}
+
 test.describe('removal, leaving and key changes', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
@@ -725,10 +746,14 @@ test.describe('removal, leaving and key changes', () => {
     test('removing someone: hold, finish, remove; their files read as a former member’s before the walk passes and after it; the rest open on a fresh device; their family is gone', async ({
         browser,
     }) => {
-        test.setTimeout(480_000);
+        test.setTimeout(600_000);
         // Sam adds a file after Replace keys, so the removal's walk is the first to re-key it.
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'sam-notes.txt', 'Notes by Sam\n');
+        // Ana has Trips open, and her device will not hear of the key change the removal starts.
+        await openFamilyFolder(ana, family, 'Family');
+        await openSubfolder(ana, 'Trips');
+        const unheard = await hideKeyChanges(ana.page);
         await openFamilyPage(maya, groupPath, family);
         const walk = await holdWalk(maya.page);
         const others = [await holdWalk(ana.page)];
@@ -758,6 +783,34 @@ test.describe('removal, leaving and key changes', () => {
         await expect(maya.page.locator('[data-key-change="walking"]')).toBeVisible({
             timeout: 60_000,
         });
+
+        // Ana uploads into Trips while the walk is held there. Her device saw no key change, so
+        // only the server says to wait (409 rotating): the upload waits and says so, not failed.
+        const refused = ana.page.waitForResponse(
+            (response) =>
+                response.request().method() === 'POST' &&
+                new URL(response.url()).pathname === '/api/drive/uploads' &&
+                response.status() === 409,
+            { timeout: 60_000 },
+        );
+        await ana.page
+            .locator('input[type=file]')
+            .first()
+            .setInputFiles([
+                {
+                    name: 'late.txt',
+                    mimeType: 'text/plain',
+                    buffer: Buffer.from('Late, but here\n'),
+                },
+            ]);
+        expect(((await (await refused).json()) as { code?: string }).code).toBe('rotating');
+        const late = ana.page
+            .locator('section[aria-label=Transfers]')
+            .getByRole('listitem')
+            .filter({ hasText: 'late.txt' })
+            .last();
+        await expect(late).toContainText('Finishing a key change…', { timeout: 60_000 });
+        await ana.page.screenshot({ path: test.info().outputPath('upload-refused-waits.png') });
 
         // While the walk is held, Sam's file is still his record: a former member's.
         await openFamilyFolder(maya, family, 'Family');
@@ -801,6 +854,20 @@ test.describe('removal, leaving and key changes', () => {
         await walk.release();
         await waitForRotation(maya.page, before);
         for (const other of others) await other.release();
+        // Ana's upload goes by itself, sealed again under Trips' new key: nobody pressed Retry,
+        // it never failed, and it opens byte for byte.
+        await expect(fileRow(ana.page, 'late.txt')).toBeVisible({ timeout: 150_000 });
+        await expect(late).toContainText('Uploaded');
+        const [landed] = await Promise.all([
+            ana.page.waitForEvent('download'),
+            (async () => {
+                await ana.page.getByRole('button', { name: 'More for late.txt' }).click();
+                await ana.page.getByRole('menuitem', { name: /^Download(?: \S+)?$/ }).click();
+            })(),
+        ]);
+        expect(readFileSync((await landed.path())!, 'utf8')).toBe('Late, but here\n');
+        await expect(mark(ana.page, 'late.txt')).toHaveCount(0);
+        await unheard.restore();
         await maya.page.reload();
         const after = mark(maya.page, 'sam-notes.txt');
         await expect(after).toHaveAttribute('data-integrity', 'former-member', {

@@ -30,6 +30,12 @@ type Entry<C> = {
     refuseWrite: (folder: WriteTarget) => string | null;
     /* Whether that refusal is only a key change that has not reached `folder` yet: adds wait. */
     waitsForKeyChange?: (folder: WriteTarget) => boolean;
+    /*
+     * The family synced again, for an upload waiting out a key change (or one
+     * the server refused for it, 409 rotating): the folder's client learns of
+     * the run and of its end, and this device's walk joins when it should.
+     */
+    refreshKeyChange?: () => Promise<void>;
 };
 
 export function createSpaceRegistry<C extends { close(): void; knows(nodeId: string): boolean }>(
@@ -73,6 +79,10 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         waitsForKeyChange: (folder: WriteTarget) => {
             if (gone.has(folder.workspaceId)) return false;
             return entries.get(folder.workspaceId)?.waitsForKeyChange?.(folder) ?? false;
+        },
+        /* Nothing to learn for one's own Drive, or a family folder forgotten here. */
+        refreshKeyChange: async (folder: WriteTarget) => {
+            await entries.get(folder.workspaceId)?.refreshKeyChange?.();
         },
         /* After a lock: every family client forgets what it opened. */
         closeAll: () => {

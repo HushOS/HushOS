@@ -67,6 +67,8 @@ export const clientOfNode = spaces.clientOfNode;
 export const refuseWrite = spaces.refuseWrite;
 /* Whether that refusal is only a family folder's key change still on its way to `folder`: adds wait. */
 export const waitsForKeyChange = spaces.waitsForKeyChange;
+/* A family folder's family synced again while an upload waits out its key change. */
+export const refreshKeyChange = spaces.refreshKeyChange;
 /* After a lock: every family folder's client forgets what it opened, as the personal one does. */
 export const closeSpaces = spaces.closeAll;
 /* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
