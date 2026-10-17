@@ -309,10 +309,21 @@
     transform-origin: left;
     pointer-events: none;
 }
+/*
+ * Only where scrolling is a mouse's or a trackpad's. A phone scrolls the page on its
+ * own thread while Safari moves this on the page's, so on a touch screen the line
+ * trails the finger; there it is left out rather than shown lagging.
+ */
+.read-progress {
+    display: none;
+}
 @supports (animation-timeline: scroll()) {
-    .read-progress {
-        animation: read-progress linear both;
-        animation-timeline: scroll(root);
+    @media (pointer: fine) {
+        .read-progress {
+            display: block;
+            animation: read-progress linear both;
+            animation-timeline: scroll(root);
+        }
     }
 }
 @keyframes read-progress {
