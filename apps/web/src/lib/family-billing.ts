@@ -1,4 +1,9 @@
-import type { FamilyPlan, GroupBillingSummary } from '@hushos/billing/api';
+import type {
+    FamilyBillingDetail,
+    FamilyPlan,
+    FamilyPlanGlance,
+    GroupBillingSummary,
+} from '@hushos/billing/api';
 import {
     DEFAULT_CURRENCY,
     FAMILY_MAX_MEMBERS,
@@ -18,7 +23,10 @@ import { familyKeys } from '@/lib/families-shell';
  */
 
 export type FamilyBilling = GroupBillingSummary;
-export type FamilySubscription = NonNullable<GroupBillingSummary['subscription']>;
+/* The priced summary a payer or `billing` holder gets; members get a FamilyPlanGlance. */
+export type FamilyBillingFull = FamilyBillingDetail;
+export type FamilyGlance = FamilyPlanGlance;
+export type FamilySubscription = NonNullable<FamilyBillingDetail['subscription']>;
 
 /* The family's plan, read once per page. Members' own refetches keep it current. */
 export const familyBillingQueryOptions = (userId: string, groupId: string) =>
@@ -46,7 +54,7 @@ export type PlanState =
           overdue: boolean;
       };
 
-export function planState(summary: FamilyBilling): PlanState {
+export function planState(summary: FamilyBillingFull): PlanState {
     if (!summary.enabled) return { kind: 'off' };
     const live = summary.subscription;
     if (live)
@@ -68,7 +76,8 @@ export function planState(summary: FamilyBilling): PlanState {
  */
 export function needsPlan(summary: FamilyBilling | undefined) {
     if (!summary) return true;
-    return summary.enabled && summary.subscription === null;
+    if (!summary.enabled) return false;
+    return summary.view === 'member' ? !summary.hasPlan : summary.subscription === null;
 }
 
 /*
@@ -82,43 +91,42 @@ export function placesOf(
     familySeats: { used: number; limit: number } | undefined,
     summary: FamilyBilling | undefined,
 ) {
-    if (summary?.enabled) return summary.seats;
+    // A member's glance carries no places: the family's row, which billing writes from the same plan.
+    if (summary?.enabled && summary.view === 'manage') return summary.seats;
     return familySeats ?? null;
 }
 
-/* Said everywhere a family price or charge is shown: Polar adds tax on top. */
+/*
+ * Said everywhere a family price or charge is shown: Polar adds tax on top.
+ * Amounts after checkout are list prices: the summary carries no discount, so
+ * a discounted family is told the figure is before it, never a wrong total.
+ */
 export const TAX_LINE = 'Plus tax where it applies; Polar adds it at checkout.';
-export const TAX_ON_CHARGES = 'Plus tax where it applies; Polar adds it to each charge.';
+export const TAX_ON_CHARGES =
+    'Before any discount. Plus tax where it applies; Polar adds it to each charge.';
 
 /*
  * How much of the plan this person sees: the payer, a `billing` holder, or
- * anyone else, who sees the plan's name and the storage only. A manager
- * without `billing` reads the whole summary from the server but is shown what
- * a member is: what the family costs is the organizer's business.
+ * anyone else, who gets the server's glance (the plan's name and the storage).
  */
 export type BillingAccess = 'payer' | 'billing' | 'glance';
 
-export function billingAccess(
-    summary: FamilyBilling,
-    roles: readonly string[] | undefined,
-): BillingAccess {
+export function billingAccess(summary: FamilyBilling): BillingAccess {
     if (summary.view !== 'manage') return 'glance';
-    if (summary.payer?.you) return 'payer';
-    if (roles?.includes('billing')) return 'billing';
-    return 'glance';
+    return summary.payer?.you ? 'payer' : 'billing';
 }
 
 /* The plan the family is on, from the catalogue; absent when it was archived or edited away. */
-export function currentPlan(summary: FamilyBilling): FamilyPlan | undefined {
+export function currentPlan(summary: FamilyBillingFull): FamilyPlan | undefined {
     const live = summary.subscription;
     return live ? summary.plans.find((plan) => plan.id === live.productId) : undefined;
 }
 
-const maxMembersOf = (summary: FamilyBilling) =>
+const maxMembersOf = (summary: FamilyBillingFull) =>
     currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS;
 
 /* Fewer places than this the family can't have: its members, and what the plan includes. */
-export function placesFloor(summary: FamilyBilling) {
+export function placesFloor(summary: FamilyBillingFull) {
     const live = summary.subscription;
     return Math.max(live?.includedMembers ?? 0, summary.seats.used);
 }
@@ -127,7 +135,7 @@ export function placesFloor(summary: FamilyBilling) {
  * How many places one "Add places" may add: at least one, at most the
  * server's step, never past the family maximum. Null when none can be added.
  */
-export function addRange(summary: FamilyBilling) {
+export function addRange(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live) return null;
     const max = Math.min(MAX_MEMBERS_PER_RAISE, maxMembersOf(summary) - live.units);
@@ -138,7 +146,7 @@ export function addRange(summary: FamilyBilling) {
  * The places the family may have from the renewal: down to its floor, below
  * what it has now. Null when there is nothing to remove.
  */
-export function removeRange(summary: FamilyBilling) {
+export function removeRange(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live) return null;
     const min = placesFloor(summary);
@@ -147,7 +155,7 @@ export function removeRange(summary: FamilyBilling) {
 }
 
 /* The plan's prices in the currency the family pays in. */
-export function livePrice(summary: FamilyBilling) {
+export function livePrice(summary: FamilyBillingFull) {
     const live = summary.subscription;
     const plan = currentPlan(summary);
     if (!live?.currency || !plan) return null;
@@ -161,7 +169,7 @@ export function livePrice(summary: FamilyBilling) {
  * over the whole raise as Polar charges it (two places at 199.98 each is 399,
  * not 2 × 199). Null when it can't be quoted (no price in that currency).
  */
-export function quoteAdd(summary: FamilyBilling, add: number, now = new Date()) {
+export function quoteAdd(summary: FamilyBillingFull, add: number, now = new Date()) {
     const live = summary.subscription;
     const price = livePrice(summary);
     if (!live || !price) return null;
@@ -180,24 +188,21 @@ export function quoteAdd(summary: FamilyBilling, add: number, now = new Date()) 
 }
 
 /*
- * What a renewal with `units` places charges: the subscription's own amount
- * (which carries any discount) moved by the per-member rate for each billable
- * place more or fewer. Null when it can't be told.
+ * What a renewal with `units` places charges at list price: the base and the
+ * per-member rate for each place past those included. The same price list
+ * the raise is quoted from, so the two never disagree; a discount Polar
+ * applies comes off both, which the page says ("Before any discount").
  */
-export function renewalAmount(summary: FamilyBilling, units: number) {
+export function renewalAmount(summary: FamilyBillingFull, units: number) {
     const live = summary.subscription;
     const price = livePrice(summary);
     if (!live || !price) return null;
-    const billable = (count: number) => Math.max(0, count - live.includedMembers);
-    const base = live.amount ?? price.base + price.perMember * billable(live.units);
-    return {
-        amount: Math.max(0, base + price.perMember * (billable(units) - billable(live.units))),
-        currency: price.currency,
-    };
+    const billable = Math.max(0, units - live.includedMembers);
+    return { amount: price.base + price.perMember * billable, currency: price.currency };
 }
 
 /* The next charge: on the period's end, for the places the family keeps. None once it is ending. */
-export function nextCharge(summary: FamilyBilling) {
+export function nextCharge(summary: FamilyBillingFull) {
     const live = summary.subscription;
     if (!live || live.cancelAtPeriodEnd) return null;
     const amount = renewalAmount(summary, live.pendingUnits ?? live.units);
@@ -229,25 +234,24 @@ const nothing: FamilyActions = {
 /*
  * Which controls this person gets. Only the payer changes a live plan (the
  * server answers anyone else 403); a plan set to end refuses changes to its
- * places until it is resumed, in the portal. A checkout makes whoever starts
- * it the payer, so once someone is, only they can buy again.
+ * places until it is resumed, in the portal. With no live plan, any `billing`
+ * holder may check out and becomes the payer (the server moves the family's
+ * customer to them); the portal stays the payer's.
  */
 export function familyActions(
     summary: FamilyBilling,
     roles: readonly string[] | undefined,
 ): FamilyActions {
+    if (summary.view !== 'manage') return nothing;
     const state = planState(summary);
     if (state.kind === 'off') return nothing;
-    const access = billingAccess(summary, roles);
-    const payer = access === 'payer';
-    if (state.kind !== 'live') {
-        const mayBuy =
-            Boolean(roles?.includes('billing')) &&
-            summary.view === 'manage' &&
-            (summary.payer === null || summary.payer.you) &&
-            summary.plans.length > 0;
-        return { ...nothing, choosePlan: mayBuy, portal: payer };
-    }
+    const payer = billingAccess(summary) === 'payer';
+    if (state.kind !== 'live')
+        return {
+            ...nothing,
+            choosePlan: Boolean(roles?.includes('billing')) && summary.plans.length > 0,
+            portal: payer,
+        };
     if (!payer) return nothing;
     const changeable = !state.ending;
     const live = state.subscription;
@@ -262,6 +266,35 @@ export function familyActions(
         portal: true,
         cancel: changeable,
     };
+}
+
+/*
+ * What "Let them in" means for a full family, said before the payer presses
+ * it (the server's ensureGroupSeat): a place the bank hasn't confirmed waits
+ * for it; a place a scheduled cut is removing is simply kept, at no charge
+ * now; otherwise one more place is bought at once. Null when a place is free,
+ * or this person doesn't pay.
+ */
+export type SeatNote =
+    | { kind: 'bank' }
+    | { kind: 'keep'; from: string }
+    | { kind: 'charge'; now: { amount: number; currency: string }; perMember: number };
+
+export function seatNoteFor(summary: FamilyBilling | undefined): SeatNote | null {
+    if (!summary?.enabled || summary.view !== 'manage' || !summary.payer?.you) return null;
+    const live = summary.subscription;
+    if (!live || live.cancelAtPeriodEnd) return null;
+    const target = summary.seats.used + 1;
+    if (target <= summary.seats.limit) return null;
+    if (target <= live.units) {
+        if (live.paidUnits < target) return { kind: 'bank' };
+        if (live.pendingUnits !== null && live.pendingUnits < target)
+            return { kind: 'keep', from: live.currentPeriodEnd };
+        return null;
+    }
+    const price = livePrice(summary);
+    if (!price || !summary.nextPlace) return null;
+    return { kind: 'charge', now: summary.nextPlace, perMember: price.perMember };
 }
 
 /* The currencies every family plan is priced in, the default first, as personal plans do. */

@@ -9,7 +9,9 @@ import {
     placesOf,
     quoteAdd,
     removeRange,
-    type FamilyBilling,
+    seatNoteFor,
+    type FamilyBillingFull,
+    type FamilyGlance,
 } from './family-billing';
 
 const FAMILY = 'fam-monthly';
@@ -30,52 +32,70 @@ const plan: FamilyPlan = {
     quotaBytes: String(2 * 1024 ** 4),
 };
 
+/*
+ * The priced summary as the server builds it: its seat limit is the server's
+ * seatLimitOf (bought, paid for, and any scheduled cut, whichever is lowest).
+ */
 function summary(
     overrides: {
         units?: number;
+        paidUnits?: number;
         used?: number;
         pendingUnits?: number | null;
         ending?: boolean;
         you?: boolean;
         payer?: null;
         live?: boolean;
-        lastPlan?: FamilyBilling['lastPlan'];
-        view?: FamilyBilling['view'];
+        lastPlan?: FamilyBillingFull['lastPlan'];
         amount?: number;
     } = {},
-): FamilyBilling {
+): FamilyBillingFull {
     const units = overrides.units ?? 6;
+    const paidUnits = overrides.paidUnits ?? units;
+    const pendingUnits = overrides.pendingUnits ?? null;
+    const live = overrides.live !== false;
     return {
         enabled: true,
-        view: overrides.view ?? 'manage',
+        view: 'manage',
         plans: [plan],
         payer: overrides.payer === null ? null : { userId: 'payer', you: overrides.you ?? true },
-        subscription:
-            overrides.live === false
-                ? null
-                : {
-                      id: 'sub',
-                      productId: FAMILY,
-                      productName: 'Family (monthly)',
-                      status: 'active',
-                      recurringInterval: 'month',
-                      amount: overrides.amount ?? 1500 + 200 * Math.max(0, units - 6),
-                      currency: 'usd',
-                      units,
-                      paidUnits: units,
-                      pendingUnits: overrides.pendingUnits ?? null,
-                      includedMembers: 6,
-                      quotaBytes: plan.quotaBytes,
-                      currentPeriodStart: start.toISOString(),
-                      currentPeriodEnd: end.toISOString(),
-                      cancelAtPeriodEnd: overrides.ending ?? false,
-                  },
+        subscription: live
+            ? {
+                  id: 'sub',
+                  productId: FAMILY,
+                  productName: 'Family (monthly)',
+                  status: 'active',
+                  recurringInterval: 'month',
+                  amount: overrides.amount ?? 1500 + 200 * Math.max(0, units - 6),
+                  currency: 'usd',
+                  units,
+                  paidUnits,
+                  pendingUnits,
+                  includedMembers: 6,
+                  quotaBytes: plan.quotaBytes,
+                  currentPeriodStart: start.toISOString(),
+                  currentPeriodEnd: end.toISOString(),
+                  cancelAtPeriodEnd: overrides.ending ?? false,
+              }
+            : null,
         lastPlan: overrides.lastPlan ?? null,
         storage: { usedBytes: '0', quotaBytes: plan.quotaBytes },
-        seats: { used: overrides.used ?? 1, limit: units },
-        nextPlace: null,
+        seats: {
+            used: overrides.used ?? 1,
+            limit: live ? Math.max(1, Math.min(units, paidUnits, pendingUnits ?? units)) : 1,
+        },
+        nextPlace: live ? { amount: 126, currency: 'usd' } : null,
     };
 }
+
+/* What a member without `billing` gets: no prices, places, payer or state. */
+const glance = (hasPlan: boolean): FamilyGlance => ({
+    enabled: true,
+    view: 'member',
+    hasPlan,
+    planName: hasPlan ? 'Family (monthly)' : null,
+    storage: { usedBytes: '0', quotaBytes: hasPlan ? plan.quotaBytes : '0' },
+});
 
 describe('quoteAdd', () => {
     test('truncates once over the whole raise, as Polar charges it, not per place', () => {
@@ -122,15 +142,17 @@ describe('places', () => {
         expect(removeRange(summary({ units: 8, used: 8 }))).toBeNull();
     });
 
-    test('the next charge follows a scheduled cut, and an ending plan has none', () => {
+    test('the next charge is the list price for the places kept, whatever the subscription’s amount', () => {
         expect(nextCharge(summary({ units: 9 }))).toEqual({
             amount: 2100,
             currency: 'usd',
             on: end.toISOString(),
         });
         expect(nextCharge(summary({ units: 9, pendingUnits: 7 }))?.amount).toBe(1700);
-        // A discount on the subscription carries through the cut.
-        expect(nextCharge(summary({ units: 9, pendingUnits: 6, amount: 1050 }))?.amount).toBe(450);
+        // A discounted subscription (1050 for nine places): the figure is the list price, said
+        // to be before any discount; mixing the discounted amount with full-price places gave 450.
+        expect(nextCharge(summary({ units: 9, pendingUnits: 6, amount: 1050 }))?.amount).toBe(1500);
+        expect(nextCharge(summary({ units: 9, amount: 1050 }))?.amount).toBe(2100);
         expect(nextCharge(summary({ units: 9, ending: true }))).toBeNull();
     });
 });
@@ -150,26 +172,14 @@ describe('who gets which controls', () => {
     });
 
     test('a billing holder who isn’t the payer changes nothing on a live plan', () => {
-        expect(familyActions(summary({ you: false }), organizer)).toEqual({
-            choosePlan: false,
-            addPlaces: false,
-            removePlaces: false,
-            keepPlaces: false,
-            portal: false,
-            cancel: false,
-        });
-    });
-
-    test('a manager without billing, and a member, get no controls at all', () => {
-        expect(Object.values(familyActions(summary({ you: false }), ['members']))).not.toContain(
+        expect(Object.values(familyActions(summary({ you: false }), organizer))).not.toContain(
             true,
         );
-        expect(
-            Object.values(familyActions(summary({ live: false, payer: null }), ['members'])),
-        ).not.toContain(true);
-        expect(
-            Object.values(familyActions(summary({ live: false, payer: null, view: 'member' }), [])),
-        ).not.toContain(true);
+    });
+
+    test('a member’s glance, a manager without billing included, gets no controls at all', () => {
+        expect(Object.values(familyActions(glance(true), ['members']))).not.toContain(true);
+        expect(Object.values(familyActions(glance(false), ['members']))).not.toContain(true);
     });
 
     test('a plan set to end can only be resumed in the portal: no place changes, no second cancel', () => {
@@ -192,19 +202,21 @@ describe('who gets which controls', () => {
         ).toBe(true);
     });
 
-    test('a family with no plan: its billing holder chooses one, unless someone else already pays', () => {
+    test('with no live plan any billing holder can choose one, even when someone else paid before', () => {
+        const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
         expect(familyActions(summary({ live: false, payer: null }), organizer).choosePlan).toBe(
             true,
         );
-        // A lapsed plan's payer renews it; another billing holder would be refused (409).
-        const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
-        expect(
-            familyActions(summary({ live: false, lastPlan: lapsed }), organizer).choosePlan,
-        ).toBe(true);
-        expect(
-            familyActions(summary({ live: false, lastPlan: lapsed, you: false }), organizer)
-                .choosePlan,
-        ).toBe(false);
+        // The former payer's family: the server moves billing to whoever checks out now.
+        const theirs = familyActions(
+            summary({ live: false, lastPlan: lapsed, you: false }),
+            organizer,
+        );
+        expect(theirs).toMatchObject({ choosePlan: true, portal: false });
+        // Without `billing` (a priced view can't happen then, but roles decide it).
+        expect(familyActions(summary({ live: false, payer: null }), ['members']).choosePlan).toBe(
+            false,
+        );
     });
 
     test('nothing is offered on a server that sells no plans', () => {
@@ -213,11 +225,44 @@ describe('who gets which controls', () => {
     });
 });
 
+describe('seatNoteFor', () => {
+    test('a full family’s payer is told a place is bought now, at the server’s quote', () => {
+        expect(seatNoteFor(summary({ units: 8, used: 8 }))).toEqual({
+            kind: 'charge',
+            now: { amount: 126, currency: 'usd' },
+            perMember: 200,
+        });
+        // A free place: nothing to say.
+        expect(seatNoteFor(summary({ units: 8, used: 7 }))).toBeNull();
+    });
+
+    test('a place a scheduled cut is removing is kept, for nothing now', () => {
+        // Eight bought, cut to six at renewal, six taken: the seventh is one of the eight.
+        expect(seatNoteFor(summary({ units: 8, used: 6, pendingUnits: 6 }))).toEqual({
+            kind: 'keep',
+            from: end.toISOString(),
+        });
+    });
+
+    test('a place the bank hasn’t confirmed waits for it, and is never quoted as a new charge', () => {
+        expect(seatNoteFor(summary({ units: 8, paidUnits: 6, used: 6 }))).toEqual({ kind: 'bank' });
+    });
+
+    test('nobody but the payer is told, and nothing while the plan is ending', () => {
+        expect(seatNoteFor(summary({ units: 8, used: 8, you: false }))).toBeNull();
+        expect(seatNoteFor(summary({ units: 8, used: 8, ending: true }))).toBeNull();
+        expect(seatNoteFor(glance(true))).toBeNull();
+    });
+});
+
 describe('needsPlan', () => {
     test('invites and folders wait for a live plan, but only where plans are sold', () => {
         expect(needsPlan(summary())).toBe(false);
         expect(needsPlan(summary({ live: false, payer: null }))).toBe(true);
         expect(needsPlan({ ...summary({ live: false, payer: null }), enabled: false })).toBe(false);
+        // A member's glance says the same through hasPlan.
+        expect(needsPlan(glance(true))).toBe(false);
+        expect(needsPlan(glance(false))).toBe(true);
         // Not yet known: hidden rather than shown and taken away.
         expect(needsPlan(undefined)).toBe(true);
     });
@@ -239,18 +284,20 @@ describe('familyCurrencies', () => {
 describe('placesOf', () => {
     test('where plans are sold, every surface shows the paid limit from billing, not the family row', () => {
         // The family row says six (the instance default); the plan pays for eight.
-        const paid = { ...summary({ units: 8, used: 3 }), seats: { used: 3, limit: 8 } };
-        expect(placesOf({ used: 3, limit: 6 }, paid)).toEqual({ used: 3, limit: 8 });
-        // A scheduled cut already limits who can join: the lower count, as the server works it out.
-        const cut = {
-            ...summary({ units: 8, used: 3, pendingUnits: 6 }),
-            seats: { used: 3, limit: 6 },
-        };
-        expect(placesOf({ used: 3, limit: 8 }, cut)).toEqual({ used: 3, limit: 6 });
+        expect(placesOf({ used: 3, limit: 6 }, summary({ units: 8, used: 3 }))).toEqual({
+            used: 3,
+            limit: 8,
+        });
+        // A cut to six at renewal, which the family row hasn't caught up with: the server's
+        // limit already counts the cut, so the header says six while eight are bought.
+        expect(
+            placesOf({ used: 3, limit: 8 }, summary({ units: 8, used: 3, pendingUnits: 6 })),
+        ).toEqual({ used: 3, limit: 6 });
     });
 
-    test('where no plans are sold, the family’s own count stands', () => {
-        const off = { ...summary(), enabled: false, seats: { used: 2, limit: 2 } };
+    test('a member’s glance carries no places, so the family’s row stands; so does a server without plans', () => {
+        expect(placesOf({ used: 3, limit: 8 }, glance(true))).toEqual({ used: 3, limit: 8 });
+        const off = { ...summary(), enabled: false };
         expect(placesOf({ used: 2, limit: 6 }, off)).toEqual({ used: 2, limit: 6 });
         expect(placesOf({ used: 2, limit: 6 }, undefined)).toEqual({ used: 2, limit: 6 });
         expect(placesOf(undefined, undefined)).toBeNull();

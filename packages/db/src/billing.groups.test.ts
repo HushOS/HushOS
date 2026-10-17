@@ -11,7 +11,7 @@ const billing = await import('./billing');
 const { db } = await import('./client');
 const { getStorage } = await import('./drive');
 const { deletionBlockers } = await import('./groups');
-const { groups, workspaceStorage } = await import('./schema');
+const { groupBillingCustomers, groups, workspaceStorage } = await import('./schema');
 
 /*
  * A family's plan as billing writes it, and the pool Drive reads from it: the
@@ -271,5 +271,32 @@ describe('dissolving', () => {
         // Cancelled, the family keeps its places and pool until the period ends.
         expect(await seatLimit(groupId)).toBe(6);
         expect(await billing.listGroupsPaidBy(userId)).toEqual([]);
+    });
+});
+
+describe('the payer', () => {
+    test('moves only from the payer the caller read, so two takeovers at once leave one payer', async () => {
+        const organizer = await createTestAccount();
+        const first = await createTestAccount();
+        const second = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId });
+        await billing.recordGroupCustomer({
+            groupId,
+            provider: 'polar',
+            providerCustomerId: 'cus_payer',
+            payerUserId: organizer.userId,
+        });
+        // Both read the organizer as payer; the first change wins, the second finds it moved.
+        expect(await billing.setGroupPayer(groupId, organizer.userId, first.userId)).toBe(true);
+        expect(await billing.setGroupPayer(groupId, organizer.userId, second.userId)).toBe(false);
+        expect((await billing.getGroupCustomer(groupId))?.payerUserId).toBe(first.userId);
+        // A payer whose account went (set null) is taken over from null, and only from null.
+        await db
+            .update(groupBillingCustomers)
+            .set({ payerUserId: null })
+            .where(eq(groupBillingCustomers.groupId, groupId));
+        expect(await billing.setGroupPayer(groupId, first.userId, second.userId)).toBe(false);
+        expect(await billing.setGroupPayer(groupId, null, second.userId)).toBe(true);
+        expect((await billing.getGroupCustomer(groupId))?.payerUserId).toBe(second.userId);
     });
 });

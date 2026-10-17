@@ -96,7 +96,10 @@ export function refusalCopy(
                 : `${family} is full.`;
         }
         case 'no-plan':
-            return `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
+            // The invitee of a family whose plan lapsed, or a manager inviting or making a folder.
+            return data && typeof data === 'object' && (data as { invitee?: unknown }).invitee
+                ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
+                : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
         case 'organizer':
             return 'Make someone else the organizer first.';
         // The payer of a live plan can't leave or be removed until it is cancelled, under Billing

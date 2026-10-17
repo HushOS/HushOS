@@ -1237,7 +1237,14 @@ test.describe('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveCount(0);
 
         // A member who doesn't hold billing: the plan's name and the storage, no money, no controls.
-        await show({ ...live(), view: 'member', plans: [], nextPlace: null });
+        // The real member payload: the plan's name, the pool and whether a plan is live; nothing else.
+        await show({
+            enabled: true,
+            view: 'member',
+            hasPlan: true,
+            planName: 'Family (monthly)',
+            storage: { usedBytes: String(300 * 1024 ** 3), quotaBytes: String(2 * 1024 ** 4) },
+        });
         const glance = maya.page.locator('[data-family-plan="glance"]');
         await expect(glance).toContainText('Family · 2 TB', { timeout: 60_000 });
         await expect(glance).toContainText('300 GB of 2 TB used');

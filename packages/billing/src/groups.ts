@@ -422,7 +422,7 @@ export async function reissueCut(groupId: string) {
 async function ensureTeamCustomer(groupId: string, user: BillingUser) {
     const existing = await billingRepository.getGroupCustomer(groupId);
     if (existing) {
-        if (existing.payerUserId !== user.id) throw anotherPayer();
+        if (existing.payerUserId !== user.id) await takeOverPayer(groupId, existing, user);
         return existing.providerCustomerId;
     }
     let customer: models.Customer;
@@ -462,9 +462,74 @@ async function ensureTeamCustomer(groupId: string, user: BillingUser) {
 
 function anotherPayer() {
     return new BillingError(
-        'Another member pays for this family. Handing billing over is not available yet.',
+        'Another member pays for this family’s plan, so only they can change it while it runs.',
         409,
     );
+}
+
+/*
+ * A family with no live plan, whose payer is someone else (their plan ended,
+ * they left, or a checkout was never finished): a `billing` holder starting a
+ * checkout becomes the payer. At Polar they join the team customer and take
+ * its owner role, which demotes the former owner (spike 3, "When billing
+ * passes"); then the former payer is taken off it, so they no longer see the
+ * family's invoices. Never while a plan is live, here or at Polar: that card
+ * is still being charged, and handing it over waits for a proper handover.
+ * The row changes only from the payer read, so two takeovers at once leave
+ * one payer.
+ */
+async function takeOverPayer(
+    groupId: string,
+    existing: { payerUserId: string | null },
+    user: BillingUser,
+) {
+    if (await billingRepository.getLiveGroupSubscription(groupId)) throw anotherPayer();
+    const key = customerKey(groupId);
+    let state: models.CustomerState | null = null;
+    try {
+        state = await polar().customers.getStateExternal(key);
+    } catch (error) {
+        if (statusOf(error) !== 404) throw unavailable(error);
+    }
+    if (state?.active_subscriptions.length) {
+        await reconcileGroup(groupId);
+        throw anotherPayer();
+    }
+    try {
+        try {
+            await polar().customers.members.createExternal(key, {
+                email: user.email,
+                name: user.name,
+                external_id: user.id,
+                role: 'billing_manager',
+            });
+        } catch (error) {
+            // Already a member of it (an earlier takeover that stopped halfway): promoted below.
+            if (statusOf(error) !== 409 && statusOf(error) !== 422) throw error;
+        }
+        await polar().customers.members.updateExternal(key, user.id, { role: 'owner' });
+        await polar().customers.updateExternal(key, {
+            metadata: {
+                hushos_owner_kind: 'group',
+                hushos_group_id: groupId,
+                hushos_payer: user.id,
+            },
+        });
+    } catch (error) {
+        throw unavailable(error);
+    }
+    if (!(await billingRepository.setGroupPayer(groupId, existing.payerUserId, user.id)))
+        throw anotherPayer();
+    log.info({ message: 'Family payer changed', billing: { group: groupId } });
+    if (!existing.payerUserId) return;
+    try {
+        await polar().customers.members.deleteExternal(key, existing.payerUserId);
+    } catch (error) {
+        log.warn({
+            message: 'Former family payer left on the team customer',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+    }
 }
 
 /*
@@ -804,14 +869,14 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
 /* ------------------------------------------------------------------------- */
 
 /*
- * Who may see a family's plan, and how much: its managers, and its payer, who
- * keeps seeing it after leaving so they can stop paying, see all of it; any
- * other active member sees the plan's name, its state and the pool. Anyone
- * else is told the family does not exist.
+ * Who may see a family's plan, and how much: its `billing` holders, and its
+ * payer, who keeps seeing it after leaving so they can stop paying, see all
+ * of it; any other active member, a manager without `billing` included, sees
+ * the glance. Anyone else is told the family does not exist.
  */
 async function planView(groupId: string, userId: string): Promise<'manage' | 'member'> {
     try {
-        await familyOf(groupId, userId, 'manager');
+        await familyOf(groupId, userId, 'billing');
         return 'manage';
     } catch (error) {
         const customer = await billingRepository.getGroupCustomer(groupId);
@@ -854,38 +919,61 @@ export async function getGroupBilling(
     if (!groupsEnv.GROUPS_ENABLED)
         throw new BillingError('This server does not offer families yet.', 404);
     const view = await planView(groupId, user.id);
-    const used = await groupsRepository.seatsUsed(groupId);
     if (!billingEnabled())
+        return view === 'manage'
+            ? {
+                  enabled: false,
+                  view,
+                  plans: [],
+                  payer: null,
+                  subscription: null,
+                  lastPlan: null,
+                  storage: null,
+                  seats: await (async () => {
+                      const used = await groupsRepository.seatsUsed(groupId);
+                      return { used, limit: used };
+                  })(),
+                  nextPlace: null,
+              }
+            : { enabled: false, view, hasPlan: false, planName: null, storage: null };
+    const [live, pool, usedBytes] = await Promise.all([
+        billingRepository.getLiveGroupSubscription(groupId),
+        billingRepository.getGroupPool(groupId),
+        billingRepository.getGroupPoolUsage(groupId),
+    ]);
+    // The pool as Drive's free-space check reads it: past its period and grace, empty.
+    const storage = pool
+        ? {
+              usedBytes: usedBytes.toString(),
+              quotaBytes:
+                  pool.expiresAt === null || pool.expiresAt.getTime() > Date.now()
+                      ? pool.quotaBytes.toString()
+                      : '0',
+          }
+        : null;
+    // A member who does not hold `billing` sees what the family has, never what it costs.
+    if (view === 'member')
         return {
-            enabled: false,
+            enabled: true,
             view,
-            plans: [],
-            payer: null,
-            subscription: null,
-            lastPlan: null,
-            storage: null,
-            seats: { used, limit: used },
-            nextPlace: null,
+            hasPlan: live !== null,
+            planName: live?.productName ?? null,
+            storage,
         };
-    const [families, customer, live, usedBytes] = await Promise.all([
+    const [families, customer, used] = await Promise.all([
         getFamilyCatalogue(),
         billingRepository.getGroupCustomer(groupId),
-        billingRepository.getLiveGroupSubscription(groupId),
-        billingRepository.getGroupPoolUsage(groupId),
+        groupsRepository.seatsUsed(groupId),
     ]);
     const lastPlan = live ? null : await billingRepository.getLastEndedGroupSubscription(groupId);
     const plan = live ? families.find((candidate) => candidate.id === live.productId) : undefined;
     const price = plan && live?.currency ? plan.prices[live.currency] : undefined;
-    // A member who does not manage the family sees what it has, never what it costs.
-    const manage = view === 'manage';
     return {
         enabled: true,
         view,
-        plans: manage
-            ? families
-                  .filter((candidate) => !candidate.archived)
-                  .map(({ archived: _archived, ...rest }) => rest)
-            : [],
+        plans: families
+            .filter((candidate) => !candidate.archived)
+            .map(({ archived: _archived, ...rest }) => rest),
         payer: customer?.payerUserId
             ? { userId: customer.payerUserId, you: customer.payerUserId === user.id }
             : null,
@@ -896,8 +984,8 @@ export async function getGroupBilling(
                   productName: live.productName,
                   status: live.status,
                   recurringInterval: live.recurringInterval,
-                  amount: manage ? live.amount : null,
-                  currency: manage ? live.currency : null,
+                  amount: live.amount,
+                  currency: live.currency,
                   units: live.units,
                   paidUnits: live.paidUnits,
                   pendingUnits: live.pendingUnits,
@@ -911,13 +999,10 @@ export async function getGroupBilling(
         lastPlan: lastPlan
             ? { productName: lastPlan.productName, endedAt: lastPlan.endedAt.toISOString() }
             : null,
-        storage: {
-            usedBytes: usedBytes.toString(),
-            quotaBytes: live ? live.quotaBytes.toString() : '0',
-        },
+        storage,
         seats: { used, limit: live ? billingRepository.seatLimitOf(live) : UNPAID_GROUP_SEATS },
         nextPlace:
-            manage && live && price && live.currency
+            live && price && live.currency
                 ? {
                       amount: quoteUnitsChange({
                           perMember: price.perMember,

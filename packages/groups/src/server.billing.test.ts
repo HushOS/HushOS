@@ -1,6 +1,6 @@
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { Member } from '../test/kit';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PolarClientError } from '@polar-sh/sdk';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -188,6 +188,14 @@ async function onPlan(
     return subscription;
 }
 
+/* The plan ran out at Polar, and HushOS has heard. */
+async function endPlan(fam: Awaited<ReturnType<typeof kit.family>>, subscription: Subscription) {
+    subscription.status = 'canceled';
+    subscription.ended_at = new Date().toISOString();
+    polar.teams.get(`group:${fam.groupId}`)!.subscriptions = [];
+    await billing.reconcileGroup(fam.groupId);
+}
+
 /* `m` accepted, and the admitting call built once, so a refused call is resent as the same bytes. */
 async function admission(fam: Awaited<ReturnType<typeof kit.family>>, m: Member) {
     await kit.accepted(fam, m);
@@ -226,8 +234,12 @@ describe('admission with billing on', () => {
 
     test('without a plan nobody is let in, and Polar is not asked', async () => {
         const fam = await kit.family();
+        // Accepted while a plan ran, which then ended.
+        const subscription = await onPlan(fam, 1);
         const newcomer = await kit.member();
         const call = await admission(fam, newcomer);
+        await endPlan(fam, subscription);
+        polar.updates = [];
         expect(
             await refusal(groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call)),
         ).toMatchObject({ code: 'seats', status: 402, data: { reason: 'no-plan' } });
@@ -445,7 +457,9 @@ describe('places', () => {
         const payer = { id: fam.organizer.userId, name: 'Maya', email: fam.organizer.email };
         const limits = async () => ({
             family: (await groups.getGroup(fam.organizer.userId, fam.groupId)).seats.limit,
-            billing: (await billing.getGroupBilling(payer, fam.groupId)).seats.limit,
+            billing: await billing
+                .getGroupBilling(payer, fam.groupId)
+                .then((summary) => (summary.view === 'manage' ? summary.seats.limit : null)),
         });
         expect(await limits()).toEqual({ family: 3, billing: 3 });
         // A cut to two at renewal blocks the third place now, on both.
@@ -466,6 +480,13 @@ describe('a family without a plan', () => {
                 }),
             ),
         ).toMatchObject({ code: 'no-plan', status: 402 });
+        // Its refusal names the family, as the person reads it.
+        await expect(
+            groups.invite(fam.organizer.userId, fam.groupId, {
+                email: 'sam@hushos.test',
+                roles: [],
+            }),
+        ).rejects.toThrow('Choose a plan for The Family first.');
         expect(await groupsRepository.listOpenInvitations(fam.groupId)).toEqual([]);
         expect(
             await refusal(
@@ -489,10 +510,7 @@ describe('a family without a plan', () => {
         ).toMatchObject({ version: 2 });
 
         // The plan ran out: the family keeps what it has, and adds no one and nothing.
-        subscription.status = 'canceled';
-        subscription.ended_at = new Date().toISOString();
-        polar.teams.get(`group:${fam.groupId}`)!.subscriptions = [];
-        await billing.reconcileGroup(fam.groupId);
+        await endPlan(fam, subscription);
         expect(
             await refusal(
                 groups.invite(fam.organizer.userId, fam.groupId, {
@@ -508,6 +526,36 @@ describe('a family without a plan', () => {
             ),
         ).toMatchObject({ code: 'no-plan', status: 402 });
         expect(await kit.head(fam.groupId)).toEqual(head);
+    });
+
+    test('an invitation sent while the plan ran can’t be accepted once it ends, and works again once renewed', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const sam = await kit.member();
+        // Sent while the plan ran (the token is in the mail; the kit makes one it can read).
+        const token = randomBytes(32).toString('base64url');
+        await groupsRepository.createInvitation({
+            groupId: fam.groupId,
+            email: sam.email,
+            normalizedEmail: sam.email,
+            tokenHash: createHash('sha256').update(token).digest(),
+            roles: [],
+            invitedBy: fam.organizer.userId,
+            expiresAt: new Date(Date.now() + DAY),
+        });
+        await endPlan(fam, subscription);
+        expect(
+            await refusal(groups.acceptInvitation(sam.userId, token, '203.0.113.9')),
+        ).toMatchObject({
+            code: 'no-plan',
+            status: 402,
+            data: { invitee: true },
+        });
+        expect(await state(fam.groupId, sam.userId)).toBeUndefined();
+        await onPlan(fam, 2);
+        expect(await groups.acceptInvitation(sam.userId, token, '203.0.113.9')).toMatchObject({
+            state: 'accepted',
+        });
     });
 
     test('someone outside the family hears that they are not in it, never whether it has a plan', async () => {

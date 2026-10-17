@@ -36,13 +36,29 @@ export type FamilyPlan = {
 };
 
 /*
- * What a family's billing page shows. Its managers and its payer get the whole
- * of it (`view: 'manage'`); any other member gets the plan's name, its state
- * and the pool (`view: 'member'`), with no plans, prices or amounts.
+ * What a family's billing page shows. Its `billing` holders and its payer get
+ * the whole of it (`view: 'manage'`); any other member, a manager without
+ * `billing` included, gets `FamilyPlanGlance`.
  */
-export type GroupBillingSummary = {
+export type GroupBillingSummary = FamilyBillingDetail | FamilyPlanGlance;
+
+/*
+ * A member's view: the plan's name, the storage used and the pool's size,
+ * and whether a plan is live at all, which is what keeps inviting, letting
+ * people in and new family folders shut (the server refuses them anyway). No
+ * prices, places, payer or state of the subscription.
+ */
+export type FamilyPlanGlance = {
     enabled: boolean;
-    view: 'manage' | 'member';
+    view: 'member';
+    hasPlan: boolean;
+    planName: string | null;
+    storage: { usedBytes: string; quotaBytes: string } | null;
+};
+
+export type FamilyBillingDetail = {
+    enabled: boolean;
+    view: 'manage';
     plans: FamilyPlan[];
     /* Who pays: the only person who can add or remove places, or open the portal. */
     payer: { userId: string; you: boolean } | null;
@@ -71,12 +87,18 @@ export type GroupBillingSummary = {
      * cancelled. Null while a plan is live, and for a family that never had one.
      */
     lastPlan: { productName: string; endedAt: string } | null;
-    /* The family's storage pool: every family folder's bytes against the plan's size. */
+    /*
+     * The family's storage pool as Drive reads it: every family folder's bytes
+     * against the pool's size (zero once a plan has ended). Null for a family
+     * with no pool, made before this server sold plans and never on one: its
+     * folders keep their own allowance.
+     */
     storage: { usedBytes: string; quotaBytes: string } | null;
     seats: { used: number; limit: number };
     /*
-     * What one more place costs now, before tax: the rest of this period at
-     * the per-member price, truncated to the minor unit as Polar charges it.
+     * What one more place costs now, before tax and any discount: the rest of
+     * this period at the per-member price, truncated to the minor unit as
+     * Polar charges it.
      */
     nextPlace: { amount: number; currency: string } | null;
 };

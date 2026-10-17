@@ -42,13 +42,17 @@ import {
     familyPrice,
     livePrice,
     nextCharge,
+    needsPlan,
     planState,
     quoteAdd,
+    seatNoteFor,
     removeRange,
     renewalAmount,
     TAX_LINE,
     TAX_ON_CHARGES,
     type FamilyBilling,
+    type FamilyBillingFull,
+    type FamilyGlance,
 } from '@/lib/family-billing';
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
 import { authError } from '@/lib/form';
@@ -103,6 +107,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function PoolLine({ storage }: { storage: FamilyBilling['storage'] }) {
+    // No pool (a family from before plans were sold), or an empty one: nothing to measure.
     if (!storage || storage.quotaBytes === '0') return null;
     const used = Number(storage.usedBytes);
     const quota = Number(storage.quotaBytes);
@@ -121,8 +126,7 @@ export function useFamilyPlanGate(userId: string, groupId: string, enabled = tru
     const summary = useQuery({ ...familyBillingQueryOptions(userId, groupId), enabled });
     // An unreadable summary leaves the server to refuse; a loading one hides the actions.
     if (summary.isError) return { waiting: false, summary: undefined };
-    const data = summary.data;
-    return { waiting: !data || (data.enabled && data.subscription === null), summary: data };
+    return { waiting: needsPlan(summary.data), summary: summary.data };
 }
 
 type Props = {
@@ -147,6 +151,12 @@ export function FamilyPlan({ place, ...props }: Props & { place: 'top' | 'bottom
     const data = summary.data;
     if (!data || !data.enabled) return null;
     const members = detail.data?.members;
+    if (data.view === 'member')
+        return place === 'top' ? (
+            <GlanceTop family={props.family} summary={data} members={members} />
+        ) : (
+            <GlanceSection summary={data} />
+        );
     return place === 'top' ? (
         <PlanTop {...props} summary={data} members={members} />
     ) : (
@@ -154,27 +164,81 @@ export function FamilyPlan({ place, ...props }: Props & { place: 'top' | 'bottom
     );
 }
 
-type Inner = Props & { summary: FamilyBilling; members: readonly FamilyMember[] | undefined };
+/*
+ * A member without `billing`: whether the family has a plan (what keeps it
+ * from taking anyone new) and who can choose one. Nothing about its state or
+ * price: the server sends none.
+ */
+function GlanceTop({
+    family,
+    summary,
+    members,
+}: {
+    family: string;
+    summary: FamilyGlance;
+    members: readonly FamilyMember[] | undefined;
+}) {
+    if (summary.hasPlan) return null;
+    const who = organizersLine(members);
+    const empty = summary.storage !== null && summary.storage.quotaBytes === '0';
+    return (
+        <div className="px-5 sm:px-8">
+            <Alert data-plan-notice="none">
+                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
+                <AlertDescription>
+                    {empty
+                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
+                        : 'Nobody new can join until it has one.'}{' '}
+                    {who ? `${who} can choose one.` : 'The organizer can choose one.'}
+                </AlertDescription>
+            </Alert>
+        </div>
+    );
+}
 
-/* Back from checkout: the webhook is usually first; otherwise one sync, then the summary is re-read. */
+/* The plan's name, and the pool: all a member without `billing` is shown. */
+function GlanceSection({ summary }: { summary: FamilyGlance }) {
+    if (!summary.hasPlan || !summary.planName) return null;
+    return (
+        <Section title="Plan">
+            <div data-family-plan="glance" className="flex flex-col gap-2 text-sm">
+                <span className="text-base font-bold">
+                    {summary.planName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')}
+                    {summary.storage && summary.storage.quotaBytes !== '0'
+                        ? ` · ${formatQuota(summary.storage.quotaBytes)}`
+                        : ''}
+                </span>
+                <PoolLine storage={summary.storage} />
+            </div>
+        </Section>
+    );
+}
+
+type Inner = Props & { summary: FamilyBillingFull; members: readonly FamilyMember[] | undefined };
+
+/*
+ * Back from checkout: Polar's delivery is usually first, else the family is
+ * synced from Polar every three seconds, eight times at most (the route allows
+ * ten in ten minutes). Only a live plan is called paid.
+ */
+const SYNC_TRIES = 8;
 function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summary }: Inner) {
     const queryClient = useQueryClient();
     const key = familyBillingQueryOptions(userId, groupId).queryKey;
     const [tries, setTries] = useState(0);
     const live = summary.subscription !== null;
     useEffect(() => {
-        if (!checkoutId || live) return;
-        // One sync reads Polar now (it is rate limited); then the summary is polled.
-        if (tries === 0)
-            void groupBillingApi
-                .sync(groupId)
-                .then((next) => queryClient.setQueryData(key, next))
-                .catch(() => undefined);
-        if (tries >= 15) return;
-        const timer = setTimeout(() => {
-            void queryClient.invalidateQueries({ queryKey: key });
-            setTries((n) => n + 1);
-        }, 2_000);
+        if (!checkoutId || live || tries >= SYNC_TRIES) return;
+        const timer = setTimeout(
+            () => {
+                void groupBillingApi
+                    .sync(groupId)
+                    .then((next) => queryClient.setQueryData(key, next))
+                    .catch(() => undefined)
+                    .finally(() => setTries((n) => n + 1));
+            },
+            tries === 0 ? 0 : 3_000,
+        );
         return () => clearTimeout(timer);
         // `key` is rebuilt each render from the same ids.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,7 +248,7 @@ function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summar
             cue('success');
             toast.add({
                 type: 'success',
-                title: `${summary.subscription?.productName ?? 'The plan'} is on`,
+                title: `Payment received. ${summary.subscription?.productName ?? 'The plan'} is on`,
                 description: 'You can invite people now.',
             });
             void queryClient.invalidateQueries({ queryKey: key.slice(0, 4) });
@@ -192,7 +256,7 @@ function useCheckoutReturn({ userId, groupId, checkoutId, onCheckoutSeen, summar
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [checkoutId, live]);
-    return { activating: Boolean(checkoutId) && !live, gaveUp: tries >= 15 };
+    return { activating: Boolean(checkoutId) && !live, gaveUp: tries >= SYNC_TRIES };
 }
 
 function PlanTop(props: Inner) {
@@ -200,6 +264,7 @@ function PlanTop(props: Inner) {
     const state = planState(summary);
     const actions = familyActions(summary, roles);
     const { activating, gaveUp } = useCheckoutReturn(props);
+    const emptyPool = summary.storage !== null && summary.storage.quotaBytes === '0';
     const payerName = personLine(members, summary.payer?.userId);
     const payerYou = summary.payer?.you ?? false;
 
@@ -209,8 +274,8 @@ function PlanTop(props: Inner) {
                 <Alert variant={gaveUp ? 'warning' : 'info'}>
                     <AlertDescription>
                         {gaveUp
-                            ? 'Payment received, but the plan is still turning on. Refresh in a minute.'
-                            : 'Payment received. Turning on the plan…'}
+                            ? 'Your payment is still being finished. Refresh in a minute; nothing is charged twice.'
+                            : 'Finishing your payment…'}
                     </AlertDescription>
                 </Alert>
             </div>
@@ -265,7 +330,8 @@ function PlanTop(props: Inner) {
         return null;
     }
 
-    const ask = payerName ?? organizersLine(members);
+    // Any `billing` holder can choose a plan while none is live (the server makes them the payer).
+    const ask = organizersLine(members);
     if (state.kind === 'lapsed')
         return (
             <div className="flex flex-col gap-2 px-5 sm:px-8">
@@ -274,8 +340,10 @@ function PlanTop(props: Inner) {
                         {family}’s plan ended on {formatDay(state.endedAt)}
                     </AlertTitle>
                     <AlertDescription>
-                        Nobody can upload to the family folders, and nobody new can join, until it’s
-                        renewed. Nothing has been deleted.{' '}
+                        {emptyPool
+                            ? 'Nobody can upload to the family folders, and nobody new can join, until it’s renewed.'
+                            : 'Nobody new can join until it’s renewed.'}{' '}
+                        Nothing has been deleted.{' '}
                         {actions.choosePlan
                             ? 'Choose a plan below to renew it.'
                             : ask
@@ -292,12 +360,13 @@ function PlanTop(props: Inner) {
     return (
         <div className="px-5 sm:px-8">
             <Alert data-plan-notice="none">
-                <AlertTitle>{family} has no plan yet</AlertTitle>
+                <AlertTitle>{family} doesn’t have a plan right now</AlertTitle>
                 <AlertDescription>
-                    Nobody can join, and nothing can be added to the family folders, until it has
-                    one.{' '}
-                    {roles.includes('billing') && summary.payer && !payerYou
-                        ? `Only ${payerName ?? 'the person who started paying for it'} can choose it.`
+                    {emptyPool
+                        ? 'Nobody new can join, and nothing can be added to the family folders, until it has one.'
+                        : 'Nobody new can join until it has one.'}{' '}
+                    {roles.includes('billing')
+                        ? 'No family plans are on sale right now.'
                         : ask
                           ? `${ask} can choose one.`
                           : 'The organizer can choose one.'}
@@ -429,13 +498,13 @@ function ChoosePlan({ groupId, family, summary, renewing }: Inner & { renewing?:
     );
 }
 
-/* Billing (payer and `billing` holders) or Plan (everyone else), under the members. */
+/* Billing, for the payer and `billing` holders, under the members. */
 function PlanSection(props: Inner) {
     const { summary, family, roles, members, groupId, userId } = props;
     const queryClient = useQueryClient();
     const key = familyBillingQueryOptions(userId, groupId).queryKey;
     const state = planState(summary);
-    const access = billingAccess(summary, roles);
+    const access = billingAccess(summary);
     const actions = familyActions(summary, roles);
     const [adding, setAdding] = useState(false);
     const [removing, setRemoving] = useState(false);
@@ -447,16 +516,6 @@ function PlanSection(props: Inner) {
     const live = state.subscription;
     const ends = formatDay(live.currentPeriodEnd);
     const name = `${live.productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')} · ${formatQuota(live.quotaBytes)}`;
-
-    if (access === 'glance')
-        return (
-            <Section title="Plan">
-                <div data-family-plan="glance" className="flex flex-col gap-2 text-sm">
-                    <span className="text-base font-bold">{name}</span>
-                    <PoolLine storage={summary.storage} />
-                </div>
-            </Section>
-        );
 
     const settle = (next: FamilyBilling) => {
         queryClient.setQueryData(key, next);
@@ -494,10 +553,11 @@ function PlanSection(props: Inner) {
 
     const interval = intervalOf(live.recurringInterval);
     const charge = nextCharge(summary);
-    const amountLine =
-        live.amount != null && live.currency
-            ? `${formatMoney(live.amount, live.currency)} ${per[interval]}`
-            : null;
+    // List price for the places bought, as every other figure here: before any discount.
+    const listed = renewalAmount(summary, live.units);
+    const amountLine = listed
+        ? `${formatMoney(listed.amount, listed.currency)} ${per[interval]}`
+        : null;
     const payerName = summary.payer?.you ? 'You' : personLine(members, summary.payer?.userId);
 
     return (
@@ -598,14 +658,14 @@ function PlanSection(props: Inner) {
                     </p>
                 )}
                 {actions.cancel && (
-                    <button
-                        type="button"
+                    <Button
+                        variant="ghost"
                         disabled={busy !== null}
                         onClick={() => setCancelling(true)}
-                        className="w-fit cursor-pointer text-sm font-semibold underline underline-offset-4 hover:text-destructive disabled:opacity-50"
+                        className="-ml-3.5 self-start underline underline-offset-4 hover:text-destructive pointer-coarse:-ml-4"
                     >
                         Cancel plan
-                    </button>
+                    </Button>
                 )}
                 <p className="text-[13px] text-muted-foreground">
                     {access === 'billing'
@@ -950,18 +1010,16 @@ export function SeatNote({
     first: string;
 }) {
     const summary = useQuery(familyBillingQueryOptions(userId, groupId)).data;
-    const live = summary?.subscription;
-    if (!summary?.enabled || !live || !summary.payer?.you || live.cancelAtPeriodEnd) return null;
-    if (summary.seats.used < summary.seats.limit) return null;
-    const price = livePrice(summary);
-    const now = summary.nextPlace;
-    if (!price || !now) return null;
+    const note = seatNoteFor(summary);
+    if (!note || summary?.view !== 'manage' || !summary.subscription) return null;
+    const interval = per[intervalOf(summary.subscription.recurringInterval)];
     return (
-        <p className="text-sm text-muted-foreground" data-seat-note>
-            Every place is taken. Letting {first} in adds one:{' '}
-            {formatMoney(now.amount, now.currency)} now, then{' '}
-            {formatMoney(price.perMember, price.currency)} {per[intervalOf(live.recurringInterval)]}
-            , plus tax where it applies.
+        <p className="text-sm text-muted-foreground" data-seat-note={note.kind}>
+            {note.kind === 'bank'
+                ? `Your bank hasn’t confirmed the charge for the last places yet. ${first} can be let in once it does.`
+                : note.kind === 'keep'
+                  ? `Every place is taken. Letting ${first} in keeps one of the places you’re removing on ${formatDay(note.from)}, with nothing charged now.`
+                  : `Every place is taken. Letting ${first} in adds one: ${formatMoney(note.now.amount, note.now.currency)} now, then ${formatMoney(note.perMember, note.now.currency)} ${interval}, before any discount and plus tax where it applies.`}
         </p>
     );
 }
@@ -992,8 +1050,9 @@ export function SeatHelp({
     const [error, setError] = useState('');
     usePageRestored(() => setBusy(false));
     if (!summary?.enabled) return null;
-    const payerYou = summary.payer?.you ?? false;
-    const payer = personLine(members, summary.payer?.userId);
+    // A manager without `billing` isn't told who pays (the glance names nobody): the refusal says it.
+    const payerYou = summary.view === 'manage' && (summary.payer?.you ?? false);
+    const payer = summary.view === 'manage' ? personLine(members, summary.payer?.userId) : null;
     const actions = familyActions(summary, roles);
 
     async function portal() {

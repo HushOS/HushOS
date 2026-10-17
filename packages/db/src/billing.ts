@@ -295,6 +295,27 @@ export async function getGroupCustomer(groupId: string) {
 }
 
 /*
+ * Moves a family's billing to another member, only from the payer the caller
+ * read (`from`, null once that account is gone): true when this call made the
+ * change, false when someone else's change got there first.
+ */
+export async function setGroupPayer(groupId: string, from: string | null, to: string) {
+    const rows = await db
+        .update(groupBillingCustomers)
+        .set({ payerUserId: to, updatedAt: new Date() })
+        .where(
+            and(
+                eq(groupBillingCustomers.groupId, groupId),
+                from === null
+                    ? isNull(groupBillingCustomers.payerUserId)
+                    : eq(groupBillingCustomers.payerUserId, from),
+            ),
+        )
+        .returning({ groupId: groupBillingCustomers.groupId });
+    return rows.length === 1;
+}
+
+/*
  * Records the provider customer made for a group and who pays. A row already
  * there wins (two checkouts at once made one customer at the provider, whose
  * external id is unique): the caller compares the payer it gets back.
