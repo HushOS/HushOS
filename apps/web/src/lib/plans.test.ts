@@ -1,6 +1,6 @@
-import type { Plan } from '@hushos/billing/api';
+import type { FamilyPlan, Plan } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
-import { currenciesOf, priceOf, tiersOf } from './plans';
+import { currenciesOf, familyOffer, priceOf, pricingLede, tiersOf } from './plans';
 
 function plan(overrides: Partial<Plan> & { id: string }): Plan {
     return {
@@ -74,5 +74,84 @@ describe('tiersOf', () => {
     test('leaves a name alone when it carries no interval suffix', () => {
         expect(tiersOf([plan({ id: 'x', name: 'Team' })])[0]?.name).toBe('Team');
         expect(tiersOf([plan({ id: 'y', name: 'Pro (annual)' })])[0]?.name).toBe('Pro');
+    });
+});
+
+/* Production's Family plans: yearly is ten times monthly, 2 TB for 6, up to 20. */
+function family(interval: 'month' | 'year'): FamilyPlan {
+    const times = interval === 'year' ? 10 : 1;
+    return {
+        id: `family-${interval}`,
+        name: interval === 'year' ? 'Family (yearly)' : 'Family (monthly)',
+        description: null,
+        interval,
+        prices: {
+            usd: { base: 1500 * times, perMember: 200 * times },
+            eur: { base: 1500 * times, perMember: 200 * times },
+            gbp: { base: 1200 * times, perMember: 200 * times },
+            inr: { base: 59900 * times, perMember: 7900 * times },
+        },
+        includedMembers: 6,
+        maxMembers: 20,
+        quotaBytes: String(2 * 1024 ** 4),
+    };
+}
+const families = [family('month'), family('year')];
+
+describe('familyOffer', () => {
+    test('offers nothing where the server lists no family plan (families off)', () => {
+        expect(familyOffer({ enabled: true, families: [] }, 'month', 'usd')).toBeNull();
+        expect(familyOffer({ enabled: true, families: [] }, 'year', 'usd')).toBeNull();
+    });
+
+    test('offers nothing with billing off, whatever plans came with it', () => {
+        expect(familyOffer({ enabled: false, families }, 'month', 'usd')).toBeNull();
+    });
+
+    test('prices the monthly plan in the visitor’s currency', () => {
+        expect(familyOffer({ enabled: true, families }, 'month', 'gbp')).toMatchObject({
+            plan: { id: 'family-month' },
+            price: '£12 a month',
+            billed: 'Billed monthly. £120 a year if you pay yearly.',
+            size: 'For up to 6 members, sharing 2 TB.',
+            pool: 'The 2 TB is for family folders; each member’s own files stay on their own plan, Free included.',
+            extra: 'Then £2 a month for each member after that, up to 20.',
+        });
+        const inr = familyOffer({ enabled: true, families }, 'month', 'inr');
+        expect(inr?.price).toBe('₹599 a month');
+        expect(inr?.extra).toBe('Then ₹79 a month for each member after that, up to 20.');
+    });
+
+    test('shows the yearly plan as a month, billed yearly, and its member price per year', () => {
+        expect(familyOffer({ enabled: true, families }, 'year', 'usd')).toMatchObject({
+            plan: { id: 'family-year' },
+            price: '$12.50 a month',
+            billed: 'Billed $150 yearly.',
+            extra: 'Then $20 a year for each member after that, up to 20.',
+        });
+    });
+
+    test('falls back to the default currency, never a price in a currency it lacks', () => {
+        const offer = familyOffer({ enabled: true, families }, 'month', 'jpy');
+        expect(offer?.price).toBe('$15 a month');
+        expect(offer?.billed).toBe('Billed monthly. $150 a year if you pay yearly.');
+    });
+
+    test('offers the other interval when only one is on sale', () => {
+        const offer = familyOffer({ enabled: true, families: [family('month')] }, 'year', 'usd');
+        expect(offer?.plan.id).toBe('family-month');
+        expect(offer?.billed).toBe('Billed monthly.');
+    });
+});
+
+describe('pricingLede', () => {
+    test('keeps "nothing else" only while no family plan is shown', () => {
+        const off =
+            'Every plan protects your files the same way. Paid plans add space, and nothing else.';
+        expect(pricingLede(familyOffer({ enabled: true, families: [] }, 'month', 'usd'))).toBe(off);
+        expect(pricingLede(familyOffer({ enabled: false, families }, 'month', 'usd'))).toBe(off);
+        expect(pricingLede(familyOffer({ enabled: true, families }, 'month', 'usd'))).toBe(
+            'Every plan protects your files the same way. Paid plans add space; a family plan adds folders you share with up to 20 members.',
+        );
     });
 });

@@ -19,7 +19,17 @@ export type Plan = {
     recommended: boolean;
 };
 
-export type Catalogue = { enabled: boolean; freeQuotaBytes: string; plans: Plan[] };
+/*
+ * The public plan catalogue. `families` lists the family plans only where
+ * this server serves families (GROUPS_ENABLED) and sells plans; it is empty
+ * everywhere else, so a page cannot offer a plan the server would refuse.
+ */
+export type Catalogue = {
+    enabled: boolean;
+    freeQuotaBytes: string;
+    plans: Plan[];
+    families: FamilyPlan[];
+};
 
 /* A family plan: a fixed base and a per-member price beyond those included, per currency. */
 export type FamilyPlan = {

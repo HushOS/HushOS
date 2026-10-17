@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { authRepository, billingRepository, growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import { billingEnv } from '@hushos/env/billing';
+import { groupsEnv } from '@hushos/env/groups';
 import { log } from '@hushos/logging';
 import { webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
@@ -12,6 +13,7 @@ import {
     PROVIDER,
     billingEnabled,
     getCatalogue,
+    getFamilyCatalogue,
     polar,
     statusOf,
     unavailable,
@@ -48,14 +50,21 @@ const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 export async function listCatalogue(): Promise<Catalogue> {
     const freeQuotaBytes = appEnv.INITIAL_STORAGE_QUOTA_BYTES.toString();
-    if (!billingEnabled()) return { enabled: false, freeQuotaBytes, plans: [] };
-    const products = await getCatalogue();
+    if (!billingEnabled()) return { enabled: false, freeQuotaBytes, plans: [], families: [] };
+    // Both read the one cached product list; families only where the server serves them.
+    const [products, families] = await Promise.all([
+        getCatalogue(),
+        groupsEnv.GROUPS_ENABLED ? getFamilyCatalogue() : [],
+    ]);
     return {
         enabled: true,
         freeQuotaBytes,
         plans: products
             .filter((product) => !product.archived)
             .map(({ archived: _archived, ...plan }) => plan),
+        families: families
+            .filter((family) => !family.archived)
+            .map(({ archived: _archived, ...family }) => family),
     };
 }
 
