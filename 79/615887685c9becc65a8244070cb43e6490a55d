@@ -1,0 +1,31 @@
+packages/billing/scripts/experiments/sandbox.ts
+  s_c56e31c87cddde::t_88ca52208c5e93 1-70
+  s_c56e31c87cddde::t_c3ada82dc193b9 71-73
+packages/billing/scripts/experiments/e1-team-customer.ts
+  s_c56e31c87cddde::t_0fec8401230e4b 1-185
+packages/billing/scripts/experiments/e2-product-shape.ts
+  s_c56e31c87cddde::t_5e317633b45046 1-172
+  s_c56e31c87cddde::t_17020f1c9fd4c4 173-175
+packages/billing/scripts/experiments/e6-checkout-links.ts
+  s_c56e31c87cddde::t_4cc265f854eb70 1-45
+  s_c56e31c87cddde::t_2fb8073b59828a 46-48
+packages/billing/scripts/experiments/card.ts
+  s_c56e31c87cddde::t_e84f9898cccc35 1-164
+  s_c56e31c87cddde::t_49dffd59dbe592 165-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "79615887685c9becc65a8244070cb43e6490a55d",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
