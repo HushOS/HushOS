@@ -8,8 +8,15 @@ export function encode(value: Uint8Array) {
         binary += String.fromCharCode(...value.subarray(at, at + 0x2000));
     return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
+/*
+ * Canonical base64url without padding, of `length` bytes when given, or a
+ * CryptoError. A length of 1 mod 4 is no base64 at all: refused here, before
+ * atob, which would throw a DOMException that callers do not treat as a
+ * refusal.
+ */
 export function decode(value: string, length?: number) {
-    if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new CryptoError('Invalid key encoding.');
+    if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1)
+        throw new CryptoError('Invalid key encoding.');
     const bytes = Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')), (char) =>
         char.charCodeAt(0),
     );
