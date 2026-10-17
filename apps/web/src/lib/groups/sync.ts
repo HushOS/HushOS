@@ -233,17 +233,24 @@ export async function acceptServed(
             // version: nothing of it was kept. Read the record and settings again and accept once
             // more, quietly; the next run either lands or, for a split view, answers the fork.
             if (!lostRace(error)) throw error;
-            if (attempt >= 2) throw new Error(SERVED_OLDER);
+            if (attempt >= 2)
+                throw new Error(
+                    (error as Error).message === SPLIT_CHAIN ? SERVED_SPLIT : SERVED_OLDER,
+                );
         }
 }
 
 /*
- * After three runs that all came back older than this worker's committed
- * chain, it is no race: the server keeps serving an older member list than
- * this device already checked. Writes go on under the chain held.
+ * After three runs that all came back refused against this worker's
+ * committed chain, it is no race: the server keeps serving an older member
+ * list than this device already checked, or another one at its version.
+ * Each is said as what it is. Writes go on under the chain held.
  */
 const SERVED_OLDER =
     'HushOS sent an older member list than this device already checked. Try again later.';
+/* The same for another member list at the version this device already checked: a split view. */
+const SERVED_SPLIT =
+    'HushOS sent a different member list at the version this device already checked. Try again later.';
 
 /* The worker's answer to a run that a later acceptance in the same session overtook. */
 export function lostRace(error: unknown) {

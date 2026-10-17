@@ -68,7 +68,7 @@ import {
 } from './signatures';
 import { openReportKey, sealReportKey } from './reports';
 import { rekeyedFor } from './rekeyed-scope';
-import { createAreaLedger } from './area-ledger';
+import { FAMILY_FOLDER, createAreaLedger } from './area-ledger';
 import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './pq';
 import {
     generateLinkSalt,
@@ -943,7 +943,6 @@ export function createCryptoSession() {
     const ledger = createAreaLedger();
     const {
         isArea,
-        holdWorkspaceKey,
         dropWorkspace,
         nodeKey,
         keyAtEpoch,
@@ -2529,9 +2528,12 @@ export function createCryptoSession() {
                 if (!accountKey || unlockedUserId !== message.input.userId)
                     throw new CryptoError('Unlock your account to open Drive.');
                 const { grant } = message.input;
-                // A group's area served as a personal workspace would skip its version checks.
-                if (isArea(grant.workspaceId))
-                    throw new CryptoError('This was refused: it is a family folder.');
+                // A family folder this session opened (its id derived under its family) served as a
+                // personal workspace would skip its version checks. A family's roster merely naming
+                // the workspace is no reason: a hostile family could name the person's own drive.
+                if (ledger.openedByFamily(grant.workspaceId)) throw new CryptoError(FAMILY_FOLDER);
+                // Opened under the account root as a personal grant, a context no family's key opens
+                // under: the account's own workspace, never an area, whatever a family's roster lists.
                 if (ledger.workspaceKey(grant.workspaceId, grant.workspaceKeyVersion))
                     return {
                         workspaceId: grant.workspaceId,
@@ -2540,7 +2542,7 @@ export function createCryptoSession() {
                 const root = accountKey.slice();
                 try {
                     const key = await openWorkspaceKey(root, unlockedUserId, grant);
-                    holdWorkspaceKey(
+                    ledger.openPersonalWorkspace(
                         grant.workspaceId,
                         grant.workspaceKeyVersion,
                         key as Uint8Array<ArrayBuffer>,

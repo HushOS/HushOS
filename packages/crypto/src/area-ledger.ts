@@ -23,8 +23,10 @@ import { KEY_CHANGE_PENDING, NOT_CARRIED, OLDER_CHAIN, SPLIT_CHAIN } from './pro
  * commits (`commit`, `uncommit`, `forgetGroup`) and every area key a grant
  * opened (`openArea`). Every piece of area state is kept per family and area:
  * an area is resolved only through the family it was opened under, its id
- * checked as derived under that family, and never while a second committed
- * chain lists it, so one family's member list never moves another's area.
+ * checked as derived under that family, so one family's member list never
+ * moves another's area; another family listing it, or listing the account's
+ * own workspace (`openPersonalWorkspace`), is ignored and only reported
+ * (`foreignListings`).
  */
 
 export const KEYS_CHANGED = 'This folder’s keys changed. Reload to continue.';
@@ -46,6 +48,7 @@ const NO_CHAIN = 'Check the family’s member list first.';
 const NOT_THE_FAMILYS = 'This folder does not belong to the family.';
 const NOT_LISTED = 'This folder is not on the family’s member list.';
 const ITEM_CHANGED = 'This item changed since it was opened. Refresh and retry.';
+export const FAMILY_FOLDER = 'This was refused: it is a family folder.';
 
 /* A node key envelope as a listing serves it, with its previous one while a rotation runs. */
 export type ServedNodeKey = {
@@ -155,8 +158,17 @@ export function createAreaLedger() {
      * older root served again never lowers it.
      */
     const rootSeenAt = new Map<string, number>();
-    /* Each area's root node, the first top-level row whose key the chain committed to. */
+    /*
+     * Each area's root node: the first top-level row, at the area's write
+     * version, whose key the family's chain committed to.
+     */
     const rootIds = new Map<string, string>();
+    /*
+     * The account's own personal workspaces (their grants opened under the
+     * account root, a context no family's key opens under): never an area,
+     * whatever a family's roster lists.
+     */
+    const personal = new Set<string>();
 
     const slot = (workspaceId: string, nodeId: string) => `${workspaceId}/${nodeId}`;
     const areaSlot = (groupId: string, workspaceId: string) => `${groupId}/${workspaceId}`;
@@ -183,15 +195,50 @@ export function createAreaLedger() {
         return count;
     }
     /*
-     * The family an area is resolved through: the one it was opened under,
-     * and only while no second committed chain lists it. Undefined otherwise.
+     * The family an area is resolved through: the one it was opened under (its
+     * id checked as derived under that family), whatever another family's
+     * chain lists; another family's listing is only a warning
+     * (`foreignListings`). An area no family opened resolves through none.
      */
     function familyOf(workspaceId: string) {
         const families = openedBy(workspaceId);
-        if (families.length !== 1 || listings(workspaceId) > 1) return undefined;
-        return families[0];
+        return families.length === 1 ? families[0] : undefined;
+    }
+    /*
+     * Committed chains listing an area another family opened here, or one of
+     * the account's own workspaces: what a hostile family's roster names,
+     * ignored for every decision and listed for the person to hear about.
+     */
+    function foreignListings() {
+        const out: { groupId: string; workspaceId: string; openedBy: string | null }[] = [];
+        for (const [groupId, chain] of chains)
+            for (const workspaceId of Object.keys(chain.areaKeys)) {
+                const families = openedBy(workspaceId);
+                if (personal.has(workspaceId)) out.push({ groupId, workspaceId, openedBy: null });
+                else if (families.length > 0 && !families.includes(groupId))
+                    out.push({ groupId, workspaceId, openedBy: families[0]! });
+            }
+        return out.sort((a, b) =>
+            `${a.groupId}/${a.workspaceId}`.localeCompare(`${b.groupId}/${b.workspaceId}`),
+        );
+    }
+    /* Whether a family opened the workspace here as one of its folders (its id derived under it). */
+    function openedByFamily(workspaceId: string) {
+        return openedBy(workspaceId).length > 0;
+    }
+    /* The account's own workspace, its key at `version` opened from its grant: never an area. */
+    function openPersonalWorkspace(
+        workspaceId: string,
+        version: number,
+        key: Uint8Array<ArrayBuffer>,
+    ) {
+        // A family folder opened here (its id derived under its family) is never the account's own.
+        if (openedByFamily(workspaceId)) throw new CryptoError(FAMILY_FOLDER);
+        personal.add(workspaceId);
+        holdWorkspaceKey(workspaceId, version, key);
     }
     function isArea(workspaceId: string) {
+        if (personal.has(workspaceId)) return false;
         if (openedBy(workspaceId).length > 0 || listings(workspaceId) > 0) return true;
         const suffix = `/${workspaceId}`;
         for (const map of [areaWrite, blocked, rootSeenAt])
@@ -231,8 +278,8 @@ export function createAreaLedger() {
     }
     /*
      * Refuses any write into a group area the worker has not found writable:
-     * blocked, not checked against its family's committed chain, listed by
-     * another family's too, or without the key at the write version (F9).
+     * blocked, not opened under a family with a committed chain, or without
+     * the key at the write version (F9).
      * Every Drive write in the session calls it.
      */
     function requireWritable(workspaceId: string) {
@@ -271,7 +318,9 @@ export function createAreaLedger() {
         }
         const seen = rootSeenAt.get(key);
         if (seen === undefined || seen < parentKeyEpoch) rootSeenAt.set(key, parentKeyEpoch);
-        if (!rootIds.has(key)) rootIds.set(key, nodeId);
+        // Only a root at the area's write version names the root node: an older top-level row
+        // (one a removed member holding an old area key could plant) never wins it.
+        if (!rootIds.has(key) && parentKeyEpoch === areaWrite.get(key)) rootIds.set(key, nodeId);
         return true;
     }
     /* Whether a top-level row is another node than the root this family's area already has. */
@@ -347,6 +396,7 @@ export function createAreaLedger() {
         const chain = chains.get(groupId);
         if (!chain) throw new CryptoError(NO_CHAIN);
         uuid(workspaceId, 'workspace id');
+        if (personal.has(workspaceId)) throw new CryptoError(NOT_THE_FAMILYS);
         try {
             await checkId('workspace', groupId, idSeed, workspaceId);
         } catch {
@@ -432,6 +482,7 @@ export function createAreaLedger() {
         rootOpenedUnder.clear();
         lineage.clear();
         workspaceKeys.clear();
+        personal.clear();
     }
     function nodeKeysOf(workspaceId: string) {
         return workspaceKeys.has(workspaceId) ? ownNodeKeys : guestNodeKeys;
@@ -992,6 +1043,9 @@ export function createAreaLedger() {
         hasWorkspace,
         dropWorkspace,
         clear,
+        openPersonalWorkspace,
+        openedByFamily,
+        foreignListings,
         nodeKey,
         prevNodeKey,
         forgetNodeKey,

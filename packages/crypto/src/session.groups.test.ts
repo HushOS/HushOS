@@ -1284,6 +1284,44 @@ describe('workspace documents in a rotation', () => {
 });
 
 describe('the write version (F9)', () => {
+    test('two acceptances sent at once, as a background sync and the foreground send them: the later chain is what the session holds, in either order', async () => {
+        const f = await family();
+        const { bob, groupId, server } = f;
+        const before = { record: f.marks.bob.record, envelope: bob.settings.envelope! };
+        const servedBefore = server.served();
+        await rotated(f);
+        for (const order of ['later first', 'older first'] as const) {
+            const device = await bob.device();
+            await device.call('settingsOpen', { userId: BOB, envelope: before.envelope });
+            const accept = (served: ServedChain) =>
+                device.call('groupAccept', {
+                    userId: BOB,
+                    groupId,
+                    served,
+                    record: before.record,
+                    checkedAt: CHECKED,
+                });
+            // The worker runs its calls one at a time, in the order sent; neither waits for the other.
+            const runs =
+                order === 'later first'
+                    ? [accept(server.served()), accept(servedBefore)]
+                    : [accept(servedBefore), accept(server.served())];
+            const settled = await Promise.allSettled(runs);
+            if (order === 'later first') {
+                expect(settled[0]).toMatchObject({ status: 'fulfilled' });
+                expect(settled[1]).toMatchObject({
+                    status: 'rejected',
+                    reason: { message: expect.stringMatching(/already holds a later member list/) },
+                });
+            } else expect(settled.map((run) => run.status)).toEqual(['fulfilled', 'fulfilled']);
+            // Either way the session holds version 3, and the older chain was never committed over it.
+            await expect(accept(server.served())).resolves.toMatchObject({
+                view: { rosterVersion: 3 },
+            });
+            await expect(accept(servedBefore)).rejects.toThrow(/already holds a later member list/);
+        }
+    });
+
     test('another roster at the version this session committed is the fork, never committed, even with the device record and settings from before both', async () => {
         const f = await family();
         const { alice, bob, groupId, server } = f;

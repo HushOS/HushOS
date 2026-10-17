@@ -1841,8 +1841,20 @@
                     "op": "state",
                     "expect": {
                         "isArea": true,
-                        "read": "not-checked",
-                        "write": "not-checked"
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "foreign",
+                    "expect": {
+                        "listings": [
+                            {
+                                "group": "other",
+                                "workspace": "area",
+                                "openedBy": "family"
+                            }
+                        ]
                     }
                 },
                 {
@@ -1858,16 +1870,24 @@
                     }
                 },
                 {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
                     "op": "create",
                     "node": "A",
                     "parent": "ROOT",
                     "parentKeyEpoch": 1,
                     "keyEpoch": 1,
-                    "expect": "not-checked"
+                    "expect": "key-change-pending"
                 },
                 {
                     "op": "requireWritable",
-                    "expect": "not-checked"
+                    "expect": "ok"
                 },
                 {
                     "op": "uncommit",
@@ -1880,6 +1900,12 @@
                         "isArea": true,
                         "read": 2,
                         "write": 2
+                    }
+                },
+                {
+                    "op": "foreign",
+                    "expect": {
+                        "listings": []
                     }
                 },
                 {
@@ -1910,6 +1936,227 @@
                     "keyEpoch": 2,
                     "expect": {
                         "key": "made:A@2"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "another family listing this family's opened folder leaves it working",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 1,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "commit",
+                    "chain": "other-f2-v1",
+                    "expect": "ok"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": 1
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "B",
+                    "parent": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:B@1"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "group": "other",
+                    "version": 1,
+                    "served": 1,
+                    "expect": "not-the-familys"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 1,
+                        "write": 1
+                    }
+                }
+            ]
+        },
+        {
+            "name": "a family listing this account's own workspace never makes it a family folder",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "other-lists-personal",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openPersonal",
+                    "version": 1,
+                    "expect": "ok"
+                },
+                {
+                    "op": "personalState",
+                    "expect": {
+                        "isArea": false,
+                        "read": null,
+                        "write": null
+                    }
+                },
+                {
+                    "op": "personalCreate",
+                    "node": "A",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "expect": {
+                        "key": "made:A@1"
+                    }
+                },
+                {
+                    "op": "foreign",
+                    "expect": {
+                        "listings": [
+                            {
+                                "group": "other",
+                                "workspace": "personal",
+                                "openedBy": null
+                            }
+                        ]
+                    }
+                },
+                {
+                    "op": "personalCreate",
+                    "node": "B",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 1,
+                    "expect": "keys-changed"
+                }
+            ]
+        },
+        {
+            "name": "an old-version top node a removed member plants never takes the root from the real one",
+            "steps": [
+                {
+                    "op": "commit",
+                    "chain": "f2-v2",
+                    "expect": "ok"
+                },
+                {
+                    "op": "openArea",
+                    "version": 1,
+                    "served": 2,
+                    "expect": {
+                        "version": 1,
+                        "writable": false,
+                        "reason": "no-grant-at-latest"
+                    }
+                },
+                {
+                    "op": "openArea",
+                    "version": 2,
+                    "served": 2,
+                    "expect": {
+                        "version": 2,
+                        "writable": false,
+                        "reason": "root-unknown"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "G",
+                    "parent": "WS",
+                    "parentKeyEpoch": 1,
+                    "keyEpoch": 1,
+                    "key": "root:1",
+                    "under": "area:1",
+                    "expect": {
+                        "key": "root:1"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "ROOT",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "root:2",
+                    "under": "area:2",
+                    "expect": {
+                        "key": "root:2"
+                    }
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
+                    }
+                },
+                {
+                    "op": "create",
+                    "node": "A",
+                    "parent": "ROOT",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "expect": {
+                        "key": "made:A@2"
+                    }
+                },
+                {
+                    "op": "list",
+                    "node": "G",
+                    "parent": "WS",
+                    "parentKeyEpoch": 2,
+                    "keyEpoch": 2,
+                    "key": "k:5",
+                    "under": "area:2",
+                    "expect": "not-committed-root"
+                },
+                {
+                    "op": "state",
+                    "expect": {
+                        "isArea": true,
+                        "read": 2,
+                        "write": 2
                     }
                 }
             ]

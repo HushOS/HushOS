@@ -1319,10 +1319,11 @@ export function createGroupSession(host: GroupHost) {
         refuseDowngrade(userId);
     }
     function commit(chain: AcceptedRosters) {
+        // The ledger first: a chain it refuses (older, or another at the version held) leaves the
+        // session's chains as they were, so the two never disagree about the family.
+        ledger.commit(chain);
         chains.set(chain.groupId, chain);
         forked.delete(chain.groupId);
-        // Each area's write version, under this family alone; a new one needs its root seen again.
-        ledger.commit(chain);
         // Seeds of keys the group has replaced sign nothing any more.
         for (const [at, seed] of seeds) {
             const [groupId, version] = at.split(':');

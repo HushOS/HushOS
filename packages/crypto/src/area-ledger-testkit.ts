@@ -75,12 +75,15 @@ export const CHAINS = [
     'f1-to-f2',
     'f2-retired',
     'other-f2-v1',
+    'other-lists-personal',
     'f2-v2-split',
 ] as const;
 export type ChainName = (typeof CHAINS)[number];
 
 /* Node names a step may use, and the ids they stand for. */
 export const NODES = ['ROOT', 'A', 'B', 'C', 'D', 'E', 'F', 'G'] as const;
+/* The account's own workspace in the steps, and its key (pattern(32, 209), named k:9). */
+export const PERSONAL = 'f0f0f0f0-0000-4000-8000-00000000000f';
 const nodeId = (name: string) =>
     `0e0e0e0e-0000-4000-8000-${(NODES.indexOf(name as (typeof NODES)[number]) + 1)
         .toString(16)
@@ -152,6 +155,10 @@ export function chains() {
         const other = await history('family', { format: 2, groupId: OTHER_GROUP });
         await other.roster(owner, [entry], undefined, await standardAreas(2));
         out.set('other-f2-v1', await acceptedOf(other, [owner as Person]));
+        // Another family whose roster names this account's own workspace as one of its areas.
+        const hostile = await history('family', { format: 2, groupId: OTHER_GROUP });
+        await hostile.roster(owner, [entry], undefined, [await keyRowAt(PERSONAL, 1)]);
+        out.set('other-lists-personal', await acceptedOf(hostile, [owner as Person]));
         return out;
     })();
     return built;
@@ -234,7 +241,9 @@ export type Step =
           envelope: Wrapped;
       }
     | { op: 'commitPending' | 'dropPending'; nodes: string[] }
-    | { op: 'dropAllPending' }
+    | { op: 'dropAllPending' | 'personalState' | 'foreign' }
+    | { op: 'openPersonal'; version: number }
+    | { op: 'personalCreate'; node: string; parentKeyEpoch: number; keyEpoch: number }
     | { op: 'keyAt'; node: string; epoch: number }
     | { op: 'state' };
 
@@ -266,7 +275,20 @@ export function readStep(value: unknown): Step | undefined {
         case 'requireWritable':
         case 'state':
         case 'dropAllPending':
+        case 'personalState':
+        case 'foreign':
             return { op: value.op };
+        case 'openPersonal': {
+            const version = epochOf(value.version);
+            return version === undefined ? undefined : { op: 'openPersonal', version };
+        }
+        case 'personalCreate': {
+            const node = nodeOf(value.node);
+            const parentKeyEpoch = epochOf(value.parentKeyEpoch);
+            const keyEpoch = epochOf(value.keyEpoch);
+            if (!node || parentKeyEpoch === undefined || keyEpoch === undefined) return undefined;
+            return { op: 'personalCreate', node, parentKeyEpoch, keyEpoch };
+        }
         case 'openArea': {
             const group = groupOf(value.group);
             const version = epochOf(value.version);
@@ -665,24 +687,59 @@ export async function runSteps(steps: Step[]) {
             case 'dropAllPending':
                 for (const node of NODES) forgetPending(node);
                 return { count: ledger.dropAllPending(AREA) };
+            case 'openPersonal':
+                // driveOpenWorkspace: the account's own grant opened, its key held as personal.
+                ledger.openPersonalWorkspace(PERSONAL, step.version, namedKey('k:9')!);
+                return {};
+            case 'personalCreate': {
+                // driveCreateNodes at the personal workspace's top level.
+                ledger.requireWritable(PERSONAL);
+                const { key } = await ledger.newNodeKey(PERSONAL, {
+                    id: id(step.node),
+                    parentId: PERSONAL,
+                    parentKeyEpoch: step.parentKeyEpoch,
+                    keyEpoch: step.keyEpoch,
+                });
+                remember(step.node, step.keyEpoch, key);
+                return { key: nameOf(key) };
+            }
+            case 'personalState':
+                return {
+                    isArea: ledger.isArea(PERSONAL),
+                    read: attemptRead(() => ledger.readVersion(PERSONAL)),
+                    write: attemptRead(() => ledger.writeVersion(PERSONAL)),
+                };
+            case 'foreign':
+                return {
+                    listings: ledger.foreignListings().map((at) => ({
+                        group: at.groupId === GROUP ? 'family' : 'other',
+                        workspace: at.workspaceId === AREA ? 'area' : 'personal',
+                        openedBy:
+                            at.openedBy === null
+                                ? null
+                                : at.openedBy === GROUP
+                                  ? 'family'
+                                  : 'other',
+                    })),
+                };
             case 'keyAt': {
                 const key = ledger.keyAtEpoch(AREA, id(step.node), step.epoch);
                 return { key: key ? nameOf(key) : null };
             }
-            case 'state': {
-                const attempt = (read: () => number | null) => {
-                    try {
-                        return read();
-                    } catch (error) {
-                        return codeOf(error);
-                    }
-                };
+            case 'state':
                 return {
                     isArea: ledger.isArea(AREA),
-                    read: attempt(() => ledger.readVersion(AREA)),
-                    write: attempt(() => ledger.writeVersion(AREA)),
+                    read: attemptRead(() => ledger.readVersion(AREA)),
+                    write: attemptRead(() => ledger.writeVersion(AREA)),
                 };
-            }
+        }
+    }
+
+    function attemptRead(read: () => number | null) {
+        try {
+            return read();
+        } catch (error) {
+            return codeOf(error);
         }
     }
 

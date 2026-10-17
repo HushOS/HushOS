@@ -71,16 +71,21 @@ describe('syncing a family', () => {
         }
     });
 
-    test('a server that keeps serving older than this worker checked is said so, not as a lost race', async () => {
-        const h = harness({ head: 6 });
-        await knownFamily(h);
-        h.results.groupAccept = () => {
-            throw new Error(OLDER_CHAIN);
-        };
-        await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow(/older member list than this device/);
-        expect(h.calls('groupAccept')).toHaveLength(3);
-        expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
-        expect(h.settingsLog.writes).toEqual([]);
+    test('a server that keeps serving older, or another list at the version checked, is said so, not as a lost race', async () => {
+        for (const [refused, said] of [
+            [OLDER_CHAIN, /an older member list than this device/],
+            [SPLIT_CHAIN, /a different member list at the version this device/],
+        ] as const) {
+            const h = harness({ head: 6 });
+            await knownFamily(h);
+            h.results.groupAccept = () => {
+                throw new Error(refused);
+            };
+            await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow(said);
+            expect(h.calls('groupAccept')).toHaveLength(3);
+            expect((await h.store.chain(USER, GROUP))?.envelope).toBe('record-5');
+            expect(h.settingsLog.writes).toEqual([]);
+        }
     });
 
     test('a route that failed is not taken for a chain that did not continue', async () => {

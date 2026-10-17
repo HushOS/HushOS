@@ -19,8 +19,21 @@ use std::sync::{Arc, OnceLock};
 /// Every chain a step may commit: AREA in GROUP, created by person 1, rotated or retired; and
 /// another family (OTHER_GROUP) whose chain also lists AREA at version 1, as a removed member who
 /// manages a second family the person is in could sign it.
-pub const CHAINS: &[&str] =
-    &["f2-v1", "f2-v2", "f2-v3", "f1-v1", "f1-v2", "f1-to-f2", "f2-retired", "other-f2-v1", "f2-v2-split"];
+pub const CHAINS: &[&str] = &[
+    "f2-v1",
+    "f2-v2",
+    "f2-v3",
+    "f1-v1",
+    "f1-v2",
+    "f1-to-f2",
+    "f2-retired",
+    "other-f2-v1",
+    "f2-v2-split",
+    "other-lists-personal",
+];
+
+/// The account's own workspace in the steps, and its key (pattern(32, 209), named k:9).
+pub const PERSONAL: &str = "f0f0f0f0-0000-4000-8000-00000000000f";
 
 /// Node names a step may use.
 pub const NODES: &[&str] = &["ROOT", "A", "B", "C", "D", "E", "F", "G"];
@@ -137,6 +150,23 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
             panic!("the other family's chain is accepted");
         };
         out.insert("other-f2-v1", chain);
+        // Another family whose roster names this account's own workspace as one of its areas.
+        let mut hostile = History { format: 2, group_id: OTHER_GROUP.into(), ..History::new() };
+        hostile.roster_with(&owner, vec![entry.clone()], None, Some(vec![key_row_at(PERSONAL, 1)]));
+        let Ok(RosterChain::Accepted { chain }) = accept_rosters(
+            OTHER_GROUP.into(),
+            hostile.key(1),
+            true,
+            vec![],
+            hostile.rosters.clone(),
+            vec![],
+            served_ml_dsa(&[&owner]),
+            reader(),
+            None,
+        ) else {
+            panic!("the hostile family's chain is accepted");
+        };
+        out.insert("other-lists-personal", chain);
         out
     })
 }
@@ -257,6 +287,10 @@ pub enum Step {
     CommitPending(Vec<String>),
     DropPending(Vec<String>),
     DropAllPending,
+    OpenPersonal(u64),
+    PersonalCreate { node: String, parent_key_epoch: u64, key_epoch: u64 },
+    PersonalState,
+    Foreign,
     KeyAt { node: String, epoch: u64 },
     State,
 }
@@ -273,6 +307,14 @@ pub fn read_step(value: &Value) -> Option<Step> {
         "uncommit" => Step::Uncommit(group_of(object.get("group"))?),
         "forget" => Step::Forget(group_of(object.get("group"))?),
         "dropAllPending" => Step::DropAllPending,
+        "personalState" => Step::PersonalState,
+        "foreign" => Step::Foreign,
+        "openPersonal" => Step::OpenPersonal(epoch_of(field("version"))?),
+        "personalCreate" => Step::PersonalCreate {
+            node: node_of(field("node"))?,
+            parent_key_epoch: epoch_of(field("parentKeyEpoch"))?,
+            key_epoch: epoch_of(field("keyEpoch"))?,
+        },
         "requireWritable" => Step::RequireWritable,
         "state" => Step::State,
         "openArea" => {
@@ -677,6 +719,47 @@ impl Runner {
                     );
                     json!({ "rewrap": false, "old": old_name, "fresh": self.name_of(&fresh) })
                 }
+            }
+            Step::OpenPersonal(version) => {
+                ledger.open_personal_workspace(PERSONAL.into(), *version, named_key("k:9").unwrap())?;
+                json!({})
+            }
+            Step::PersonalCreate { node, parent_key_epoch, key_epoch } => {
+                let made = ledger.new_node_key(
+                    PERSONAL.into(),
+                    id(node),
+                    PERSONAL.into(),
+                    *parent_key_epoch,
+                    *key_epoch,
+                )?;
+                self.remember(node, *key_epoch, &made.key);
+                json!({ "key": self.name_of(&made.key) })
+            }
+            Step::PersonalState => {
+                let attempt = |read: CoreResult<Option<u64>>| match read {
+                    Ok(version) => json!(version),
+                    Err(error) => json!(code_of(&error)),
+                };
+                json!({
+                    "isArea": ledger.is_area(PERSONAL.into()),
+                    "read": attempt(ledger.read_version(PERSONAL.into())),
+                    "write": attempt(ledger.write_version(PERSONAL.into())),
+                })
+            }
+            Step::Foreign => {
+                let name = |group: &str| if group == GROUP { "family" } else { "other" };
+                let listings: Vec<Value> = ledger
+                    .foreign_listings()
+                    .into_iter()
+                    .map(|at| {
+                        json!({
+                            "group": name(&at.group_id),
+                            "workspace": if at.workspace_id == AREA { "area" } else { "personal" },
+                            "openedBy": at.opened_by.as_deref().map(name),
+                        })
+                    })
+                    .collect();
+                json!({ "listings": listings })
             }
             Step::DropAllPending => {
                 for node in NODES {

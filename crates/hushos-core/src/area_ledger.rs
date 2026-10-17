@@ -29,10 +29,12 @@
 //! compares them on any sequence of steps.
 //!
 //! Area state is kept per (family, area): an area resolves only through the
-//! family [`AreaLedger::open_area`] derived its id under, and never while a
-//! second committed chain lists it, so another family's member list (one a
-//! removed member manages, say) can neither move an area's write version nor
-//! drop its keys. A chain older than the one held is refused.
+//! family [`AreaLedger::open_area`] derived its id under, so another family's
+//! member list (one a removed member manages, say) can neither move an area's
+//! write version nor drop its keys; its listing of the area, or of the
+//! account's own workspace ([`AreaLedger::open_personal_workspace`]), is
+//! ignored and reported ([`AreaLedger::foreign_listings`]). A chain older than
+//! the one held, or another at its version, is refused.
 //!
 //! Where it differs from the worker, on purpose: [`AreaLedger::rotate_key`]
 //! marks a walk's fresh key pending at once (the worker's `rotateKey` does
@@ -77,6 +79,7 @@ const NO_CHAIN: &str = "Check the family’s member list first.";
 const NOT_THE_FAMILYS: &str = "This folder does not belong to the family.";
 const NOT_LISTED: &str = "This folder is not on the family’s member list.";
 const ITEM_CHANGED: &str = "This item changed since it was opened. Refresh and retry.";
+const FAMILY_FOLDER: &str = "This was refused: it is a family folder.";
 /// A chain older than the one this device already holds for the family (a
 /// background acceptance that lost a race with the foreground's): refused,
 /// and nothing of it (the record, the pin) is to be written.
@@ -152,6 +155,17 @@ pub struct RotatingNodeKey {
     pub key_epoch: u64,
     pub wrapped_parent_key_epoch: u64,
     pub key_envelope: Vec<u8>,
+}
+
+/// A committed chain listing a workspace that is not its family's: a folder
+/// another family opened here (`opened_by`), or the account's own workspace
+/// (`opened_by` none). Ignored for every decision; shown as a warning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ForeignListing {
+    pub group_id: String,
+    pub workspace_id: String,
+    pub opened_by: Option<String>,
 }
 
 /// A node key the session holds, at its epoch: the app's copy to wipe.
@@ -230,8 +244,10 @@ struct State {
     area_write: HashMap<AreaSlot, u64>,
     blocked: HashMap<AreaSlot, AreaBlock>,
     root_seen_at: HashMap<AreaSlot, u64>,
-    /* Each area's root node: the first top-level row whose key the family's chain committed to. */
+    /* Each area's root node: the first top-level row, at the write version, whose key the chain committed to. */
     root_ids: HashMap<AreaSlot, String>,
+    /* The account's own workspaces: never an area, whatever a family's roster lists. */
+    personal: std::collections::HashSet<String>,
     /* What the web's group session holds: committed chains by group, and areas opened per group. */
     chains: HashMap<String, Arc<AcceptedRosters>>,
     opened: HashMap<String, BTreeMap<String, OpenedArea>>,
@@ -288,14 +304,43 @@ impl State {
      * id as derived under it), and only while no second committed chain lists it.
      */
     fn family_of(&self, workspace_id: &str) -> Option<String> {
+        // The family it was opened under, whatever another family's chain lists (only a warning:
+        // `foreign_listings`); an area no family opened resolves through none.
         let families = self.opened_by(workspace_id);
-        if families.len() != 1 || self.listings(workspace_id) > 1 {
+        if families.len() != 1 {
             return None;
         }
         families.into_iter().next()
     }
 
+    fn foreign_listings(&self) -> Vec<ForeignListing> {
+        let mut out = vec![];
+        for (group_id, chain) in &self.chains {
+            for workspace_id in chain.area_keys.keys() {
+                let families = self.opened_by(workspace_id);
+                if self.personal.contains(workspace_id) {
+                    out.push(ForeignListing {
+                        group_id: group_id.clone(),
+                        workspace_id: workspace_id.clone(),
+                        opened_by: None,
+                    });
+                } else if !families.is_empty() && !families.contains(group_id) {
+                    out.push(ForeignListing {
+                        group_id: group_id.clone(),
+                        workspace_id: workspace_id.clone(),
+                        opened_by: families.into_iter().next(),
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| (&a.group_id, &a.workspace_id).cmp(&(&b.group_id, &b.workspace_id)));
+        out
+    }
+
     fn is_area(&self, workspace_id: &str) -> bool {
+        if self.personal.contains(workspace_id) {
+            return false;
+        }
         !self.opened_by(workspace_id).is_empty()
             || self.listings(workspace_id) > 0
             || self.area_write.keys().any(|(_, ws)| ws == workspace_id)
@@ -386,7 +431,11 @@ impl State {
         if seen.is_none_or(|seen| seen < parent_key_epoch) {
             self.root_seen_at.insert(at.clone(), parent_key_epoch);
         }
-        self.root_ids.entry(at).or_insert_with(|| node_id.to_string());
+        // Only a root at the area's write version names the root node: an older top-level row (one
+        // a removed member holding an old area key could plant) never wins it.
+        if self.area_write.get(&at) == Some(&parent_key_epoch) {
+            self.root_ids.entry(at).or_insert_with(|| node_id.to_string());
+        }
         Ok(true)
     }
 
@@ -980,7 +1029,7 @@ impl AreaLedger {
     /// A family's chain, accepted from what the server served (never a staged
     /// one): its areas are written under the versions it lists, and only its
     /// own areas (an area is resolved only through the family it was opened
-    /// under, and never while a second committed chain lists it). A new write
+    /// under; another family listing it is only reported). A new write
     /// version needs its root seen again; a retired area is written no more.
     /// Refused ([`OLDER_CHAIN`]) for a chain older than the one held, and
     /// ([`SPLIT_CHAIN`]) for another chain at the version held: an app then
@@ -1026,6 +1075,9 @@ impl AreaLedger {
         uuid(&group_id, "group id")?;
         let chain = state.chains.get(&group_id).cloned().ok_or_else(|| refused(NO_CHAIN))?;
         uuid(&workspace_id, "workspace id")?;
+        if state.personal.contains(&workspace_id) {
+            return Err(refused(NOT_THE_FAMILYS));
+        }
         check_id(IdKind::Workspace, group_id.clone(), id_seed.clone(), workspace_id.clone())
             .map_err(|_| refused(NOT_THE_FAMILYS))?;
         let latest = area_write_version(Arc::clone(&chain), workspace_id.clone())
@@ -1049,6 +1101,34 @@ impl AreaLedger {
             latest,
         );
         Ok(AreaOpened { version, writable: reason.is_none(), reason })
+    }
+
+    /// The account's own workspace, its key at `version` opened from its grant
+    /// (`workspace_open`): never a family folder, whatever a family's roster
+    /// lists, so a hostile family naming it cannot lock the drive. Call it
+    /// when the session opens its personal workspace, before any family sync.
+    /// Refused for a family folder this session opened (its id derived under its family).
+    pub fn open_personal_workspace(
+        &self,
+        workspace_id: String,
+        version: u64,
+        workspace_key: Vec<u8>,
+    ) -> CoreResult<()> {
+        let workspace_key = Zeroizing::new(workspace_key);
+        let mut state = self.lock();
+        if !state.opened_by(&workspace_id).is_empty() {
+            return Err(refused(FAMILY_FOLDER));
+        }
+        state.personal.insert(workspace_id.clone());
+        state.hold_workspace_key(&workspace_id, version, workspace_key.to_vec());
+        Ok(())
+    }
+
+    /// Committed chains listing a family folder another family opened here,
+    /// or the account's own workspace: what a hostile family's roster names,
+    /// ignored for every decision, for the app to tell the person about.
+    pub fn foreign_listings(&self) -> Vec<ForeignListing> {
+        self.lock().foreign_listings()
     }
 
     /// Whether the workspace is a family folder this session knows.
@@ -1667,15 +1747,14 @@ mod tests {
         // lists this family's folder at its old version; the server serves the old top level.
         let ledger = writable_with_both();
         ledger.commit(chain_of(OTHER_GROUP, vec![vec![Row::Key(1)]])).unwrap();
-        assert_eq!(message(ledger.write_version(AREA.into())), NOT_CHECKED_KEYS);
+        // Opened under this family, its id derived under it: the folder stays this family's.
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         let old_root = served(&node(ROOT), AREA, 1, 1, &area_key_at(AREA, 1), &root_key(1));
         ledger.open_listed_node(AREA.into(), old_root).unwrap();
-        assert_eq!(message(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1)), NOT_CHECKED_KEYS);
-        // The other family gone again, the area is its own family's: version 2, and the old top
-        // level writes nothing.
-        ledger.uncommit(OTHER_GROUP.into());
         assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         assert_eq!(message(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1)), KEY_CHANGE_PENDING);
+        ledger.uncommit(OTHER_GROUP.into());
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
         ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
         assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 2, 2).is_ok());
     }
@@ -1810,5 +1889,49 @@ mod tests {
         let split = chain(vec![vec![Row::Key(1)], vec![]]);
         assert_eq!(message(ledger.commit(split)), SPLIT_CHAIN);
         assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+    }
+
+    #[test]
+    fn a_family_naming_the_account_s_own_workspace_or_another_family_s_folder_locks_nothing() {
+        let personal = "f0f0f0f0-0000-4000-8000-00000000000f";
+        let ledger = writable_at(1);
+        // The hostile family lists this family's folder and the account's own workspace.
+        let hostile = chain_of(OTHER_GROUP, vec![vec![Row::Key(1)]]);
+        ledger.commit(hostile).unwrap();
+        ledger.open_personal_workspace(personal.into(), 1, key(9)).unwrap();
+        // A family folder this session opened is never taken as the account's own.
+        assert_eq!(message(ledger.open_personal_workspace(AREA.into(), 1, key(9))), FAMILY_FOLDER);
+        assert!(!ledger.is_area(personal.into()));
+        assert_eq!(ledger.write_version(personal.into()), Ok(None));
+        assert!(ledger.new_node_key(personal.into(), node(5), personal.into(), 1, 1).is_ok());
+        // The family's folder stays the family's: written, and the listing only a warning.
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(1)));
+        assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 1, 1).is_ok());
+        assert_eq!(
+            ledger.foreign_listings(),
+            vec![ForeignListing {
+                group_id: OTHER_GROUP.into(),
+                workspace_id: AREA.into(),
+                opened_by: Some(GROUP.into())
+            }]
+        );
+        // And the account's own workspace is never opened as a family folder.
+        let refused =
+            ledger.open_area(GROUP.into(), personal.into(), AREA_SEED.into(), 1, area_key_at(AREA, 1), 1);
+        assert_eq!(message(refused), NOT_THE_FAMILYS);
+    }
+
+    #[test]
+    fn an_old_version_top_node_never_takes_the_root_from_the_real_one() {
+        let ledger = AreaLedger::new();
+        ledger.commit(chain(vec![vec![Row::Key(1)], vec![Row::Key(2)]])).unwrap();
+        open(&ledger, 1, 2);
+        open(&ledger, 2, 2);
+        // A removed member holding area key 1 and the old top level's key plants another node with it.
+        let planted = served(&node(9), AREA, 1, 1, &area_key_at(AREA, 1), &root_key(1));
+        ledger.open_listed_node(AREA.into(), planted).unwrap();
+        ledger.open_listed_node(AREA.into(), root_row(2)).unwrap();
+        assert_eq!(ledger.write_version(AREA.into()), Ok(Some(2)));
+        assert!(ledger.new_node_key(AREA.into(), node(2), node(ROOT), 2, 2).is_ok());
     }
 }
