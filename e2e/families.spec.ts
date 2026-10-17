@@ -63,7 +63,9 @@ import {
 // As the server reads it: on unless set to false (an empty value is the default too).
 const familiesOn = process.env.GROUPS_ENABLED !== 'false';
 
-test.describe.configure({ mode: 'serial' });
+// Each block below is serial and makes its own people, so the blocks run side by side and
+// CI can shard the file: as one serial file it was the slowest job of a run.
+test.describe.configure({ mode: 'parallel' });
 
 test.beforeAll(async ({ request }) => {
     const answer = await request.get('/api/drive/capabilities', {
@@ -289,7 +291,7 @@ async function typeHidden(newcomer: Person, hidden: number[], read: string[]) {
     await match.click();
 }
 
-test.describe('two people', () => {
+test.describe.serial('two people', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
     let sam: Person;
@@ -682,7 +684,7 @@ function committedVersion(page: Page) {
     );
 }
 
-test.describe('removal, leaving and key changes', () => {
+test.describe.serial('removal, leaving and key changes', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
     let sam: Person;
@@ -1056,7 +1058,7 @@ test.describe('removal, leaving and key changes', () => {
     });
 });
 
-test.describe('three people', () => {
+test.describe.serial('three people', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
     let ana: Person;
@@ -1189,7 +1191,7 @@ test.describe('three people', () => {
  * plan's name. What the page offers and hides is real; checkout, the portal and the
  * places routes are not exercised.
  */
-test.describe('family plans, with the billing summary stubbed', () => {
+test.describe.serial('family plans, with the billing summary stubbed', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     const DAY = 24 * 60 * 60 * 1000;
     const family = 'Ekström family';
@@ -1468,7 +1470,7 @@ test.describe('family plans, with the billing summary stubbed', () => {
     });
 });
 
-test.describe('deleting a family folder', () => {
+test.describe.serial('deleting a family folder', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let ida: Person;
     let leo: Person;
