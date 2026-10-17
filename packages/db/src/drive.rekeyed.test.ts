@@ -1,4 +1,18 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import {
+    contentKeyContext,
+    generateKey,
+    metadataContext,
+    openEnvelopeBytes,
+    openOriginKey,
+    openWithOriginKey,
+    originOpeningKey,
+    rekeyEnvelope,
+    sealMetadata,
+    sealVersion,
+    wrapOriginKey,
+    type OriginRecord,
+} from '@hushos/crypto/drive';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
@@ -30,6 +44,8 @@ import {
     metadataRekeyedStatement,
     metadataSigned,
     metadataStatement,
+    verifySignature,
+    versionRekeyedStatement,
     versionStatement,
     type StatementForm,
 } from './signatures';
@@ -171,10 +187,19 @@ type Signing = {
     dropOrigin?: boolean;
 };
 
+/* Envelopes really re-sealed under a node key, and the wrapped keys that open their origins. */
+type Sealed = {
+    metadataEnvelope: Buffer;
+    contentKeyEnvelope: Buffer;
+    metadataWrap: Buffer;
+    versionWrap: Buffer;
+};
+
 /*
  * One file node re-keyed at the run's target, its metadata and its one version
  * each signed as `metadata` and `version` say, by the owner unless `by` says
- * another account's key.
+ * another account's key; with `sealed`, over those envelopes and wraps rather
+ * than random bytes.
  */
 async function rotateFile(
     run: Awaited<ReturnType<typeof startOn>>,
@@ -182,11 +207,12 @@ async function rotateFile(
     metadata: Signing,
     version: Signing = metadata,
     by = owner.userId,
+    sealed?: Sealed,
 ) {
     const row = await nodeRow(nodeId);
     const current = await versionRow(row.currentVersionId!);
-    const metadataEnvelope = meta();
-    const contentKeyEnvelope = randomBytes(84);
+    const metadataEnvelope = sealed?.metadataEnvelope ?? meta();
+    const contentKeyEnvelope = sealed?.contentKeyEnvelope ?? randomBytes(84);
     const sign = signerFor(by);
     const rekeyOf = async (
         signing: Signing,
@@ -203,11 +229,26 @@ async function rotateFile(
         return valid;
     };
     const metadataRekey = await rekeyOf(metadata, async () => {
-        const rekey = await signed.metadataRekey(by, ws, nodeId, run.targetEpoch, metadataEnvelope);
+        const rekey = await signed.metadataRekey(
+            by,
+            ws,
+            nodeId,
+            run.targetEpoch,
+            metadataEnvelope,
+            sealed?.metadataWrap,
+        );
         return rekey;
     });
     const versionRekey = await rekeyOf(version, () =>
-        signed.versionRekey(by, ws, nodeId, current.id, run.targetEpoch, contentKeyEnvelope),
+        signed.versionRekey(
+            by,
+            ws,
+            nodeId,
+            current.id,
+            run.targetEpoch,
+            contentKeyEnvelope,
+            sealed?.versionWrap,
+        ),
     );
     const fields = {
         workspaceId: ws,
@@ -805,6 +846,310 @@ describe('a second drop', () => {
             ]),
         );
         expect(evidence).toHaveLength(2);
+    });
+});
+
+/*
+ * A drop's evidence must stand on its own: the rotation that drops an origin
+ * overwrites the envelope the previous re-keyer sealed and its epoch, and a
+ * later purge takes the version's object. Someone holding the node key at the
+ * previous epoch rebuilds the previous re-keyer's statement from the row alone
+ * and opens what it covers, so a poisoned wrap (their signature covers it)
+ * can be told from a dropper who lied about one. Real envelopes, real wraps.
+ */
+describe('a drop’s evidence', () => {
+    /* What the row alone shows, under `nodeKey`: whether the origin binds, and whose signatures hold. */
+    async function evidenceOf(row: typeof driveOriginDrops.$inferSelect, nodeKey: Uint8Array) {
+        const metadata = row.versionId === null;
+        const record: OriginRecord = metadata
+            ? { kind: 'metadata', metadataVersion: row.metadataVersion! }
+            : { kind: 'version', versionId: row.versionId! };
+        const aad = metadata
+            ? metadataContext({
+                  workspaceId: row.workspaceId,
+                  nodeId: row.nodeId,
+                  metadataVersion: row.metadataVersion!,
+              })
+            : contentKeyContext({
+                  workspaceId: row.workspaceId,
+                  nodeId: row.nodeId,
+                  versionId: row.versionId!,
+                  objectId: row.objectId!,
+                  suite: row.contentSuite!,
+              });
+        const origin = {
+            envelope: row.originEnvelope,
+            signerId: row.originSignerId,
+            signature: row.originSignature,
+            keyEnvelope: row.originKeyEnvelope,
+        };
+        const statement = metadata
+            ? metadataRekeyedStatement(
+                  {
+                      workspaceId: row.workspaceId,
+                      nodeId: row.nodeId,
+                      kind: row.nodeKind!,
+                      metadataVersion: row.metadataVersion!,
+                      metadataEnvelope: row.previousEnvelope!,
+                      keyEpoch: row.previousKeyEpoch!,
+                  },
+                  origin,
+              )
+            : versionRekeyedStatement(
+                  {
+                      workspaceId: row.workspaceId,
+                      nodeId: row.nodeId,
+                      versionId: row.versionId!,
+                      objectId: row.objectId!,
+                      contentSuite: row.contentSuite!,
+                      contentKeyEnvelope: row.previousEnvelope!,
+                      keyEpoch: row.previousKeyEpoch!,
+                  },
+                  origin,
+              );
+        const writerStatement = metadata
+            ? metadataStatement({
+                  workspaceId: row.workspaceId,
+                  nodeId: row.nodeId,
+                  kind: row.nodeKind!,
+                  metadataVersion: row.metadataVersion!,
+                  metadataEnvelope: row.originEnvelope,
+              })
+            : versionStatement({
+                  workspaceId: row.workspaceId,
+                  nodeId: row.nodeId,
+                  versionId: row.versionId!,
+                  objectId: row.objectId!,
+                  contentSuite: row.contentSuite!,
+                  contentKeyEnvelope: row.originEnvelope,
+              });
+        const opened = await openOriginKey(row.originKeyEnvelope, nodeKey, {
+            workspaceId: row.workspaceId,
+            nodeId: row.nodeId,
+            keyEpoch: row.previousKeyEpoch!,
+            record,
+            originEnvelope: row.originEnvelope,
+        });
+        const current = Buffer.from(await openEnvelopeBytes(row.previousEnvelope!, nodeKey, aad));
+        const fromOrigin = await openWithOriginKey(row.originEnvelope, opened, aad).then(
+            (bytes) => Buffer.from(bytes),
+            () => null,
+        );
+        return {
+            bound: fromOrigin !== null && fromOrigin.equals(current),
+            rekeyerSigned: verifySignature(
+                signerFor(row.previousRekeyerId!).publicKey,
+                statement,
+                row.previousRekeySignature,
+            ),
+            writerSigned: verifySignature(
+                signerFor(row.originSignerId).publicKey,
+                writerStatement,
+                row.originSignature,
+            ),
+        };
+    }
+
+    /* The file's records as `writer` sealed them under `nodeKey` for real, and signed them. */
+    async function sealedBy(nodeKey: Uint8Array, doc: { id: string }) {
+        const row = await nodeRow(doc.id);
+        const version = await versionRow(row.currentVersionId!);
+        const content = {
+            workspaceId: ws,
+            nodeId: doc.id,
+            versionId: version.id,
+            objectId: version.objectId!,
+            suite: 2,
+        };
+        const metadataEnvelope = Buffer.from(
+            await sealMetadata(
+                { name: 'Plans.pdf', mime: 'application/pdf', size: 1024, modified: null },
+                nodeKey,
+                { workspaceId: ws, nodeId: doc.id, metadataVersion: row.metadataVersion },
+            ),
+        );
+        const contentKeyEnvelope = Buffer.from(
+            await sealVersion(
+                { contentKey: generateKey(), plaintextSize: 1024, thumbnailBytes: 0 },
+                nodeKey,
+                content,
+            ),
+        );
+        await db.update(driveNodes).set({ metadataEnvelope }).where(eq(driveNodes.id, doc.id));
+        await db
+            .update(fileVersions)
+            .set({ contentKeyEnvelope })
+            .where(eq(fileVersions.id, version.id));
+        await writtenBy(writer, doc);
+        return {
+            metadata: {
+                envelope: metadataEnvelope,
+                aad: metadataContext({
+                    workspaceId: ws,
+                    nodeId: doc.id,
+                    metadataVersion: row.metadataVersion,
+                }),
+                record: { kind: 'metadata', metadataVersion: row.metadataVersion } as OriginRecord,
+            },
+            version: {
+                envelope: contentKeyEnvelope,
+                aad: contentKeyContext(content),
+                record: { kind: 'version', versionId: version.id } as OriginRecord,
+            },
+        };
+    }
+
+    /*
+     * An honest first re-key from `oldKey` to `newKey` at `keyEpoch`: each record re-sealed raw
+     * and its origin's opening key wrapped, unless `poison` wraps some other key for one record.
+     */
+    async function rekeyed(
+        records: Awaited<ReturnType<typeof sealedBy>>,
+        nodeId: string,
+        oldKey: Uint8Array,
+        newKey: Uint8Array,
+        keyEpoch: number,
+        poison?: 'version',
+    ): Promise<Sealed> {
+        const one = async (
+            entry: Awaited<ReturnType<typeof sealedBy>>['metadata'],
+            poisoned: boolean,
+        ) => ({
+            envelope: Buffer.from(await rekeyEnvelope(entry.envelope, oldKey, newKey, entry.aad)),
+            wrap: Buffer.from(
+                await wrapOriginKey(
+                    poisoned ? generateKey() : originOpeningKey(entry.envelope, oldKey),
+                    newKey,
+                    {
+                        workspaceId: ws,
+                        nodeId,
+                        keyEpoch,
+                        record: entry.record,
+                        originEnvelope: entry.envelope,
+                    },
+                ),
+            ),
+        });
+        const metadata = await one(records.metadata, false);
+        const version = await one(records.version, poison === 'version');
+        return {
+            metadataEnvelope: metadata.envelope,
+            contentKeyEnvelope: version.envelope,
+            metadataWrap: metadata.wrap,
+            versionWrap: version.wrap,
+        };
+    }
+
+    /* A newer version published over the current one, which is then discarded and purged. */
+    async function purgeCurrentVersion(nodeId: string) {
+        const row = await nodeRow(nodeId);
+        const objectId = randomUUID();
+        const next = await signed.beginUpload({
+            workspaceId: ws,
+            userId: owner.userId,
+            node: {
+                existing: true,
+                id: nodeId,
+                keyEpoch: row.keyEpoch,
+                expectedVersionId: row.currentVersionId,
+            },
+            version: { id: randomUUID(), contentKeyEnvelope: randomBytes(84) },
+            object: {
+                id: objectId,
+                objectKey: `ws/${ws}/${objectId}`,
+                contentSuite: 2,
+                chunkSize: Number(8n * MiB),
+                chunkCount: 1,
+                contentNonce: randomBytes(16),
+                ciphertextSize: MiB + 16n,
+            },
+            multipartId: `mp-${objectId}`,
+            expiresAt: new Date(Date.now() + 3600_000),
+        });
+        if (next.status !== 'ok') throw new Error(next.status);
+        await drive.startCompleting(ws, next.uploadId);
+        const done = await drive.finishCompleting(ws, next.uploadId, MiB + 16n);
+        if (done.status !== 'published') throw new Error(done.status);
+        const discarded = await drive.discardVersion(ws, row.currentVersionId!);
+        if (discarded.status !== 'ok') throw new Error(discarded.status);
+        expect((await versionRow(row.currentVersionId!)).status).toBe('purged');
+    }
+
+    const evidenceRows = (nodeId: string) =>
+        db.select().from(driveOriginDrops).where(eq(driveOriginDrops.nodeId, nodeId));
+
+    /* Written by `writer` under K0, re-keyed by the owner to K1, then dropped by the owner. */
+    async function droppedFile(poison?: 'version') {
+        const doc = await file();
+        const k0 = generateKey();
+        const k1 = generateKey();
+        const records = await sealedBy(k0, doc);
+        const first = await startOn(doc.id);
+        const sealed = await rekeyed(records, doc.id, k0, k1, first.targetEpoch, poison);
+        const result = await rotateFile(
+            first,
+            doc.id,
+            { rekey: 'valid' },
+            { rekey: 'valid' },
+            owner.userId,
+            sealed,
+        );
+        if (result.status !== 'ok') throw new Error(result.status);
+        if (!(await rotations.finishRotation(first))) throw new Error('not finished');
+        const drop = await startOn(doc.id);
+        expect(
+            (await rotateFile(drop, doc.id, { legacy: 'resealed', dropOrigin: true })).status,
+        ).toBe('ok');
+        if (!(await rotations.finishRotation(drop))) throw new Error('not finished');
+        return { doc, k1, firstEpoch: first.targetEpoch, versionId: result.versionId };
+    }
+
+    test('the row alone, with the old node key, rebuilds the previous re-keyer’s statement and verifies it, after a later rotation and a purge', async () => {
+        const { doc, k1, firstEpoch, versionId } = await droppedFile();
+        const before = await evidenceRows(doc.id);
+        expect(before.map((row) => row.versionId)).toEqual(
+            expect.arrayContaining([null, versionId]),
+        );
+        expect(before).toHaveLength(2);
+        for (const row of before) {
+            expect(row.previousKeyEpoch).toBe(firstEpoch);
+            expect(row.previousRekeyerId).toBe(owner.userId);
+            expect(await evidenceOf(row, k1)).toEqual({
+                bound: true,
+                rekeyerSigned: true,
+                writerSigned: true,
+            });
+        }
+
+        // The record moves on: re-keyed again over the dropper's re-sealed record, and its
+        // version replaced and purged, its object gone. The evidence needs none of it.
+        await rotatedOnce(doc.id, { rekey: 'valid' });
+        await purgeCurrentVersion(doc.id);
+        const node = await nodeRow(doc.id);
+        expect(node.keyEpoch).toBeGreaterThan(firstEpoch);
+        const after = await evidenceRows(doc.id);
+        expect(after).toHaveLength(2);
+        for (const row of after)
+            expect(await evidenceOf(row, k1)).toEqual({
+                bound: true,
+                rekeyerSigned: true,
+                writerSigned: true,
+            });
+    });
+
+    test('tells a poisoned wrap, which the previous re-keyer signed, from an origin that binds', async () => {
+        const { doc, k1, versionId } = await droppedFile('version');
+        const rows = await evidenceRows(doc.id);
+        const version = rows.find((row) => row.versionId === versionId)!;
+        const metadata = rows.find((row) => row.versionId === null)!;
+        // The owner's signature covers a wrap that opens nothing of the writer's: their fault, and
+        // the dropper was right to drop it. The metadata beside it bound: a drop of that was not.
+        expect(await evidenceOf(version, k1)).toEqual({
+            bound: false,
+            rekeyerSigned: true,
+            writerSigned: true,
+        });
+        expect((await evidenceOf(metadata, k1)).bound).toBe(true);
     });
 });
 

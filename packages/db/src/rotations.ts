@@ -439,7 +439,10 @@ export type SignedRecord = {
         keyEnvelope: Buffer;
         rekeySignature: Buffer;
     } | null;
-    /* The kept origin a legacy re-seal dropped (dropOrigin), recorded whole as evidence. */
+    /*
+     * The kept origin a legacy re-seal dropped (dropOrigin), recorded whole as evidence, with
+     * the envelope the previous re-keyer sealed over it: their statement covers both.
+     */
     dropped: {
         envelope: Buffer;
         signerId: string;
@@ -447,6 +450,7 @@ export type SignedRecord = {
         keyEnvelope: Buffer;
         rekeySignature: Buffer;
         previousRekeyerId: string | null;
+        previousEnvelope: Buffer;
     } | null;
 };
 
@@ -548,7 +552,11 @@ export function checkRotatedRecord(input: {
         origin: null,
         // The server cannot check binding, so a drop leaves a trace of whose signature went.
         dropped:
-            kept && kept.signerId && stored.originKeyEnvelope && stored.rekeySignature
+            kept &&
+            kept.signerId &&
+            stored.originKeyEnvelope &&
+            stored.rekeySignature &&
+            stored.envelope
                 ? {
                       envelope: kept.envelope,
                       signerId: kept.signerId,
@@ -556,6 +564,7 @@ export function checkRotatedRecord(input: {
                       keyEnvelope: stored.originKeyEnvelope,
                       rekeySignature: stored.rekeySignature,
                       previousRekeyerId: stored.signerId,
+                      previousEnvelope: stored.envelope,
                   }
                 : null,
     };
@@ -815,14 +824,20 @@ export async function rotateNodeIn(
                     : {}),
             })
             .where(and(eq(fileVersions.id, version.id), eq(fileVersions.nodeId, item.id)));
-    // Every drop, as evidence that outlives the record: whose signature, which, who, when.
+    // Every drop, as evidence that outlives the record: whose signature, which, who, when, and
+    // every field of the previous re-keyer's statement that this rotation overwrites or a purge
+    // takes (the envelope they sealed, its epoch, the node's kind or the version's object and
+    // suite), so the row alone rebuilds that statement (docs/integrity-design.md).
     const drops = [
         ...(metadata.dropped
             ? [
                   {
                       dropped: metadata.dropped,
                       metadataVersion: node.metadataVersion,
+                      nodeKind: node.kind,
                       versionId: null,
+                      objectId: null,
+                      contentSuite: null,
                   },
               ]
             : []),
@@ -832,7 +847,10 @@ export async function rotateNodeIn(
                       {
                           dropped: version.signed.dropped,
                           metadataVersion: null,
+                          nodeKind: null,
                           versionId: version.id,
+                          objectId: version.row.objectId,
+                          contentSuite: version.row.contentSuite,
                       },
                   ]
                 : [],
@@ -851,6 +869,11 @@ export async function rotateNodeIn(
                 originKeyEnvelope: drop.dropped.keyEnvelope,
                 previousRekeySignature: drop.dropped.rekeySignature,
                 previousRekeyerId: drop.dropped.previousRekeyerId,
+                previousEnvelope: drop.dropped.previousEnvelope,
+                previousKeyEpoch: node.keyEpoch,
+                nodeKind: drop.nodeKind,
+                objectId: drop.objectId,
+                contentSuite: drop.contentSuite,
                 droppedBy: input.userId,
                 targetEpoch: input.targetEpoch,
             })),

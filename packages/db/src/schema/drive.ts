@@ -307,6 +307,15 @@ export const driveOriginDrops = pgTable(
         previousRekeySignature: bytea('previous_rekey_signature').notNull(),
         // Null once that account is gone (the row's signer column is nulled with it).
         previousRekeyerId: uuid('previous_rekeyer'),
+        // The rest of what the previous re-keyer's statement covers, which the drop overwrites
+        // (the envelope they sealed and its epoch) or a purge takes (the version's object and
+        // suite): with them the row alone rebuilds that statement. Null on drops recorded before
+        // they were kept; whole on every drop since.
+        previousEnvelope: bytea('previous_envelope'),
+        previousKeyEpoch: integer('previous_key_epoch'),
+        nodeKind: text('node_kind').$type<'folder' | 'file'>(),
+        objectId: uuid('object_id'),
+        contentSuite: smallint('content_suite'),
         droppedBy: uuid('dropped_by').notNull(),
         targetEpoch: integer('target_epoch').notNull(),
         droppedAt: timestamp('dropped_at', { withTimezone: true }).notNull().defaultNow(),
@@ -316,6 +325,10 @@ export const driveOriginDrops = pgTable(
         check(
             'drive_origin_drops_valid',
             sql`(${table.metadataVersion} is null) <> (${table.versionId} is null) and octet_length(${table.originEnvelope}) between 42 and 4136 and octet_length(${table.originSignature}) = 64 and octet_length(${table.originKeyEnvelope}) = 72 and octet_length(${table.previousRekeySignature}) = 64 and ${table.targetEpoch} >= 1`,
+        ),
+        check(
+            'drive_origin_drops_previous_valid',
+            sql`(${table.previousEnvelope} is null and ${table.previousKeyEpoch} is null and ${table.nodeKind} is null and ${table.objectId} is null and ${table.contentSuite} is null) or (${table.previousEnvelope} is not null and ${table.previousKeyEpoch} >= 1 and ${table.previousKeyEpoch} < ${table.targetEpoch} and ((${table.metadataVersion} is not null and ${table.nodeKind} in ('folder', 'file') and ${table.objectId} is null and ${table.contentSuite} is null and octet_length(${table.previousEnvelope}) between 42 and 4136) or (${table.versionId} is not null and ${table.nodeKind} is null and ${table.objectId} is not null and ${table.contentSuite} >= 1 and octet_length(${table.previousEnvelope}) = octet_length(${table.originEnvelope}))))`,
         ),
     ],
 );
