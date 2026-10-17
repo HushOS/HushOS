@@ -2,7 +2,7 @@
 
 Status: research, 15 October 2026. Nothing was called against Polar. Evidence comes from three places, cited inline:
 
-- **[SDK]** the installed `@polar-sh/sdk` 1.0.0-alpha.20, `2026-04` namespace: `node_modules/.bun/@polar-sh+sdk@1.0.0-alpha.20/node_modules/@polar-sh/sdk/dist/models-Os3Vmw3y.d.mts` (line numbers below). The `2026-10` models file differs from it in two doc strings only.
+- **[SDK]** the installed `@polar-sh/sdk` 1.0.0-alpha.20, `2026-04` namespace: `node_modules/.bun/@polar-sh+sdk@1.0.0-alpha.20/node_modules/@polar-sh/sdk/dist/models-Os3Vmw3y.d.mts` (line numbers below). The billing package moved to the `2026-10` namespace on 17 October 2026; its models file (`models-Buz84sI2.d.mts`) differs from this one in two doc strings only, so the line numbers hold for both.
 - **[src]** Polar's public server source at commit `a4bae2b` (14 October 2026): `https://github.com/polarsource/polar/blob/a4bae2b742befdb6dcc696a841f259aed24f2086/server/polar/<path>`. Source shows intent, not what the sandbox does; anything load-bearing is repeated as an experiment in section 6.
 - **[docs]** `https://polar.sh/docs/...` pages, named where cited.
 
@@ -69,7 +69,7 @@ Experiments E5 (refund maths) and the refund half of E4 are no longer needed; th
 
 - **Adding mid-cycle.**
     - `subscriptions.update(id, { units, proration_behavior: 'invoice' })` creates a `subscription_update` order and charges it off-session at once, in `PaymentMode.sync` ([src] `subscription/service.py` 4644–4661, 2559–2669).
-    - A failed charge returns 402 `PaymentFailed` or `PaymentActionRequired` ([docs] `api-reference/2026-04/subscriptions/update-subscription`).
+    - A failed charge returns 402 `PaymentFailed` or `PaymentActionRequired` ([docs] `api-reference/2026-10/subscriptions/update-subscription`).
     - Whether the unit change survives that 402 is not visible; E3 checks it.
     - `'prorate'` defers the charge to the next renewal: no immediate payment, no 402, and no separate transaction fee. The catch is credit risk. A plan cancelled at period end never renews, so the deferred charge is likely never collected (E3).
 - **Removing mid-cycle.**
@@ -329,7 +329,7 @@ Use Stripe test cards ([Stripe testing docs](https://docs.stripe.com/testing)):
 **E2. Product shape.**
 
 - **Setup:**
-    1. Through the API on `2026-04`, create Family (monthly) with a fixed price plus a graduated unit price in all four currencies: `{ bound: 6, unit_amount: 0 }`, then `{ bound: null, unit_amount: 200 }`, with `minimum_units: 6`.
+    1. Through the API on `2026-10`, create Family (monthly) with a fixed price plus a graduated unit price in all four currencies: `{ bound: 6, unit_amount: 0 }`, then `{ bound: null, unit_amount: 200 }`, with `minimum_units: 6`.
     2. Retry with mismatched bounds across currencies.
 - **Pass if:**
     - the product is accepted;
@@ -404,7 +404,7 @@ Use Stripe test cards ([Stripe testing docs](https://docs.stripe.com/testing)):
 
 ## 7. Open risks
 
-- **Unit-based pricing is six weeks old** and is used here against Polar's own "not a person" guidance. Polar may change its behaviour, or steer people-counting to seats. Mitigation: pin the SDK version and the `2026-04` path, and rerun E2 and E3 before every SDK upgrade.
+- **Unit-based pricing is six weeks old** and is used here against Polar's own "not a person" guidance. Polar may change its behaviour, or steer people-counting to seats. Mitigation: pin the SDK version and the API-version path (`2026-10` since 17 October 2026), and rerun E2 and E3 before every SDK upgrade or API-version change. The move from `2026-04` to `2026-10` is such a change, so E2 and E3 must be run, or rerun, on `2026-10` before their results are relied on. The OpenAPI specs for the two versions differ only in webhook-endpoint secrets and license-key fields, which makes a change unlikely, not ruled out.
 - **Polar's docs disagree with its source.**
     - `features/products` says "Each product has a single pricing model", while the source composes fixed with seat or unit prices.
     - The 1,000-seat cap appears in the docs but not in the code.

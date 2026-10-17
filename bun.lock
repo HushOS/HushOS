@@ -130,7 +130,7 @@
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
-        "@polar-sh/sdk": "^1.0.0-alpha.20",
+        "@polar-sh/sdk": "1.0.0-alpha.20",
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",

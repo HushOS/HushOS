@@ -1,4 +1,4 @@
-import type * as PolarSdk from '@polar-sh/sdk/2026-04';
+import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -196,7 +196,7 @@ const fakeClient = {
     },
 };
 
-vi.mock('@polar-sh/sdk/2026-04', async (importOriginal) => {
+vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     const real = await importOriginal<typeof PolarSdk>();
     return { ...real, createPolar: () => fakeClient };
 });

@@ -2,7 +2,7 @@ import { billingRepository, growthRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import { billingEnv } from '@hushos/env/billing';
 import { log } from '@hushos/logging';
-import { createPolar, webhooks, type Polar, type models } from '@polar-sh/sdk/2026-04';
+import { createPolar, webhooks, type Polar, type models } from '@polar-sh/sdk/2026-10';
 import { PolarClientError } from '@polar-sh/sdk';
 import type { BillingSummary, Catalogue, DiscountTerms, Plan } from './api';
 import {
