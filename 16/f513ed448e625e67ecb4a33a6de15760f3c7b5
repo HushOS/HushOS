@@ -1,0 +1,53 @@
+DESIGN.md
+  s_c56e31c87cddde::t_3df442e0efe023 396
+apps/web/src/lib/integrity-lines.test.ts
+  s_c56e31c87cddde::t_626c2d713e0084 456-466,468-485,487-490,492-506
+apps/web/src/lib/integrity-lines.ts
+  s_c56e31c87cddde::t_9ad399ca1d7033 380-386,390-391,393,397-418,422-446,448-449
+docs/groups-server.md
+  s_c56e31c87cddde::t_7afebd24965ea5 276-277
+docs/integrity-design.md
+  s_c56e31c87cddde::t_aba9b526eddadf 381,383
+docs/self-hosting.md
+  s_c56e31c87cddde::t_77d9db53725848 194
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_b5d6b35f1fd720 670,1590-1603
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_8ec7537bde109d 3187-3200
+packages/db/drizzle/20261017062152_rekeyed_origins/migration.sql
+  s_c56e31c87cddde::t_60cba07a65d6f5 10-12,22,24-26,30-31,34
+packages/db/drizzle/20261017062152_rekeyed_origins/snapshot.json
+  s_c56e31c87cddde::t_04dea2fa5d1ac0 4,3555,3573-3611,11387
+packages/db/src/drive.rekeyed.test.ts
+  s_c56e31c87cddde::t_103ee81966f956 2,24,27,709-711,713-719,727,742-744,751-810
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_04f532ade4f98f 477-489,1602,1728,2372,2419
+packages/db/src/readiness.ts
+  s_c56e31c87cddde::t_0f137cdc0b7a80 14
+packages/db/src/rotations.ts
+  s_c56e31c87cddde::t_5e0808998a8f19 428-430,442-450,551-559,677-678,712-713,788,849,851-853
+packages/db/src/schema/drive.ts
+  s_c56e31c87cddde::t_c5c203188964b4 77-79,282-284,300-302,304,306-309,318
+packages/drive/src/api.ts
+  s_c56e31c87cddde::t_3132baf15b5454 48-51,56-57
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_e3c1f63f681938 118,121-127,176
+packages/drive/src/server.visitors.test.ts
+  s_c56e31c87cddde::t_60ffc6ba76b575 29,33,99-107,111-115,131-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16f513ed448e625e67ecb4a33a6de15760f3c7b5",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
