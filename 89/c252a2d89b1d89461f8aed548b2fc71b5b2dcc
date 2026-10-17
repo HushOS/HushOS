@@ -1,0 +1,114 @@
+apps/web/src/components/families/remove-dialog.tsx
+  s_c56e31c87cddde::t_16dbba3ee24ecb 1-249
+  s_c56e31c87cddde::t_addae5000994e2 250-280
+apps/web/src/lib/groups/removal.ts
+  s_c56e31c87cddde::t_dc5c623607cbba 1-363
+  s_c56e31c87cddde::t_ccd1bf7c1fabf0 364-415
+apps/web/src/lib/family-work.ts
+  s_c56e31c87cddde::t_01e6ec64c9b641 1-83
+  s_c56e31c87cddde::t_fb49c07f7684c8 84-93
+apps/web/src/components/families/key-changes.tsx
+  s_c56e31c87cddde::t_e39cd18fd1117d 1-152
+  s_c56e31c87cddde::t_28639c87b47c61 153-154
+apps/web/src/lib/groups/server-testkit.ts
+  s_c56e31c87cddde::t_40cd4f6323cc64 1-441
+  s_c56e31c87cddde::t_ac6a9343014c15 442-495
+apps/web/src/lib/groups/removal.test.ts
+  s_c56e31c87cddde::t_3e808731e86652 1-369,372,375-376
+  s_c56e31c87cddde::t_323a561f2abf7c 370-371,373-374,377-473
+apps/web/src/lib/groups/rotations.ts
+  s_c56e31c87cddde::t_5c7cc5ed523411 1-108
+  s_c56e31c87cddde::t_faebf09c393732 109-110
+DESIGN.md
+  s_c56e31c87cddde::t_851a7d647a68e0 396
+apps/web/src/components/drive/add-menu.tsx
+  s_c56e31c87cddde::t_257b0af4c154e5 20-21,30
+apps/web/src/components/drive/area-notice.tsx
+  s_c56e31c87cddde::t_5c376af8468070 9-11,49-51
+apps/web/src/components/drive/drive-shell.tsx
+  s_c56e31c87cddde::t_cefaee2e772236 106-107,111-116,120-138
+apps/web/src/components/drive/family-area.tsx
+  s_c56e31c87cddde::t_887a5ebd1bd6c5 35-36,52-64
+apps/web/src/components/drive/folder-view.tsx
+  s_c56e31c87cddde::t_cb738f65d8f04e 437,442,488-495,524,528,541-552,558,826-827,838,923-926,1001-1009,1263-1266,1317
+apps/web/src/components/drive/transfers-panel.tsx
+  s_c56e31c87cddde::t_ac22aabf6f4252 7,32,81-84,392-395,406-414,495-496
+apps/web/src/components/families/members.tsx
+  s_c56e31c87cddde::t_3115d8acd48627 30,52,59,169,178-179,183,263-267,313-321,346-355
+apps/web/src/lib/drive.ts
+  s_c56e31c87cddde::t_2d0339a0594d56 68-69,76,189-191
+apps/web/src/lib/families.ts
+  s_c56e31c87cddde::t_2a41a7d332d7a6 2,106-109,112-113,119-129,179-180,190-197,215-221
+apps/web/src/lib/groups/context.ts
+  s_c56e31c87cddde::t_b31eb0beb86dcd 12,35-38,95-99,103,105-109
+apps/web/src/lib/groups/outbox.ts
+  s_c56e31c87cddde::t_d315b439c9b087 92-96,241-245,348-350,372-398,559-562,782-786
+apps/web/src/lib/groups/sync.ts
+  s_c56e31c87cddde::t_5da5e2303ff539 67-68,72,79-80,83-106,367,456-460
+apps/web/src/lib/groups/test-harness.ts
+  s_c56e31c87cddde::t_69022216bb1279 113,158-162
+apps/web/src/lib/groups/walks.test.ts
+  s_c56e31c87cddde::t_823ccdd37ad920 1-146
+apps/web/src/lib/groups/walks.ts
+  s_c56e31c87cddde::t_04371f88c0fb5c 1-83
+apps/web/src/lib/rotation.ts
+  s_c56e31c87cddde::t_023623dcf74056 38,60-65
+apps/web/src/lib/space-registry.ts
+  s_c56e31c87cddde::t_5c313d8b9bb41e 15-22,31-32,73-76
+apps/web/src/lib/spaces.ts
+  s_c56e31c87cddde::t_f17db421781a30 6,13,15-16,18,20-21,110,112-118,132,179-374
+apps/web/src/lib/transfers.ts
+  s_c56e31c87cddde::t_6fae77b584f3fc 11,65-66,68
+apps/web/src/lib/uploads.ts
+  s_c56e31c87cddde::t_46cb6aab545d29 10,31-36,68-72,138-139,150-184
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/index.tsx
+  s_c56e31c87cddde::t_c94380e5dce40c 9,38,41,44-45,67-68,123,188-192,196-198,246,271-279,300-304,355-356,358-362,364-372,375
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/route.tsx
+  s_c56e31c87cddde::t_fc0df5a3ce51a1 29-31
+docs/groups-design.md
+  s_c56e31c87cddde::t_c1c435922a1a23 288-293
+docs/groups-server.md
+  s_c56e31c87cddde::t_dd0aaa82c0e62f 256,273-279
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_ba4986930b57e9 4-11,36-45,161-165,167,421,430-438,440,539-858
+packages/crypto/src/index.ts
+  s_c56e31c87cddde::t_38e889bbaadee5 36
+packages/crypto/src/protocol.ts
+  s_c56e31c87cddde::t_90a8451f1470eb 57
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_0ed9ac03fa98af 262-268,503-520,607-614,660-661,1470-1474,1478-1481,1504-1507,2988-3038,3083-3084
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_6eceabbe1dcd59 21,25,1722,1786-1846,2685-3084
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_5fb555ed0ac524 532-538,916-921,1410,1414,1741-1745,2552,2631-2643,2645-2661,2672-2673,2690,2699-2722,2729-2730,3014-3022,3030-3074
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_4cc365fc8d5ecc 195-230,791-792,948-949,1079-1080,1302-1305,1325-1326,1767-1768,1803-1804,2048-2049
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_6019024b31198c 28,1119-1450
+packages/drive/src/client.test.ts
+  s_c56e31c87cddde::t_b07f71fa0b6522 74,205,247,390-406
+packages/drive/src/client.ts
+  s_c56e31c87cddde::t_532522fa6a0942 9,236-243,958,1416,1426-1429,1456,1604-1619,1632,1639,1908
+packages/drive/src/server.ts
+  s_c56e31c87cddde::t_cf419c6560e5fc 532-534,663-665,776-778,1270-1272,1476-1478
+packages/drive/src/transfers.test.ts
+  s_c56e31c87cddde::t_9dd14190a307e9 98,323-324,431-491,912-961
+packages/drive/src/transfers.ts
+  s_c56e31c87cddde::t_56c9b25e3dd39d 61-65,146-154,274-276,396-399,621-659,684-695,991-992,994-998
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "89c252a2d89b1d89461f8aed548b2fc71b5b2dcc",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
