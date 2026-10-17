@@ -449,6 +449,7 @@ const {
     deleteTestAccount,
     resetDatabase,
     setTestMember,
+    setTestUsedBytes,
 } = await import('../../db/test/helpers');
 const { billingRepository, authRepository, driveRepository, groupsRepository, growthRepository } =
     await import('@hushos/db');
@@ -1712,6 +1713,79 @@ describe('review fixes', () => {
         const { payer, groupId } = await familyOnPlan();
         for (let index = 0; index < 10; index++) await billing.syncGroup(payer, groupId);
         await expect(billing.syncGroup(payer, groupId)).rejects.toMatchObject({ status: 429 });
+    });
+});
+
+describe('family summary', () => {
+    test('a member who doesn’t manage the family sees its plan and pool, never a price, and can’t refresh it', async () => {
+        const { payer, groupId, areaIds, subscription } = await familyOnPlan({ units: 7 });
+        const member = await createTestAccount();
+        await setTestMember({ groupId, userId: member.userId, state: 'active' });
+        await setTestUsedBytes(areaIds[0]!, 300n * GIB);
+        const glance = await billing.getGroupBilling(userOf(member), groupId);
+        expect(glance).toMatchObject({
+            view: 'member',
+            plans: [],
+            nextPlace: null,
+            payer: { userId: payer.id, you: false },
+            subscription: { productName: 'Family (monthly)', amount: null, currency: null },
+            storage: { usedBytes: (300n * GIB).toString(), quotaBytes: FAMILY_POOL.toString() },
+        });
+        await expect(billing.syncGroup(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        // The payer gets the amounts, and the period a raise is prorated over.
+        const full = await billing.getGroupBilling(payer, groupId);
+        expect(full).toMatchObject({
+            view: 'manage',
+            subscription: {
+                amount: 1500,
+                currency: 'usd',
+                currentPeriodStart: subscription.current_period_start,
+            },
+        });
+        expect(full.plans.length).toBeGreaterThan(0);
+        // Someone outside the family learns nothing of it.
+        const outsider = await createTestAccount();
+        await expect(billing.getGroupBilling(userOf(outsider), groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        // Nor does someone who only accepted an invitation.
+        const waiting = await createTestAccount();
+        await setTestMember({ groupId, userId: waiting.userId, state: 'accepted' });
+        await expect(billing.getGroupBilling(userOf(waiting), groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+    });
+
+    test('the pool counts every family folder, and a plan that ended is named with its end', async () => {
+        const organizer = await createTestAccount();
+        const { groupId, areaIds } = await createTestFamily({
+            organizerId: organizer.userId,
+            areas: 2,
+            pooled: true,
+        });
+        const before = await billing.getGroupBilling(userOf(organizer), groupId);
+        // Never paid: nothing ended, so it is a family still choosing, not a lapsed one.
+        expect(before).toMatchObject({ subscription: null, lastPlan: null });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        const subscription = familySubscription(groupId, { units: 6 });
+        await billing.reconcileGroup(groupId);
+        await setTestUsedBytes(areaIds[0]!, 5n * GIB);
+        await setTestUsedBytes(areaIds[1]!, 7n * GIB);
+        expect((await billing.getGroupBilling(userOf(organizer), groupId)).storage).toEqual({
+            usedBytes: (12n * GIB).toString(),
+            quotaBytes: FAMILY_POOL.toString(),
+        });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        const after = await billing.getGroupBilling(userOf(organizer), groupId);
+        expect(after.subscription).toBeNull();
+        expect(after.lastPlan?.productName).toBe('Family (monthly)');
+        expect(Date.parse(after.lastPlan!.endedAt)).toBeGreaterThan(Date.now() - 60_000);
+        // The files stay; the pool they count against is gone until a plan returns.
+        expect(after.storage).toEqual({ usedBytes: (12n * GIB).toString(), quotaBytes: '0' });
     });
 });
 

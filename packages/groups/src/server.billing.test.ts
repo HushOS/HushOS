@@ -1,5 +1,6 @@
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { Member } from '../test/kit';
+import { randomBytes } from 'node:crypto';
 import { PolarClientError } from '@polar-sh/sdk';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -135,7 +136,9 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     return { ...real, createPolar: () => fakeClient };
 });
 
-const { groupsRepository, billingRepository, driveRepository } = await import('@hushos/db');
+const { groupsRepository, billingRepository, driveRepository, scopedId } =
+    await import('@hushos/db');
+const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
 const { closeDatabase, createTestAccount, resetDatabase } = await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const groups = await import('./server');
@@ -405,5 +408,114 @@ describe('admission with billing on', () => {
         expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({ state: 'left' });
         expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(2);
         expect((await driveRepository.getStorage(fam.areaId))?.allowance).toBe(1024n ** 4n);
+    });
+});
+
+/* A new family folder's call (route 21): its roster row, root, self-grant and the creator's grant. */
+async function areaCall(fam: Awaited<ReturnType<typeof kit.family>>) {
+    const areaSeed = randomBytes(16).toString('base64url');
+    const areaId = scopedId('workspace', fam.groupId, areaSeed)!;
+    const { at, call } = await kit.nextRoster(fam, fam.organizer, kit.entries(fam.h), {
+        areas: [
+            {
+                workspaceId: areaId,
+                workspaceKeyVersion: 1,
+                commitment: await areaKeyCommitment(randomBytes(32)),
+            },
+        ],
+    });
+    return {
+        ...call,
+        area: {
+            workspaceId: areaId,
+            idSeed: areaSeed,
+            root: await kit.rootWire(areaId, fam.organizer.who),
+            selfGrant: kit.selfGrant(areaId),
+        },
+        grants: [
+            await kit.grantWire(fam.groupId, areaId, 1, fam.organizer.who, fam.organizer.who, at),
+        ],
+    };
+}
+
+describe('places', () => {
+    test('the family and its billing summary report the same paid limit, through a scheduled cut', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 3);
+        const payer = { id: fam.organizer.userId, name: 'Maya', email: fam.organizer.email };
+        const limits = async () => ({
+            family: (await groups.getGroup(fam.organizer.userId, fam.groupId)).seats.limit,
+            billing: (await billing.getGroupBilling(payer, fam.groupId)).seats.limit,
+        });
+        expect(await limits()).toEqual({ family: 3, billing: 3 });
+        // A cut to two at renewal blocks the third place now, on both.
+        await billing.setGroupUnits(payer, fam.groupId, 2);
+        expect(await limits()).toEqual({ family: 2, billing: 2 });
+    });
+});
+
+describe('a family without a plan', () => {
+    test('invites nobody and makes no family folder, and stores nothing for trying', async () => {
+        const fam = await kit.family();
+        const before = await kit.head(fam.groupId);
+        expect(
+            await refusal(
+                groups.invite(fam.organizer.userId, fam.groupId, {
+                    email: 'sam@hushos.test',
+                    roles: [],
+                }),
+            ),
+        ).toMatchObject({ code: 'no-plan', status: 402 });
+        expect(await groupsRepository.listOpenInvitations(fam.groupId)).toEqual([]);
+        expect(
+            await refusal(
+                groups.createArea(fam.organizer.userId, fam.groupId, await areaCall(fam)),
+            ),
+        ).toMatchObject({ code: 'no-plan', status: 402 });
+        // The member list, and so its areas, are as they were.
+        expect(await kit.head(fam.groupId)).toEqual(before);
+    });
+
+    test('with a plan it does both; once the plan ends it stops again', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 1);
+        await groups.invite(fam.organizer.userId, fam.groupId, {
+            email: 'sam@hushos.test',
+            roles: [],
+        });
+        expect(await groupsRepository.listOpenInvitations(fam.groupId)).toHaveLength(1);
+        expect(
+            await groups.createArea(fam.organizer.userId, fam.groupId, await areaCall(fam)),
+        ).toMatchObject({ version: 2 });
+
+        // The plan ran out: the family keeps what it has, and adds no one and nothing.
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        polar.teams.get(`group:${fam.groupId}`)!.subscriptions = [];
+        await billing.reconcileGroup(fam.groupId);
+        expect(
+            await refusal(
+                groups.invite(fam.organizer.userId, fam.groupId, {
+                    email: 'ana@hushos.test',
+                    roles: [],
+                }),
+            ),
+        ).toMatchObject({ code: 'no-plan', status: 402 });
+        const head = await kit.head(fam.groupId);
+        expect(
+            await refusal(
+                groups.createArea(fam.organizer.userId, fam.groupId, await areaCall(fam)),
+            ),
+        ).toMatchObject({ code: 'no-plan', status: 402 });
+        expect(await kit.head(fam.groupId)).toEqual(head);
+    });
+
+    test('someone outside the family hears that they are not in it, never whether it has a plan', async () => {
+        const fam = await kit.family();
+        const outsider = await kit.member();
+        const answer = await refusal(
+            groups.invite(outsider.userId, fam.groupId, { email: 'sam@hushos.test', roles: [] }),
+        );
+        expect(answer.code).toBe('not-member');
     });
 });

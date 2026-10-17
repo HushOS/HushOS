@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountIntents,
@@ -11,6 +11,8 @@ import {
     groups,
     personalWorkspaces,
     storageEntitlements,
+    workspaceStorage,
+    workspaces,
 } from './schema';
 
 // past_due keeps its allowance through the retry window; the entitlement's own expiry bounds it.
@@ -565,4 +567,37 @@ export async function getGroupPool(groupId: string) {
         .from(groupStorage)
         .where(eq(groupStorage.groupId, groupId));
     return row ?? null;
+}
+
+/*
+ * What the family's folders hold, together: the bytes the pool is spent on
+ * (drive.ts freeBytes counts the same areas). Reserved bytes of uploads still
+ * in flight are left out; the summary shows what is stored.
+ */
+export async function getGroupPoolUsage(groupId: string) {
+    const [row] = await db
+        .select({ used: sql<string>`coalesce(sum(${workspaceStorage.usedBytes}), 0)::text` })
+        .from(workspaceStorage)
+        .innerJoin(workspaces, eq(workspaces.id, workspaceStorage.workspaceId))
+        .where(eq(workspaces.groupId, groupId));
+    return BigInt(row?.used ?? '0');
+}
+
+/* The family's most recent plan that has ended, for the notice once none is live. */
+export async function getLastEndedGroupSubscription(groupId: string) {
+    const [row] = await db
+        .select({
+            productName: groupBillingSubscriptions.productName,
+            endedAt: groupBillingSubscriptions.endedAt,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNotNull(groupBillingSubscriptions.endedAt),
+            ),
+        )
+        .orderBy(desc(groupBillingSubscriptions.endedAt))
+        .limit(1);
+    return row?.endedAt ? { productName: row.productName, endedAt: row.endedAt } : null;
 }

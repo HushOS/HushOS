@@ -3,6 +3,7 @@ import { ChevronRightIcon, FolderPlusIcon } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState } from '@/components/drive/file-list';
 import { FINISHING_KEY_CHANGE } from '@/components/drive/family-area';
+import { useFamilyPlanGate } from '@/components/families/family-billing';
 import { NewFamilyFolderDialog } from '@/components/families/new-folder-dialog';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { FolderMark } from '@/components/folder-mark';
@@ -31,6 +32,9 @@ function areaLine(area: AreaState) {
 function FamilySpacePage() {
     const space = useFamilySpace();
     const [creating, setCreating] = useState(false);
+    // Where plans are sold, a family folder waits for one: the pool is empty until it is paid.
+    const plan = useFamilyPlanGate(space.userId, space.groupId);
+    const canCreate = space.manager && !plan.waiting;
     // A folder whose root did not open has no name to show; it is listed by what it is.
     const rows = [...space.areas].sort((a, b) =>
         (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true }),
@@ -55,7 +59,7 @@ function FamilySpacePage() {
                 >
                     Trash
                 </Link>
-                {space.manager && (
+                {canCreate && (
                     <Button onClick={() => setCreating(true)}>
                         <FolderPlusIcon />
                         New family folder
@@ -67,9 +71,11 @@ function FamilySpacePage() {
                     icon={FolderPlusIcon}
                     title="No family folders yet"
                     body={
-                        space.manager
+                        canCreate
                             ? 'Make one, and everyone in the family can open it.'
-                            : 'Someone who manages the family can make one.'
+                            : plan.waiting && plan.summary
+                              ? `Family folders wait for ${space.family} to have a plan.`
+                              : 'Someone who manages the family can make one.'
                     }
                 />
             ) : (
@@ -117,7 +123,7 @@ function FamilySpacePage() {
                 </ul>
             )}
             <ServerKnowsLine className="mt-auto" />
-            {space.manager && (
+            {canCreate && (
                 <NewFamilyFolderDialog
                     userId={space.userId}
                     groupId={space.groupId}

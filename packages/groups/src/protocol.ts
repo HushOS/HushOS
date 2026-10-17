@@ -17,6 +17,7 @@ export type GroupErrorCode =
     | 'seats'
     | 'organizer'
     | 'payer'
+    | 'no-plan'
     | 'last-holder'
     | 'unsupported'
     | 'forbidden'

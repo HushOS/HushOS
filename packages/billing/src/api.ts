@@ -35,9 +35,14 @@ export type FamilyPlan = {
     quotaBytes: string;
 };
 
-/* What a family's billing page shows its managers and its payer. */
+/*
+ * What a family's billing page shows. Its managers and its payer get the whole
+ * of it (`view: 'manage'`); any other member gets the plan's name, its state
+ * and the pool (`view: 'member'`), with no plans, prices or amounts.
+ */
 export type GroupBillingSummary = {
     enabled: boolean;
+    view: 'manage' | 'member';
     plans: FamilyPlan[];
     /* Who pays: the only person who can add or remove places, or open the portal. */
     payer: { userId: string; you: boolean } | null;
@@ -56,9 +61,18 @@ export type GroupBillingSummary = {
         pendingUnits: number | null;
         includedMembers: number;
         quotaBytes: string;
+        /* With the end, what a raise is prorated over: the web quotes it with `quoteUnitsChange`. */
+        currentPeriodStart: string;
         currentPeriodEnd: string;
         cancelAtPeriodEnd: boolean;
     } | null;
+    /*
+     * The plan the family had last, once none is live: it ran out or was
+     * cancelled. Null while a plan is live, and for a family that never had one.
+     */
+    lastPlan: { productName: string; endedAt: string } | null;
+    /* The family's storage pool: every family folder's bytes against the plan's size. */
+    storage: { usedBytes: string; quotaBytes: string } | null;
     seats: { used: number; limit: number };
     /*
      * What one more place costs now, before tax: the rest of this period at
@@ -192,6 +206,23 @@ export interface GrowthApi {
     ): Promise<AffiliateView>;
     deleteAffiliate(id: string): Promise<{ deleted: true }>;
     markAffiliatePaid(id: string): Promise<{ paid: number }>;
+}
+
+/* A family's plan (`/api/billing/groups/:id`); only its payer changes it. */
+export interface GroupBillingApi {
+    summary(groupId: string): Promise<GroupBillingSummary>;
+    /* Polar's hosted checkout; whoever starts it becomes the family's payer. */
+    checkout(groupId: string, productId: string, currency?: string): Promise<{ url: string }>;
+    /*
+     * More places are charged at once; fewer are scheduled for the period's
+     * end. `url` is the portal when the bank wants the payer to confirm.
+     */
+    setUnits(
+        groupId: string,
+        units: number,
+    ): Promise<{ billing: GroupBillingSummary; url: string | null; confirmPayment?: true }>;
+    portal(groupId: string): Promise<{ url: string }>;
+    sync(groupId: string): Promise<GroupBillingSummary>;
 }
 
 export interface BillingApi {

@@ -42,6 +42,32 @@ export const UNPAID_GROUP_SEATS = 1;
  */
 export const STALE_RAISE_DAYS = 7;
 
+/*
+ * What Polar charges at once for going from `fromUnits` to `toUnits` places,
+ * before tax: the added per-member amount for the part of the period left,
+ * prorated by the second and truncated to the minor unit, as Polar does
+ * (spike E4: 200 at 0.99994 of a month left was charged 199; 2000 at 0.999994
+ * of a year, 1999). Places within the included members cost nothing; a cut
+ * costs nothing now and refunds nothing.
+ */
+export function quoteUnitsChange(input: {
+    perMember: number;
+    includedMembers: number;
+    fromUnits: number;
+    toUnits: number;
+    periodStart: Date;
+    periodEnd: Date;
+    now?: Date;
+}) {
+    const billable = (units: number) => Math.max(0, units - input.includedMembers);
+    const added = billable(input.toUnits) - billable(input.fromUnits);
+    const total = Math.floor((input.periodEnd.getTime() - input.periodStart.getTime()) / 1000);
+    if (added <= 0 || total <= 0) return 0;
+    const now = (input.now ?? new Date()).getTime();
+    const left = Math.min(total, Math.max(0, Math.floor((input.periodEnd.getTime() - now) / 1000)));
+    return Number((BigInt(added) * BigInt(input.perMember) * BigInt(left)) / BigInt(total));
+}
+
 /* The organisation's default payment currency at the provider; every plan has a price in it. */
 export const DEFAULT_CURRENCY = 'usd';
 
