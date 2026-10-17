@@ -1,4 +1,4 @@
-import { createPolar, type models } from '@polar-sh/sdk/2026-04';
+import { createPolar, type models } from '@polar-sh/sdk/2026-10';
 import {
     DEFAULT_CURRENCY,
     PLAN_METADATA_KEY,
