@@ -429,6 +429,11 @@ export async function applyGroupState(input: {
      * other live row has ended), or one subscription as a change returned it.
      */
     complete?: boolean;
+    /*
+     * Subscriptions the caller could not read into a snapshot (their product is
+     * not a plan it knows): left exactly as they are, never swept as ended.
+     */
+    keepIds?: string[];
 }) {
     return db.transaction(async (tx) => {
         const [group] = await tx
@@ -494,7 +499,8 @@ export async function applyGroupState(input: {
             .filter(
                 (subscription) => !subscription.endedAt && LIVE_STATUSES.has(subscription.status),
             )
-            .map((subscription) => subscription.id);
+            .map((subscription) => subscription.id)
+            .concat(input.keepIds ?? []);
         if (input.complete !== false)
             await tx
                 .update(groupBillingSubscriptions)

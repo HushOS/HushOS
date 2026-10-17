@@ -1,10 +1,16 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { closeDatabase, createTestAccount, createTestFamily, resetDatabase } from '../test/helpers';
-import * as billing from './billing';
-import { db } from './client';
-import { getStorage } from './drive';
-import { groups, workspaceStorage } from './schema';
+import type { GroupSubscriptionSnapshot } from './billing';
+
+// Pools are billing's: with BILLING_PROVIDER=none Drive ignores them (drive.pool-none.test.ts).
+process.env.BILLING_PROVIDER = 'polar';
+
+const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
+    await import('../test/helpers');
+const billing = await import('./billing');
+const { db } = await import('./client');
+const { getStorage } = await import('./drive');
+const { groups, workspaceStorage } = await import('./schema');
 
 /*
  * A family's plan as billing writes it, and the pool Drive reads from it: the
@@ -16,9 +22,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const GRACE = 3 * DAY;
 const GIB = 1_073_741_824n;
 
-function plan(
-    overrides: Partial<billing.GroupSubscriptionSnapshot> = {},
-): billing.GroupSubscriptionSnapshot {
+function plan(overrides: Partial<GroupSubscriptionSnapshot> = {}): GroupSubscriptionSnapshot {
     const units = overrides.units ?? 6;
     return {
         id: 'sub_family',
@@ -41,7 +45,7 @@ function plan(
     };
 }
 
-async function apply(groupId: string, subscriptions: billing.GroupSubscriptionSnapshot[]) {
+async function apply(groupId: string, subscriptions: GroupSubscriptionSnapshot[]) {
     return billing.applyGroupState({
         groupId,
         provider: 'polar',

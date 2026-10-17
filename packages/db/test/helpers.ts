@@ -244,11 +244,11 @@ export async function createTestFamily(input: {
     return { groupId: id, areaIds };
 }
 
-/* Someone in a test family: accepted (waiting to be let in) or active, with roles. */
+/* Someone in a test family: accepted (waiting to be let in), active or left, with roles. */
 export async function setTestMember(input: {
     groupId: string;
     userId: string;
-    state: 'accepted' | 'active';
+    state: 'accepted' | 'active' | 'left';
     roles?: GroupRole[];
 }) {
     const now = new Date();
@@ -256,7 +256,8 @@ export async function setTestMember(input: {
         state: input.state,
         roles: input.roles ?? [],
         acceptedAt: now,
-        admittedAt: input.state === 'active' ? now : null,
+        admittedAt: input.state === 'accepted' ? null : now,
+        leftAt: input.state === 'left' ? now : null,
     };
     await db
         .insert(groupMemberships)

@@ -30,6 +30,7 @@ export {
     createGroupPortalSession,
     ensureGroupSeat,
     getGroupBilling,
+    paysForGroup,
     quoteUnitsChange,
     reconcileGroup,
     reissueCut,

@@ -116,7 +116,17 @@ const polar = {
     raiseLeavesOrder: false,
     /* How many scheduled cuts (next_period) fail before Polar takes one again. */
     cutFailures: 0,
-    orders: [] as { id: string; subscription_id: string; status: string; due_amount: number }[],
+    /* Runs once as Polar takes the next cut: an admission landing mid-flight. */
+    beforeCut: null as (() => Promise<void>) | null,
+    /* Orders cannot be read (a token without orders:read, an outage). */
+    ordersFail: false,
+    orders: [] as {
+        id: string;
+        subscription_id: string;
+        status: string;
+        due_amount: number;
+        created_at: string;
+    }[],
     calls: [] as string[],
 };
 
@@ -335,6 +345,7 @@ const fakeClient = {
     orders: {
         async list(query: { subscription_id?: string; status?: string }) {
             polar.calls.push(`orders.list:${query.subscription_id}`);
+            if (polar.ordersFail) throw new PolarClientError(403, { error: 'NotPermitted' });
             return {
                 items: polar.orders.filter(
                     (order) =>
@@ -383,6 +394,9 @@ const fakeClient = {
                         polar.cutFailures -= 1;
                         throw new PolarClientError(503, { error: 'ServiceUnavailable' });
                     }
+                    const hook = polar.beforeCut;
+                    polar.beforeCut = null;
+                    await hook?.();
                     subscription.pending_update = {
                         units: body.units,
                         applies_at: subscription.current_period_end,
@@ -398,6 +412,7 @@ const fakeClient = {
                         subscription_id: id,
                         status: 'pending',
                         due_amount: 235,
+                        created_at: new Date().toISOString(),
                     });
                 }
                 if (raise && polar.raiseRefusal)
@@ -497,6 +512,8 @@ beforeEach(async () => {
     polar.raiseRefusal = null;
     polar.raiseLeavesOrder = false;
     polar.cutFailures = 0;
+    polar.beforeCut = null;
+    polar.ordersFail = false;
     polar.orders = [];
     billing.setCutRetryQueue(undefined);
     polar.calls = [];
@@ -1270,16 +1287,23 @@ describe('family places', () => {
         expect(raises()).toEqual([]);
     });
 
-    test('a raise deletes a scheduled cut at Polar, and HushOS puts it back', async () => {
+    test('an explicit raise replaces a scheduled cut: no places paid for and blocked', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
         await billing.setGroupUnits(payer, groupId, 6);
         expect(subscription).toMatchObject({ units: 8, pending_update: { units: 6 } });
         // The cut blocks admissions at once.
         expect(await seatLimit(groupId)).toBe(6);
         await billing.setGroupUnits(payer, groupId, 9);
-        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 6 } });
+        expect(subscription).toMatchObject({ units: 9, pending_update: null });
+        expect(await seatLimit(groupId)).toBe(9);
         const summary = await billing.getGroupBilling(payer, groupId);
-        expect(summary.subscription).toMatchObject({ units: 9, pendingUnits: 6 });
+        expect(summary.subscription).toMatchObject({ units: 9, pendingUnits: null });
+        expect(
+            (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
+        ).toBeNull();
+        // Nothing puts the cut back later either.
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
         // Below the members admitted, or the plan's six, a cut is refused before Polar.
         polar.calls = [];
         await expect(billing.setGroupUnits(payer, groupId, 5)).rejects.toMatchObject({
@@ -1288,11 +1312,9 @@ describe('family places', () => {
         expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
     });
 
-    test('a cut put back after a raise is never below the members admitted', async () => {
+    test('a scheduled cut that blocks the payer’s admission moves up, free', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
         await billing.setGroupUnits(payer, groupId, 6);
-        // A seventh member while the cut to six is pending: the payer's admission moves the
-        // cut up to seven, free, since the place was already paid for.
         const seventh = await createTestAccount();
         await setTestMember({ groupId, userId: seventh.userId, state: 'accepted' });
         polar.calls = [];
@@ -1300,10 +1322,21 @@ describe('family places', () => {
         expect(raises()).toEqual([]);
         expect(subscription).toMatchObject({ units: 9, pending_update: { units: 7 } });
         expect(await seatLimit(groupId)).toBe(7);
-        await setTestMember({ groupId, userId: seventh.userId, state: 'active' });
-        // Now a raise with that cut pending: the cut comes back at seven, not six.
-        await billing.setGroupUnits(payer, groupId, 10);
-        expect(subscription).toMatchObject({ units: 10, pending_update: { units: 7 } });
+    });
+
+    test('an admission that lands while a cut is scheduled moves the cut up to the members', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8, members: 5 });
+        // The payer counts six members and cuts to six; a seventh is admitted before the cut lands.
+        polar.beforeCut = async () =>
+            setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        await billing.setGroupUnits(payer, groupId, 6);
+        expect(subscription).toMatchObject({ units: 8, pending_update: { units: 7 } });
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits).toBe(7);
     });
 
     test('a declined raise says the bank declined it and changes nothing; a confirmation goes to the portal', async () => {
@@ -1486,17 +1519,18 @@ describe('unpaid places', () => {
 });
 
 describe('cuts Polar lost', () => {
-    test('a cut that could not be put back after a raise is queued, and the retry puts it back', async () => {
+    test('a recorded cut Polar lost is re-issued by reconcile; a refusal is queued and the retry puts it back', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
         const queued: string[] = [];
         billing.setCutRetryQueue(async (id) => {
             queued.push(id);
         });
         await billing.setGroupUnits(payer, groupId, 6);
+        // Polar drops the cut on its own, and refuses it back once.
+        subscription.pending_update = null;
         polar.cutFailures = 1;
-        await billing.setGroupUnits(payer, groupId, 9);
-        // The raise stands; Polar dropped the cut and refused it back once.
-        expect(subscription).toMatchObject({ units: 9, pending_update: null });
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
         expect(queued).toEqual([groupId]);
         expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits).toBe(6);
         // The job's first run meets Polar failing again and throws, so pg-boss retries it.
@@ -1504,7 +1538,7 @@ describe('cuts Polar lost', () => {
         await expect(billing.reissueCut(groupId)).rejects.toBeInstanceOf(PolarClientError);
         expect(subscription.pending_update).toBeNull();
         await billing.reissueCut(groupId);
-        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 6 } });
+        expect(subscription).toMatchObject({ units: 8, pending_update: { units: 6 } });
         expect(await seatLimit(groupId)).toBe(6);
         // Run again (a duplicate job), it asks Polar for nothing.
         polar.calls = [];
@@ -1512,22 +1546,118 @@ describe('cuts Polar lost', () => {
         expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
     });
 
-    test('the daily reconcile re-issues a recorded cut, and forgets it once it has applied', async () => {
-        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+    test('the daily reconcile re-issues a recorded cut, never below the members, and forgets it once it applied', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
         await billing.setGroupUnits(payer, groupId, 6);
-        // No queue in this process: only the record is left.
-        polar.cutFailures = 1;
-        await billing.setGroupUnits(payer, groupId, 9);
-        expect(subscription.pending_update).toBeNull();
+        subscription.pending_update = null;
+        // A seventh member arrived since, and arrives again while the cut is re-issued.
+        await setTestMember({
+            groupId,
+            userId: (await createTestAccount()).userId,
+            state: 'active',
+        });
+        polar.beforeCut = async () =>
+            setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
         await billing.reconcileGroup(groupId);
-        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 6 } });
-        // The period renews at six: nothing is due any more.
-        subscription.units = 6;
+        expect(subscription).toMatchObject({ units: 9, pending_update: { units: 8 } });
+        // The period renews at eight: nothing is due any more.
+        subscription.units = 8;
         subscription.pending_update = null;
         await billing.reconcileGroup(groupId);
         expect(
             (await billingRepository.getLiveGroupSubscription(groupId))?.intendedUnits,
         ).toBeNull();
         expect(subscription.pending_update).toBeNull();
+    });
+});
+
+describe('review fixes', () => {
+    test('a raise whose orders cannot be read opens no place', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.ordersFail = true;
+        expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
+            status: 'confirm',
+        });
+        expect(subscription.units).toBe(7);
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('a raise left unconfirmed past seven days is cut back to the places paid for', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.raiseRefusal = { error: 'PaymentActionRequired', detail: 'Confirm the payment.' };
+        polar.raiseLeavesOrder = true;
+        await billing.ensureGroupSeat(groupId, payer.id);
+        expect(subscription.units).toBe(7);
+        // Six days: the payer may still answer their bank.
+        polar.orders[0]!.created_at = new Date(Date.now() - 6 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+        polar.orders[0]!.created_at = new Date(Date.now() - 8 * DAY).toISOString();
+        await billing.reconcileGroup(groupId);
+        expect(subscription).toMatchObject({ units: 7, pending_update: { units: 6 } });
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('a plan whose product an operator edited out of the catalogue is never swept as ended', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        const family = polar.products.find((candidate) => candidate.id === FAMILY)!;
+        const metadata = { ...family.metadata };
+        const clock = vi.spyOn(Date, 'now');
+        const later = (ms: number) => clock.mockReturnValue(new Date().getTime() + ms);
+        try {
+            delete (family.metadata as Record<string, string>).included_members;
+            later(2 * 60_000);
+            await billing.reconcileGroup(groupId);
+            clock.mockRestore();
+            const live = await billingRepository.getLiveGroupSubscription(groupId);
+            expect(live).toMatchObject({ id: subscription.id, status: 'active', endedAt: null });
+            expect(await seatLimit(groupId)).toBe(8);
+            expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
+            await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
+                status: 409,
+            });
+        } finally {
+            family.metadata = metadata;
+            const restore = vi.spyOn(Date, 'now');
+            restore.mockReturnValue(new Date().getTime() + 4 * 60_000);
+            await billing.listCatalogue();
+            restore.mockRestore();
+        }
+    });
+
+    test('a former payer can still open the portal and pay for less, but not for more', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        expect((await billing.createGroupPortalSession(payer, groupId)).url).toContain(payer.id);
+        await billing.setGroupUnits(payer, groupId, 6);
+        expect(subscription.pending_update).toEqual(expect.objectContaining({ units: 6 }));
+        await expect(billing.setGroupUnits(payer, groupId, 9)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(subscription.units).toBe(8);
+    });
+
+    test('a checkout is refused while Polar holds a plan HushOS has not seen yet', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        familySubscription(groupId, { units: 7 });
+        polar.checkouts = [];
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 409 });
+        expect(polar.checkouts).toEqual([]);
+        // The plan it found reached the family.
+        expect(await seatLimit(groupId)).toBe(7);
+    });
+
+    test('a family’s sync is rate-limited per person', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        for (let index = 0; index < 10; index++) await billing.syncGroup(payer, groupId);
+        await expect(billing.syncGroup(payer, groupId)).rejects.toMatchObject({ status: 429 });
     });
 });

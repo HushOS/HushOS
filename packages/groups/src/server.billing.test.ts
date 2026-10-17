@@ -155,11 +155,11 @@ async function onPlan(fam: Awaited<ReturnType<typeof kit.family>>, units: number
     await billingRepository.recordGroupCustomer({
         groupId: fam.groupId,
         provider: 'polar',
-        providerCustomerId: 'cus_team',
+        providerCustomerId: `cus_${fam.groupId.slice(0, 8)}`,
         payerUserId: fam.organizer.userId,
     });
     const subscription: Subscription = {
-        id: 'sub_family',
+        id: `sub_${fam.groupId.slice(0, 8)}`,
         status: 'active',
         product_id: FAMILY,
         recurring_interval: 'month',
@@ -172,7 +172,7 @@ async function onPlan(fam: Awaited<ReturnType<typeof kit.family>>, units: number
         units,
         pending_update: null,
     };
-    polar.teams.set(`group:${fam.groupId}`, { id: 'cus_team', subscriptions: [subscription] });
+    polar.teams.set(`group:${fam.groupId}`, { id: `cus_${fam.groupId.slice(0, 8)}`, subscriptions: [subscription] });
     polar.subscriptions.set(subscription.id, subscription);
     await billing.reconcileGroup(fam.groupId);
     return subscription;
@@ -289,5 +289,29 @@ describe('admission with billing on', () => {
         expect(polar.updates).toEqual([]);
         expect(subscription.units).toBe(2);
         expect(await state(fam.groupId, third.userId)).toBe('accepted');
+    });
+
+    test('the payer of a live plan cannot leave, even beside another billing holder, nor dissolve it as its last member', async () => {
+        const alone = await kit.family();
+        await onPlan(alone, 1);
+        // Leaving last would dissolve the family; the card would go on being charged.
+        expect(await refusal(groups.leave(alone.organizer.userId, alone.groupId))).toMatchObject({
+            code: 'payer',
+            status: 409,
+        });
+        expect(await state(alone.groupId, alone.organizer.userId)).toBe('active');
+        expect((await groupsRepository.getGroupRow(alone.groupId))?.dissolvedAt).toBeNull();
+
+        polar.teams.clear();
+        polar.subscriptions.clear();
+        const fam = await kit.family();
+        await onPlan(fam, 2);
+        const holder = await kit.member();
+        await kit.admitted(fam, holder, ['billing', 'members']);
+        expect(await refusal(groups.leave(fam.organizer.userId, fam.groupId))).toMatchObject({
+            code: 'payer',
+            status: 409,
+        });
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
     });
 });

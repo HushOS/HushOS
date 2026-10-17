@@ -34,6 +34,14 @@ export const MAX_MEMBERS_PER_RAISE = 5;
  */
 export const UNPAID_GROUP_SEATS = 1;
 
+/*
+ * A raise whose order still waits for the bank after this many days is cut
+ * back, at the period's end, to the places paid for: the payer never
+ * confirmed it, so a renewal must not bill it. Seven days leaves a payer a
+ * week to answer their bank (a 3-D Secure or e-mandate prompt).
+ */
+export const STALE_RAISE_DAYS = 7;
+
 /* The organisation's default payment currency at the provider; every plan has a price in it. */
 export const DEFAULT_CURRENCY = 'usd';
 

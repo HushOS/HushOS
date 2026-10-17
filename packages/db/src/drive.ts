@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
+import { billingEnv } from '@hushos/env/billing';
 import { db } from './client';
 import { holdsWorkspace } from './membership';
 import { heldObjectCondition } from './reports';
@@ -1263,7 +1264,8 @@ async function freeBytes(tx: Tx, workspaceId: string) {
         .select({ groupId: workspaces.groupId })
         .from(workspaces)
         .where(eq(workspaces.id, workspaceId));
-    const groupId = owner?.groupId ?? null;
+    // A pool is billing's; with BILLING_PROVIDER=none every area keeps its own allowance.
+    const groupId = billingEnv.BILLING_PROVIDER === 'none' ? null : (owner?.groupId ?? null);
     const [pool] = groupId
         ? await tx
               .select({ quotaBytes: groupStorage.quotaBytes, expiresAt: groupStorage.expiresAt })

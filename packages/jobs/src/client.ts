@@ -116,8 +116,9 @@ export async function ensureQueues(boss: PgBoss) {
 }
 
 /*
- * For the API side: a lazily started, send-only client. Nothing sends yet; Drive's
- * upload commit will be the first caller, ideally inside its own transaction.
+ * For the API side: a lazily started, send-only client (billing's cut retries
+ * are its first caller). A start that fails is forgotten, so the next send
+ * tries again instead of failing for the life of the process.
  */
 let client: Promise<PgBoss> | undefined;
 export function getJobClient() {
@@ -126,7 +127,10 @@ export function getJobClient() {
         boss.on('error', (error) => log.error(error));
         await boss.start();
         return boss;
-    })();
+    })().catch((error: unknown) => {
+        client = undefined;
+        throw error;
+    });
     return client;
 }
 

@@ -25,7 +25,12 @@ import {
 } from '@hushos/crypto/groups';
 import { verifyHybrid } from '@hushos/crypto/signatures';
 import { UNPAID_GROUP_SEATS } from '@hushos/billing/protocol';
-import { billingEnabled, ensureGroupSeat, type SeatResult } from '@hushos/billing/server';
+import {
+    billingEnabled,
+    ensureGroupSeat,
+    paysForGroup,
+    type SeatResult,
+} from '@hushos/billing/server';
 import { authRepository, groupsRepository, madeFor } from '@hushos/db';
 import {
     nodeEnvelopesInput,
@@ -1881,8 +1886,19 @@ export async function removeMember(
     return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
 }
 
-/* Route 20: leaving at once. */
+/*
+ * Route 20: leaving at once. The payer of the family's live plan is refused,
+ * even when someone else holds `billing` and even as its last member, which
+ * would dissolve it: their card would go on being charged for a family they
+ * are not in. They hand billing over or cancel the plan first.
+ */
 export async function leave(userId: string, groupId: string) {
+    if (await paysForGroup(groupId, userId))
+        throw new GroupError(
+            'payer',
+            'You pay for this family’s plan. Hand billing to another member or cancel the plan before you leave.',
+            409,
+        );
     const result = await groupsRepository.leaveGroup(groupId, userId);
     switch (result.status) {
         case 'left':

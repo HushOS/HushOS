@@ -1,4 +1,5 @@
-import { billingRepository, groupsRepository } from '@hushos/db';
+import { createHash } from 'node:crypto';
+import { authRepository, billingRepository, groupsRepository } from '@hushos/db';
 import { appEnv } from '@hushos/env/app';
 import { billingEnv } from '@hushos/env/billing';
 import { groupsEnv } from '@hushos/env/groups';
@@ -17,7 +18,12 @@ import {
     type BillingUser,
     type FamilyCatalogueProduct,
 } from './provider';
-import { GROUP_CUSTOMER_PREFIX, MAX_MEMBERS_PER_RAISE, UNPAID_GROUP_SEATS } from './protocol';
+import {
+    GROUP_CUSTOMER_PREFIX,
+    MAX_MEMBERS_PER_RAISE,
+    STALE_RAISE_DAYS,
+    UNPAID_GROUP_SEATS,
+} from './protocol';
 
 /*
  * Family billing (docs/groups-design.md 3.5, docs/polar-group-billing-spike.md
@@ -141,30 +147,37 @@ async function planOf(productId: string) {
 
 /*
  * Whether an order of the subscription waits for payment (a raise the bank
- * has not confirmed, a renewal being retried): true, false, or null when the
- * orders could not be read (`orders:read`).
+ * has not confirmed, a renewal being retried), and since when: `unpaid` is
+ * true, false, or null when the orders could not be read (`orders:read`).
+ * Only false lets places count as paid.
  */
-async function unpaidOrder(subscriptionId: string) {
+async function orderState(subscriptionId: string) {
     try {
         const orders = await polar().orders.list({
             subscription_id: subscriptionId,
             status: 'pending',
             limit: 10,
         });
-        return orders.items.some((order) => order.due_amount > 0);
+        const waiting = orders.items.filter((order) => order.due_amount > 0);
+        const oldest = waiting.reduce<number | null>((min, order) => {
+            const at = Date.parse(order.created_at);
+            return Number.isNaN(at) ? min : min === null ? at : Math.min(min, at);
+        }, null);
+        return { unpaid: waiting.length > 0, oldestAt: oldest };
     } catch (error) {
         log.warn({
             message: 'Group orders could not be read',
             billing: { status: statusOf(error) },
         });
-        return null;
+        return { unpaid: null, oldestAt: null };
     }
 }
 
 /*
  * One subscription as a change returned it, written without touching the
  * group's others. `paid` says the places it now has are paid for (a raise
- * Polar answered with 200); otherwise the paid count stays where it was.
+ * Polar answered with 200 and no order waits); otherwise the paid count stays
+ * where it was.
  */
 async function applyChanged(groupId: string, subscription: models.Subscription, paid: boolean) {
     const plan = await planOf(subscription.product_id);
@@ -179,6 +192,8 @@ async function applyChanged(groupId: string, subscription: models.Subscription, 
     });
 }
 
+const LIVE = new Set(['active', 'trialing', 'past_due']);
+
 /*
  * A webhook says only that something changed: the team customer's state says
  * what is true now. Every subscription it lists, and every one HushOS still
@@ -186,8 +201,15 @@ async function applyChanged(groupId: string, subscription: models.Subscription, 
  * ended one has left it), with its unpaid orders: places count as paid only
  * when none waits, so a raise awaiting the bank opens nothing until its
  * `order.paid` (or the next reconcile) finds it paid. Then the group's rows,
- * seat limit and pool are rewritten in one transaction, and a cut HushOS still
- * means to have that Polar lost is asked for again.
+ * seat limit and pool are rewritten in one transaction.
+ *
+ * A subscription whose product the catalogue cannot read (an operator edited
+ * it) is left as it was, never swept as ended: the family keeps its places and
+ * its payer stays its payer until someone fixes the product. A raise whose
+ * order has waited STALE_RAISE_DAYS is cut back to the places paid for at the
+ * period's end, so a renewal never bills a place nobody confirmed. Last, a cut
+ * HushOS still means to have that Polar lost is asked for again, and queued
+ * for a retry if Polar refuses.
  */
 export async function reconcileGroup(groupId: string) {
     if (!billingEnabled() || !UUID.test(groupId)) return;
@@ -203,6 +225,8 @@ export async function reconcileGroup(groupId: string) {
     const ids = new Set((state?.active_subscriptions ?? []).map((subscription) => subscription.id));
     for (const id of await billingRepository.listLiveGroupSubscriptionIds(groupId)) ids.add(id);
     const subscriptions: billingRepository.GroupSubscriptionSnapshot[] = [];
+    const unresolved: string[] = [];
+    const stale: string[] = [];
     for (const id of ids) {
         let subscription: models.Subscription;
         try {
@@ -212,10 +236,19 @@ export async function reconcileGroup(groupId: string) {
             throw unavailable(error);
         }
         const plan = await planOf(subscription.product_id);
-        if (!plan) continue;
+        if (!plan) {
+            unresolved.push(subscription.id);
+            log.warn({
+                message: 'Group subscription left as it was: its product is not a family plan',
+                billing: { group: groupId, subscription: subscription.id },
+            });
+            continue;
+        }
         const ended = Boolean(subscription.ended_at);
-        const paid = !ended && (await unpaidOrder(subscription.id)) === false;
-        subscriptions.push(snapshotOf(subscription, plan, paid));
+        const orders = ended ? null : await orderState(subscription.id);
+        if (orders?.oldestAt != null && Date.now() - orders.oldestAt > STALE_RAISE_DAYS * DAY)
+            stale.push(subscription.id);
+        subscriptions.push(snapshotOf(subscription, plan, orders?.unpaid === false));
     }
     await billingRepository.applyGroupState({
         groupId,
@@ -224,7 +257,15 @@ export async function reconcileGroup(groupId: string) {
         subscriptions,
         graceMs: graceMs(),
         complete: true,
+        keepIds: unresolved,
     });
+    const liveCount =
+        subscriptions.filter((s) => !s.endedAt && LIVE.has(s.status)).length + unresolved.length;
+    if (liveCount > 1)
+        log.warn({
+            message: 'Group has more than one live subscription',
+            billing: { group: groupId, live: liveCount },
+        });
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     const used = await groupsRepository.seatsUsed(groupId);
     // Changed outside HushOS (the dashboard, support): never remove anyone, but say so.
@@ -233,13 +274,26 @@ export async function reconcileGroup(groupId: string) {
             message: 'Group plan has fewer places than admitted members',
             billing: { group: groupId, units: live.units, admitted: used },
         });
-    if (live?.intendedUnits != null)
-        await reissueCut(groupId).catch((error: unknown) =>
+    if (live && stale.includes(live.id) && live.paidUnits < live.units) {
+        log.warn({
+            message: 'Unconfirmed raise cut back to the places paid for',
+            billing: { group: groupId, units: live.units, paid: live.paidUnits },
+        });
+        await billingRepository.setIntendedUnits(
+            live.id,
+            Math.min(live.intendedUnits ?? live.paidUnits, live.paidUnits),
+        );
+    }
+    if (live && (live.intendedUnits !== null || stale.includes(live.id)))
+        try {
+            await reissueCut(groupId);
+        } catch (error) {
             log.warn({
                 message: 'Recorded cut not re-issued by reconcile',
                 billing: { group: groupId, status: statusOf(error) },
-            }),
-        );
+            });
+            await queueCutRetry(groupId);
+        }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -272,6 +326,32 @@ async function queueCutRetry(groupId: string) {
 }
 
 /*
+ * Schedules a cut to `target` places at the period's end and records it. An
+ * admission can commit between the count `target` came from and the cut: the
+ * seats this writes refuse any admission after it (the group row orders the
+ * two), and the members counted after it catch one that landed before, so the
+ * cut is moved up to them, or dropped if that is no cut at all.
+ */
+async function scheduleCut(groupId: string, subscriptionId: string, units: number, target: number) {
+    let cut = await polar().subscriptions.update(subscriptionId, {
+        units: target,
+        proration_behavior: 'next_period',
+    });
+    await applyChanged(groupId, cut, false);
+    await billingRepository.setIntendedUnits(subscriptionId, target);
+    const used = await groupsRepository.seatsUsed(groupId);
+    if (used <= target) return;
+    cut = await polar().subscriptions.update(
+        subscriptionId,
+        used < units
+            ? { units: used, proration_behavior: 'next_period' }
+            : { pending_update: null },
+    );
+    await applyChanged(groupId, cut, false);
+    await billingRepository.setIntendedUnits(subscriptionId, used < units ? used : null);
+}
+
+/*
  * Asks Polar again for the cut HushOS recorded, if Polar no longer has it.
  * Idempotent: a cut sets an absolute count for the next period, so asking
  * twice schedules the same thing. Never below the members admitted or the
@@ -300,11 +380,7 @@ export async function reissueCut(groupId: string) {
     if (subscription.pending_update?.units === target) return;
     // Polar refuses quantity changes on a plan set to end; resuming it brings the cut back here.
     if (subscription.cancel_at_period_end) return;
-    const cut = await polar().subscriptions.update(subscription.id, {
-        units: target,
-        proration_behavior: 'next_period',
-    });
-    await applyChanged(groupId, cut, false);
+    await scheduleCut(groupId, subscription.id, units, target);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -395,6 +471,17 @@ export async function startGroupCheckout(
     if (units > plan.maxMembers)
         throw new BillingError(`A family can have at most ${plan.maxMembers} members.`, 400);
     const customerId = await ensureTeamCustomer(groupId, user);
+    // A plan Polar has that has not reached HushOS yet (a delivery still on its way) is one too.
+    let state: models.CustomerState | null = null;
+    try {
+        state = await polar().customers.getStateExternal(customerKey(groupId));
+    } catch (error) {
+        if (statusOf(error) !== 404) throw unavailable(error);
+    }
+    if (state?.active_subscriptions.length) {
+        await reconcileGroup(groupId);
+        throw new BillingError('This family already has a plan.', 409);
+    }
     try {
         const checkout = await polar().checkouts.create({
             products: [plan.id],
@@ -449,11 +536,21 @@ async function requirePayer(groupId: string, userId: string) {
     return customer;
 }
 
+/* The payer's portal, open to them even after they left: they can always stop paying. */
 export async function createGroupPortalSession(user: BillingUser, groupId: string) {
     requireFamilyBilling();
-    await familyOf(groupId, user.id, 'billing');
     await requirePayer(groupId, user.id);
     return portalFor(groupId, user.id);
+}
+
+/*
+ * Whether this person pays for the family's live plan, one HushOS cannot read
+ * included. While they do, they may not leave it (nor dissolve it as its last
+ * member): the card on its customer is theirs and would go on being charged.
+ */
+export async function paysForGroup(groupId: string, userId: string) {
+    if (!billingEnabled()) return false;
+    return (await billingRepository.listGroupsPaidBy(userId)).includes(groupId);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -505,7 +602,6 @@ async function changePlaces(
     groupId: string,
     live: { id: string; paidUnits: number },
     target: number,
-    floor: number,
 ): Promise<SeatResult> {
     let subscription: models.Subscription;
     try {
@@ -545,8 +641,6 @@ async function changePlaces(
         }
     }
     if (target - current > MAX_MEMBERS_PER_RAISE) return cap;
-    // The raise deletes any scheduled cut at Polar (spike E3): it is recorded first, then put back.
-    if (cut !== null) await billingRepository.setIntendedUnits(live.id, cut);
     let raised: models.Subscription;
     try {
         raised = await polar().subscriptions.update(subscription.id, {
@@ -556,26 +650,11 @@ async function changePlaces(
     } catch (error) {
         return refusedRaise(error);
     }
-    // A 200 is a charge Polar made at once; an order still waiting says otherwise.
-    const paid = (await unpaidOrder(subscription.id)) !== true;
-    const restored = cut === null ? null : Math.max(cut, floor, plan.includedMembers);
-    const reissue = restored !== null && restored < target;
-    if (cut !== null) await billingRepository.setIntendedUnits(live.id, reissue ? restored : null);
-    if (reissue) {
-        try {
-            raised = await polar().subscriptions.update(subscription.id, {
-                units: restored,
-                proration_behavior: 'next_period',
-            });
-        } catch (error) {
-            // The raise stands; the recorded cut is retried by the queue and the daily reconcile.
-            log.warn({
-                message: 'Pending cut not re-issued after a raise',
-                billing: { group: groupId, units: restored, status: statusOf(error) },
-            });
-            await queueCutRetry(groupId);
-        }
-    }
+    // The raise replaced any scheduled cut at Polar (spike E3): the payer asked for more places
+    // now, so the cut is not put back, or they would pay for places they could not fill.
+    if (cut !== null) await billingRepository.setIntendedUnits(live.id, null);
+    // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet.
+    const paid = (await orderState(subscription.id)).unpaid === false;
     await applyChanged(groupId, raised, paid);
     return paid ? { status: 'ok' } : { status: 'confirm', url: null };
 }
@@ -596,7 +675,7 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
     if (target <= billingRepository.seatLimitOf(live)) return { status: 'ok' };
     const customer = await billingRepository.getGroupCustomer(groupId);
     if (!customer || customer.payerUserId !== admitterId) return { status: 'payer' };
-    const result = await changePlaces(groupId, live, target, target);
+    const result = await changePlaces(groupId, live, target);
     if (result.status !== 'confirm') return result;
     return {
         status: 'confirm',
@@ -614,7 +693,7 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
  */
 export async function setGroupUnits(user: BillingUser, groupId: string, units: number) {
     requireFamilyBilling();
-    await familyOf(groupId, user.id, 'billing');
+    // The payer may always pay for less, even after leaving the family; adding needs a member.
     await requirePayer(groupId, user.id);
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     if (!live) throw new BillingError('This family has no plan.', 404);
@@ -627,18 +706,14 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
         );
     if (units < live.units) {
         try {
-            const cut = await polar().subscriptions.update(live.id, {
-                units,
-                proration_behavior: 'next_period',
-            });
-            await applyChanged(groupId, cut, false);
+            await scheduleCut(groupId, live.id, live.units, units);
         } catch (error) {
             throw unavailable(error);
         }
-        await billingRepository.setIntendedUnits(live.id, units);
         return { billing: await getGroupBilling(user, groupId), url: null };
     }
-    const result = await changePlaces(groupId, live, units, floor);
+    await familyOf(groupId, user.id, 'billing');
+    const result = await changePlaces(groupId, live, units);
     switch (result.status) {
         case 'ok':
             return { billing: await getGroupBilling(user, groupId), url: null };
@@ -689,10 +764,32 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
 /* Summary                                                                    */
 /* ------------------------------------------------------------------------- */
 
+/*
+ * Who may see a family's plan: its managers, and its payer, who keeps seeing
+ * it after leaving so they can stop paying.
+ */
+async function seesPlan(groupId: string, userId: string) {
+    try {
+        await familyOf(groupId, userId, 'manager');
+    } catch (error) {
+        const customer = await billingRepository.getGroupCustomer(groupId);
+        if (customer?.payerUserId !== userId) throw error;
+    }
+}
+
+/* Each sync reads Polar several times: ten a person per family every ten minutes. */
+const SYNC_LIMIT = { count: 10, windowMs: 10 * 60 * 1000 };
+
 /* After a checkout or a portal visit: the family's state re-read from Polar now. */
 export async function syncGroup(user: BillingUser, groupId: string) {
     requireFamilyBilling();
-    await familyOf(groupId, user.id, 'manager');
+    await seesPlan(groupId, user.id);
+    const bucket = createHash('sha256').update(`billing:group-sync:${groupId}:${user.id}`).digest();
+    if (!(await authRepository.consumeRateLimit(bucket, SYNC_LIMIT.count, SYNC_LIMIT.windowMs)))
+        throw new BillingError(
+            'Too many refreshes just now. Please try again in a few minutes.',
+            429,
+        );
     await reconcileGroup(groupId);
     return getGroupBilling(user, groupId);
 }
@@ -701,9 +798,11 @@ export async function getGroupBilling(
     user: BillingUser,
     groupId: string,
 ): Promise<GroupBillingSummary> {
-    await familyOf(groupId, user.id, 'manager');
+    if (!groupsEnv.GROUPS_ENABLED)
+        throw new BillingError('This server does not offer families yet.', 404);
+    await seesPlan(groupId, user.id);
     const used = await groupsRepository.seatsUsed(groupId);
-    if (!billingEnabled() || !groupsEnv.GROUPS_ENABLED)
+    if (!billingEnabled())
         return {
             enabled: false,
             plans: [],
