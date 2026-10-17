@@ -72,16 +72,33 @@ function firstName(name: string) {
 }
 
 /*
+ * The label Info gives the worst issue's writer: "Changed by", except for a
+ * former member's record, which Info says as the row's mark does ("Written
+ * by Sam, who has left Lindqvist family."), the label and changedByWords
+ * read together.
+ */
+export function changedByLabel(issue: IntegrityIssue) {
+    if (issue.integrity !== 'former-member' || issue.rekey) return 'Changed by';
+    return issue.record === 'version' ? 'Added by' : 'Written by';
+}
+
+/*
  * Who Info's "Changed by" names for the worst issue: from this person's own
  * pins and the family's list, as everywhere. A re-key cause names someone
  * only for a mismatch under the re-keyer's verified signature; any other is
- * "Not confirmed", whatever the server says.
+ * "Not confirmed", whatever the server says. A former member is named as the
+ * row's mark names them, after changedByLabel: never with the family's word
+ * for their keys, which it no longer gives.
  */
 export function changedByWords(issue: IntegrityIssue, names: SignerNames) {
     if (issue.rekey && !(issue.rekey.cause === 'mismatch' && issue.rekey.rekeyer === 'verified'))
         return 'Not confirmed';
     if (issue.integrity === 'unchecked') return 'Not checked';
     const named = nameSigner(issue.signer, names);
+    if (issue.integrity === 'former-member') {
+        const who = memberWords(named, 'someone you haven’t checked');
+        return `${who.charAt(0).toUpperCase()}${who.slice(1)}, who has left ${names.family?.name ?? 'the family'}.`;
+    }
     if (named.kind === 'you') return 'You';
     if (named.kind === 'contact') return named.name;
     if (named.kind === 'member') return named.email ? `${named.name} (${named.email})` : named.name;

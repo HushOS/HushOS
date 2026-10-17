@@ -21,7 +21,7 @@ import {
     firstName,
 } from '@/lib/families';
 import type { JoinMark, RosterFork } from '@hushos/crypto';
-import { errorCopy } from '@/lib/groups/copy';
+import { errorCopy, wrongWordsCopy } from '@/lib/groups/copy';
 import { confirmJoin, joinStatus, type JoinOutcome } from '@/lib/groups/join';
 import { cue } from '@/lib/sounds';
 
@@ -38,9 +38,10 @@ export const Route = createFileRoute('/_authenticated/app/_drive/families/$group
  *    the code it works out with two words hidden, at positions it picks for
  *    this showing; the person checks the other ten and types the two. "They
  *    match" joins only if the two are the code's, with the code as this
- *    device's mark; anything else keeps nothing and says not to use the family
- *    yet. The page never says the person was let in: when route 2 says so is
- *    the server's call, which is why the two words are typed.
+ *    device's mark. Wrong typed words keep nothing and say, calmly and without
+ *    saying which, that one of them is wrong; "They don't match" keeps nothing and says not to use the
+ *    family yet. The page never says the person was let in: when route 2 says
+ *    so is the server's call, which is why the two words are typed.
  * Waiting and comparing survive a reload: the code is worked out again, with
  * new hidden positions.
  */
@@ -49,8 +50,17 @@ type Step =
     | { kind: 'loading' }
     /* `n` tells one entry into waiting from the next, so polling starts again each time. */
     | { kind: 'waiting'; n: number }
-    /* `hidden`: the two positions this showing hides. `changed`: an earlier code no longer holds. */
-    | { kind: 'compare'; mark: JoinMark; hidden: [number, number]; changed?: boolean }
+    /*
+     * `hidden`: the two positions this showing hides. `changed`: an earlier code no longer
+     * holds. `wrong`: the typed pair was not the code's (never which word).
+     */
+    | {
+          kind: 'compare';
+          mark: JoinMark;
+          hidden: [number, number];
+          changed?: boolean;
+          wrong?: boolean;
+      }
     | { kind: 'mismatch' }
     | { kind: 'fork'; fork: RosterFork };
 
@@ -121,9 +131,12 @@ function JoinFamily() {
                     hidden: outcome.hidden,
                     changed: outcome.changed,
                 });
-            case 'mismatch':
+            case 'wrong-words':
+                // Most likely misheard: the same showing stays, both words to be read again.
                 cue('error');
-                return setStep({ kind: 'mismatch' });
+                return setStep((current) =>
+                    current.kind === 'compare' ? { ...current, wrong: true } : current,
+                );
             case 'fork':
                 return setStep({ kind: 'fork', fork: outcome.fork });
         }
@@ -303,8 +316,17 @@ function JoinFamily() {
                             )}
                             hidden={step.hidden}
                             typed={typed}
-                            onType={setTyped}
+                            wrong={step.wrong ?? false}
+                            onType={(next) => {
+                                setTyped(next);
+                                if (step.wrong) setStep({ ...step, wrong: undefined });
+                            }}
                         />
+                        {step.wrong && (
+                            <p role="alert" data-wrong-words className="text-sm">
+                                {wrongWordsCopy(them)}
+                            </p>
+                        )}
                         <CompareGuidance />
                         <div className="flex flex-wrap gap-2">
                             <Button
@@ -411,12 +433,15 @@ function HiddenCode({
     shown,
     hidden,
     typed,
+    wrong,
     onType,
 }: {
     /* The code with the hidden words already taken out (null). */
     shown: readonly (string | null)[];
     hidden: readonly [number, number];
     typed: readonly [string, string];
+    /* The typed pair was not the code's: both fields are marked, never just one. */
+    wrong: boolean;
     onType: (typed: [string, string]) => void;
 }) {
     return (
@@ -445,6 +470,7 @@ function HiddenCode({
                         ) : (
                             <input
                                 aria-label={`Word ${at + 1}`}
+                                aria-invalid={wrong || undefined}
                                 autoComplete="off"
                                 autoCorrect="off"
                                 autoCapitalize="none"
@@ -455,7 +481,7 @@ function HiddenCode({
                                     next[slot] = event.target.value;
                                     onType(next);
                                 }}
-                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive"
                             />
                         )}
                     </li>

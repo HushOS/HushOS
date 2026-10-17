@@ -1465,7 +1465,10 @@ function DragCard({
 /*
  * The folder path is the page title: folders above are links, the folder you are in
  * is the heading. One row at every depth, so nothing moves as you go in and out of
- * folders. A deep path folds its middle into "…". Crumbs take dropped rows, and every
+ * folders. A deep path folds its middle into "…". Where the row is short of room
+ * the folders above give it up first, down to a few letters each, and on a phone a
+ * path with more than one folder above folds them all into "…", so the heading that
+ * says where you are is the last thing to be cut. Crumbs take dropped rows, and every
  * folder in the path but the top one can be dragged onto a crumb further up.
  */
 function FolderPath({
@@ -1494,14 +1497,71 @@ function FolderPath({
     const draggableCrumb = (crumb: DriveNode, index: number) =>
         index > 0 && crumb.workspaceId === workspaceId ? crumb.id : undefined;
     const crumbClass =
-        '-mx-1.5 shrink-0 rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
+        '-mx-1.5 min-w-0 truncate rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-[-0.02em] text-foreground transition-colors hover:bg-muted sm:text-2xl';
+    // On a phone, two or more places above fold into one "…" menu holding them all.
+    const fold = (area ? 1 : 0) + (shared ? 1 : 0) + above.length > 1;
+    // Each folder above gives up its room before the heading loses a pixel, down to about three
+    // letters (a mere hundred times faster still cost the heading a fraction, enough for its
+    // ellipsis).
+    const aboveClass = cn(
+        'flex min-w-[3.25rem] shrink-[100000] items-center gap-1',
+        fold && 'max-sm:hidden',
+    );
+    const chevron = (
+        <ChevronRightIcon
+            className="size-5 shrink-0 text-muted-foreground"
+            strokeWidth={2.2}
+            aria-hidden="true"
+        />
+    );
     return (
         <nav aria-label="Folder path" className="flex h-11 min-w-0 items-center gap-1">
+            {fold && (
+                <span className="flex shrink-0 items-center gap-1 sm:hidden">
+                    <DropdownMenu>
+                        <DropdownMenuTrigger
+                            aria-label="Folders above"
+                            className={cn(crumbClass, 'shrink-0 cursor-pointer')}
+                        >
+                            …
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="min-w-48">
+                            {area && (
+                                <DropdownMenuItem
+                                    render={
+                                        <Link
+                                            to="/app/s/$groupId"
+                                            params={{ groupId: area.groupId }}
+                                        />
+                                    }
+                                >
+                                    {area.family}
+                                </DropdownMenuItem>
+                            )}
+                            {shared && (
+                                <DropdownMenuItem render={<Link to="/app/shared" />}>
+                                    Shared with me
+                                </DropdownMenuItem>
+                            )}
+                            {above.map((crumb) => (
+                                <DropdownMenuItem
+                                    key={crumb.id}
+                                    render={<Link {...folderLink(here, crumb.id)} />}
+                                >
+                                    {crumbName(crumb)}
+                                </DropdownMenuItem>
+                            ))}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    {chevron}
+                </span>
+            )}
             {area && (
-                <>
+                <span className={aboveClass}>
                     <Link
                         to="/app/s/$groupId"
                         params={{ groupId: area.groupId }}
+                        title={area.family}
                         className={crumbClass}
                     >
                         {area.family}
@@ -1511,11 +1571,11 @@ function FolderPath({
                         strokeWidth={2.2}
                         aria-hidden="true"
                     />
-                </>
+                </span>
             )}
             {shared && (
-                <>
-                    <Link to="/app/shared" className={crumbClass}>
+                <span className={aboveClass}>
+                    <Link to="/app/shared" title="Shared with me" className={crumbClass}>
                         Shared with me
                     </Link>
                     <ChevronRightIcon
@@ -1523,15 +1583,23 @@ function FolderPath({
                         strokeWidth={2.2}
                         aria-hidden="true"
                     />
-                </>
+                </span>
             )}
             {shown.map((crumb) => (
-                <span key={crumb?.id ?? 'fold'} className="flex shrink-0 items-center gap-1">
+                <span
+                    key={crumb?.id ?? 'fold'}
+                    className={
+                        crumb
+                            ? aboveClass
+                            : cn('flex shrink-0 items-center gap-1', fold && 'max-sm:hidden')
+                    }
+                >
                     {crumb ? (
                         <Link
                             {...folderLink(here, crumb.id)}
                             data-crumb-id={crumb.id}
                             data-crumb-drag={draggableCrumb(crumb, crumbs.indexOf(crumb))}
+                            title={crumbName(crumb)}
                             className={cn(
                                 crumbClass,
                                 dropOver === crumb.id &&
@@ -1544,7 +1612,7 @@ function FolderPath({
                         <DropdownMenu>
                             <DropdownMenuTrigger
                                 aria-label="More folders"
-                                className={cn(crumbClass, 'cursor-pointer')}
+                                className={cn(crumbClass, 'shrink-0 cursor-pointer')}
                             >
                                 …
                             </DropdownMenuTrigger>
@@ -1561,7 +1629,7 @@ function FolderPath({
                         </DropdownMenu>
                     )}
                     <ChevronRightIcon
-                        className="size-5 text-muted-foreground"
+                        className="size-5 shrink-0 text-muted-foreground"
                         strokeWidth={2.2}
                         aria-hidden="true"
                     />

@@ -304,12 +304,17 @@ describe('joining a family', () => {
         await f.land();
         const shown = await joinStatus(ctx, f.groupId);
         if (shown.status !== 'compare') throw new Error(shown.status);
-        // Both hidden words wrong, or only one: nothing kept, said as a mismatch.
+        // Both hidden words wrong, or either one: nothing kept, and the same answer every time,
+        // so a guesser never learns which word was right.
         const right = wordsAt(code, shown.hidden);
         const other = (word: string) => (word === 'abandon' ? 'ability' : 'abandon');
-        for (const words of [right.map(other), [right[0]!, other(right[1]!)]]) {
+        for (const words of [
+            right.map(other),
+            [right[0]!, other(right[1]!)],
+            [other(right[0]!), right[1]!],
+        ]) {
             expect(await confirmJoin(ctx, f.groupId, shown.mark, words)).toEqual({
-                status: 'mismatch',
+                status: 'wrong-words',
             });
             await nothingKept(ctx, store, f.groupId);
         }
@@ -350,7 +355,7 @@ describe('joining a family', () => {
         const wrong = wordsAt(code, elsewhere);
         if (wrong.join(' ') !== wordsAt(code, shown.hidden).join(' '))
             expect(await confirmJoin(ctx, f.groupId, shown.mark, wrong)).toEqual({
-                status: 'mismatch',
+                status: 'wrong-words',
             });
         await nothingKept(ctx, store, f.groupId);
     });
@@ -386,7 +391,7 @@ describe('joining a family', () => {
         // Ten words compared by a person in a hurry, the two typed as Alice reads her own code.
         expect(
             await confirmJoin(ctx, f.groupId, shown.mark, wordsAt(alices, shown.hidden)),
-        ).toEqual({ status: 'mismatch' });
+        ).toEqual({ status: 'wrong-words' });
         await nothingKept(ctx, store, f.groupId);
     });
 

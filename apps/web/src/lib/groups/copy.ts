@@ -18,6 +18,10 @@ export type CopyContext = {
     names?: Record<string, string>;
 };
 
+/* Why this person can't leave or step back yet: someone else must hold the role first. */
+export const ORGANIZER_FIRST = 'Make someone else the organizer first.';
+export const MANAGER_FIRST = 'Let someone else manage the family first.';
+
 const list = (names: string[]) =>
     names.length <= 1
         ? (names[0] ?? 'someone')
@@ -101,7 +105,7 @@ export function refusalCopy(
                 ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
                 : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
         case 'organizer':
-            return 'Make someone else the organizer first.';
+            return ORGANIZER_FIRST;
         // The payer of a live plan can't leave or be removed until it is cancelled, under Billing
         // on this page (through the billing portal). Removing them names them; leaving doesn't.
         case 'payer':
@@ -109,7 +113,7 @@ export function refusalCopy(
                 ? `${ctx.person} pays for ${ctx.family ?? 'this family'}’s plan. They can cancel it under Billing on this page; then you can remove them.`
                 : `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
         case 'last-holder':
-            return 'Let someone else manage the family first.';
+            return MANAGER_FIRST;
         case 'unsupported':
             return 'Update HushOS to do this. Reload the page to get the latest version.';
         case 'forbidden':
@@ -224,4 +228,14 @@ export function noticeCopy(
         case 'documents-cleared':
             return `A family folder’s ${notice.document === 'tags' ? 'tags' : 'settings'} couldn’t be opened while its keys were replaced, and started again empty.`;
     }
+}
+
+/*
+ * The two hidden words of the join code typed, and not the code's: most
+ * likely one misheard, so it is said calmly, and never which one, or a
+ * guesser could find them one at a time. The warning that HushOS may be
+ * showing a different member list is kept for "They don't match".
+ */
+export function wrongWordsCopy(them: string) {
+    return `One of the words doesn’t match. Ask ${them} to read them again. If they still don’t match, choose They don’t match.`;
 }

@@ -33,7 +33,7 @@ export function AreaNotice({ area, waiting }: { area: FamilyArea; waiting: boole
                         You can still open what’s in it.
                     </AlertDescription>
                     <AlertAction>
-                        <Button size="sm" variant="outline" onClick={area.recheck}>
+                        <Button variant="outline" onClick={area.recheck}>
                             Check again
                         </Button>
                     </AlertAction>

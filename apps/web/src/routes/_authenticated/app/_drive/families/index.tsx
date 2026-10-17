@@ -58,18 +58,13 @@ function Families() {
                     </Button>
                 </EmptyState>
             )}
+            {/* The app's empty state, not a row: Create a family stays the header's one blue button. */}
             {families.data?.length === 0 && (
-                <div className="flex h-14 items-center gap-3 border-y border-rule px-5 sm:px-8">
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                        <UsersIcon className="size-4" aria-hidden="true" />
-                    </span>
-                    <span className="flex min-w-0 flex-col">
-                        <span className="text-[15px] font-medium">No families yet</span>
-                        <span className="text-[13px] text-muted-foreground">
-                            Create one, or accept an invitation from someone else’s.
-                        </span>
-                    </span>
-                </div>
+                <EmptyState
+                    icon={UsersIcon}
+                    title="No families yet"
+                    body="Create one, or accept an invitation from someone else’s."
+                />
             )}
             {families.data && families.data.length > 0 && (
                 <ul className="flex flex-col border-t border-rule">
@@ -85,7 +80,7 @@ function Families() {
                                             : '/app/families/$groupId'
                                     }
                                     params={{ groupId: family.id }}
-                                    className="flex h-14 items-center gap-3 border-b border-rule pr-4 pl-5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-6 sm:pl-8"
+                                    className="flex min-h-14 items-center gap-3 border-b border-rule py-2 pr-4 pl-5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-6 sm:pl-8"
                                 >
                                     <PersonAvatar name={family.name} seed={family.id} />
                                     <span className="flex min-w-0 flex-1 flex-col">

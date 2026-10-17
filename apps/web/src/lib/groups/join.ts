@@ -25,7 +25,7 @@ import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from
  *    now; another code (the member list changed meanwhile) keeps nothing and
  *    is the new one to compare. Then the typed words must be the code's at
  *    the positions this module issued for it (never ones the caller names),
- *    or nothing is kept ('mismatch'), and the same positions stay for that
+ *    or nothing is kept ('wrong-words'), and the same positions stay for that
  *    code for the rest of the session, so a retry cannot fish for easier
  *    ones. Only then is the code
  *    recorded in the sealed joins record, the chain accepted with it as the
@@ -37,7 +37,9 @@ import { afterAccept, fetchServed, syncGroup, syncLocked, type SyncResult } from
  * family it made up the moment it does; comparing alone could then be done
  * by a person who never waited for the admin. Typing two words only the
  * admin's screen shows cannot: guessing them is 22 bits, at positions the
- * server does not know. That holds against finishing alone. It is no bound
+ * server does not know. A wrong pair is said as one of the two being wrong,
+ * never which, so the words never fall one at a time (2 x 2048 tries in
+ * place of 4 million). That holds against finishing alone. It is no bound
  * on a server grinding a made-up family whose code matches the admin's in
  * the words a person who compares nothing would skip: the ten compared words
  * are the defence there, and only as good as the comparing.
@@ -188,7 +190,11 @@ function issuedFor(ctx: GroupContext, groupId: string, mark: JoinMark) {
     return at;
 }
 
-/* Whether the typed words are the code's at the positions issued for it. */
+/*
+ * Whether the typed words are the code's at the positions issued for it. One
+ * answer for the pair: which word is wrong is never said, or a guesser could
+ * find the two one at a time.
+ */
 function typedMatch(positions: readonly number[], mark: JoinMark, typed: HiddenWords) {
     if (typed.length !== 2 || typed.some((word) => typeof word !== 'string' || !word.trim()))
         throw new Error('Type the two hidden words of the join code.');
@@ -211,8 +217,12 @@ export type JoinOutcome =
      * changed, or the server is showing something else), and nothing was kept.
      */
     | { status: 'compare'; mark: JoinMark; hidden: [number, number]; changed?: boolean }
-    /* The typed words are not the code's: nothing was kept. */
-    | { status: 'mismatch' }
+    /*
+     * The typed words are not the code's: most likely one misheard or
+     * mistyped, said calmly and never which. Nothing was kept, and the
+     * positions stay.
+     */
+    | { status: 'wrong-words' }
     /* This person's own marks disagree with what is served (a rejoin onto another history): the hard warning. */
     | { status: 'fork'; fork: RosterFork };
 
@@ -295,7 +305,7 @@ async function completeJoin(
             const at = issuedFor(ctx, groupId, current);
             if (!typedMatch(at.positions, current, typed)) {
                 at.held = true;
-                return { status: 'mismatch' };
+                return { status: 'wrong-words' };
             }
         }
         // Kept before acceptance: a reload between the two finishes from here.
