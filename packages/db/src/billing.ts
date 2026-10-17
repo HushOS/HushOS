@@ -346,7 +346,12 @@ export async function getLiveGroupSubscription(groupId: string) {
     return row ?? null;
 }
 
-/* Groups whose live plan this person pays for: their account cannot be deleted meanwhile. */
+/*
+ * Groups whose live plan this person pays for: their account cannot be
+ * deleted, nor they leave or be removed, meanwhile. A plan set to cancel at
+ * the period's end is not live here: its payer has stopped paying, and the
+ * family keeps it until it ends.
+ */
 export async function listGroupsPaidBy(userId: string) {
     const rows = await db
         .selectDistinct({ groupId: groupBillingCustomers.groupId })
@@ -360,6 +365,7 @@ export async function listGroupsPaidBy(userId: string) {
                 eq(groupBillingCustomers.payerUserId, userId),
                 isNull(groupBillingSubscriptions.endedAt),
                 inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
+                eq(groupBillingSubscriptions.cancelAtPeriodEnd, false),
             ),
         );
     return rows.map((row) => row.groupId);
@@ -387,10 +393,18 @@ export function seatLimitOf(subscription: {
  * The next-period count HushOS asked Polar for, or null once nothing is due
  * (the cut applied, was cleared, or is no longer below the count).
  */
-export async function setIntendedUnits(subscriptionId: string, units: number | null) {
+export async function setIntendedUnits(
+    subscriptionId: string,
+    units: number | null,
+    stale = false,
+) {
     await db
         .update(groupBillingSubscriptions)
-        .set({ intendedUnits: units, updatedAt: new Date() })
+        .set({
+            intendedUnits: units,
+            intendedStale: units !== null && stale,
+            updatedAt: new Date(),
+        })
         .where(eq(groupBillingSubscriptions.id, subscriptionId));
 }
 

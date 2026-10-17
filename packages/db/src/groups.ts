@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { billingEnv } from '@hushos/env/billing';
 import { and, count, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
@@ -33,6 +34,7 @@ import {
     groupKeySeals,
     groupKeySuccessions,
     groupMemberships,
+    groupBillingSubscriptions,
     groupRosters,
     groupStorage,
     groups,
@@ -1629,7 +1631,30 @@ export async function storeGrants(input: {
 
 export type LeaveResult =
     | { status: 'left' | 'dissolved' }
-    | { status: 'not-member' | 'organizer' | 'last-holder' | 'unavailable' };
+    | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' };
+
+/*
+ * Whether the family has a plan someone is still paying for: live, and not set
+ * to cancel at the period's end. Such a family is never dissolved, whoever
+ * leaves last: its payer would go on being charged for nothing. Only with
+ * billing on; with BILLING_PROVIDER=none a plan's rows are history.
+ */
+async function billedPlan(tx: Tx | typeof db, groupId: string) {
+    if (billingEnv.BILLING_PROVIDER === 'none') return false;
+    const [row] = await tx
+        .select({ id: groupBillingSubscriptions.id })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+                inArray(groupBillingSubscriptions.status, ['active', 'trialing', 'past_due']),
+                eq(groupBillingSubscriptions.cancelAtPeriodEnd, false),
+            ),
+        )
+        .limit(1);
+    return Boolean(row);
+}
 
 /*
  * A member's departure, under the group's lock (taken by the caller, with the
@@ -1658,6 +1683,7 @@ async function depart(tx: Tx, groupId: string, userId: string): Promise<LeaveRes
     }
     const others = await othersOf(tx, groupId, userId);
     if (others.length === 0) {
+        if (await billedPlan(tx, groupId)) return { status: 'billed' };
         await leave();
         await revokeAccess(tx, groupId, userId);
         await tx
@@ -1734,10 +1760,14 @@ export async function deletionBlockers(userId: string) {
             ),
         )
         .orderBy(groupMemberships.groupId);
-    const blockers: { groupId: string; reason: 'organizer' | 'last-holder' }[] = [];
+    const blockers: { groupId: string; reason: 'organizer' | 'last-holder' | 'billed' }[] = [];
     for (const { groupId, roles } of mine) {
         const others = await othersOf(db, groupId, userId);
-        if (others.length === 0) continue;
+        if (others.length === 0) {
+            // The last member would dissolve a family whose plan is still being paid for.
+            if (await billedPlan(db, groupId)) blockers.push({ groupId, reason: 'billed' });
+            continue;
+        }
         const reason = blocker(roles, others);
         if (reason) blockers.push({ groupId, reason });
     }
@@ -1771,7 +1801,7 @@ export async function leaveGroup(groupId: string, userId: string): Promise<Leave
 export async function departAllForDeletion(
     tx: Tx,
     userId: string,
-): Promise<{ status: 'ok' } | { status: 'organizer' | 'last-holder'; groupId: string }> {
+): Promise<{ status: 'ok' } | { status: 'organizer' | 'last-holder' | 'billed'; groupId: string }> {
     const memberships = await tx
         .select({ groupId: groupMemberships.groupId })
         .from(groupMemberships)
@@ -1786,7 +1816,11 @@ export async function departAllForDeletion(
         if (!(await lockGroup(tx, groupId))) continue;
         await lockAreas(tx, groupId);
         const result = await depart(tx, groupId, userId);
-        if (result.status === 'organizer' || result.status === 'last-holder')
+        if (
+            result.status === 'organizer' ||
+            result.status === 'last-holder' ||
+            result.status === 'billed'
+        )
             return { status: result.status, groupId };
     }
     return { status: 'ok' };

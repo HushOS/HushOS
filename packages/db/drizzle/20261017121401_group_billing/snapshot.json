@@ -1,7 +1,7 @@
 {
     "version": "8",
     "dialect": "postgres",
-    "id": "a32f8676-50fe-461f-9975-5aef05925042",
+    "id": "1551e88a-3682-4126-861e-d697bae2db9e",
     "prevIds": ["3baa363a-ccc2-4366-9fb8-2dff9451aa11"],
     "ddl": [
         {
@@ -5638,6 +5638,19 @@
             "generated": null,
             "identity": null,
             "name": "intended_units",
+            "entityType": "columns",
+            "schema": "public",
+            "table": "group_billing_subscriptions"
+        },
+        {
+            "type": "boolean",
+            "typeSchema": null,
+            "notNull": true,
+            "dimensions": 0,
+            "default": "false",
+            "generated": null,
+            "identity": null,
+            "name": "intended_stale",
             "entityType": "columns",
             "schema": "public",
             "table": "group_billing_subscriptions"

@@ -98,7 +98,7 @@ export function refusalCopy(
         case 'organizer':
             return 'Make someone else the organizer first.';
         case 'payer':
-            return `You pay for ${ctx.family ?? 'this family'}’s plan. Hand billing to another member or cancel the plan first.`;
+            return `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it in Plan and storage first; the family keeps it until the end of the period.`;
         case 'last-holder':
             return 'Let someone else manage the family first.';
         case 'unsupported':

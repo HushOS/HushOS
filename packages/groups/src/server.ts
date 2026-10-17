@@ -1883,8 +1883,22 @@ export async function removeMember(
     targetId: string,
     call: RosterCall,
 ) {
+    // The payer of a live plan stays until they cancel it: their card would go on being charged.
+    if (await paysForGroup(groupId, targetId))
+        throw new GroupError(
+            'payer',
+            'They pay for this family’s plan. They can cancel it in Plan and storage; then you can remove them.',
+            409,
+        );
     return writeChain(groupId, userId, call, { kind: 'remove', userId: targetId });
 }
+
+const youPay = () =>
+    new GroupError(
+        'payer',
+        'You pay for this family’s plan. Cancel it in Plan and storage before you leave; the family keeps it until the end of the period.',
+        409,
+    );
 
 /*
  * Route 20: leaving at once. The payer of the family's live plan is refused,
@@ -1893,12 +1907,7 @@ export async function removeMember(
  * are not in. They hand billing over or cancel the plan first.
  */
 export async function leave(userId: string, groupId: string) {
-    if (await paysForGroup(groupId, userId))
-        throw new GroupError(
-            'payer',
-            'You pay for this family’s plan. Hand billing to another member or cancel the plan before you leave.',
-            409,
-        );
+    if (await paysForGroup(groupId, userId)) throw youPay();
     const result = await groupsRepository.leaveGroup(groupId, userId);
     switch (result.status) {
         case 'left':
@@ -1913,6 +1922,9 @@ export async function leave(userId: string, groupId: string) {
                 'Hand the group’s billing to another member before you leave.',
                 409,
             );
+        // The last member of a family whose plan is still paid for: leaving would dissolve it.
+        case 'billed':
+            throw youPay();
         case 'last-holder':
             throw new GroupError(
                 'last-holder',

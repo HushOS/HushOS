@@ -442,8 +442,14 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     return { ...real, createPolar: () => fakeClient };
 });
 
-const { closeDatabase, createTestAccount, createTestFamily, resetDatabase, setTestMember } =
-    await import('../../db/test/helpers');
+const {
+    closeDatabase,
+    createTestAccount,
+    createTestFamily,
+    deleteTestAccount,
+    resetDatabase,
+    setTestMember,
+} = await import('../../db/test/helpers');
 const { billingRepository, authRepository, driveRepository, groupsRepository, growthRepository } =
     await import('@hushos/db');
 
@@ -1067,6 +1073,31 @@ async function familyOnPlan(options: { units?: number; members?: number } = {}) 
 }
 
 const raises = () => polar.calls.filter((call) => call.includes('"proration_behavior":"invoice"'));
+
+/*
+ * An operator edits the family product so the catalogue drops it (no
+ * `included_members`), past the catalogue's one-minute cache. Afterwards the
+ * product is put back and the cache refreshed at a later clock, so the tests
+ * after see the real catalogue again.
+ */
+let catalogueClock = 0;
+async function withFamilyProductEdited(run: () => Promise<void>) {
+    const family = polar.products.find((candidate) => candidate.id === FAMILY)!;
+    const metadata = { ...family.metadata };
+    const clock = vi.spyOn(Date, 'now');
+    // Each edit runs later than the last refresh, so the cache always expires for it.
+    catalogueClock += 10 * 60_000;
+    try {
+        delete (family.metadata as Record<string, string>).included_members;
+        clock.mockReturnValue(new Date().getTime() + catalogueClock);
+        await run();
+    } finally {
+        family.metadata = metadata;
+        clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+        await billing.listCatalogue();
+        clock.mockRestore();
+    }
+}
 const seatLimit = async (groupId: string) =>
     (await groupsRepository.getGroupRow(groupId))?.seatLimit ?? null;
 
@@ -1600,33 +1631,55 @@ describe('review fixes', () => {
         await billing.reconcileGroup(groupId);
         expect(subscription).toMatchObject({ units: 7, pending_update: { units: 6 } });
         expect(await seatLimit(groupId)).toBe(6);
+        // Day nine: the payer answers their bank and the order is paid. The cut is withdrawn,
+        // and nothing re-issues it.
+        polar.orders[0]!.status = 'paid';
+        polar.calls = [];
+        await billing.reconcileGroup(groupId);
+        expect(subscription).toMatchObject({ units: 7, pending_update: null });
+        expect(await seatLimit(groupId)).toBe(7);
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toMatchObject({
+            paidUnits: 7,
+            intendedUnits: null,
+            intendedStale: false,
+        });
+        expect(polar.calls.filter((call) => call.includes('next_period'))).toEqual([]);
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toBeNull();
+    });
+
+    test('a payer’s own cut is not withdrawn when a raise is paid', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 9, members: 5 });
+        await billing.setGroupUnits(payer, groupId, 7);
+        await billing.reconcileGroup(groupId);
+        expect(subscription.pending_update).toEqual(expect.objectContaining({ units: 7 }));
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.intendedStale).toBe(
+            false,
+        );
     });
 
     test('a plan whose product an operator edited out of the catalogue is never swept as ended', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
-        const family = polar.products.find((candidate) => candidate.id === FAMILY)!;
-        const metadata = { ...family.metadata };
-        const clock = vi.spyOn(Date, 'now');
-        const later = (ms: number) => clock.mockReturnValue(new Date().getTime() + ms);
-        try {
-            delete (family.metadata as Record<string, string>).included_members;
-            later(2 * 60_000);
+        await withFamilyProductEdited(async () => {
             await billing.reconcileGroup(groupId);
-            clock.mockRestore();
-            const live = await billingRepository.getLiveGroupSubscription(groupId);
-            expect(live).toMatchObject({ id: subscription.id, status: 'active', endedAt: null });
-            expect(await seatLimit(groupId)).toBe(8);
-            expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
-            await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
-                status: 409,
+        });
+        const live = await billingRepository.getLiveGroupSubscription(groupId);
+        expect(live).toMatchObject({ id: subscription.id, status: 'active', endedAt: null });
+        expect(await seatLimit(groupId)).toBe(8);
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
+        await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({ status: 409 });
+    });
+
+    test('a cut on a plan HushOS cannot read is refused, and Polar is not asked', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 8 });
+        await withFamilyProductEdited(async () => {
+            polar.calls = [];
+            await expect(billing.setGroupUnits(payer, groupId, 6)).rejects.toMatchObject({
+                status: 503,
             });
-        } finally {
-            family.metadata = metadata;
-            const restore = vi.spyOn(Date, 'now');
-            restore.mockReturnValue(new Date().getTime() + 4 * 60_000);
-            await billing.listCatalogue();
-            restore.mockRestore();
-        }
+        });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update).toBeNull();
     });
 
     test('a former payer can still open the portal and pay for less, but not for more', async () => {
@@ -1659,5 +1712,55 @@ describe('review fixes', () => {
         const { payer, groupId } = await familyOnPlan();
         for (let index = 0; index < 10; index++) await billing.syncGroup(payer, groupId);
         await expect(billing.syncGroup(payer, groupId)).rejects.toMatchObject({ status: 429 });
+    });
+});
+
+describe('cancelling and payers', () => {
+    test('a cancelled plan frees its payer; the family keeps its places and pool until it ends', async () => {
+        const { payer, groupId, areaIds, subscription } = await familyOnPlan({ units: 7 });
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([groupId]);
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(groupId);
+        expect(await billingRepository.listGroupsPaidBy(payer.id)).toEqual([]);
+        await expect(billing.revokeForDeletion(payer.id)).resolves.toBeUndefined();
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
+    });
+
+    test('a live plan whose payer’s account is gone is revoked at once; one set to end runs out', async () => {
+        const { payer, groupId, areaIds, subscription } = await familyOnPlan({ units: 7 });
+        await deleteTestAccount(payer.id);
+        const delivery = await signedWebhook({
+            type: 'customer.state_changed',
+            data: { id: 'cus_team', external_id: `group:${groupId}`, type: 'team' },
+        });
+        expect((await billing.handleWebhook(delivery)).status).toBe(200);
+        expect(polar.calls).toContain(`subscriptions.revoke:${subscription.id}`);
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        expect(await seatLimit(groupId)).toBeNull();
+        expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(0n);
+
+        const ending = await familyOnPlan({ units: 7 });
+        ending.subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(ending.groupId);
+        await deleteTestAccount(ending.payer.id);
+        polar.calls = [];
+        await billing.reconcileGroup(ending.groupId);
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.revoke'))).toEqual([]);
+        expect(await seatLimit(ending.groupId)).toBe(7);
+    });
+
+    test('a former payer sees the plan only while it is live', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        await expect(billing.getGroupBilling(payer, groupId)).resolves.toMatchObject({
+            enabled: true,
+        });
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        await expect(billing.getGroupBilling(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
     });
 });

@@ -10,6 +10,7 @@ const { closeDatabase, createTestAccount, createTestFamily, resetDatabase } =
 const billing = await import('./billing');
 const { db } = await import('./client');
 const { getStorage } = await import('./drive');
+const { deletionBlockers } = await import('./groups');
 const { groups, workspaceStorage } = await import('./schema');
 
 /*
@@ -255,5 +256,20 @@ describe('payers', () => {
         expect(await billing.listGroupsPaidBy(other.userId)).toEqual([]);
         await apply(groupId, []);
         expect(await billing.listGroupsPaidBy(payer.userId)).toEqual([]);
+    });
+});
+
+describe('dissolving', () => {
+    test('the last member of a family with a plan still paid for cannot delete their account; once cancelled they can', async () => {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        expect(await deletionBlockers(userId)).toEqual([]);
+        await apply(groupId, [plan()]);
+        expect(await deletionBlockers(userId)).toEqual([{ groupId, reason: 'billed' }]);
+        await apply(groupId, [plan({ cancelAtPeriodEnd: true })]);
+        expect(await deletionBlockers(userId)).toEqual([]);
+        // Cancelled, the family keeps its places and pool until the period ends.
+        expect(await seatLimit(groupId)).toBe(6);
+        expect(await billing.listGroupsPaidBy(userId)).toEqual([]);
     });
 });

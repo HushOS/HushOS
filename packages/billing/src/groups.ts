@@ -181,7 +181,7 @@ async function orderState(subscriptionId: string) {
  */
 async function applyChanged(groupId: string, subscription: models.Subscription, paid: boolean) {
     const plan = await planOf(subscription.product_id);
-    if (!plan) return;
+    if (!plan) return false;
     await billingRepository.applyGroupState({
         groupId,
         provider: PROVIDER,
@@ -190,6 +190,7 @@ async function applyChanged(groupId: string, subscription: models.Subscription, 
         graceMs: graceMs(),
         complete: false,
     });
+    return true;
 }
 
 const LIVE = new Set(['active', 'trialing', 'past_due']);
@@ -207,7 +208,9 @@ const LIVE = new Set(['active', 'trialing', 'past_due']);
  * it) is left as it was, never swept as ended: the family keeps its places and
  * its payer stays its payer until someone fixes the product. A raise whose
  * order has waited STALE_RAISE_DAYS is cut back to the places paid for at the
- * period's end, so a renewal never bills a place nobody confirmed. Last, a cut
+ * period's end (one made within that many days of a renewal can still be
+ * billed once), and the cut is withdrawn if the order is paid later. A live
+ * plan whose payer's account is gone is revoked. Last, a cut
  * HushOS still means to have that Polar lost is asked for again, and queued
  * for a retry if Polar refuses.
  */
@@ -267,6 +270,7 @@ export async function reconcileGroup(groupId: string) {
             billing: { group: groupId, live: liveCount },
         });
     const live = await billingRepository.getLiveGroupSubscription(groupId);
+    if (live && (await revokeWithoutPayer(groupId, live))) return;
     const used = await groupsRepository.seatsUsed(groupId);
     // Changed outside HushOS (the dashboard, support): never remove anyone, but say so.
     if (live && live.units < used)
@@ -274,15 +278,27 @@ export async function reconcileGroup(groupId: string) {
             message: 'Group plan has fewer places than admitted members',
             billing: { group: groupId, units: live.units, admitted: used },
         });
+    // The raise the stale rule cut back was paid after all: withdraw that cut, re-issue nothing.
+    if (live?.intendedStale && live.paidUnits >= live.units) {
+        log.info({
+            message: 'Stale-raise cut withdrawn: the raise was paid',
+            billing: { group: groupId, units: live.units },
+        });
+        await billingRepository.setIntendedUnits(live.id, null);
+        if (live.pendingUnits === live.intendedUnits) {
+            const cleared = await polar().subscriptions.update(live.id, { pending_update: null });
+            await applyChanged(groupId, cleared, true);
+        }
+        return;
+    }
     if (live && stale.includes(live.id) && live.paidUnits < live.units) {
         log.warn({
             message: 'Unconfirmed raise cut back to the places paid for',
             billing: { group: groupId, units: live.units, paid: live.paidUnits },
         });
-        await billingRepository.setIntendedUnits(
-            live.id,
-            Math.min(live.intendedUnits ?? live.paidUnits, live.paidUnits),
-        );
+        // The payer's own cut stands when it is already at or below the places paid for.
+        if (live.intendedUnits === null || live.intendedUnits > live.paidUnits)
+            await billingRepository.setIntendedUnits(live.id, live.paidUnits, true);
     }
     if (live && (live.intendedUnits !== null || stale.includes(live.id)))
         try {
@@ -294,6 +310,28 @@ export async function reconcileGroup(groupId: string) {
             });
             await queueCutRetry(groupId);
         }
+}
+
+/*
+ * A plan still billing with nobody to pay for it: its payer's account is gone
+ * (a checkout paid after they deleted it, say). Revoked at Polar at once, so
+ * no card is charged for a family nobody pays for; a plan already set to end
+ * runs out instead, as its payer chose.
+ */
+async function revokeWithoutPayer(
+    groupId: string,
+    live: { id: string; cancelAtPeriodEnd: boolean },
+) {
+    if (live.cancelAtPeriodEnd) return false;
+    const customer = await billingRepository.getGroupCustomer(groupId);
+    if (customer?.payerUserId) return false;
+    log.warn({
+        message: 'Group plan revoked: its payer is gone',
+        billing: { group: groupId, subscription: live.id },
+    });
+    const revoked = await polar().subscriptions.revoke(live.id);
+    await applyChanged(groupId, revoked, false);
+    return true;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -332,13 +370,19 @@ async function queueCutRetry(groupId: string) {
  * two), and the members counted after it catch one that landed before, so the
  * cut is moved up to them, or dropped if that is no cut at all.
  */
-async function scheduleCut(groupId: string, subscriptionId: string, units: number, target: number) {
+async function scheduleCut(
+    groupId: string,
+    subscriptionId: string,
+    units: number,
+    target: number,
+    stale = false,
+) {
     let cut = await polar().subscriptions.update(subscriptionId, {
         units: target,
         proration_behavior: 'next_period',
     });
-    await applyChanged(groupId, cut, false);
-    await billingRepository.setIntendedUnits(subscriptionId, target);
+    if (!(await applyChanged(groupId, cut, false))) throw unresolvedPlan();
+    await billingRepository.setIntendedUnits(subscriptionId, target, stale);
     const used = await groupsRepository.seatsUsed(groupId);
     if (used <= target) return;
     cut = await polar().subscriptions.update(
@@ -347,8 +391,15 @@ async function scheduleCut(groupId: string, subscriptionId: string, units: numbe
             ? { units: used, proration_behavior: 'next_period' }
             : { pending_update: null },
     );
-    await applyChanged(groupId, cut, false);
-    await billingRepository.setIntendedUnits(subscriptionId, used < units ? used : null);
+    if (!(await applyChanged(groupId, cut, false))) throw unresolvedPlan();
+    await billingRepository.setIntendedUnits(subscriptionId, used < units ? used : null, stale);
+}
+
+function unresolvedPlan() {
+    return new BillingError(
+        'This family’s plan could not be read. Nothing more was changed; contact support.',
+        503,
+    );
 }
 
 /*
@@ -376,11 +427,12 @@ export async function reissueCut(groupId: string) {
         await billingRepository.setIntendedUnits(live.id, null);
         return;
     }
-    if (target !== live.intendedUnits) await billingRepository.setIntendedUnits(live.id, target);
+    if (target !== live.intendedUnits)
+        await billingRepository.setIntendedUnits(live.id, target, live.intendedStale);
     if (subscription.pending_update?.units === target) return;
     // Polar refuses quantity changes on a plan set to end; resuming it brings the cut back here.
     if (subscription.cancel_at_period_end) return;
-    await scheduleCut(groupId, subscription.id, units, target);
+    await scheduleCut(groupId, subscription.id, units, target, live.intendedStale);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -705,9 +757,12 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
             400,
         );
     if (units < live.units) {
+        // A plan HushOS cannot read is never changed blind.
+        if (!(await planOf(live.productId))) throw unresolvedPlan();
         try {
             await scheduleCut(groupId, live.id, live.units, units);
         } catch (error) {
+            if (error instanceof BillingError) throw error;
             throw unavailable(error);
         }
         return { billing: await getGroupBilling(user, groupId), url: null };
@@ -774,6 +829,7 @@ async function seesPlan(groupId: string, userId: string) {
     } catch (error) {
         const customer = await billingRepository.getGroupCustomer(groupId);
         if (customer?.payerUserId !== userId) throw error;
+        if (!(await billingRepository.getLiveGroupSubscription(groupId))) throw error;
     }
 }
 

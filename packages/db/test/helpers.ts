@@ -7,7 +7,7 @@ import {
     randomUUID,
     sign,
 } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../src/client';
 import {
     accountIdentities,
@@ -266,4 +266,9 @@ export async function setTestMember(input: {
             target: [groupMemberships.groupId, groupMemberships.userId],
             set: values,
         });
+}
+
+/* An account deleted outright, as deleteAccount leaves the rows that point at it. */
+export async function deleteTestAccount(userId: string) {
+    await db.delete(users).where(eq(users.id, userId));
 }

@@ -28,6 +28,7 @@ CREATE TABLE "group_billing_subscriptions" (
 	"paid_units" integer DEFAULT 0 NOT NULL,
 	"pending_units" integer,
 	"intended_units" integer,
+	"intended_stale" boolean DEFAULT false NOT NULL,
 	"included_members" integer NOT NULL,
 	"quota_bytes" bigint NOT NULL,
 	"current_period_start" timestamp with time zone NOT NULL,

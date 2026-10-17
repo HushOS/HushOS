@@ -1781,7 +1781,14 @@ function decodeIdentity(
  * cancelled plan except in the narrow race the repository answers below.
  */
 async function refuseWhileHoldingGroups(userId: string) {
-    if ((await groupsRepository.deletionBlockers(userId)).length > 0)
+    const blockers = await groupsRepository.deletionBlockers(userId);
+    // The last member of a family with a plan still paid for: deleting would dissolve it.
+    if (blockers.some((blocker) => blocker.reason === 'billed'))
+        throw new AuthError(
+            'Your family has a plan that is still being paid for. Cancel it in Plan and storage before deleting your account; the family keeps it until the end of the period.',
+            409,
+        );
+    if (blockers.length > 0)
         throw new AuthError(
             'You organise a family group. Hand it over to another member, or leave it, before deleting your account.',
             409,

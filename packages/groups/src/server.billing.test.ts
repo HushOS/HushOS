@@ -136,7 +136,7 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
 });
 
 const { groupsRepository, billingRepository, driveRepository } = await import('@hushos/db');
-const { closeDatabase, resetDatabase } = await import('../../db/test/helpers');
+const { closeDatabase, createTestAccount, resetDatabase } = await import('../../db/test/helpers');
 const kit = await import('../test/kit');
 const groups = await import('./server');
 const billing = await import('@hushos/billing/server');
@@ -151,12 +151,16 @@ beforeEach(async () => {
 afterAll(closeDatabase);
 
 /* The family's plan at Polar and here, as a completed checkout and its delivery leave it. */
-async function onPlan(fam: Awaited<ReturnType<typeof kit.family>>, units: number) {
+async function onPlan(
+    fam: Awaited<ReturnType<typeof kit.family>>,
+    units: number,
+    payerUserId = fam.organizer.userId,
+) {
     await billingRepository.recordGroupCustomer({
         groupId: fam.groupId,
         provider: 'polar',
         providerCustomerId: `cus_${fam.groupId.slice(0, 8)}`,
-        payerUserId: fam.organizer.userId,
+        payerUserId,
     });
     const subscription: Subscription = {
         id: `sub_${fam.groupId.slice(0, 8)}`,
@@ -172,7 +176,10 @@ async function onPlan(fam: Awaited<ReturnType<typeof kit.family>>, units: number
         units,
         pending_update: null,
     };
-    polar.teams.set(`group:${fam.groupId}`, { id: `cus_${fam.groupId.slice(0, 8)}`, subscriptions: [subscription] });
+    polar.teams.set(`group:${fam.groupId}`, {
+        id: `cus_${fam.groupId.slice(0, 8)}`,
+        subscriptions: [subscription],
+    });
     polar.subscriptions.set(subscription.id, subscription);
     await billing.reconcileGroup(fam.groupId);
     return subscription;
@@ -313,5 +320,90 @@ describe('admission with billing on', () => {
             status: 409,
         });
         expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+    });
+
+    test('removing the payer is refused while the plan is live; a member who does not pay can be removed, and can leave', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 3);
+        const holder = await kit.member();
+        await kit.admitted(fam, holder, ['members']);
+        // A roster outside the kit's history: the refusal comes before anything is checked.
+        const forged = await kit.forgedRoster(fam, holder, (roster) => ({
+            ...roster,
+            members: roster.members.map((entry) =>
+                entry.userId === fam.organizer.userId
+                    ? { ...entry, status: 'left' as const }
+                    : entry,
+            ),
+        }));
+        const { revision } = await kit.head(fam.groupId);
+        expect(
+            await refusal(
+                groups.removeMember(holder.userId, fam.groupId, fam.organizer.userId, {
+                    expectedRevision: revision,
+                    roster: kit.wire(forged),
+                }),
+            ),
+        ).toMatchObject({ code: 'payer', status: 409 });
+        expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
+
+        // The organizer removes a member who does not pay: the roster rotates the folder.
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        const before = kit.entries(fam.h).find((entry) => entry.userId === plain.userId)!;
+        const { at, call } = await kit.nextRoster(
+            fam,
+            fam.organizer,
+            kit.withEntry(fam.h, { ...before, status: 'left' }),
+        );
+        await groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+            ...call,
+            rotations: [await kit.rotationWire(fam.areaId, fam.organizer.who, 1)],
+            grants: [
+                await kit.grantWire(
+                    fam.groupId,
+                    fam.areaId,
+                    2,
+                    fam.organizer.who,
+                    fam.organizer.who,
+                    at,
+                ),
+                await kit.grantWire(fam.groupId, fam.areaId, 2, fam.organizer.who, holder.who, at),
+            ],
+        });
+        expect(await state(fam.groupId, plain.userId)).toBe('removed');
+        // And one who does not pay leaves on their own.
+        await groups.leave(holder.userId, fam.groupId);
+        expect(await state(fam.groupId, holder.userId)).toBe('left');
+    });
+
+    test('the last member cannot dissolve a family whose plan someone still pays for; once cancelled they can', async () => {
+        const fam = await kit.family();
+        // The payer is someone else: the last member does not pay, and still cannot dissolve it.
+        const payer = await createTestAccount();
+        const subscription = await onPlan(fam, 1, payer.userId);
+        expect(await refusal(groups.leave(fam.organizer.userId, fam.groupId))).toMatchObject({
+            code: 'payer',
+            status: 409,
+        });
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({
+            state: 'left',
+            dissolved: true,
+        });
+    });
+
+    test('a payer who cancelled can leave; the family keeps the plan until it ends', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const holder = await kit.member();
+        await kit.admitted(fam, holder, ['billing', 'members']);
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        expect(await groups.leave(fam.organizer.userId, fam.groupId)).toEqual({ state: 'left' });
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(2);
+        expect((await driveRepository.getStorage(fam.areaId))?.allowance).toBe(1024n ** 4n);
     });
 });

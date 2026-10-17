@@ -143,6 +143,11 @@ export const groupBillingSubscriptions = pgTable(
          * re-issued by the retry job and the daily reconcile.
          */
         intendedUnits: integer('intended_units'),
+        /*
+         * The cut above is the stale-raise rule's (a raise unconfirmed for
+         * STALE_RAISE_DAYS), not the payer's: it is withdrawn if the raise is paid.
+         */
+        intendedStale: boolean('intended_stale').notNull().default(false),
         includedMembers: integer('included_members').notNull(),
         quotaBytes: bigint('quota_bytes', { mode: 'bigint' }).notNull(),
         currentPeriodStart: timestamp('current_period_start', { withTimezone: true }).notNull(),
