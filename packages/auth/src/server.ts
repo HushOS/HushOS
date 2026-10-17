@@ -744,7 +744,7 @@ export async function succeedIdentity(
         sessionTokenHash: hash(token),
         identity: decoded as authRepository.IdentityV2,
         signature: decodeField(input.signature, HYBRID_SIGNATURE_BYTES),
-        // Optional until the 1c release requires it (docs/groups-server.md 5); checked when sent.
+        // Optional until a later gate, once iOS and Android send it (docs/groups-server.md 5); checked when sent.
         consent:
             input.consent === undefined
                 ? null

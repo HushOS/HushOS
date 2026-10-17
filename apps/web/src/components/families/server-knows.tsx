@@ -4,8 +4,9 @@ import { cn } from 'cn';
 export function ServerKnowsLine({ className }: { className?: string }) {
     return (
         <p className={cn('px-5 py-6 text-[13px] text-muted-foreground sm:px-8', className)}>
-            HushOS’s server knows who is in your family and the family’s name. It can’t open family
-            folders.
+            HushOS’s server knows the family’s name, who is in it and what each person can do, who
+            invited and let in whom, and how many family folders there are and roughly how big. It
+            can’t open family folders.
         </p>
     );
 }

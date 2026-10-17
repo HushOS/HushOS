@@ -238,7 +238,7 @@ The group core does not use the personal-pin verifier (`verifySuccessionChain`, 
 
 **Successor consent, only where it buys something.** From a member's first keys up to their entry's, the walk follows a link only when the new keys it names co-signed it. Without that, keys planted as a member's _first_ entry (where every chain starts) could bridge to the member's real identity: the planter signs a link from the planted keys, the walk crosses it, and records and grants under the planted keys read as the member's (retired-key, or a grant that opens). The planter holds the planted keys but not the member's, so the consent half under the new keys is the one thing they cannot make; a link without it (one-sided, or with only the planter's half) is refused there, and a record under the planted keys reads bad-signature. A self-consented link from the planted keys to keys of the planter's own (both halves his) is a valid edge, but it never reaches the entry, and retirement from the first keys stops at the entry, so the planted keys still read bad-signature. Elsewhere consent buys nothing: a personal pin from the reader's own words check is the reader's own anchor (one trusted through a group is not, above), and the roster-lag walk and `foldInEntry` start at the entry's current keys, which a planter already vouches for (a stated residual) and from which he could consent to his own successor anyway. There the version 2 signature suffices, so every honest rotation a shipped client signed keeps its verdicts: verified on the lag, and no false key conflict for a pinned reader after a fold-in.
 
-What it costs: until 1c uploads and serves `consent` (with the backfill of earlier links, `docs/identity-pq-design.md` 2), a member whose entry has moved on from their first keys does not have those pre-entry keys retired, and seals they made under them do not open through history.
+What it costs: the web uploads `consent` with every succession and backfills the account's earlier links (`docs/identity-pq-design.md` 2), but iOS and Android do not send it yet. For a link without consent (one a native app made, or one from a version 1 identity, which cannot carry it), a member whose entry has moved on from their first keys does not have those pre-entry keys retired, and seals they made under them do not open through history.
 
 **Withholding links.** A server that serves a member's identity with their links withheld, or cut short, makes their genuine records under keys it hides read `bad-signature` in group areas (with no links served at all, `unchecked`), and a pinned reader's verdict `key-conflict`: `bad-signature` there can be server-triggered, which the readers' copy says ("couldn't verify this signature"). A writer statement that names its signing key (the planned writer upgrade, `docs/identity-pq-design.md` 7) would let an unknown key read `unchecked` instead.
 
@@ -509,5 +509,23 @@ Each fails on a defect a person would notice (see AGENTS.md):
 
 ## 8. Open questions
 
-- **Polar mechanics** are settled by `docs/polar-group-billing-spike.md` (decisions agreed 2026-10-15); its sandbox experiments E1 to E8 still confirm the behaviour before 3.5 is built.
+- **Polar mechanics** are settled by `docs/polar-group-billing-spike.md` (decisions agreed 2026-10-15); its sandbox results (section 8 there, 2026-10-17) are what 3.5 is built against, and its open risks (section 7) still apply.
 - **Post-quantum identity signatures** are designed in `docs/identity-pq-design.md`; the migrations this design and that one need are in `docs/envelope-migrations.md`.
+
+## 9. Still open after the families release
+
+Families (milestone 1c) are released on the web: create, invite, join with the join code, family folders, removal and leaving with every folder's keys replaced, and re-keyed records that keep each writer's signature. What is not done, and what it costs; server-side detail is in `docs/groups-server.md`, "Still open", and the core's open flags in `docs/groups-invariants.md`, "Flags".
+
+- **Mobile families (1d) are not built:** iOS and Android show no families, so family folders open only in a browser.
+- **Billing (1e) is not built:** family folders are free storage bounded by `GROUP_AREA_LIMIT` and `GROUP_OWNED_LIMIT`, with no pool, payer or seat purchase (3.5), so hushos.com keeps families off.
+- **Native clients don't read re-keyed records yet:** re-keyed records stay in family folders only, since a shipped app would stall on one in a personal folder.
+- **Personal folders still re-attribute on rotation:** after a personal rotation, an editor's verified record reads as the owner's.
+- **Copies outside family folders judge the legacy columns:** a copy in a personal folder vouches for the rotation's re-signature rather than the writer, and copies or moves between spaces re-sign as the copier.
+- **`drive_origin_drops` has no reader:** dropped origins are kept as evidence, but nobody can view or settle a drop in an app.
+- **A rotating member can drop writers' origins:** the record then reads as re-sealed by the dropper for good, with the drop shown in Info.
+- **Successor consent is web only (flag F8):** for links a native app made, a member's pre-entry keys are not retired and seals made under them do not open through history.
+- **Sharing in family folders is hidden** until share records signed at family level exist (3.4): members cannot share family-folder files.
+- **Areas cannot be deleted (flag F11):** there is no retirement row, so area deletion cannot ship yet.
+- **Rosters do not commit to an area root's key (flag F14):** a server can roll an area root back to an earlier key at the same area key version without any check seeing it.
+- **A master-key rotation loses unsent family changes on the rotating device:** its sealed family records are dropped and accepted again, not re-sealed.
+- **Hostile guardians are out of scope beyond the re-key and the 7-day hold:** child accounts are not built (2.9, 3.6), and when they are, a guardian holding a device or the mailbox can still cancel each conversion (threat model 3.7).

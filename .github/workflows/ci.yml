@@ -100,9 +100,13 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            - name: Local infrastructure (Postgres, Mailpit, Garage) and environment
+            # Families off, as hushos.com runs until billing charges for family folders: this
+            # suite covers the off path (families.spec.ts checks they stay hidden), and the
+            # e2e-families job below covers the self-hosting default, families on.
+            - name: Local infrastructure (Postgres, Mailpit, Garage) and environment, families off
               run: |
                   bun run setup
+                  echo 'GROUPS_ENABLED=false' >> .env
                   bun run infra:up
             - name: Apply migrations
               run: bun run db:migrate
@@ -155,8 +159,10 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
-    # Families (groups 1c) on a server that serves them: the suite above runs with them off (the
-    # default), where families.spec.ts checks they stay hidden. One runner, one spec file.
+    # Families on, the self-hosting default: the suite above runs with them off, as hushos.com
+    # does, where families.spec.ts checks they stay hidden. One runner, one spec file. The switch
+    # is written out rather than left to the default, so a change of default cannot quietly turn
+    # this job into a second run of the off path.
     e2e-families:
         name: Browser tests (families)
         runs-on: ubuntu-latest
@@ -236,10 +242,12 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            - name: Local infrastructure (Postgres, Mailpit, Garage) without Docker, and environment
+            # Families off, as in the chromium suite; the families flows run on chromium only.
+            - name: Local infrastructure (Postgres, Mailpit, Garage) without Docker, and environment, families off
               run: |
                   brew install postgresql@18 mailpit garage
                   bun run setup
+                  echo 'GROUPS_ENABLED=false' >> .env
                   scripts/infra-native.sh
               env:
                   HOMEBREW_NO_INSTALL_CLEANUP: 1

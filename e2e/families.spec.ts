@@ -49,7 +49,8 @@ import {
  * otherwise fails the file rather than letting it skip.
  */
 
-const familiesOn = process.env.GROUPS_ENABLED === 'true';
+// As the server reads it: on unless set to false (an empty value is the default too).
+const familiesOn = process.env.GROUPS_ENABLED !== 'false';
 
 test.describe.configure({ mode: 'serial' });
 
