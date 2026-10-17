@@ -74,10 +74,10 @@ describe('return-to', () => {
 
     test('Sign in from a public page goes to the app; only listed pages come back', () => {
         const toApp = { redirect: undefined, remember: false };
-        for (const page of ['/', '/pricing', '/blog', '/blog/a-post', '/security', '/terms'])
+        for (const page of ['/', '/blog', '/blog/a-post', '/security', '/terms'])
             expect(signInReturn(page), page).toEqual(toApp);
-        // A prefix is a whole segment: these are not under /go, /s or /join.
-        for (const page of ['/gone', '/support', '/joiners', '/r/abc'])
+        // A prefix is a whole segment: these are not under /go, /s, /join or /pricing.
+        for (const page of ['/gone', '/support', '/joiners', '/pricingx'])
             expect(signInReturn(page), page).toEqual(toApp);
         expect(signInReturn('/go/creator', '?x=1')).toEqual({
             redirect: '/go/creator?x=1',
@@ -87,6 +87,24 @@ describe('return-to', () => {
             redirect: '/app/contacts',
             remember: false,
         });
+    });
+
+    test('a buyer who signs in on pricing comes back to it, query and all', () => {
+        expect(signInReturn('/pricing')).toEqual({ redirect: '/pricing', remember: false });
+        expect(signInReturn('/pricing', '?interval=year')).toEqual({
+            redirect: '/pricing?interval=year',
+            remember: false,
+        });
+    });
+
+    test('an invite link is left out on purpose: signed in, it is a dead end', () => {
+        expect(signInReturn('/r/abc')).toEqual({ redirect: undefined, remember: false });
+    });
+
+    test('an address that is not a same-site path gives no redirect', () => {
+        // The router matches the first two as an offer page, but put raw in ?redirect= they leave the site.
+        for (const page of ['//go/x', '/go/x\\y', 'javascript:alert(1)'])
+            expect(signInReturn(page).redirect, page).toBeUndefined();
     });
 
     test('a shared link or an invitation is remembered, never put in the query string', () => {

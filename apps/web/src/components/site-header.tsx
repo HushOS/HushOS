@@ -38,8 +38,9 @@ const isAt = (pathname: string, to: string) => pathname === to || pathname.start
 
 /*
  * Sign in goes to the app, except from the few pages worth coming back to (signInReturn): a
- * shared link or an invitation is remembered in this browser, key and all; an offer page comes
- * back through `?redirect=`.
+ * shared link is remembered in this browser, key and all, and an invitation as plain `/join`
+ * (its token is already in this tab's sessionStorage); pricing and an offer page come back
+ * through `?redirect=`.
  */
 function useSignIn() {
     const location = useLocation();

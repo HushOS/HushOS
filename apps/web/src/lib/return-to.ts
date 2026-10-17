@@ -91,15 +91,26 @@ export function returnTarget(redirect?: string | null) {
 
 /*
  * Public pages whose Sign in comes back to them, with everything under them; every other public
- * page signs in to /app, so a new page goes there too until it is added here. A page whose key
- * rides after the `#` is remembered in this browser, never put in a query string: a shared link,
- * and a family invitation (a 404 or error page under either still shows the site header). The
- * others come back through `?redirect=`: an offer page, whose signed-in view checks out with its
- * discount, and the app itself, should its error page be what is showing. Not here: an invite
- * link (/r/), which tells someone already signed in that it is for someone else.
+ * page signs in to /app, so a new page goes there too until it is added here.
+ *
+ * Remembered in this browser, never put in a query string (a 404 or error page under either
+ * still shows the site header):
+ * - a shared link (/s/), remembered key and all, since its key rides after the `#`;
+ * - a family invitation (/join). That page moves its token out of the address into this tab's
+ *   sessionStorage, so the header remembers plain `/join`, without the token: coming back in
+ *   the same tab finds the token kept there, and a new tab finds none. The invitation's own
+ *   Sign in remembers the token with it.
+ *
+ * The others come back through `?redirect=`: /pricing, whose buttons start checkout straight
+ * away once signed in, so a buyer who signs in there has to land back on it; an offer page
+ * (/go/), whose signed-in view checks out with its discount; and the app itself, should its
+ * error page be what is showing.
+ *
+ * Left out on purpose: an invite link (/r/), which tells someone already signed in that it is
+ * for someone else, so coming back to it is a dead end.
  */
 const KEYED = ['/s', '/join'];
-const RETURNS = ['/go', '/app'];
+const RETURNS = ['/pricing', '/go', '/app'];
 
 /* What Sign in in the site header does from a page: nothing (to /app), a `?redirect=`, or a remembered return. */
 export function signInReturn(
