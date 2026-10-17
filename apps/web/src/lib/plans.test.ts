@@ -113,12 +113,13 @@ describe('familyOffer', () => {
             plan: { id: 'family-month' },
             price: '£12 a month',
             billed: 'Billed monthly. £120 a year if you pay yearly.',
-            size: 'For up to 6 people, sharing 2 TB.',
-            extra: 'Then £2 a month for each person after that, up to 20.',
+            size: 'For up to 6 members, sharing 2 TB.',
+            pool: 'The 2 TB is for family folders; each member’s own files stay on their own plan, Free included.',
+            extra: 'Then £2 a month for each member after that, up to 20.',
         });
         const inr = familyOffer({ enabled: true, families }, 'month', 'inr');
         expect(inr?.price).toBe('₹599 a month');
-        expect(inr?.extra).toBe('Then ₹79 a month for each person after that, up to 20.');
+        expect(inr?.extra).toBe('Then ₹79 a month for each member after that, up to 20.');
     });
 
     test('shows the yearly plan as a month, billed yearly, and its member price per year', () => {
@@ -126,7 +127,7 @@ describe('familyOffer', () => {
             plan: { id: 'family-year' },
             price: '$12.50 a month',
             billed: 'Billed $150 yearly.',
-            extra: 'Then $20 a year for each person after that, up to 20.',
+            extra: 'Then $20 a year for each member after that, up to 20.',
         });
     });
 
@@ -150,7 +151,7 @@ describe('pricingLede', () => {
         expect(pricingLede(familyOffer({ enabled: true, families: [] }, 'month', 'usd'))).toBe(off);
         expect(pricingLede(familyOffer({ enabled: false, families }, 'month', 'usd'))).toBe(off);
         expect(pricingLede(familyOffer({ enabled: true, families }, 'month', 'usd'))).toBe(
-            'Every plan protects your files the same way. Paid plans add space; a family plan adds folders you share with up to 20 people.',
+            'Every plan protects your files the same way. Paid plans add space; a family plan adds folders you share with up to 20 members.',
         );
     });
 });

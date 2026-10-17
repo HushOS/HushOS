@@ -71,9 +71,11 @@ export type FamilyOffer = {
     price: string;
     /* "Billed monthly. $150 a year if you pay yearly." or "Billed $150 yearly." */
     billed: string;
-    /* "For up to 6 people, sharing 2 TB." */
+    /* "For up to 6 members, sharing 2 TB." */
     size: string;
-    /* "Then $2 a month for each person after that, up to 20." */
+    /* "The 2 TB is for family folders; each member’s own files stay on their own plan, Free included." */
+    pool: string;
+    /* "Then $2 a month for each member after that, up to 20." */
     extra: string;
 };
 
@@ -109,8 +111,10 @@ export function familyOffer(
                 : yearlyPrice && yearlyPrice.currency === price.currency
                   ? `Billed monthly. ${money(yearlyPrice.base)} a year if you pay yearly.`
                   : 'Billed monthly.',
-        size: `For up to ${plan.includedMembers} people, sharing ${formatQuota(plan.quotaBytes)}.`,
-        extra: `Then ${money(price.perMember)} ${per} for each person after that, up to ${plan.maxMembers}.`,
+        size: `For up to ${plan.includedMembers} members, sharing ${formatQuota(plan.quotaBytes)}.`,
+        // The pool counts only family folders; a member's own drive keeps its own allowance.
+        pool: `The ${formatQuota(plan.quotaBytes)} is for family folders; each member’s own files stay on their own plan, Free included.`,
+        extra: `Then ${money(price.perMember)} ${per} for each member after that, up to ${plan.maxMembers}.`,
     };
 }
 
@@ -121,6 +125,6 @@ export function familyOffer(
 export function pricingLede(family: FamilyOffer | null) {
     const same = 'Every plan protects your files the same way.';
     return family
-        ? `${same} Paid plans add space; a family plan adds folders you share with up to ${family.plan.maxMembers} people.`
+        ? `${same} Paid plans add space; a family plan adds folders you share with up to ${family.plan.maxMembers} members.`
         : `${same} Paid plans add space, and nothing else.`;
 }
