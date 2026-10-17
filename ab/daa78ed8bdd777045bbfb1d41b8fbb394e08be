@@ -1,0 +1,47 @@
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_c56e31c87cddde::t_1df3411c38d9e0 23-24,66-67,94-96
+apps/web/src/lib/groups/removal.test.ts
+  s_c56e31c87cddde::t_aa43c81d8fa989 484-508
+apps/web/src/lib/groups/sync.test.ts
+  s_c56e31c87cddde::t_e874f000131962 218,223,225,230,234,236,240,247
+apps/web/src/lib/groups/sync.ts
+  s_c56e31c87cddde::t_bd80d2da2761aa 208,215-219,228,234,237,242,248,251,253-256
+docs/groups-design.md
+  s_c56e31c87cddde::t_26d38a720a41a5 201,293,309
+docs/groups-invariants.md
+  s_c56e31c87cddde::t_a59576cbec3158 196,296
+docs/groups-server.md
+  s_c56e31c87cddde::t_9a7e58390821c7 282
+e2e/families.spec.ts
+  s_c56e31c87cddde::t_2f168ab7660b40 1318-1320
+packages/crypto/src/session-groups.ts
+  s_c56e31c87cddde::t_2a1a6e526ebae1 411-417,2087-2092,2114-2117
+packages/crypto/src/session.groups.test.ts
+  s_c56e31c87cddde::t_048709e7af6bf1 26-31,65,1857-2083,3348-3391,3607-3655
+packages/crypto/src/session.ts
+  s_c56e31c87cddde::t_1797e8e566e64a 922-924,1423-1427,1429,1444-1448,1510,1520-1523,1525-1529,1532,1985-1999,2007-2008
+packages/db/drizzle/20261017154132_group_area_deletion/migration.sql
+  s_c56e31c87cddde::t_8b7c3372cfc26f 14-17
+packages/db/src/billing.groups.test.ts
+  s_c56e31c87cddde::t_ce870c25c1ab7a 1,13,114,123-124,127,131-133,135-137
+packages/db/src/drive.ts
+  s_c56e31c87cddde::t_d48d8ffa86abb8 1279-1282,1316-1319,1706-1715
+packages/db/src/groups.test.ts
+  s_c56e31c87cddde::t_965f10ba2ac238 42,3681-3737
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "abdaa78ed8bdd777045bbfb1d41b8fbb394e08be",
+  "prompts": {},
+  "sessions": {
+    "s_c56e31c87cddde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3254715f-8393-40fe-bbc6-4e1b86d2829d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
